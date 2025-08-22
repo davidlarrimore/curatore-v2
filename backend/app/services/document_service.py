@@ -314,12 +314,26 @@ class DocumentService:
             return False
         
         try:
+            # Handle both dict and Pydantic model
+            if hasattr(llm_evaluation, 'clarity_score'):
+                # Pydantic model
+                clarity = llm_evaluation.clarity_score or 0
+                completeness = llm_evaluation.completeness_score or 0
+                relevance = llm_evaluation.relevance_score or 0
+                markdown = llm_evaluation.markdown_score or 0
+            else:
+                # Dictionary
+                clarity = llm_evaluation.get("clarity_score", 0)
+                completeness = llm_evaluation.get("completeness_score", 0)
+                relevance = llm_evaluation.get("relevance_score", 0)
+                markdown = llm_evaluation.get("markdown_score", 0)
+            
             return (
                 conversion_score >= thresholds.conversion and
-                int(llm_evaluation.get("clarity_score", 0)) >= thresholds.clarity and
-                int(llm_evaluation.get("completeness_score", 0)) >= thresholds.completeness and
-                int(llm_evaluation.get("relevance_score", 0)) >= thresholds.relevance and
-                int(llm_evaluation.get("markdown_score", 0)) >= thresholds.markdown
+                int(clarity) >= thresholds.clarity and
+                int(completeness) >= thresholds.completeness and
+                int(relevance) >= thresholds.relevance and
+                int(markdown) >= thresholds.markdown
             )
         except Exception:
             return False
@@ -472,13 +486,18 @@ class DocumentService:
     
     def _find_document_file(self, document_id: str) -> Optional[Path]:
         """Find the uploaded file for a document ID."""
-        # In a real implementation, you'd have a mapping of document_id to file_path
-        # For now, we'll search the upload directory
-        for file_path in self.upload_dir.glob("*"):
+        # Look for files that start with the document_id
+        for file_path in self.upload_dir.glob(f"{document_id}_*"):
             if file_path.is_file() and file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
-                # Simple implementation: use filename as document_id
-                if document_id in str(file_path.stem) or str(file_path.stem) in document_id:
-                    return file_path
+                return file_path
+        
+        # Fallback: look for any file that contains the document_id
+        for file_path in self.upload_dir.glob("*"):
+            if (file_path.is_file() and 
+                file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS and
+                document_id in str(file_path.name)):
+                return file_path
+        
         return None
     
     def get_supported_extensions(self) -> List[str]:
@@ -501,11 +520,63 @@ class DocumentService:
         # Create unique filename with document ID
         file_path = self.upload_dir / f"{document_id}_{safe_filename}"
         
+        # Ensure directory exists
+        self.upload_dir.mkdir(parents=True, exist_ok=True)
+        
         # Save file
-        with open(file_path, "wb") as f:
-            f.write(content)
+        try:
+            with open(file_path, "wb") as f:
+                f.write(content)
+            print(f"File saved successfully: {file_path}")
+        except Exception as e:
+            print(f"Error saving file {file_path}: {e}")
+            raise
         
         return document_id, file_path
+    
+    def list_uploaded_files(self) -> List[Dict[str, Any]]:
+        """List all uploaded files with metadata."""
+        files = []
+        try:
+            # Ensure upload directory exists
+            self.upload_dir.mkdir(parents=True, exist_ok=True)
+            
+            for file_path in self.upload_dir.glob("*"):
+                if file_path.is_file():
+                    # Check if it's a supported file type
+                    if file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                        try:
+                            stat = file_path.stat()
+                            
+                            # Extract document_id from filename
+                            # Format: {document_id}_{original_filename}
+                            filename_parts = file_path.name.split('_', 1)
+                            if len(filename_parts) >= 2:
+                                document_id = filename_parts[0]
+                                original_filename = filename_parts[1]
+                            else:
+                                # Fallback if filename doesn't follow expected format
+                                document_id = file_path.stem
+                                original_filename = file_path.name
+                            
+                            files.append({
+                                "document_id": document_id,
+                                "filename": original_filename,
+                                "original_filename": file_path.name,
+                                "file_size": stat.st_size,
+                                "upload_time": stat.st_mtime * 1000,  # Convert to milliseconds for JS
+                                "file_path": str(file_path)
+                            })
+                        except Exception as e:
+                            print(f"Error processing file {file_path}: {e}")
+                            continue
+        except Exception as e:
+            print(f"Error listing files in {self.upload_dir}: {e}")
+            return []
+        
+        # Sort by upload time (newest first)
+        files.sort(key=lambda x: x["upload_time"], reverse=True)
+        return files
     
     def get_processed_content(self, document_id: str) -> Optional[str]:
         """Get processed markdown content for a document."""

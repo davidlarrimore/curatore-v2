@@ -84,4 +84,6 @@ Icon?
 *.swo
 *.~lock.*
 
-uploads/*
+/uploads/*
+/batch_documents/*
+/processed/*
