@@ -113,8 +113,9 @@ OCR_LANG=eng
 OCR_PSM=3
 
 # File Storage
-UPLOAD_DIR=uploads
-PROCESSED_DIR=processed  
+BATCH_DIR=files/batch_files
+UPLOAD_DIR=files/uploaded_files
+PROCESSED_DIR=files/processed_files  
 MAX_FILE_SIZE=52428800
 
 # Quality Thresholds

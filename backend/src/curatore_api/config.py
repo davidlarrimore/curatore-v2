@@ -35,8 +35,9 @@ class Settings(BaseSettings):
     ocr_psm: int = Field(default=3, env="OCR_PSM")
     
     # File Storage
-    upload_dir: str = Field(default="uploads", env="UPLOAD_DIR")
-    processed_dir: str = Field(default="processed", env="PROCESSED_DIR")
+    batch_dir: str = Field(default="files/batch_files", env="BATCH_DIR")    
+    upload_dir: str = Field(default="files/uploaded_files", env="UPLOAD_DIR")
+    processed_dir: str = Field(default="files/processed_files", env="PROCESSED_DIR")
     max_file_size: int = Field(default=50 * 1024 * 1024, env="MAX_FILE_SIZE")  # 50MB
     
     # Quality Thresholds
@@ -84,8 +85,9 @@ except Exception as e:
         openai_max_retries = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
         ocr_lang = os.getenv("OCR_LANG", "eng")
         ocr_psm = int(os.getenv("OCR_PSM", "3"))
-        upload_dir = os.getenv("UPLOAD_DIR", "uploads")
-        processed_dir = os.getenv("PROCESSED_DIR", "processed")
+        batch_dir = os.getenv("BATCH_DIR", "files/batch_files")
+        upload_dir = os.getenv("UPLOAD_DIR", "files/uploaded_files")
+        processed_dir = os.getenv("PROCESSED_DIR", "files/processed_files")
         max_file_size = int(os.getenv("MAX_FILE_SIZE", "52428800"))
         default_conversion_threshold = int(os.getenv("DEFAULT_CONVERSION_THRESHOLD", "70"))
         default_clarity_threshold = int(os.getenv("DEFAULT_CLARITY_THRESHOLD", "7"))

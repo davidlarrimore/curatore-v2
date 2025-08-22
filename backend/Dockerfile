@@ -24,7 +24,7 @@ RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
 COPY app ./app
 
 # Create necessary directories
-RUN mkdir -p uploads processed
+RUN mkdir -p files files/uploaded_files files/processed_files files/batch_files
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
