@@ -35,14 +35,19 @@ class DocumentService:
     SUPPORTED_EXTENSIONS = {".docx", ".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".md", ".txt"}
     
     def __init__(self):
+        # NEW DIRECTORY STRUCTURE
+        self.files_root = Path(settings.files_root)
         self.upload_dir = Path(settings.upload_dir)
         self.processed_dir = Path(settings.processed_dir)
+        self.batch_dir = Path(settings.batch_dir)
         self._ensure_directories()
     
     def _ensure_directories(self) -> None:
         """Ensure required directories exist."""
+        self.files_root.mkdir(parents=True, exist_ok=True)
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.processed_dir.mkdir(parents=True, exist_ok=True)
+        self.batch_dir.mkdir(parents=True, exist_ok=True)
     
     def _pdf_pages_to_images(self, pdf_path: Path, dpi: int = 220) -> List[Image.Image]:
         """Convert PDF pages to images for OCR."""
@@ -79,434 +84,250 @@ class DocumentService:
         ocr_settings: OCRSettings
     ) -> ConversionResult:
         """Convert document to markdown format."""
-        ext = file_path.suffix.lower()
-        note = ""
+        start_time = time.time()
+        filename = file_path.name
+        extension = file_path.suffix.lower()
         
         try:
-            # 1) MD/TXT direct
-            if ext in {".md", ".txt"}:
-                try:
-                    text = file_path.read_text(encoding="utf-8")
-                except UnicodeDecodeError:
-                    text = file_path.read_text(encoding="latin-1")
-                
-                content = text if ext == ".md" else f"```\n{text}\n```"
-                score, feedback = self._score_conversion(None, content)
-                
+            if extension == ".pdf":
+                return await self._convert_pdf_to_markdown(file_path, ocr_settings)
+            elif extension == ".docx":
+                return await self._convert_docx_to_markdown(file_path)
+            elif extension in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}:
+                return await self._convert_image_to_markdown(file_path, ocr_settings)
+            elif extension in {".txt", ".md"}:
+                return await self._convert_text_to_markdown(file_path)
+            else:
                 return ConversionResult(
-                    success=True,
-                    markdown_content=content,
-                    conversion_score=score,
-                    conversion_feedback=feedback,
-                    conversion_note="Loaded text/markdown directly."
+                    filename=filename,
+                    success=False,
+                    error_message=f"Unsupported file format: {extension}",
+                    conversion_time=time.time() - start_time
                 )
-            
-            # 2) Try MarkItDown first
-            try:
-                if MD_CONVERTER:
-                    res = MD_CONVERTER.convert(str(file_path))
-                    md = (res.text_content or "").strip()
-                    if md:
-                        score, feedback = self._score_conversion(None, md)
-                        return ConversionResult(
-                            success=True,
-                            markdown_content=md,
-                            conversion_score=score,
-                            conversion_feedback=feedback,
-                            conversion_note="Converted with MarkItDown."
-                        )
-                    note = "MarkItDown returned empty content; attempting fallbacks."
-            except Exception as e:
-                note = f"MarkItDown failed: {e}; attempting fallbacks."
-            
-            # 3) DOCX fallback
-            if ext == ".docx":
-                try:
-                    d = docx.Document(str(file_path))
-                    parts = [p.text for p in d.paragraphs]
-                    md = "\n".join(parts).strip()
-                    if md:
-                        score, feedback = self._score_conversion(None, md)
-                        return ConversionResult(
-                            success=True,
-                            markdown_content=md,
-                            conversion_score=score,
-                            conversion_feedback=feedback,
-                            conversion_note="Converted DOCX via python-docx fallback."
-                        )
-                except Exception as e:
-                    return ConversionResult(
-                        success=False,
-                        conversion_score=0,
-                        conversion_feedback=f"DOCX fallback failed: {e}",
-                        conversion_note=note
-                    )
-            
-            # 4) PDF: text layer first, else rasterize+OCR
-            if ext == ".pdf":
-                try:
-                    text = pdf_extract_text(str(file_path)) or ""
-                    if text.strip():
-                        score, feedback = self._score_conversion(None, text)
-                        return ConversionResult(
-                            success=True,
-                            markdown_content=text,
-                            conversion_score=score,
-                            conversion_feedback=feedback,
-                            conversion_note="Extracted PDF text via pdfminer.six."
-                        )
-                    
-                    # Fall back to OCR
-                    imgs = self._pdf_pages_to_images(file_path, dpi=220)
-                    if not imgs:
-                        return ConversionResult(
-                            success=False,
-                            conversion_score=0,
-                            conversion_feedback=f"No pages to OCR. {note}",
-                            conversion_note=note
-                        )
-                    
-                    all_text, confs = [], []
-                    for img in imgs:
-                        t, c = self._ocr_image_with_tesseract(
-                            img, 
-                            lang=ocr_settings.language, 
-                            psm=ocr_settings.psm
-                        )
-                        if t:
-                            all_text.append(t)
-                            confs.append(c)
-                    
-                    md = "\n\n".join(all_text).strip()
-                    avg_conf = (sum(confs)/len(confs)) if confs else 0.0
-                    
-                    if md:
-                        score, feedback = self._score_conversion(None, md)
-                        return ConversionResult(
-                            success=True,
-                            markdown_content=md,
-                            conversion_score=score,
-                            conversion_feedback=feedback,
-                            conversion_note=f"PDF OCR via Tesseract; avg_conf={avg_conf:.2f}"
-                        )
-                    else:
-                        return ConversionResult(
-                            success=False,
-                            conversion_score=0,
-                            conversion_feedback="PDF OCR produced no text",
-                            conversion_note=note
-                        )
-                        
-                except Exception as e:
-                    return ConversionResult(
-                        success=False,
-                        conversion_score=0,
-                        conversion_feedback=f"PDF OCR error: {e}",
-                        conversion_note=note
-                    )
-            
-            # 5) Images: OCR with Tesseract
-            if ext in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}:
-                try:
-                    img = Image.open(str(file_path)).convert("RGB")
-                    text, conf = self._ocr_image_with_tesseract(
-                        img, 
-                        lang=ocr_settings.language, 
-                        psm=ocr_settings.psm
-                    )
-                    
-                    if text:
-                        score, feedback = self._score_conversion(None, text)
-                        return ConversionResult(
-                            success=True,
-                            markdown_content=text,
-                            conversion_score=score,
-                            conversion_feedback=feedback,
-                            conversion_note=f"Image OCR via Tesseract; avg_conf={conf:.2f}"
-                        )
-                    else:
-                        return ConversionResult(
-                            success=False,
-                            conversion_score=0,
-                            conversion_feedback="Image OCR produced no text",
-                            conversion_note=note
-                        )
-                        
-                except Exception as e:
-                    return ConversionResult(
-                        success=False,
-                        conversion_score=0,
-                        conversion_feedback=f"Image OCR error: {e}",
-                        conversion_note=note
-                    )
-            
-            return ConversionResult(
-                success=False,
-                conversion_score=0,
-                conversion_feedback=f"Unsupported or failed conversion. {note}",
-                conversion_note=note
-            )
-            
         except Exception as e:
             return ConversionResult(
+                filename=filename,
                 success=False,
-                conversion_score=0,
-                conversion_feedback=f"Conversion error: {e}",
-                conversion_note=note
+                error_message=f"Conversion error: {str(e)}",
+                conversion_time=time.time() - start_time
             )
     
-    def _score_conversion(self, original_text: Optional[str], markdown_text: str) -> Tuple[int, str]:
-        """Score conversion quality (0-100)."""
-        if not markdown_text:
-            return 0, "No markdown produced."
-        
-        # Content coverage
-        content_score = 100
-        if original_text:
-            ow = original_text.split()
-            mw = markdown_text.split()
-            if len(ow) == 0:
-                content_score = 0
-            else:
-                ratio = min(len(mw) / len(ow), 1.0)
-                content_score = int(ratio * 100)
-        
-        # Structure markers
-        headings = len(re.findall(r'^#{1,6}\s', markdown_text, flags=re.MULTILINE))
-        lists = len(re.findall(r'^[\-\*]\s', markdown_text, flags=re.MULTILINE))
-        tables = markdown_text.count('|')
-        structure_score = 0
-        if headings > 0: structure_score += 30
-        if lists > 0:    structure_score += 30
-        if tables > 3:   structure_score += 20
-        
-        # Legibility
-        if "�" in markdown_text:
-            legibility_score = 0
-        else:
-            lines = markdown_text.splitlines() or [markdown_text]
-            avg_len = sum(len(l) for l in lines) / len(lines)
-            legibility_score = 20 if avg_len < 200 else 10
-        
-        total = int(0.5 * content_score + structure_score + legibility_score)
-        total = min(total, 100)
-        
-        fb = []
-        if content_score < 100 and original_text:
-            fb.append(f"Content preserved ~{content_score}%.")
-        if structure_score < 60:
-            fb.append("Formatting may be partially lost.")
-        if legibility_score < 20:
-            fb.append("Some readability issues (long lines or odd characters).")
-        if not fb:
-            fb.append("High-fidelity conversion.")
-        
-        return total, " ".join(fb)
-    
-    def _meets_thresholds(
-        self, 
-        conversion_score: int, 
-        llm_evaluation: Optional[Dict[str, Any]], 
-        thresholds: QualityThresholds
-    ) -> bool:
-        """Check if document meets quality thresholds."""
-        if not llm_evaluation:
-            return False
-        
-        try:
-            # Handle both dict and Pydantic model
-            if hasattr(llm_evaluation, 'clarity_score'):
-                # Pydantic model
-                clarity = llm_evaluation.clarity_score or 0
-                completeness = llm_evaluation.completeness_score or 0
-                relevance = llm_evaluation.relevance_score or 0
-                markdown = llm_evaluation.markdown_score or 0
-            else:
-                # Dictionary
-                clarity = llm_evaluation.get("clarity_score", 0)
-                completeness = llm_evaluation.get("completeness_score", 0)
-                relevance = llm_evaluation.get("relevance_score", 0)
-                markdown = llm_evaluation.get("markdown_score", 0)
-            
-            return (
-                conversion_score >= thresholds.conversion and
-                int(clarity) >= thresholds.clarity and
-                int(completeness) >= thresholds.completeness and
-                int(relevance) >= thresholds.relevance and
-                int(markdown) >= thresholds.markdown
-            )
-        except Exception:
-            return False
-    
-    async def process_document(
-        self, 
-        document_id: str, 
-        file_path: Path, 
-        options: ProcessingOptions
-    ) -> ProcessingResult:
-        """Process a single document through the complete pipeline."""
+    async def _convert_pdf_to_markdown(self, file_path: Path, ocr_settings: OCRSettings) -> ConversionResult:
+        """Convert PDF to markdown using text extraction + OCR fallback."""
         start_time = time.time()
         filename = file_path.name
         
         try:
-            # Step 1: Convert to markdown
-            conversion_result = await self.convert_to_markdown(file_path, options.ocr_settings)
-            
-            if not conversion_result.success or not conversion_result.markdown_content:
-                return ProcessingResult(
-                    document_id=document_id,
-                    filename=filename,
-                    status=ProcessingStatus.FAILED,
-                    success=False,
-                    message=f"Conversion failed: {conversion_result.conversion_feedback}",
-                    original_path=str(file_path),
-                    conversion_result=conversion_result,
-                    processing_time=time.time() - start_time,
-                    thresholds_used=options.quality_thresholds
-                )
-            
-            markdown_content = conversion_result.markdown_content
-            
-            # Step 2: Generate document summary
-            document_summary = None
-            if llm_service.is_available:
+            # Try MarkItDown first if available
+            if MD_CONVERTER:
                 try:
-                    document_summary = await llm_service.summarize_document(markdown_content, filename)
-                except Exception as e:
-                    document_summary = f"Summary generation failed: {str(e)[:100]}..."
+                    result = MD_CONVERTER.convert(str(file_path))
+                    if result and result.text_content.strip():
+                        return ConversionResult(
+                            filename=filename,
+                            success=True,
+                            markdown_content=result.text_content,
+                            method="MarkItDown",
+                            conversion_time=time.time() - start_time,
+                            conversion_score=85  # High score for successful text extraction
+                        )
+                except Exception:
+                    pass
             
-            # Step 3: Vector DB optimization (if enabled)
-            vector_optimized = False
-            optimization_note = ""
-            if options.auto_optimize and llm_service.is_available:
-                try:
-                    optimized_content = await llm_service.optimize_for_vector_db(markdown_content)
-                    if optimized_content and optimized_content.strip():
-                        markdown_content = optimized_content
-                        vector_optimized = True
-                        optimization_note = "Vector DB optimized. "
-                    else:
-                        optimization_note = "Vector optimization returned empty content. "
-                except Exception as e:
-                    optimization_note = f"Optimization failed ({str(e)[:50]}...). "
-            
-            # Step 4: Save processed markdown
-            output_path = self.processed_dir / f"{file_path.stem}_{document_id}.md"
+            # Fallback to pdfminer
             try:
-                output_path.write_text(markdown_content, encoding="utf-8")
+                text = pdf_extract_text(str(file_path))
+                if text and text.strip() and len(text.strip()) > 50:
+                    return ConversionResult(
+                        filename=filename,
+                        success=True,
+                        markdown_content=text,
+                        method="PDFMiner Text Extraction",
+                        conversion_time=time.time() - start_time,
+                        conversion_score=80
+                    )
+            except Exception:
+                pass
+            
+            # OCR fallback
+            try:
+                images = self._pdf_pages_to_images(file_path)
+                if not images:
+                    raise Exception("Could not convert PDF pages to images")
+                
+                ocr_texts = []
+                total_confidence = 0
+                
+                for i, img in enumerate(images):
+                    text, conf = self._ocr_image_with_tesseract(
+                        img, 
+                        ocr_settings.language, 
+                        ocr_settings.page_segmentation_mode
+                    )
+                    if text:
+                        ocr_texts.append(f"## Page {i+1}\n\n{text}")
+                        total_confidence += conf
+                
+                if ocr_texts:
+                    avg_confidence = total_confidence / len(images)
+                    markdown_content = "\n\n".join(ocr_texts)
+                    conversion_score = int(avg_confidence * 100)
+                    
+                    return ConversionResult(
+                        filename=filename,
+                        success=True,
+                        markdown_content=markdown_content,
+                        method="OCR",
+                        ocr_confidence=avg_confidence,
+                        conversion_time=time.time() - start_time,
+                        conversion_score=conversion_score
+                    )
             except Exception as e:
-                return ProcessingResult(
-                    document_id=document_id,
-                    filename=filename,
-                    status=ProcessingStatus.FAILED,
-                    success=False,
-                    message=f"Failed to save processed content: {str(e)}",
-                    original_path=str(file_path),
-                    conversion_result=conversion_result,
-                    processing_time=time.time() - start_time,
-                    thresholds_used=options.quality_thresholds
-                )
+                pass
             
-            # Update conversion result with any optimization notes
-            conversion_result.conversion_note = f"{optimization_note}{conversion_result.conversion_note}"
-            
-            # Step 5: LLM evaluation
-            llm_evaluation = None
-            if llm_service.is_available:
-                try:
-                    llm_evaluation = await llm_service.evaluate_document(markdown_content)
-                except Exception as e:
-                    print(f"LLM evaluation failed for {filename}: {e}")
-            
-            # Step 6: Check quality thresholds
-            passes_thresholds = False
-            if llm_evaluation:
-                passes_thresholds = self._meets_thresholds(
-                    conversion_result.conversion_score,
-                    llm_evaluation.model_dump() if llm_evaluation else None,
-                    options.quality_thresholds
-                )
-            
-            return ProcessingResult(
-                document_id=document_id,
+            return ConversionResult(
                 filename=filename,
-                status=ProcessingStatus.COMPLETED,
-                success=True,
-                original_path=str(file_path),
-                markdown_path=str(output_path),
-                conversion_result=conversion_result,
-                llm_evaluation=llm_evaluation,
-                document_summary=document_summary,
-                conversion_score=conversion_result.conversion_score,
-                pass_all_thresholds=passes_thresholds,
-                vector_optimized=vector_optimized,
-                processing_time=time.time() - start_time,
-                processed_at=time.time(),
-                thresholds_used=options.quality_thresholds
+                success=False,
+                error_message="All PDF conversion methods failed",
+                conversion_time=time.time() - start_time
             )
             
         except Exception as e:
-            return ProcessingResult(
-                document_id=document_id,
+            return ConversionResult(
                 filename=filename,
-                status=ProcessingStatus.FAILED,
                 success=False,
-                message=f"Processing error: {str(e)}",
-                original_path=str(file_path),
-                processing_time=time.time() - start_time,
-                thresholds_used=options.quality_thresholds
+                error_message=f"PDF conversion error: {str(e)}",
+                conversion_time=time.time() - start_time
             )
     
-    async def process_batch(
-        self, 
-        document_ids: List[str], 
-        options: ProcessingOptions
-    ) -> List[ProcessingResult]:
-        """Process multiple documents."""
-        results = []
+    async def _convert_docx_to_markdown(self, file_path: Path) -> ConversionResult:
+        """Convert DOCX to markdown."""
+        start_time = time.time()
+        filename = file_path.name
         
-        for doc_id in document_ids:
-            # Find the file for this document ID
-            file_path = self._find_document_file(doc_id)
-            if not file_path:
-                results.append(ProcessingResult(
-                    document_id=doc_id,
-                    filename=f"unknown_{doc_id}",
-                    status=ProcessingStatus.FAILED,
-                    success=False,
-                    message="Document file not found",
-                    thresholds_used=options.quality_thresholds
-                ))
-                continue
+        try:
+            # Try MarkItDown first
+            if MD_CONVERTER:
+                try:
+                    result = MD_CONVERTER.convert(str(file_path))
+                    if result and result.text_content.strip():
+                        return ConversionResult(
+                            filename=filename,
+                            success=True,
+                            markdown_content=result.text_content,
+                            method="MarkItDown",
+                            conversion_time=time.time() - start_time,
+                            conversion_score=90
+                        )
+                except Exception:
+                    pass
             
-            result = await self.process_document(doc_id, file_path, options)
-            results.append(result)
-        
-        return results
+            # Fallback to python-docx
+            doc = docx.Document(str(file_path))
+            paragraphs = []
+            
+            for paragraph in doc.paragraphs:
+                text = paragraph.text.strip()
+                if text:
+                    paragraphs.append(text)
+            
+            if paragraphs:
+                markdown_content = "\n\n".join(paragraphs)
+                return ConversionResult(
+                    filename=filename,
+                    success=True,
+                    markdown_content=markdown_content,
+                    method="python-docx",
+                    conversion_time=time.time() - start_time,
+                    conversion_score=85
+                )
+            
+            return ConversionResult(
+                filename=filename,
+                success=False,
+                error_message="No text content found in DOCX file",
+                conversion_time=time.time() - start_time
+            )
+            
+        except Exception as e:
+            return ConversionResult(
+                filename=filename,
+                success=False,
+                error_message=f"DOCX conversion error: {str(e)}",
+                conversion_time=time.time() - start_time
+            )
     
-    def _find_document_file(self, document_id: str) -> Optional[Path]:
-        """Find the uploaded file for a document ID."""
-        # Look for files that start with the document_id
-        for file_path in self.upload_dir.glob(f"{document_id}_*"):
-            if file_path.is_file() and file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
-                return file_path
+    async def _convert_image_to_markdown(self, file_path: Path, ocr_settings: OCRSettings) -> ConversionResult:
+        """Convert image to markdown using OCR."""
+        start_time = time.time()
+        filename = file_path.name
         
-        # Fallback: look for any file that contains the document_id
-        for file_path in self.upload_dir.glob("*"):
-            if (file_path.is_file() and 
-                file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS and
-                document_id in str(file_path.name)):
-                return file_path
+        try:
+            img = Image.open(file_path).convert("RGB")
+            text, confidence = self._ocr_image_with_tesseract(
+                img, 
+                ocr_settings.language, 
+                ocr_settings.page_segmentation_mode
+            )
+            
+            if text and text.strip():
+                conversion_score = int(confidence * 100)
+                return ConversionResult(
+                    filename=filename,
+                    success=True,
+                    markdown_content=text,
+                    method="OCR",
+                    ocr_confidence=confidence,
+                    conversion_time=time.time() - start_time,
+                    conversion_score=conversion_score
+                )
+            
+            return ConversionResult(
+                filename=filename,
+                success=False,
+                error_message="No text detected in image",
+                conversion_time=time.time() - start_time
+            )
+            
+        except Exception as e:
+            return ConversionResult(
+                filename=filename,
+                success=False,
+                error_message=f"Image OCR error: {str(e)}",
+                conversion_time=time.time() - start_time
+            )
+    
+    async def _convert_text_to_markdown(self, file_path: Path) -> ConversionResult:
+        """Convert text/markdown file."""
+        start_time = time.time()
+        filename = file_path.name
         
-        return None
-    
-    def get_supported_extensions(self) -> List[str]:
-        """Get list of supported file extensions."""
-        return list(self.SUPPORTED_EXTENSIONS)
-    
-    def is_supported_file(self, filename: str) -> bool:
-        """Check if file is supported for processing."""
-        return Path(filename).suffix.lower() in self.SUPPORTED_EXTENSIONS
+        try:
+            content = file_path.read_text(encoding="utf-8")
+            if content.strip():
+                return ConversionResult(
+                    filename=filename,
+                    success=True,
+                    markdown_content=content,
+                    method="Direct Text Loading",
+                    conversion_time=time.time() - start_time,
+                    conversion_score=100
+                )
+            
+            return ConversionResult(
+                filename=filename,
+                success=False,
+                error_message="File is empty",
+                conversion_time=time.time() - start_time
+            )
+            
+        except Exception as e:
+            return ConversionResult(
+                filename=filename,
+                success=False,
+                error_message=f"Text file error: {str(e)}",
+                conversion_time=time.time() - start_time
+            )
     
     async def save_uploaded_file(self, filename: str, content: bytes) -> Tuple[str, Path]:
         """Save uploaded file and return document ID and file path."""
@@ -578,6 +399,42 @@ class DocumentService:
         files.sort(key=lambda x: x["upload_time"], reverse=True)
         return files
     
+    def list_batch_files(self) -> List[Dict[str, Any]]:
+        """List all batch files with metadata."""
+        files = []
+        try:
+            # Ensure batch directory exists
+            self.batch_dir.mkdir(parents=True, exist_ok=True)
+            
+            for file_path in self.batch_dir.glob("*"):
+                if file_path.is_file():
+                    # Check if it's a supported file type
+                    if file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                        try:
+                            stat = file_path.stat()
+                            
+                            # Use filename as document_id for batch files
+                            document_id = file_path.stem
+                            
+                            files.append({
+                                "document_id": document_id,
+                                "filename": file_path.name,
+                                "original_filename": file_path.name,
+                                "file_size": stat.st_size,
+                                "upload_time": stat.st_mtime * 1000,  # Convert to milliseconds for JS
+                                "file_path": str(file_path)
+                            })
+                        except Exception as e:
+                            print(f"Error processing batch file {file_path}: {e}")
+                            continue
+        except Exception as e:
+            print(f"Error listing files in {self.batch_dir}: {e}")
+            return []
+        
+        # Sort by upload time (newest first)
+        files.sort(key=lambda x: x["upload_time"], reverse=True)
+        return files
+    
     def get_processed_content(self, document_id: str) -> Optional[str]:
         """Get processed markdown content for a document."""
         # Look for processed file
@@ -597,43 +454,215 @@ class DocumentService:
     ) -> Optional[ProcessingResult]:
         """Update document content with optional LLM improvements."""
         try:
-            # Apply LLM improvements if requested
-            final_content = content
-            if improvement_prompt and llm_service.is_available:
-                final_content = await llm_service.improve_document(content, improvement_prompt)
-            elif apply_vector_optimization and llm_service.is_available:
-                final_content = await llm_service.optimize_for_vector_db(content)
+            start_time = time.time()
             
-            # Save updated content
-            for file_path in self.processed_dir.glob(f"*_{document_id}.md"):
-                file_path.write_text(final_content, encoding="utf-8")
-                
-                # Re-evaluate the document
-                score, feedback = self._score_conversion(None, final_content)
-                llm_evaluation = None
-                if llm_service.is_available:
-                    llm_evaluation = await llm_service.evaluate_document(final_content)
-                
-                # Create updated result
-                return ProcessingResult(
-                    document_id=document_id,
-                    filename=file_path.name,
-                    status=ProcessingStatus.COMPLETED,
-                    success=True,
-                    markdown_path=str(file_path),
-                    conversion_score=score,
-                    llm_evaluation=llm_evaluation,
-                    vector_optimized=apply_vector_optimization,
-                    processing_time=0.0,
-                    processed_at=time.time()
+            # Apply improvements if requested
+            if improvement_prompt or apply_vector_optimization:
+                content = await self._apply_content_improvements(
+                    content, improvement_prompt, apply_vector_optimization
                 )
             
-            return None
+            # Save updated content
+            processed_file = self.processed_dir / f"updated_{document_id}.md"
+            processed_file.write_text(content, encoding="utf-8")
+            
+            # Re-evaluate quality
+            quality_scores = await llm_service.evaluate_quality(content)
+            
+            # Get default thresholds (you might want to get these from settings)
+            thresholds = QualityThresholds(
+                conversion_threshold=settings.default_conversion_threshold,
+                clarity_threshold=settings.default_clarity_threshold,
+                completeness_threshold=settings.default_completeness_threshold,
+                relevance_threshold=settings.default_relevance_threshold,
+                markdown_threshold=settings.default_markdown_threshold
+            )
+            
+            # Check if passes all thresholds
+            passes_thresholds = (
+                quality_scores.clarity >= thresholds.clarity_threshold and
+                quality_scores.completeness >= thresholds.completeness_threshold and
+                quality_scores.relevance >= thresholds.relevance_threshold and
+                quality_scores.markdown_quality >= thresholds.markdown_threshold
+            )
+            
+            return ProcessingResult(
+                document_id=document_id,
+                filename=f"updated_{document_id}.md",
+                status=ProcessingStatus.COMPLETED,
+                success=True,
+                message="Content updated successfully",
+                processed_path=str(processed_file),
+                markdown_content=content,
+                quality_scores=quality_scores,
+                pass_all_thresholds=passes_thresholds,
+                processing_time=time.time() - start_time,
+                processed_at=time.time(),
+                thresholds_used=thresholds
+            )
             
         except Exception as e:
-            print(f"Error updating document {document_id}: {e}")
+            print(f"Error updating content for {document_id}: {e}")
             return None
+    
+    async def _apply_content_improvements(
+        self, 
+        content: str, 
+        improvement_prompt: Optional[str] = None,
+        apply_vector_optimization: bool = False
+    ) -> str:
+        """Apply LLM-based improvements to content."""
+        if apply_vector_optimization:
+            content = await llm_service.optimize_for_vector_db(content)
+        
+        if improvement_prompt:
+            content = await llm_service.improve_content(content, improvement_prompt)
+        
+        return content
+    
+    async def process_document(
+        self, 
+        document_id: str, 
+        file_path: Path, 
+        options: ProcessingOptions
+    ) -> ProcessingResult:
+        """Process a single document."""
+        start_time = time.time()
+        filename = file_path.name
+        
+        try:
+            # Convert to markdown
+            conversion_result = await self.convert_to_markdown(file_path, options.ocr_settings)
+            
+            if not conversion_result.success:
+                return ProcessingResult(
+                    document_id=document_id,
+                    filename=filename,
+                    status=ProcessingStatus.FAILED,
+                    success=False,
+                    message=conversion_result.error_message or "Conversion failed",
+                    original_path=str(file_path),
+                    processing_time=time.time() - start_time,
+                    thresholds_used=options.quality_thresholds
+                )
+            
+            markdown_content = conversion_result.markdown_content
+            
+            # Apply vector optimization if requested
+            vector_optimized = False
+            if options.vector_db_optimization:
+                try:
+                    markdown_content = await llm_service.optimize_for_vector_db(markdown_content)
+                    vector_optimized = True
+                except Exception as e:
+                    print(f"Vector optimization failed: {e}")
+            
+            # Save processed content
+            processed_file = self.processed_dir / f"{filename}_{document_id}.md"
+            processed_file.write_text(markdown_content, encoding="utf-8")
+            
+            # Evaluate quality
+            quality_scores = await llm_service.evaluate_quality(markdown_content)
+            document_summary = await llm_service.generate_summary(markdown_content)
+            
+            # Check if passes all thresholds
+            passes_thresholds = (
+                conversion_result.conversion_score >= options.quality_thresholds.conversion_threshold and
+                quality_scores.clarity >= options.quality_thresholds.clarity_threshold and
+                quality_scores.completeness >= options.quality_thresholds.completeness_threshold and
+                quality_scores.relevance >= options.quality_thresholds.relevance_threshold and
+                quality_scores.markdown_quality >= options.quality_thresholds.markdown_threshold
+            )
+            
+            return ProcessingResult(
+                document_id=document_id,
+                filename=filename,
+                status=ProcessingStatus.COMPLETED,
+                success=True,
+                message="Processing completed successfully",
+                original_path=str(file_path),
+                processed_path=str(processed_file),
+                markdown_content=markdown_content,
+                quality_scores=quality_scores,
+                document_summary=document_summary,
+                conversion_score=conversion_result.conversion_score,
+                pass_all_thresholds=passes_thresholds,
+                vector_optimized=vector_optimized,
+                processing_time=time.time() - start_time,
+                processed_at=time.time(),
+                thresholds_used=options.quality_thresholds
+            )
+            
+        except Exception as e:
+            return ProcessingResult(
+                document_id=document_id,
+                filename=filename,
+                status=ProcessingStatus.FAILED,
+                success=False,
+                message=f"Processing error: {str(e)}",
+                original_path=str(file_path),
+                processing_time=time.time() - start_time,
+                thresholds_used=options.quality_thresholds
+            )
+    
+    async def process_batch(
+        self, 
+        document_ids: List[str], 
+        options: ProcessingOptions
+    ) -> List[ProcessingResult]:
+        """Process multiple documents."""
+        results = []
+        
+        for doc_id in document_ids:
+            # Find the file for this document ID
+            file_path = self._find_document_file(doc_id)
+            if not file_path:
+                results.append(ProcessingResult(
+                    document_id=doc_id,
+                    filename=f"unknown_{doc_id}",
+                    status=ProcessingStatus.FAILED,
+                    success=False,
+                    message="Document file not found",
+                    thresholds_used=options.quality_thresholds
+                ))
+                continue
+            
+            result = await self.process_document(doc_id, file_path, options)
+            results.append(result)
+        
+        return results
+    
+    def _find_document_file(self, document_id: str) -> Optional[Path]:
+        """Find the uploaded or batch file for a document ID."""
+        # Look in uploaded files first
+        for file_path in self.upload_dir.glob(f"{document_id}_*"):
+            if file_path.is_file() and file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                return file_path
+        
+        # Look in batch files
+        for file_path in self.batch_dir.glob("*"):
+            if (file_path.is_file() and 
+                file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS and
+                (file_path.stem == document_id or document_id in str(file_path.name))):
+                return file_path
+        
+        # Fallback: look for any file that contains the document_id in upload dir
+        for file_path in self.upload_dir.glob("*"):
+            if (file_path.is_file() and 
+                file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS and
+                document_id in str(file_path.name)):
+                return file_path
+        
+        return None
+    
+    def get_supported_extensions(self) -> List[str]:
+        """Get list of supported file extensions."""
+        return list(self.SUPPORTED_EXTENSIONS)
+    
+    def is_supported_file(self, filename: str) -> bool:
+        """Check if file is supported for processing."""
+        return Path(filename).suffix.lower() in self.SUPPORTED_EXTENSIONS
 
 
-# Global document service instance
+# Global service instance
 document_service = DocumentService()
