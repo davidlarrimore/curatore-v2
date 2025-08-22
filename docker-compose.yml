@@ -5,20 +5,52 @@ services:
     build:
       context: ./backend
       dockerfile: Dockerfile
-    container_name: rfn-backend
+    container_name: curatore-backend
     volumes:
       - ./backend:/app
+      # Map local directories for file storage
+      - ./uploads:/app/uploads
+      - ./processed:/app/processed
     ports:
       - "8000:8000"
     environment:
       - PYTHONUNBUFFERED=1
+      # Load from .env file
+      - DEBUG=${DEBUG:-false}
+      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000"]}
+      # OpenAI/LLM Configuration
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_VERIFY_SSL=${OPENAI_VERIFY_SSL:-true}
+      - OPENAI_TIMEOUT=${OPENAI_TIMEOUT:-60}
+      - OPENAI_MAX_RETRIES=${OPENAI_MAX_RETRIES:-3}
+      # OCR Configuration
+      - OCR_LANG=${OCR_LANG:-eng}
+      - OCR_PSM=${OCR_PSM:-3}
+      # File Storage
+      - UPLOAD_DIR=${UPLOAD_DIR:-uploads}
+      - PROCESSED_DIR=${PROCESSED_DIR:-processed}
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-52428800}
+      # Quality Thresholds
+      - DEFAULT_CONVERSION_THRESHOLD=${DEFAULT_CONVERSION_THRESHOLD:-70}
+      - DEFAULT_CLARITY_THRESHOLD=${DEFAULT_CLARITY_THRESHOLD:-7}
+      - DEFAULT_COMPLETENESS_THRESHOLD=${DEFAULT_COMPLETENESS_THRESHOLD:-7}
+      - DEFAULT_RELEVANCE_THRESHOLD=${DEFAULT_RELEVANCE_THRESHOLD:-7}
+      - DEFAULT_MARKDOWN_THRESHOLD=${DEFAULT_MARKDOWN_THRESHOLD:-7}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
 
   frontend:
     build:
       context: ./frontend
       dockerfile: Dockerfile
-    container_name: rfn-frontend
+    container_name: curatore-frontend
     volumes:
       - ./frontend:/app
       - /app/node_modules
@@ -27,3 +59,5 @@ services:
     environment:
       - NEXT_PUBLIC_API_URL=http://localhost:8000
     command: npm run dev
+    depends_on:
+      - backend

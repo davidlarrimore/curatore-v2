@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-docker compose up --build
+echo "🚀 Starting Curatore v2 development environment..."
+docker-compose up --build

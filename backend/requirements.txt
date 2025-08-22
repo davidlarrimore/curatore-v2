@@ -1,3 +1,25 @@
+# Core FastAPI dependencies
 fastapi==0.115.0
 uvicorn[standard]==0.30.6
 pydantic==2.8.2
+pydantic-settings==2.5.2
+python-multipart==0.0.6
+
+# Document processing dependencies (from v1)
+markitdown>=0.0.1
+pdfminer.six>=20221105
+pillow>=10.3
+pytesseract>=0.3.10
+python-docx>=1.1.2
+pymupdf>=1.24
+httpx>=0.24.0
+urllib3>=1.26.0
+
+# OpenAI API
+openai>=1.35
+
+# File handling
+aiofiles>=0.24.0
+
+# Additional utilities
+python-dotenv>=1.0.0

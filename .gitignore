@@ -83,3 +83,5 @@ Icon?
 *.swn
 *.swo
 *.~lock.*
+
+uploads/*

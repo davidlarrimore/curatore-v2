@@ -1,3 +1,4 @@
 #!/usr/bin/env bash
 set -euo pipefail
-docker compose down
+echo "🛑 Stopping Curatore v2 development environment..."
+docker-compose down
