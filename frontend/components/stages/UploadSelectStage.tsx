@@ -1,7 +1,7 @@
-// components/stages/UploadSelectStage.tsx
+// frontend/components/stages/UploadSelectStage.tsx
 'use client'
 
-import { useState, useRef, useCallback } from 'react';
+import { useState, useRef, useCallback, useEffect } from 'react';
 import { FileInfo, ProcessingOptions } from '@/types';
 import { fileApi, utils } from '@/lib/api';
 
@@ -31,10 +31,20 @@ export function UploadSelectStage({
   isProcessing
 }: UploadSelectStageProps) {
   const [uploadedFiles, setUploadedFiles] = useState<FileInfo[]>([]);
+  const [batchFiles, setBatchFiles] = useState<FileInfo[]>([]);
   const [isUploading, setIsUploading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [dragActive, setDragActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Load files when source type changes
+  useEffect(() => {
+    if (sourceType === 'upload') {
+      loadUploadedFiles();
+    } else {
+      loadBatchFiles();
+    }
+  }, [sourceType]);
 
   // Load uploaded files
   const loadUploadedFiles = useCallback(async () => {
@@ -44,6 +54,20 @@ export function UploadSelectStage({
       setUploadedFiles(response.files);
     } catch (error) {
       console.error('Failed to load uploaded files:', error);
+    } finally {
+      setIsRefreshing(false);
+    }
+  }, []);
+
+  // Load batch files
+  const loadBatchFiles = useCallback(async () => {
+    setIsRefreshing(true);
+    try {
+      const response = await fileApi.listBatchFiles();
+      setBatchFiles(response.files);
+    } catch (error) {
+      console.error('Failed to load batch files:', error);
+      setBatchFiles([]);
     } finally {
       setIsRefreshing(false);
     }
@@ -78,7 +102,6 @@ export function UploadSelectStage({
         });
       } catch (error) {
         console.error(`Failed to upload ${file.name}:`, error);
-        // Fixed: Handle unknown error type
         const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
         alert(`Failed to upload ${file.name}: ${errorMessage}`);
       }
@@ -87,7 +110,7 @@ export function UploadSelectStage({
     if (uploadedFileIds.length > 0) {
       await loadUploadedFiles();
       // Auto-select uploaded files
-      onSelectedFilesChange(uploadedFileIds);
+      onSelectedFilesChange([...selectedFiles, ...uploadedFileIds]);
     }
 
     setIsUploading(false);
@@ -147,6 +170,11 @@ export function UploadSelectStage({
     onProcess(selectedFiles, processingOptions);
   };
 
+  // Get current file list based on source type
+  const getCurrentFiles = () => {
+    return sourceType === 'upload' ? uploadedFiles : batchFiles;
+  };
+
   // Render file list
   const renderFileList = (files: FileInfo[], title: string) => {
     const allSelected = files.length > 0 && files.every(f => 
@@ -157,8 +185,8 @@ export function UploadSelectStage({
       <div className="space-y-4">
         <div className="flex items-center justify-between">
           <h3 className="text-lg font-medium">{title} ({files.length})</h3>
-          {files.length > 0 && (
-            <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-2">
+            {files.length > 0 && (
               <label className="flex items-center space-x-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -168,22 +196,37 @@ export function UploadSelectStage({
                 />
                 <span className="text-sm text-gray-600">Select All</span>
               </label>
-              <button
-                type="button"
-                onClick={sourceType === 'upload' ? loadUploadedFiles : undefined}
-                disabled={isRefreshing}
-                className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-md transition-colors disabled:opacity-50"
-              >
-                {isRefreshing ? '🔄' : '🔄'} Refresh
-              </button>
-            </div>
-          )}
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                if (sourceType === 'upload') {
+                  loadUploadedFiles();
+                } else {
+                  loadBatchFiles();
+                }
+              }}
+              disabled={isRefreshing}
+              className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-md transition-colors disabled:opacity-50"
+            >
+              {isRefreshing ? '🔄' : '🔄'} Refresh
+            </button>
+          </div>
         </div>
 
         {files.length === 0 ? (
           <div className="text-center py-8 text-gray-500">
             <div className="text-4xl mb-2">📁</div>
-            <p>No files found</p>
+            {sourceType === 'local' ? (
+              <div>
+                <p className="font-medium">No batch files found</p>
+                <p className="text-sm mt-1">
+                  Place files in the <code className="bg-gray-200 px-1 rounded">files/batch_files/</code> folder and refresh
+                </p>
+              </div>
+            ) : (
+              <p>No uploaded files found</p>
+            )}
           </div>
         ) : (
           <div className="space-y-2 max-h-64 overflow-y-auto">
@@ -199,10 +242,17 @@ export function UploadSelectStage({
                   />
                   <div className="flex-1">
                     <p className="font-medium text-gray-900">{file.filename}</p>
-                    <p className="text-sm text-gray-500">
-                      {utils.formatFileSize(file.file_size)} • 
-                      {new Date(file.upload_time).toLocaleDateString()}
-                    </p>
+                    <div className="flex items-center space-x-2 text-sm text-gray-500">
+                      <span>{utils.formatFileSize(file.file_size)}</span>
+                      <span>•</span>
+                      <span>{new Date(file.upload_time).toLocaleDateString()}</span>
+                      {sourceType === 'local' && (
+                        <>
+                          <span>•</span>
+                          <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded text-xs">Batch</span>
+                        </>
+                      )}
+                    </div>
                   </div>
                 </div>
               );
@@ -212,6 +262,8 @@ export function UploadSelectStage({
       </div>
     );
   };
+
+  const currentFiles = getCurrentFiles();
 
   return (
     <div className="space-y-6">
@@ -246,10 +298,10 @@ export function UploadSelectStage({
         <div>
           <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
             <p className="text-sm text-blue-800">
-              <strong>Local Files:</strong> Place documents in the batch_documents/ folder and click refresh.
+              <strong>Local Files:</strong> Place documents in the <code className="bg-blue-100 px-1 rounded">files/batch_files/</code> folder and click refresh.
             </p>
           </div>
-          {renderFileList([], 'Local Files')}
+          {renderFileList(batchFiles, 'Local Files')}
         </div>
       ) : (
         <div className="space-y-6">
@@ -376,6 +428,9 @@ export function UploadSelectStage({
             {selectedFiles.length > 0 && (
               <p className="text-sm text-gray-600">
                 {selectedFiles.length} file(s) selected for processing
+                {sourceType === 'local' && (
+                  <span className="ml-2 text-blue-600">(from batch files)</span>
+                )}
               </p>
             )}
           </div>

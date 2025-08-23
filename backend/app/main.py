@@ -71,6 +71,29 @@ def clear_file_directories():
 async def startup_event():
     """Application startup event handler."""
     print("🚀 Starting Curatore v2...")
+    
+    # Debug: Show current working directory and file paths
+    import os
+    print(f"📍 Current working directory: {os.getcwd()}")
+    print(f"📁 Settings paths:")
+    print(f"   FILES_ROOT: {settings.files_root}")
+    print(f"   UPLOAD_DIR: {settings.upload_dir}")
+    print(f"   PROCESSED_DIR: {settings.processed_dir}")
+    print(f"   BATCH_DIR: {settings.batch_dir}")
+    
+    # Check if mounted directories exist
+    for name, path in [
+        ("Files root", settings.files_root),
+        ("Upload dir", settings.upload_dir),
+        ("Processed dir", settings.processed_dir),
+        ("Batch dir", settings.batch_dir)
+    ]:
+        path_obj = Path(path)
+        exists = path_obj.exists()
+        is_dir = path_obj.is_dir() if exists else False
+        print(f"   {name}: {path} - {'✅ EXISTS' if exists else '❌ MISSING'}{' (DIR)' if is_dir else ''}")
+    
+    # Clear uploaded and processed files only (not batch files)
     clear_file_directories()
     
     # Clear in-memory storage
@@ -78,11 +101,8 @@ async def startup_event():
     batch_results.clear()
     print("✅ In-memory storage cleared")
     
-    # Ensure directories exist
-    Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
-    Path(settings.processed_dir).mkdir(parents=True, exist_ok=True)
-    Path(settings.batch_dir).mkdir(parents=True, exist_ok=True)
-    print("✅ Directories ensured")
+    # The DocumentService will handle directory creation in its __init__
+    print("✅ Startup complete")
 
 
 @app.get("/api/health", response_model=HealthStatus)
@@ -165,7 +185,21 @@ async def list_uploaded_files():
         files = document_service.list_uploaded_files()
         return {"files": files, "count": len(files)}
     except Exception as e:
+        print(f"Error in list_uploaded_files: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
+
+
+@app.get("/api/documents/batch")
+async def list_batch_files():
+    """List all files in the batch_files directory for local processing."""
+    try:
+        files = document_service.list_batch_files()
+        return {"files": files, "count": len(files)}
+    except Exception as e:
+        print(f"Error in list_batch_files: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        raise HTTPException(status_code=500, detail=f"Failed to list batch files: {str(e)}")
 
 
 @app.post("/api/documents/upload", response_model=FileUploadResponse)
@@ -240,7 +274,42 @@ async def process_document(
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Processing error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Processing failed: {str(e)}")
+
+
+@app.post("/api/documents/batch/{filename}/process", response_model=ProcessingResult)
+async def process_batch_file(
+    filename: str,
+    background_tasks: BackgroundTasks,
+    options: Optional[ProcessingOptions] = None
+):
+    """Process a single file from the batch_files directory."""
+    try:
+        if not options:
+            options = ProcessingOptions()
+        
+        # Find the batch file
+        batch_file_path = document_service.find_batch_file(filename)
+        if not batch_file_path:
+            raise HTTPException(status_code=404, detail="Batch file not found")
+        
+        # Generate a document ID for the batch file
+        document_id = str(uuid.uuid4())
+        
+        # Process the document
+        result = await document_service.process_document(document_id, batch_file_path, options)
+        
+        # Store result
+        processing_results[document_id] = result
+        
+        return result
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Batch processing error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
 
 
 @app.post("/api/documents/batch/process", response_model=BatchProcessingResult)
@@ -284,6 +353,7 @@ async def process_batch(
         return batch_result
         
     except Exception as e:
+        print(f"Batch processing error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
 
 
@@ -299,11 +369,17 @@ async def get_processing_result(document_id: str):
 @app.get("/api/documents/{document_id}/content")
 async def get_document_content(document_id: str):
     """Get processed markdown content for a document."""
-    content = document_service.get_processed_content(document_id)
-    if not content:
-        raise HTTPException(status_code=404, detail="Processed content not found")
-    
-    return {"content": content}
+    try:
+        content = document_service.get_processed_content(document_id)
+        if not content:
+            raise HTTPException(status_code=404, detail="Processed content not found")
+        
+        return {"content": content}
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Get content error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to get content: {str(e)}")
 
 
 @app.put("/api/documents/{document_id}/content", response_model=ProcessingResult)
@@ -328,22 +404,29 @@ async def update_document_content(document_id: str, request: DocumentEditRequest
     except HTTPException:
         raise
     except Exception as e:
+        print(f"Update content error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Content update failed: {str(e)}")
 
 
 @app.get("/api/documents/{document_id}/download")
 async def download_document(document_id: str):
     """Download processed document."""
-    # Find processed file
-    for file_path in Path(settings.processed_dir).glob(f"*_{document_id}.md"):
-        if file_path.exists():
-            return FileResponse(
-                path=str(file_path),
-                filename=f"{file_path.stem}.md",
-                media_type="text/markdown"
-            )
-    
-    raise HTTPException(status_code=404, detail="Processed document not found")
+    try:
+        # Find processed file
+        for file_path in Path(settings.processed_dir).glob(f"*_{document_id}.md"):
+            if file_path.exists():
+                return FileResponse(
+                    path=str(file_path),
+                    filename=f"{file_path.stem}.md",
+                    media_type="text/markdown"
+                )
+        
+        raise HTTPException(status_code=404, detail="Processed document not found")
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"Download error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
 
 
 @app.get("/api/batch/{batch_id}/result", response_model=BatchProcessingResult)
@@ -384,6 +467,7 @@ async def delete_document(document_id: str):
         return {"message": "Document deleted successfully"}
         
     except Exception as e:
+        print(f"Delete error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Deletion failed: {str(e)}")
 
 

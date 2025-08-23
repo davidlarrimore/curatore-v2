@@ -36,16 +36,48 @@ class DocumentService:
     SUPPORTED_EXTENSIONS = {".docx", ".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".md", ".txt"}
     
     def __init__(self):
+        # Use absolute paths from settings - these should match Docker volume mount
         self.upload_dir = Path(settings.upload_dir)
         self.processed_dir = Path(settings.processed_dir)
         self.batch_dir = Path(settings.batch_dir)
+        
+        print(f"🔧 DocumentService initialized with:")
+        print(f"   Upload dir: {self.upload_dir}")
+        print(f"   Processed dir: {self.processed_dir}")
+        print(f"   Batch dir: {self.batch_dir}")
+        
+        # Only ensure directories exist, don't create them if they don't
         self._ensure_directories()
     
     def _ensure_directories(self) -> None:
-        """Ensure required directories exist."""
-        self.upload_dir.mkdir(parents=True, exist_ok=True)
-        self.processed_dir.mkdir(parents=True, exist_ok=True)
-        self.batch_dir.mkdir(parents=True, exist_ok=True)
+        """Ensure required directories exist - but only if the parent volume is mounted."""
+        try:
+            # Check if the main files directory exists (should be mounted from Docker)
+            files_root = Path(settings.files_root)
+            
+            if not files_root.exists():
+                print(f"⚠️  Main files directory doesn't exist: {files_root}")
+                print("   This suggests the Docker volume mount may not be working correctly.")
+                # Don't create it - this should be mounted from the host
+                return
+            
+            # Only create subdirectories if the main directory exists
+            dirs_to_ensure = [
+                (self.upload_dir, "uploaded_files"),
+                (self.processed_dir, "processed_files"), 
+                (self.batch_dir, "batch_files")
+            ]
+            
+            for dir_path, name in dirs_to_ensure:
+                if not dir_path.exists():
+                    dir_path.mkdir(parents=True, exist_ok=True)
+                    print(f"📁 Created {name} directory: {dir_path}")
+                else:
+                    print(f"✅ {name} directory exists: {dir_path}")
+                    
+        except Exception as e:
+            print(f"❌ Error ensuring directories: {e}")
+            # Don't raise the exception - let the app continue
     
     def clear_all_files(self) -> Dict[str, int]:
         """Clear all uploaded and processed files. Returns count of deleted files."""
@@ -80,6 +112,92 @@ class DocumentService:
             raise
         
         return deleted_counts
+    
+    def list_batch_files(self) -> List[Dict[str, Any]]:
+        """List all files in the batch_files directory."""
+        files = []
+        try:
+            print(f"🔍 Listing batch files from: {self.batch_dir}")
+            
+            if not self.batch_dir.exists():
+                print(f"⚠️ Batch directory does not exist: {self.batch_dir}")
+                return files
+            
+            file_count = 0
+            for file_path in self.batch_dir.glob("*"):
+                file_count += 1
+                if file_path.is_file() and file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                    try:
+                        stat = file_path.stat()
+                        
+                        # Generate a temporary document_id for frontend compatibility
+                        document_id = f"batch_{file_path.stem}"
+                        
+                        file_info = {
+                            "document_id": document_id,
+                            "filename": file_path.name,
+                            "original_filename": file_path.name,
+                            "file_size": stat.st_size,
+                            "upload_time": stat.st_mtime * 1000,  # Convert to milliseconds
+                            "file_path": str(file_path),
+                            "source": "batch"  # Mark as batch file
+                        }
+                        files.append(file_info)
+                        print(f"📄 Found batch file: {file_path.name} ({stat.st_size} bytes)")
+                    except Exception as e:
+                        print(f"⚠️ Error processing file {file_path}: {e}")
+                        continue
+                else:
+                    if file_path.is_file():
+                        print(f"❌ Unsupported file type: {file_path.name}")
+            
+            print(f"✅ Found {len(files)} valid batch files out of {file_count} total files")
+            
+        except Exception as e:
+            print(f"❌ Error listing batch files: {e}")
+            import traceback
+            traceback.print_exc()
+        
+        return files
+
+    def find_batch_file(self, filename: str) -> Optional[Path]:
+        """Find a specific file in the batch_files directory."""
+        try:
+            batch_file_path = self.batch_dir / filename
+            print(f"🔍 Looking for batch file: {batch_file_path}")
+            
+            if batch_file_path.exists() and batch_file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                print(f"✅ Found batch file: {batch_file_path}")
+                return batch_file_path
+            else:
+                print(f"❌ Batch file not found or unsupported: {batch_file_path}")
+                return None
+        except Exception as e:
+            print(f"❌ Error finding batch file {filename}: {e}")
+            return None
+
+    def copy_batch_to_upload(self, filename: str) -> Tuple[str, Path]:
+        """Copy a batch file to the upload directory for processing."""
+        try:
+            # Find the batch file
+            batch_file_path = self.find_batch_file(filename)
+            if not batch_file_path:
+                raise FileNotFoundError(f"Batch file not found: {filename}")
+            
+            # Generate unique document ID
+            document_id = str(uuid.uuid4())
+            
+            # Create target path in upload directory
+            target_path = self.upload_dir / f"{document_id}_{filename}"
+            
+            # Copy file
+            shutil.copy2(batch_file_path, target_path)
+            print(f"📁 Copied batch file: {batch_file_path} -> {target_path}")
+            
+            return document_id, target_path
+        except Exception as e:
+            print(f"❌ Error copying batch file {filename}: {e}")
+            raise
     
     def _pdf_pages_to_images(self, pdf_path: Path, dpi: int = 220) -> List[Image.Image]:
         """Convert PDF pages to images for OCR."""
@@ -386,6 +504,8 @@ class DocumentService:
         filename = file_path.name
         
         try:
+            print(f"🔄 Processing document: {filename} (ID: {document_id})")
+            
             # Step 1: Convert to markdown
             conversion_result = await self.convert_to_markdown(file_path, options.ocr_settings)
             
@@ -403,13 +523,16 @@ class DocumentService:
                 )
             
             markdown_content = conversion_result.markdown_content
+            print(f"✅ Conversion successful: {len(markdown_content)} characters")
             
             # Step 2: Generate document summary
             document_summary = None
             if llm_service.is_available:
                 try:
                     document_summary = await llm_service.summarize_document(markdown_content, filename)
+                    print(f"📝 Summary generated: {document_summary[:100]}...")
                 except Exception as e:
+                    print(f"⚠️ Summary generation failed: {e}")
                     document_summary = f"Summary generation failed: {str(e)[:100]}..."
             
             # Step 3: Vector DB optimization (if enabled)
@@ -422,15 +545,19 @@ class DocumentService:
                         markdown_content = optimized_content
                         vector_optimized = True
                         optimization_note = "Vector DB optimized. "
+                        print("🎯 Vector optimization applied")
                     else:
                         optimization_note = "Vector optimization returned empty content. "
+                        print("⚠️ Vector optimization returned empty content")
                 except Exception as e:
                     optimization_note = f"Optimization failed ({str(e)[:50]}...). "
+                    print(f"❌ Vector optimization failed: {e}")
             
             # Step 4: Save processed markdown
             output_path = self.processed_dir / f"{file_path.stem}_{document_id}.md"
             try:
                 output_path.write_text(markdown_content, encoding="utf-8")
+                print(f"💾 Saved processed content: {output_path}")
             except Exception as e:
                 return ProcessingResult(
                     document_id=document_id,
@@ -452,8 +579,9 @@ class DocumentService:
             if llm_service.is_available:
                 try:
                     llm_evaluation = await llm_service.evaluate_document(markdown_content)
+                    print("📊 LLM evaluation completed")
                 except Exception as e:
-                    print(f"LLM evaluation failed for {filename}: {e}")
+                    print(f"⚠️ LLM evaluation failed for {filename}: {e}")
             
             # Step 6: Check quality thresholds
             passes_thresholds = False
@@ -463,6 +591,11 @@ class DocumentService:
                     llm_evaluation.model_dump() if llm_evaluation else None,
                     options.quality_thresholds
                 )
+                status = "✅ PASS" if passes_thresholds else "❌ FAIL"
+                print(f"🎯 Quality check: {status}")
+            
+            processing_time = time.time() - start_time
+            print(f"⏱️ Processing completed in {processing_time:.2f}s")
             
             return ProcessingResult(
                 document_id=document_id,
@@ -477,12 +610,16 @@ class DocumentService:
                 conversion_score=conversion_result.conversion_score,
                 pass_all_thresholds=passes_thresholds,
                 vector_optimized=vector_optimized,
-                processing_time=time.time() - start_time,
+                processing_time=processing_time,
                 processed_at=time.time(),
                 thresholds_used=options.quality_thresholds
             )
             
         except Exception as e:
+            print(f"❌ Processing error for {filename}: {e}")
+            import traceback
+            traceback.print_exc()
+            
             return ProcessingResult(
                 document_id=document_id,
                 filename=filename,
@@ -523,12 +660,26 @@ class DocumentService:
     
     def _find_document_file(self, document_id: str) -> Optional[Path]:
         """Find the uploaded file for a document ID."""
-        # Look for files that start with the document_id
+        # Look for files that start with the document_id in upload directory
         for file_path in self.upload_dir.glob(f"{document_id}_*"):
             if file_path.is_file() and file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
                 return file_path
         
-        # Look in batch files
+        # Look in batch files for batch_ prefixed IDs
+        if document_id.startswith("batch_"):
+            batch_filename = document_id.replace("batch_", "") + ".*"
+            for file_path in self.batch_dir.glob(batch_filename):
+                if file_path.is_file() and file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                    return file_path
+            
+            # Also try exact filename match
+            for file_path in self.batch_dir.glob("*"):
+                if (file_path.is_file() and 
+                    file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS and
+                    file_path.stem == document_id.replace("batch_", "")):
+                    return file_path
+        
+        # Look in batch files by exact match
         for file_path in self.batch_dir.glob("*"):
             if (file_path.is_file() and 
                 file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS and
@@ -594,7 +745,7 @@ class DocumentService:
                         "filename": parts[1] if len(parts) > 1 else file_path.name,
                         "original_filename": file_path.name,
                         "file_size": stat.st_size,
-                        "upload_time": stat.st_mtime,
+                        "upload_time": stat.st_mtime * 1000,  # Convert to milliseconds
                         "file_path": str(file_path)
                     })
         except Exception as e:

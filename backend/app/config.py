@@ -34,11 +34,11 @@ class Settings(BaseSettings):
     ocr_lang: str = Field(default="eng", env="OCR_LANG")
     ocr_psm: int = Field(default=3, env="OCR_PSM")
     
-    # File Storage - FIXED: Single standardized location
-    files_root: str = Field(default="files", env="FILES_ROOT")
-    upload_dir: str = Field(default="files/uploaded_files", env="UPLOAD_DIR")
-    processed_dir: str = Field(default="files/processed_files", env="PROCESSED_DIR")
-    batch_dir: str = Field(default="files/batch_files", env="BATCH_DIR")
+    # File Storage - FIXED: Use absolute paths that match Docker volume mount
+    files_root: str = Field(default="/app/files", env="FILES_ROOT")
+    upload_dir: str = Field(default="/app/files/uploaded_files", env="UPLOAD_DIR")
+    processed_dir: str = Field(default="/app/files/processed_files", env="PROCESSED_DIR")
+    batch_dir: str = Field(default="/app/files/batch_files", env="BATCH_DIR")
     max_file_size: int = Field(default=50 * 1024 * 1024, env="MAX_FILE_SIZE")  # 50MB
     
     # Quality Thresholds
