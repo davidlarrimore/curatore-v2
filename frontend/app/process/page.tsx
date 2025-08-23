@@ -5,14 +5,16 @@ import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
 import { ProcessingStage, ProcessingState, FileInfo, ProcessingResult, ProcessingOptions } from '@/types';
 import { systemApi, utils } from '@/lib/api';
-import { Accordion, AccordionItem } from '@/components/ui/Accordion';
 import { UploadSelectStage } from '@/components/stages/UploadSelectStage';
-import { ProcessingStage as ProcessingStageComponent } from '@/components/stages/ProcessingStage';
+import { ProcessingPanel } from '@/components/ProcessingPanel';
 import { ReviewStage } from '@/components/stages/ReviewStage';
 import { DownloadStage } from '@/components/stages/DownloadStage';
 
+type AppStage = 'upload' | 'review' | 'download';
+
 export default function ProcessPage() {
   const router = useRouter();
+  const [currentStage, setCurrentStage] = useState<AppStage>('upload');
   const [state, setState] = useState<ProcessingState>({
     currentStage: 'upload',
     sourceType: 'upload',
@@ -34,6 +36,11 @@ export default function ProcessPage() {
       auto_optimize: true
     }
   });
+
+  // Processing panel state
+  const [showProcessingPanel, setShowProcessingPanel] = useState(false);
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [isProcessingComplete, setIsProcessingComplete] = useState(false);
 
   const [systemStatus, setSystemStatus] = useState({
     health: 'checking...',
@@ -101,6 +108,10 @@ export default function ProcessPage() {
         config: state.config // Keep configuration
       });
       
+      setCurrentStage('upload');
+      setShowProcessingPanel(false);
+      setIsProcessing(false);
+      setIsProcessingComplete(false);
       setError('');
       setShowResetConfirm(false);
       
@@ -115,16 +126,6 @@ export default function ProcessPage() {
     } finally {
       setIsResetting(false);
     }
-  };
-
-  // Stage navigation handlers
-  const handleStageChange = (stage: ProcessingStage) => {
-    setState(prev => ({ ...prev, currentStage: stage }));
-  };
-
-  // Fixed handler for accordion onToggle
-  const handleAccordionToggle = (id: string) => {
-    handleStageChange(id as ProcessingStage);
   };
 
   const handleSourceTypeChange = (sourceType: 'local' | 'upload') => {
@@ -159,24 +160,33 @@ export default function ProcessPage() {
       ...prev,
       selectedFiles: files,
       config: { ...prev.config, ...options },
-      currentStage: 'process',
-      processingComplete: false,
       processingResults: []
     }));
+
+    // Switch to review stage and show processing panel
+    setCurrentStage('review');
+    setShowProcessingPanel(true);
+    setIsProcessing(true);
+    setIsProcessingComplete(false);
   };
 
   const handleProcessingComplete = (results: ProcessingResult[]) => {
     setState(prev => ({
       ...prev,
       processingResults: results,
-      processingComplete: true,
-      currentStage: 'review'
+      processingComplete: true
     }));
+    
+    setIsProcessing(false);
+    setIsProcessingComplete(true);
+    // Keep the processing panel open so user can see the logs/results
   };
 
   const handleProcessingError = (error: string) => {
     setError(error);
-    setState(prev => ({ ...prev, currentStage: 'upload' }));
+    setIsProcessing(false);
+    setIsProcessingComplete(false);
+    // Don't close the processing panel so user can see the error logs
   };
 
   const handleResultsUpdate = (results: ProcessingResult[]) => {
@@ -184,7 +194,8 @@ export default function ProcessPage() {
   };
 
   const handleReviewComplete = () => {
-    setState(prev => ({ ...prev, currentStage: 'download' }));
+    setCurrentStage('download');
+    setShowProcessingPanel(false); // Close processing panel when moving to download
   };
 
   const handleRestart = () => {
@@ -196,58 +207,15 @@ export default function ProcessPage() {
       processingComplete: false,
       config: state.config // Keep configuration
     });
+    setCurrentStage('upload');
+    setShowProcessingPanel(false);
+    setIsProcessing(false);
+    setIsProcessingComplete(false);
     setError('');
   };
 
-  // Determine stage completion status
-  const getStageStatus = (stage: ProcessingStage) => {
-    switch (stage) {
-      case 'upload':
-        return state.currentStage !== 'upload';
-      case 'process':
-        return state.processingComplete;
-      case 'review':
-        return state.currentStage === 'download';
-      case 'download':
-        return false; // Never completed, can always restart
-      default:
-        return false;
-    }
-  };
-
-  // Determine if stage should be disabled
-  const isStageDisabled = (stage: ProcessingStage) => {
-    switch (stage) {
-      case 'upload':
-        return false; // Always enabled
-      case 'process':
-        return state.selectedFiles.length === 0;
-      case 'review':
-        return !state.processingComplete;
-      case 'download':
-        return state.processingResults.length === 0;
-      default:
-        return true;
-    }
-  };
-
-  // Get stage subtitle
-  const getStageSubtitle = (stage: ProcessingStage) => {
-    switch (stage) {
-      case 'upload':
-        return `${state.selectedFiles.length} files selected`;
-      case 'process':
-        return state.processingComplete 
-          ? `${state.processingResults.length} files processed`
-          : 'Ready to process';
-      case 'review':
-        const ragReady = state.processingResults.filter(r => r.pass_all_thresholds).length;
-        return `${ragReady}/${state.processingResults.length} RAG-ready`;
-      case 'download':
-        return 'Download and manage results';
-      default:
-        return '';
-    }
+  const handleCloseProcessingPanel = () => {
+    setShowProcessingPanel(false);
   };
 
   if (isLoading) {
@@ -389,116 +357,145 @@ export default function ProcessPage() {
           </div>
         )}
 
-        {/* Processing Stages Accordion */}
-        <Accordion 
-          activeId={state.currentStage} 
-          onActiveChange={handleAccordionToggle}
-        >
-          {/* Stage 1: Upload & Select Documents */}
-          <AccordionItem
-            id="upload"
-            title="1. Upload & Select Documents"
-            subtitle={getStageSubtitle('upload')}
-            icon="📁"
-            isOpen={state.currentStage === 'upload'}
-            onToggle={handleAccordionToggle}
-            disabled={isStageDisabled('upload')}
-            completed={getStageStatus('upload')}
-          >
-            <UploadSelectStage
-              sourceType={state.sourceType}
-              onSourceTypeChange={handleSourceTypeChange}
-              selectedFiles={state.selectedFiles}
-              onSelectedFilesChange={handleSelectedFilesChange}
-              onProcess={handleProcessStart}
-              supportedFormats={systemStatus.supportedFormats}
-              maxFileSize={systemStatus.maxFileSize}
-              processingOptions={{
-                auto_optimize: state.config.auto_optimize,
-                ocr_settings: state.config.ocr_settings,
-                quality_thresholds: state.config.quality_thresholds
-              }}
-              onProcessingOptionsChange={handleProcessingOptionsChange}
-              isProcessing={state.currentStage === 'process'}
-            />
-          </AccordionItem>
+        {/* Stage Navigation */}
+        <div className="flex items-center justify-center mb-8">
+          <div className="flex items-center space-x-4">
+            {/* Upload Stage */}
+            <div className="flex items-center">
+              <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
+                currentStage === 'upload' 
+                  ? 'bg-blue-600 text-white' 
+                  : state.selectedFiles.length > 0
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-300 text-gray-600'
+              }`}>
+                {state.selectedFiles.length > 0 ? '✓' : '1'}
+              </div>
+              <span className={`ml-2 font-medium ${
+                currentStage === 'upload' ? 'text-blue-600' : 'text-gray-600'
+              }`}>
+                Upload & Select
+              </span>
+            </div>
 
-          {/* Stage 2: Process Documents */}
-          <AccordionItem
-            id="process"
-            title="2. Process Documents"
-            subtitle={getStageSubtitle('process')}
-            icon="⚙️"
-            isOpen={state.currentStage === 'process'}
-            onToggle={handleAccordionToggle}
-            disabled={isStageDisabled('process')}
-            completed={getStageStatus('process')}
-          >
-            {state.currentStage === 'process' && (
-              <ProcessingStageComponent
+            {/* Arrow */}
+            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+
+            {/* Review Stage */}
+            <div className="flex items-center">
+              <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
+                currentStage === 'review' 
+                  ? 'bg-blue-600 text-white' 
+                  : isProcessingComplete
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-300 text-gray-600'
+              }`}>
+                {isProcessingComplete ? '✓' : '2'}
+              </div>
+              <span className={`ml-2 font-medium ${
+                currentStage === 'review' ? 'text-blue-600' : 'text-gray-600'
+              }`}>
+                Review Results
+              </span>
+            </div>
+
+            {/* Arrow */}
+            <svg className="w-5 h-5 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            </svg>
+
+            {/* Download Stage */}
+            <div className="flex items-center">
+              <div className={`flex items-center justify-center w-10 h-10 rounded-full ${
+                currentStage === 'download' 
+                  ? 'bg-blue-600 text-white' 
+                  : 'bg-gray-300 text-gray-600'
+              }`}>
+                3
+              </div>
+              <span className={`ml-2 font-medium ${
+                currentStage === 'download' ? 'text-blue-600' : 'text-gray-600'
+              }`}>
+                Download
+              </span>
+            </div>
+          </div>
+        </div>
+
+        {/* Stage Content */}
+        <div className="bg-white rounded-2xl border shadow-sm p-6 mb-8">
+          {currentStage === 'upload' && (
+            <div>
+              <div className="text-center mb-6">
+                <h2 className="text-2xl font-bold text-gray-900 mb-2">📁 Upload & Select Documents</h2>
+                <p className="text-gray-600">Choose documents to process for RAG optimization</p>
+              </div>
+              
+              <UploadSelectStage
+                sourceType={state.sourceType}
+                onSourceTypeChange={handleSourceTypeChange}
                 selectedFiles={state.selectedFiles}
+                onSelectedFilesChange={handleSelectedFilesChange}
+                onProcess={handleProcessStart}
+                supportedFormats={systemStatus.supportedFormats}
+                maxFileSize={systemStatus.maxFileSize}
                 processingOptions={{
                   auto_optimize: state.config.auto_optimize,
                   ocr_settings: state.config.ocr_settings,
                   quality_thresholds: state.config.quality_thresholds
                 }}
-                onProcessingComplete={handleProcessingComplete}
-                onError={handleProcessingError}
+                onProcessingOptionsChange={handleProcessingOptionsChange}
+                isProcessing={isProcessing}
               />
-            )}
-          </AccordionItem>
+            </div>
+          )}
 
-          {/* Stage 3: Review Results */}
-          <AccordionItem
-            id="review"
-            title="3. Review Results"
-            subtitle={getStageSubtitle('review')}
-            icon="📊"
-            isOpen={state.currentStage === 'review'}
-            onToggle={handleAccordionToggle}
-            disabled={isStageDisabled('review')}
-            completed={getStageStatus('review')}
-          >
-            {state.currentStage === 'review' && (
-              <ReviewStage
-                processingResults={state.processingResults}
-                onResultsUpdate={handleResultsUpdate}
-                onComplete={handleReviewComplete}
-                qualityThresholds={state.config.quality_thresholds}
-              />
-            )}
-          </AccordionItem>
+          {currentStage === 'review' && (
+            <ReviewStage
+              processingResults={state.processingResults}
+              onResultsUpdate={handleResultsUpdate}
+              onComplete={handleReviewComplete}
+              qualityThresholds={state.config.quality_thresholds}
+              isProcessingComplete={isProcessingComplete}
+              isProcessing={isProcessing}
+              selectedFiles={state.selectedFiles}
+            />
+          )}
 
-          {/* Stage 4: Download Results */}
-          <AccordionItem
-            id="download"
-            title="4. Download Results"
-            subtitle={getStageSubtitle('download')}
-            icon="⬇️"
-            isOpen={state.currentStage === 'download'}
-            onToggle={handleAccordionToggle}
-            disabled={isStageDisabled('download')}
-            completed={getStageStatus('download')}
-          >
-            {state.currentStage === 'download' && (
-              <DownloadStage
-                processingResults={state.processingResults}
-                onRestart={handleRestart}
-              />
-            )}
-          </AccordionItem>
-        </Accordion>
+          {currentStage === 'download' && (
+            <DownloadStage
+              processingResults={state.processingResults}
+              onRestart={handleRestart}
+            />
+          )}
+        </div>
 
         {/* Footer */}
-        <div className="mt-12 text-center text-gray-500 text-sm">
+        <div className="text-center text-gray-500 text-sm">
           <p>
             <strong>Curatore v2</strong> - Transform documents into RAG-ready, semantically optimized content
           </p>
           <p className="mt-1">
-            Multi-stage processing pipeline for optimal vector database integration
+            Streamlined processing pipeline for optimal vector database integration
           </p>
         </div>
       </div>
+
+      {/* Background Processing Panel */}
+      <ProcessingPanel
+        selectedFiles={state.selectedFiles}
+        processingOptions={{
+          auto_optimize: state.config.auto_optimize,
+          ocr_settings: state.config.ocr_settings,
+          quality_thresholds: state.config.quality_thresholds
+        }}
+        onProcessingComplete={handleProcessingComplete}
+        onError={handleProcessingError}
+        isVisible={showProcessingPanel}
+        onClose={handleCloseProcessingPanel}
+      />
     </div>
   );
 }

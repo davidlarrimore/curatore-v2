@@ -10,6 +10,9 @@ interface ReviewStageProps {
   onResultsUpdate: (results: ProcessingResult[]) => void;
   onComplete: () => void;
   qualityThresholds: QualityThresholds;
+  isProcessingComplete: boolean;
+  isProcessing: boolean;
+  selectedFiles: any[];
 }
 
 type TabType = 'quality' | 'editor';
@@ -18,7 +21,10 @@ export function ReviewStage({
   processingResults,
   onResultsUpdate,
   onComplete,
-  qualityThresholds
+  qualityThresholds,
+  isProcessingComplete,
+  isProcessing,
+  selectedFiles
 }: ReviewStageProps) {
   const [selectedResult, setSelectedResult] = useState<ProcessingResult | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('quality');
@@ -35,6 +41,13 @@ export function ReviewStage({
       loadDocumentContent(selectedResult.document_id);
     }
   }, [selectedResult, activeTab]);
+
+  // Auto-select first result when processing completes
+  useEffect(() => {
+    if (isProcessingComplete && processingResults.length > 0 && !selectedResult) {
+      setSelectedResult(processingResults[0]);
+    }
+  }, [isProcessingComplete, processingResults]);
 
   const loadDocumentContent = async (documentId: string) => {
     setIsLoading(true);
@@ -146,6 +159,112 @@ export function ReviewStage({
   const ragReadyCount = successfulResults.filter(r => r.pass_all_thresholds).length;
   const vectorOptimizedCount = successfulResults.filter(r => r.vector_optimized).length;
 
+  // Show waiting state if processing hasn't completed
+  if (!isProcessingComplete) {
+    return (
+      <div className="space-y-6">
+        {/* Header */}
+        <div className="text-center">
+          <h2 className="text-2xl font-bold text-gray-900 mb-2">📊 Review Results</h2>
+          <p className="text-gray-600">
+            {isProcessing 
+              ? 'Processing documents in the background. Results will appear here as they complete.'
+              : 'Waiting for documents to process...'
+            }
+          </p>
+        </div>
+
+        {/* Processing Status */}
+        <div className="bg-white rounded-lg border p-8">
+          <div className="text-center">
+            <div className="mb-6">
+              {isProcessing ? (
+                <div className="animate-spin rounded-full h-16 w-16 border-b-4 border-blue-600 mx-auto"></div>
+              ) : (
+                <div className="text-6xl mb-4">⏳</div>
+              )}
+            </div>
+            
+            <h3 className="text-xl font-medium text-gray-900 mb-2">
+              {isProcessing ? 'Processing in Progress' : 'Ready to Process'}
+            </h3>
+            
+            <p className="text-gray-600 mb-6">
+              {isProcessing 
+                ? `Processing ${selectedFiles.length} document(s). You can monitor progress in the panel below.`
+                : 'Documents will be processed when you start the operation.'
+              }
+            </p>
+
+            {/* Show partial results if any are available */}
+            {processingResults.length > 0 && (
+              <div className="border-t pt-6">
+                <h4 className="font-medium text-gray-900 mb-4">Partial Results ({processingResults.length}/{selectedFiles.length})</h4>
+                
+                {/* Mini stats */}
+                <div className="grid grid-cols-3 gap-4 max-w-md mx-auto mb-4">
+                  <div className="text-center p-3 bg-green-50 rounded-lg">
+                    <div className="text-lg font-bold text-green-600">{successfulResults.length}</div>
+                    <div className="text-xs text-green-800">Successful</div>
+                  </div>
+                  <div className="text-center p-3 bg-blue-50 rounded-lg">
+                    <div className="text-lg font-bold text-blue-600">{ragReadyCount}</div>
+                    <div className="text-xs text-blue-800">RAG Ready</div>
+                  </div>
+                  <div className="text-center p-3 bg-purple-50 rounded-lg">
+                    <div className="text-lg font-bold text-purple-600">{vectorOptimizedCount}</div>
+                    <div className="text-xs text-purple-800">Optimized</div>
+                  </div>
+                </div>
+
+                {/* Recent results preview */}
+                <div className="max-w-2xl mx-auto">
+                  <div className="space-y-2">
+                    {processingResults.slice(-3).map((result) => (
+                      <div key={result.document_id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
+                        <div className="flex items-center space-x-3">
+                          <span className="text-xl">
+                            {result.success ? (result.pass_all_thresholds ? '✅' : '⚠️') : '❌'}
+                          </span>
+                          <div>
+                            <p className="font-medium text-gray-900">{result.filename}</p>
+                            <p className="text-sm text-gray-600">Score: {result.conversion_score}/100</p>
+                          </div>
+                        </div>
+                        
+                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+                          result.pass_all_thresholds 
+                            ? 'bg-green-100 text-green-800'
+                            : result.success
+                              ? 'bg-yellow-100 text-yellow-800'
+                              : 'bg-red-100 text-red-800'
+                        }`}>
+                          {result.pass_all_thresholds ? 'RAG Ready' : result.success ? 'Needs Work' : 'Failed'}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Tips while waiting */}
+        <div className="bg-blue-50 border border-blue-200 rounded-lg p-6">
+          <h4 className="font-medium text-blue-900 mb-2">💡 While You Wait</h4>
+          <ul className="text-sm text-blue-800 space-y-1">
+            <li>• Results will appear automatically as documents are processed</li>
+            <li>• You can monitor detailed progress in the processing panel below</li>
+            <li>• The system will notify you when all documents are complete</li>
+            <li>• Each document is evaluated for clarity, completeness, relevance, and markdown quality</li>
+          </ul>
+        </div>
+      </div>
+    );
+  }
+
+  // Show full review interface when processing is complete
   return (
     <div className="space-y-6">
       {/* Header */}
