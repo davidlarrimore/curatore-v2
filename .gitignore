@@ -84,10 +84,15 @@ Icon?
 *.swo
 *.~lock.*
 
-/backend/files/uploaded_files/*
-/backend/files/batch_files/*
-/backend/files/processed_files/*
-
+# -------------------------
+# Curatore v2 File Storage - FIXED: Single location
+# -------------------------
+# Only ignore files in the root-level files directory
 /files/uploaded_files/*
 /files/batch_files/*
 /files/processed_files/*
+
+# Keep the directory structure but ignore contents
+!/files/uploaded_files/.gitkeep
+!/files/batch_files/.gitkeep  
+!/files/processed_files/.gitkeep

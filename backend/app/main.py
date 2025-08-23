@@ -1,6 +1,7 @@
 # backend/app/main.py
 import time
 import uuid
+import shutil
 from datetime import datetime
 from typing import List, Optional
 from pathlib import Path
@@ -40,6 +41,50 @@ processing_results: dict[str, ProcessingResult] = {}
 batch_results: dict[str, BatchProcessingResult] = {}
 
 
+def clear_file_directories():
+    """Clear uploaded and processed file directories on startup."""
+    try:
+        upload_dir = Path(settings.upload_dir)
+        processed_dir = Path(settings.processed_dir)
+        
+        # Clear uploaded files
+        if upload_dir.exists():
+            for file_path in upload_dir.glob("*"):
+                if file_path.is_file():
+                    file_path.unlink()
+                    print(f"Deleted uploaded file: {file_path}")
+        
+        # Clear processed files
+        if processed_dir.exists():
+            for file_path in processed_dir.glob("*"):
+                if file_path.is_file():
+                    file_path.unlink()
+                    print(f"Deleted processed file: {file_path}")
+        
+        print("✅ File directories cleared on startup")
+    except Exception as e:
+        print(f"⚠️ Error clearing file directories: {e}")
+
+
+# Clear directories on startup
+@app.on_event("startup")
+async def startup_event():
+    """Application startup event handler."""
+    print("🚀 Starting Curatore v2...")
+    clear_file_directories()
+    
+    # Clear in-memory storage
+    processing_results.clear()
+    batch_results.clear()
+    print("✅ In-memory storage cleared")
+    
+    # Ensure directories exist
+    Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
+    Path(settings.processed_dir).mkdir(parents=True, exist_ok=True)
+    Path(settings.batch_dir).mkdir(parents=True, exist_ok=True)
+    print("✅ Directories ensured")
+
+
 @app.get("/api/health", response_model=HealthStatus)
 async def health_check():
     """Health check endpoint."""
@@ -58,6 +103,31 @@ async def health_check():
 async def get_llm_status():
     """Get LLM connection status."""
     return await llm_service.test_connection()
+
+
+@app.post("/api/system/reset")
+async def reset_system():
+    """Reset the entire system - clear all files and data."""
+    try:
+        # Clear file directories
+        clear_file_directories()
+        
+        # Clear in-memory storage
+        processing_results.clear()
+        batch_results.clear()
+        
+        # Ensure directories exist
+        Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)
+        Path(settings.processed_dir).mkdir(parents=True, exist_ok=True)
+        Path(settings.batch_dir).mkdir(parents=True, exist_ok=True)
+        
+        return {
+            "success": True,
+            "message": "System reset successfully",
+            "timestamp": datetime.now()
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Reset failed: {str(e)}")
 
 
 @app.get("/api/config/supported-formats")

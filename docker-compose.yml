@@ -8,10 +8,8 @@ services:
     container_name: curatore-backend
     volumes:
       - ./backend:/app
-      # Map local directories for file storage
-      - ./files/uploaded_files:/app/files/uploaded_files
-      - ./files/processed_files:/app/files/processed_files
-      - ./files/batch_files:/app/files/batch_files
+      # Map local root-level files directory to backend app files directory
+      - ./files:/app/files
     ports:
       - "8000:8000"
     environment:
@@ -29,10 +27,11 @@ services:
       # OCR Configuration
       - OCR_LANG=${OCR_LANG:-eng}
       - OCR_PSM=${OCR_PSM:-3}
-      # File Storage
-      - BATCH_DIR=${BATCH_DIR:-files/batch_files}
+      # File Storage - FIXED: Single location mapping
+      - FILES_ROOT=${FILES_ROOT:-files}
       - UPLOAD_DIR=${UPLOAD_DIR:-files/uploaded_files}
-      - PROCESSED_DIR=${PROCESSED_DIR:-files/processed}
+      - PROCESSED_DIR=${PROCESSED_DIR:-files/processed_files}
+      - BATCH_DIR=${BATCH_DIR:-files/batch_files}
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-52428800}
       # Quality Thresholds
       - DEFAULT_CONVERSION_THRESHOLD=${DEFAULT_CONVERSION_THRESHOLD:-70}

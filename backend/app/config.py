@@ -34,7 +34,7 @@ class Settings(BaseSettings):
     ocr_lang: str = Field(default="eng", env="OCR_LANG")
     ocr_psm: int = Field(default=3, env="OCR_PSM")
     
-    # File Storage - NEW STRUCTURE
+    # File Storage - FIXED: Single standardized location
     files_root: str = Field(default="files", env="FILES_ROOT")
     upload_dir: str = Field(default="files/uploaded_files", env="UPLOAD_DIR")
     processed_dir: str = Field(default="files/processed_files", env="PROCESSED_DIR")

@@ -44,6 +44,8 @@ export default function ProcessPage() {
 
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string>('');
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
 
   // Load initial data
   useEffect(() => {
@@ -80,6 +82,38 @@ export default function ProcessPage() {
       setError('Failed to load application data. Please refresh the page.');
     } finally {
       setIsLoading(false);
+    }
+  };
+
+  // Reset system handler
+  const handleResetSystem = async () => {
+    setIsResetting(true);
+    try {
+      await systemApi.resetSystem();
+      
+      // Reset local state
+      setState({
+        currentStage: 'upload',
+        sourceType: 'upload',
+        selectedFiles: [],
+        processingResults: [],
+        processingComplete: false,
+        config: state.config // Keep configuration
+      });
+      
+      setError('');
+      setShowResetConfirm(false);
+      
+      // Show success message briefly
+      setError('✅ System reset successfully');
+      setTimeout(() => setError(''), 3000);
+      
+    } catch (error) {
+      console.error('Reset failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Reset failed';
+      setError(`❌ Reset failed: ${errorMessage}`);
+    } finally {
+      setIsResetting(false);
     }
   };
 
@@ -255,6 +289,26 @@ export default function ProcessPage() {
                 </div>
               </div>
               
+              {/* Reset Button */}
+              <button
+                type="button"
+                onClick={() => setShowResetConfirm(true)}
+                disabled={isResetting}
+                className="flex items-center space-x-2 px-4 py-2 bg-red-100 hover:bg-red-200 text-red-700 rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {isResetting ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-red-600"></div>
+                    <span className="hidden sm:inline">Resetting...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>🔄</span>
+                    <span className="hidden sm:inline">Reset</span>
+                  </>
+                )}
+              </button>
+              
               {/* Settings Button */}
               <button
                 type="button"
@@ -270,20 +324,68 @@ export default function ProcessPage() {
       </div>
 
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Reset Confirmation Modal */}
+        {showResetConfirm && (
+          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-lg p-6 max-w-md w-mx-4">
+              <div className="text-center">
+                <div className="text-6xl mb-4">⚠️</div>
+                <h3 className="text-xl font-bold text-gray-900 mb-2">Reset System?</h3>
+                <p className="text-gray-600 mb-6">
+                  This will permanently delete all uploaded files, processed documents, and reset the system to the initial state. This action cannot be undone.
+                </p>
+                
+                <div className="flex space-x-3">
+                  <button
+                    type="button"
+                    onClick={() => setShowResetConfirm(false)}
+                    disabled={isResetting}
+                    className="flex-1 px-4 py-2 bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors disabled:opacity-50"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleResetSystem}
+                    disabled={isResetting}
+                    className="flex-1 px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {isResetting ? (
+                      <div className="flex items-center justify-center space-x-2">
+                        <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                        <span>Resetting...</span>
+                      </div>
+                    ) : (
+                      'Yes, Reset System'
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
         {/* Error Display */}
         {error && (
-          <div className="mb-6 bg-red-50 border border-red-200 rounded-lg p-4">
-            <div className="flex items-center space-x-2">
-              <span className="text-red-600">❌</span>
-              <p className="text-red-800">{error}</p>
+          <div className={`mb-6 rounded-lg p-4 ${
+            error.startsWith('✅') 
+              ? 'bg-green-50 border border-green-200'
+              : 'bg-red-50 border border-red-200'
+          }`}>
+            <div className="flex items-center justify-between">
+              <p className={error.startsWith('✅') ? 'text-green-800' : 'text-red-800'}>
+                {error}
+              </p>
+              <button
+                type="button"
+                onClick={() => setError('')}
+                className={`text-sm underline ${
+                  error.startsWith('✅') ? 'text-green-600 hover:text-green-800' : 'text-red-600 hover:text-red-800'
+                }`}
+              >
+                Dismiss
+              </button>
             </div>
-            <button
-              type="button"
-              onClick={() => setError('')}
-              className="mt-2 text-red-600 hover:text-red-800 text-sm underline"
-            >
-              Dismiss
-            </button>
           </div>
         )}
 

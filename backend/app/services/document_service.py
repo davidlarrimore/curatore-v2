@@ -4,6 +4,7 @@ import io
 import re
 import time
 import uuid
+import shutil
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 
@@ -45,6 +46,40 @@ class DocumentService:
         self.upload_dir.mkdir(parents=True, exist_ok=True)
         self.processed_dir.mkdir(parents=True, exist_ok=True)
         self.batch_dir.mkdir(parents=True, exist_ok=True)
+    
+    def clear_all_files(self) -> Dict[str, int]:
+        """Clear all uploaded and processed files. Returns count of deleted files."""
+        deleted_counts = {
+            "uploaded": 0,
+            "processed": 0,
+            "total": 0
+        }
+        
+        try:
+            # Clear uploaded files
+            if self.upload_dir.exists():
+                for file_path in self.upload_dir.glob("*"):
+                    if file_path.is_file():
+                        file_path.unlink()
+                        deleted_counts["uploaded"] += 1
+                        print(f"Deleted uploaded file: {file_path}")
+            
+            # Clear processed files
+            if self.processed_dir.exists():
+                for file_path in self.processed_dir.glob("*"):
+                    if file_path.is_file():
+                        file_path.unlink()
+                        deleted_counts["processed"] += 1
+                        print(f"Deleted processed file: {file_path}")
+            
+            deleted_counts["total"] = deleted_counts["uploaded"] + deleted_counts["processed"]
+            print(f"✅ File cleanup complete: {deleted_counts['total']} files deleted")
+            
+        except Exception as e:
+            print(f"⚠️ Error during file cleanup: {e}")
+            raise
+        
+        return deleted_counts
     
     def _pdf_pages_to_images(self, pdf_path: Path, dpi: int = 220) -> List[Image.Image]:
         """Convert PDF pages to images for OCR."""
