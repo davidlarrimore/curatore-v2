@@ -1,4 +1,5 @@
-import time, json
+# backend/src/curatore_api/services/processing.py
+import time, json, re
 from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 from ..config import Settings
@@ -7,6 +8,30 @@ from ..storage import Storage
 from ..pipeline_adapter import (
     SUPPORTED_EXTS, convert_to_markdown, score_conversion, llm_eval_prompt
 )
+
+def clean_llm_response(text: str) -> str:
+    """Clean LLM response by removing markdown code block wrappers and extra formatting."""
+    if not text:
+        return text
+    
+    # Remove markdown code block wrappers (```markdown ... ``` or ``` ... ```)
+    text = re.sub(r'^```(?:markdown|md)?\s*\n', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\n```\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^```(?:markdown|md)?\s*', '', text)
+    text = re.sub(r'```\s*$', '', text)
+    
+    # Remove any leading/trailing whitespace
+    text = text.strip()
+    
+    # Remove multiple consecutive newlines (more than 2)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    # Remove common summary prefixes that LLMs add
+    text = re.sub(r'^## Summary\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'^Summary:\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'^\*\*Summary\*\*:\s*', '', text, flags=re.IGNORECASE)
+    
+    return text
 
 class ProcessingService:
     def __init__(self, cfg: Settings, llm: LLMClient, storage: Storage):
@@ -36,17 +61,24 @@ class ProcessingService:
                 "note": note,
                 "pass_all": False
             }
+        
         # Optional vector optimization via LLM
         if auto_optimize:
-            system = ("Reformat this document to be optimized for vector database storage and retrieval. "
-                      "Use clear section headings, logical chunking, and context-rich phrasing. "
-                      "Return ONLY the revised Markdown.")
+            system = (
+                "Reformat this document to be optimized for vector database storage and retrieval. "
+                "Use clear section headings, logical chunking, and context-rich phrasing. "
+                "Return ONLY the revised Markdown content without any code block wrappers or extra formatting."
+            )
             user = f"Document:\n```markdown\n{md}\n```"
             try:
-                md = await self.llm.chat(
+                optimized_md = await self.llm.chat(
                     [{"role": "system", "content": system}, {"role": "user", "content": user}],
                     temperature=0.2
                 )
+                # Clean the optimized response
+                optimized_md = clean_llm_response(optimized_md)
+                if optimized_md and optimized_md.strip():
+                    md = optimized_md
             except Exception:
                 pass
 

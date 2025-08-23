@@ -45,6 +45,27 @@ class LLMService:
             print(f"Warning: Failed to initialize OpenAI client: {e}")
             self._client = None
     
+    @staticmethod
+    def _clean_markdown_response(text: str) -> str:
+        """Clean LLM response by removing markdown code block wrappers and extra formatting."""
+        if not text:
+            return text
+        
+        # Remove markdown code block wrappers (```markdown ... ``` or ``` ... ```)
+        # This handles multiple variations of markdown code blocks
+        text = re.sub(r'^```(?:markdown|md)?\s*\n', '', text, flags=re.MULTILINE)
+        text = re.sub(r'\n```\s*$', '', text, flags=re.MULTILINE)
+        text = re.sub(r'^```(?:markdown|md)?\s*', '', text)
+        text = re.sub(r'```\s*$', '', text)
+        
+        # Remove any leading/trailing whitespace
+        text = text.strip()
+        
+        # Remove multiple consecutive newlines (more than 2)
+        text = re.sub(r'\n{3,}', '\n\n', text)
+        
+        return text
+    
     @property
     def is_available(self) -> bool:
         """Check if LLM client is available."""
@@ -153,7 +174,8 @@ class LLMService:
         try:
             system_prompt = (
                 "You are a technical editor. Improve the given Markdown in-place per the user's instructions. "
-                "Preserve facts and structure when possible. Return ONLY the revised Markdown content."
+                "Preserve facts and structure when possible. "
+                "Return ONLY the revised Markdown content without any code block wrappers or extra formatting."
             )
             
             user_prompt = f"Instructions:\n{prompt}\n\nCurrent Markdown:\n```markdown\n{markdown_text}\n```"
@@ -167,7 +189,10 @@ class LLMService:
                 ],
             )
             
-            return resp.choices[0].message.content.strip()
+            improved_content = resp.choices[0].message.content.strip()
+            
+            # Clean the response to remove any markdown code block wrappers
+            return self._clean_markdown_response(improved_content)
             
         except Exception as e:
             print(f"LLM improvement failed: {e}")
@@ -188,22 +213,55 @@ class LLMService:
         8. **Cross-References**: Add brief context when referencing other sections
 
         Transform the content while preserving all factual information and making it ideal for semantic search and retrieval.
+        Return only the optimized markdown content without any code block wrappers.
         """
         
         return await self.improve_document(markdown_text, optimization_prompt)
     
     async def summarize_document(self, markdown_text: str, filename: str) -> str:
         """Generate a summary of the document content."""
-        summary_prompt = """
-        Analyze this document and provide a concise 2-3 sentence summary that captures:
-        1. The main topic/subject matter
-        2. The document type (e.g., report, manual, article, etc.)
-        3. Key content highlights or purpose
+        if not self._client:
+            return f"Unable to generate summary - LLM not available"
         
-        Keep the summary professional and informative, suitable for a document processing log.
-        """
-        
-        return await self.improve_document(markdown_text, summary_prompt)
+        try:
+            system_prompt = (
+                "You are a document analyzer. Create a concise 2-3 sentence summary that captures: "
+                "1. The main topic/subject matter, "
+                "2. The document type (e.g., report, manual, guide, etc.), "
+                "3. Key content highlights or purpose. "
+                "Keep the summary professional and informative. "
+                "Return ONLY the summary text without any markdown formatting or code blocks."
+            )
+            
+            user_prompt = f"Analyze this document and provide a summary:\n\n```markdown\n{markdown_text}\n```"
+            
+            resp = self._client.chat.completions.create(
+                model=settings.openai_model,
+                temperature=0.1,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
+                max_tokens=200  # Limit summary length
+            )
+            
+            summary = resp.choices[0].message.content.strip()
+            
+            # Clean the response to remove any markdown formatting
+            summary = self._clean_markdown_response(summary)
+            
+            # Additional cleanup for summary-specific formatting
+            summary = re.sub(r'^## Summary\s*', '', summary, flags=re.IGNORECASE)
+            summary = re.sub(r'^Summary:\s*', '', summary, flags=re.IGNORECASE)  
+            summary = re.sub(r'^\*\*Summary\*\*:\s*', '', summary, flags=re.IGNORECASE)
+            summary = re.sub(r'^Document Summary:\s*', '', summary, flags=re.IGNORECASE)
+            summary = re.sub(r'^Analysis:\s*', '', summary, flags=re.IGNORECASE)
+            
+            return summary.strip()
+            
+        except Exception as e:
+            print(f"Summary generation failed: {e}")
+            return f"Summary generation failed: {str(e)[:100]}..."
 
 
 # Global LLM service instance

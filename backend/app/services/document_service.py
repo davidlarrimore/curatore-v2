@@ -30,6 +30,33 @@ from ..models import (
 from .llm_service import llm_service
 
 
+def clean_llm_response(text: str) -> str:
+    """Clean LLM response by removing markdown code block wrappers and extra formatting."""
+    if not text:
+        return text
+    
+    # Remove markdown code block wrappers (```markdown ... ``` or ``` ... ```)
+    text = re.sub(r'^```(?:markdown|md)?\s*\n', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\n```\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^```(?:markdown|md)?\s*', '', text)
+    text = re.sub(r'```\s*$', '', text)
+    
+    # Remove any leading/trailing whitespace
+    text = text.strip()
+    
+    # Remove multiple consecutive newlines (more than 2)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    # Remove common summary prefixes that LLMs add
+    text = re.sub(r'^## Summary\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'^Summary:\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'^\*\*Summary\*\*:\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'^Document Summary:\s*', '', text, flags=re.IGNORECASE)
+    text = re.sub(r'^Analysis:\s*', '', text, flags=re.IGNORECASE)
+    
+    return text
+
+
 class DocumentService:
     """Service for document processing operations."""
     
@@ -529,7 +556,9 @@ class DocumentService:
             document_summary = None
             if llm_service.is_available:
                 try:
-                    document_summary = await llm_service.summarize_document(markdown_content, filename)
+                    summary = await llm_service.summarize_document(markdown_content, filename)
+                    # Clean the summary to remove any markdown formatting
+                    document_summary = clean_llm_response(summary)
                     print(f"📝 Summary generated: {document_summary[:100]}...")
                 except Exception as e:
                     print(f"⚠️ Summary generation failed: {e}")
@@ -542,6 +571,8 @@ class DocumentService:
                 try:
                     optimized_content = await llm_service.optimize_for_vector_db(markdown_content)
                     if optimized_content and optimized_content.strip():
+                        # Clean the optimized content to remove any markdown code blocks
+                        optimized_content = clean_llm_response(optimized_content)
                         markdown_content = optimized_content
                         vector_optimized = True
                         optimization_note = "Vector DB optimized. "
@@ -758,7 +789,9 @@ class DocumentService:
         # Look for processed file
         for file_path in self.processed_dir.glob(f"*_{document_id}.md"):
             try:
-                return file_path.read_text(encoding="utf-8")
+                content = file_path.read_text(encoding="utf-8")
+                # Clean the content when retrieving it as well
+                return clean_llm_response(content)
             except Exception:
                 continue
         return None
@@ -775,9 +808,13 @@ class DocumentService:
             # Apply LLM improvements if requested
             final_content = content
             if improvement_prompt and llm_service.is_available:
-                final_content = await llm_service.improve_document(content, improvement_prompt)
+                improved_content = await llm_service.improve_document(content, improvement_prompt)
+                # Clean the improved content
+                final_content = clean_llm_response(improved_content)
             elif apply_vector_optimization and llm_service.is_available:
-                final_content = await llm_service.optimize_for_vector_db(content)
+                optimized_content = await llm_service.optimize_for_vector_db(content)
+                # Clean the optimized content
+                final_content = clean_llm_response(optimized_content)
             
             # Save updated content
             for file_path in self.processed_dir.glob(f"*_{document_id}.md"):

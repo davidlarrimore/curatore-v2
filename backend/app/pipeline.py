@@ -1,4 +1,4 @@
-# pipeline.py
+# backend/app/pipeline.py
 import os, io, re, json, time
 from pathlib import Path
 from typing import Optional, Tuple, Dict, Any, List
@@ -28,6 +28,25 @@ OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
 OPENAI_VERIFY_SSL = os.getenv("OPENAI_VERIFY_SSL", "true").lower() in ("true", "1", "yes")
 OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "60"))
 OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
+
+def clean_llm_response(text: str) -> str:
+    """Clean LLM response by removing markdown code block wrappers and extra formatting."""
+    if not text:
+        return text
+    
+    # Remove markdown code block wrappers (```markdown ... ``` or ``` ... ```)
+    text = re.sub(r'^```(?:markdown|md)?\s*\n', '', text, flags=re.MULTILINE)
+    text = re.sub(r'\n```\s*$', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^```(?:markdown|md)?\s*', '', text)
+    text = re.sub(r'```\s*$', '', text)
+    
+    # Remove any leading/trailing whitespace
+    text = text.strip()
+    
+    # Remove multiple consecutive newlines (more than 2)
+    text = re.sub(r'\n{3,}', '\n\n', text)
+    
+    return text
 
 # Initialize OpenAI client with custom configuration
 _client = None
@@ -276,7 +295,8 @@ def llm_improve(markdown_text: str, prompt: str) -> str:
     try:
         system = (
             "You are a technical editor. Improve the given Markdown in-place per the user's instructions. "
-            "Preserve facts and structure when possible. Return ONLY the revised Markdown content."
+            "Preserve facts and structure when possible. "
+            "Return ONLY the revised Markdown content without any code block wrappers or extra formatting."
         )
         user = f"Instructions:\n{prompt}\n\nCurrent Markdown:\n```markdown\n{markdown_text}\n```"
         
@@ -288,7 +308,10 @@ def llm_improve(markdown_text: str, prompt: str) -> str:
                 {"role": "user", "content": user},
             ],
         )
-        return resp.choices[0].message.content.strip()
+        improved_content = resp.choices[0].message.content.strip()
+        
+        # Clean the response to remove any markdown code block wrappers
+        return clean_llm_response(improved_content)
     except Exception as e:
         print(f"Warning: LLM improvement failed: {e}")
         return markdown_text
