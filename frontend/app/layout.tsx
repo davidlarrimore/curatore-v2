@@ -1,10 +1,12 @@
 // app/layout.tsx
 import '../styles/globals.css'
 import { ReactNode } from 'react'
+import { AppLayout } from '@/components/layout/AppLayout'
 
 export const metadata = {
-  title: 'Curatore v2',
-  description: 'RAG Document Processing & Optimization',
+  title: 'Curatore v2 - RAG Document Processing',
+  description: 'Transform documents into RAG-ready, semantically optimized content',
+  viewport: 'width=device-width, initial-scale=1',
 }
 
 interface RootLayoutProps {
@@ -13,8 +15,12 @@ interface RootLayoutProps {
 
 export default function RootLayout({ children }: RootLayoutProps) {
   return (
-    <html lang="en">
-      <body className="bg-gray-50">{children}</body>
+    <html lang="en" className="h-full">
+      <body className="h-full bg-gray-50 antialiased">
+        <AppLayout>
+          {children}
+        </AppLayout>
+      </body>
     </html>
   )
 }

@@ -2,9 +2,600 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  color-scheme: light;
+@layer base {
+  :root {
+    color-scheme: light;
+    --radius: 0.5rem;
+  }
+
+  html, body, #__next {
+    height: 100%;
+  }
+
+  body {
+    font-feature-settings: 'rlig' 1, 'calt' 1;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+  
+  /* Custom scrollbar styling */
+  .scrollbar-thin {
+    scrollbar-width: thin;
+    scrollbar-color: #cbd5e1 #f1f5f9;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-track {
+    background: #f1f5f9;
+    border-radius: 3px;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-thumb {
+    background: #cbd5e1;
+    border-radius: 3px;
+  }
+  
+  .scrollbar-thin::-webkit-scrollbar-thumb:hover {
+    background: #94a3b8;
+  }
+  
+  /* Terminal scrollbar styling */
+  .terminal-scrollbar::-webkit-scrollbar {
+    width: 8px;
+  }
+  
+  .terminal-scrollbar::-webkit-scrollbar-track {
+    background: #1f2937;
+  }
+  
+  .terminal-scrollbar::-webkit-scrollbar-thumb {
+    background: #22c55e;
+    border-radius: 4px;
+  }
+  
+  .terminal-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #16a34a;
+  }
 }
-html, body {
-  height: 100%;
+
+@layer components {
+  /* Layout components */
+  .app-layout {
+    @apply h-full flex flex-col;
+  }
+  
+  .sidebar-transition {
+    @apply transition-all duration-300 ease-in-out;
+  }
+  
+  .main-content {
+    @apply flex-1 overflow-auto;
+  }
+  
+  /* Card components */
+  .card {
+    @apply bg-white rounded-lg border border-gray-200 shadow-sm;
+  }
+  
+  .card-header {
+    @apply px-6 py-4 border-b border-gray-200 bg-gray-50;
+  }
+  
+  .card-content {
+    @apply px-6 py-4;
+  }
+  
+  /* Data visualization components */
+  .metric-card {
+    @apply bg-white rounded-lg border p-4 text-center hover:shadow-md transition-shadow;
+  }
+  
+  .metric-value {
+    @apply text-2xl font-bold;
+  }
+  
+  .metric-label {
+    @apply text-sm text-gray-600 mt-1;
+  }
+  
+  /* Status indicators */
+  .status-indicator {
+    @apply inline-flex items-center px-2 py-1 rounded-full text-xs font-medium;
+  }
+  
+  .status-healthy {
+    @apply bg-green-100 text-green-800;
+  }
+  
+  .status-warning {
+    @apply bg-yellow-100 text-yellow-800;
+  }
+  
+  .status-error {
+    @apply bg-red-100 text-red-800;
+  }
+  
+  /* Processing states */
+  .processing-item {
+    @apply flex items-center space-x-3 p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors;
+  }
+  
+  .processing-item.selected {
+    @apply border-blue-500 bg-blue-50;
+  }
+  
+  /* File upload zones */
+  .upload-zone {
+    @apply border-2 border-dashed border-gray-300 rounded-xl p-8 text-center transition-colors hover:border-gray-400;
+  }
+  
+  .upload-zone.active {
+    @apply border-blue-400 bg-blue-50;
+  }
+  
+  /* Processing log terminal styling */
+  .processing-log {
+    @apply bg-gray-900 text-green-400 font-mono text-sm;
+  }
+  
+  .log-entry {
+    @apply flex items-start space-x-3 py-1;
+  }
+  
+  .log-timestamp {
+    @apply text-gray-400 text-xs w-20 flex-shrink-0 mt-0.5;
+  }
+  
+  .log-message {
+    @apply flex-1 break-words;
+  }
+  
+  .log-success {
+    @apply text-green-400;
+  }
+  
+  .log-warning {
+    @apply text-yellow-400;
+  }
+  
+  .log-error {
+    @apply text-red-400;
+  }
+  
+  .log-info {
+    @apply text-gray-300;
+  }
+}
+
+@layer utilities {
+  /* Layout utilities */
+  .full-height {
+    height: 100vh;
+    height: 100dvh; /* Dynamic viewport height for mobile */
+  }
+  
+  .content-area {
+    @apply flex-1 overflow-hidden;
+  }
+  
+  /* Animation utilities */
+  .animate-fade-in {
+    animation: fadeIn 0.3s ease-in-out;
+  }
+  
+  .animate-slide-up {
+    animation: slideUp 0.3s ease-out;
+  }
+  
+  .animate-slide-down {
+    animation: slideDown 0.3s ease-out;
+  }
+  
+  /* Focus management */
+  .focus-visible-only {
+    @apply focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2;
+  }
+  
+  /* Text utilities */
+  .text-gradient {
+    @apply bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent;
+  }
+  
+  /* Glass morphism effect */
+  .glass {
+    @apply bg-white bg-opacity-80 backdrop-blur-sm border border-white border-opacity-20;
+  }
+}
+
+/* Custom animations */
+@keyframes fadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes slideUp {
+  from { 
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to { 
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideDown {
+  from { 
+    transform: translateY(-20px);
+    opacity: 0;
+  }
+  to { 
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+/* Quality score ring animation */
+@keyframes scoreRingAnimation {
+  from {
+    stroke-dasharray: 0 88;
+  }
+}
+
+.score-ring {
+  animation: scoreRingAnimation 1s ease-out;
+}
+
+/* Processing panel slide animations */
+@keyframes panelSlideUp {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
+
+@keyframes panelSlideDown {
+  from {
+    transform: translateY(0);
+  }
+  to {
+    transform: translateY(100%);
+  }
+}
+
+.panel-slide-up {
+  animation: panelSlideUp 0.3s ease-out;
+}
+
+.panel-slide-down {
+  animation: panelSlideDown 0.3s ease-in;
+}
+
+/* Responsive design helpers */
+@media (max-width: 1024px) {
+  .sidebar-overlay {
+    @apply fixed inset-0 bg-gray-900 bg-opacity-50 z-40;
+  }
+}
+
+/* Dark mode support (future enhancement) */
+@media (prefers-color-scheme: dark) {
+  :root {
+    color-scheme: dark;
+  }
+}
+
+/* Print styles */
+@media print {
+  .no-print {
+    @apply hidden;
+  }
+  
+  .print-only {
+    @apply block;
+  }
+  
+  .print-break-before {
+    page-break-before: always;
+  }
+  
+  .print-break-after {
+    page-break-after: always;
+  }
+}
+
+/* High contrast mode support */
+@media (prefers-contrast: high) {
+  .card {
+    @apply border-2 border-gray-400;
+  }
+  
+  .status-indicator {
+    @apply border border-current;
+  }
+}
+
+/* Reduced motion support */
+@media (prefers-reduced-motion: reduce) {
+  .animate-spin {
+    animation: none;
+  }
+  
+  .animate-pulse {
+    animation: none;
+  }
+  
+  .sidebar-transition {
+    @apply transition-none;
+  }
+  
+  .processing-log {
+    @apply transition-none;
+  }
+}
+
+/* Focus management for accessibility */
+.focus-trap {
+  @apply focus:outline-none;
+}
+
+/* Skip link for accessibility */
+.skip-link {
+  @apply absolute -top-10 left-6 bg-blue-600 text-white px-4 py-2 rounded-md z-50 transition-all;
+}
+
+.skip-link:focus {
+  @apply top-6;
+}
+
+/* Error boundary styling */
+.error-boundary {
+  @apply min-h-screen flex items-center justify-center bg-gray-50;
+}
+
+.error-content {
+  @apply max-w-md mx-auto text-center p-6;
+}
+
+/* Loading states */
+.loading-skeleton {
+  @apply animate-pulse bg-gray-200 rounded;
+}
+
+.loading-shimmer {
+  @apply relative overflow-hidden bg-gray-200;
+}
+
+.loading-shimmer::after {
+  content: '';
+  @apply absolute inset-0 -translate-x-full bg-gradient-to-r from-transparent via-white to-transparent opacity-60;
+  animation: shimmer 1.5s infinite;
+}
+
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* File drag and drop enhancements */
+.drag-overlay {
+  @apply fixed inset-0 bg-blue-500 bg-opacity-10 border-4 border-blue-500 border-dashed z-50 flex items-center justify-center;
+}
+
+.drag-indicator {
+  @apply bg-white rounded-lg p-8 shadow-lg text-center;
+}
+
+/* Mobile-specific optimizations */
+@media (max-width: 640px) {
+  .mobile-optimized {
+    @apply text-sm;
+  }
+  
+  .mobile-stack {
+    @apply flex-col space-y-4 space-x-0;
+  }
+  
+  .mobile-hidden {
+    @apply hidden;
+  }
+  
+  .mobile-full-width {
+    @apply w-full;
+  }
+}
+
+/* Touch device optimizations */
+@media (hover: none) and (pointer: coarse) {
+  .touch-target {
+    @apply min-h-11 min-w-11;
+  }
+  
+  .hover\:bg-gray-50:hover {
+    @apply bg-gray-50;
+  }
+}
+
+/* Performance optimizations */
+.will-change-transform {
+  will-change: transform;
+}
+
+.gpu-accelerated {
+  transform: translateZ(0);
+}
+
+/* Custom properties for dynamic theming */
+:root {
+  --color-primary: 37 99 235; /* blue-600 */
+  --color-success: 34 197 94; /* green-500 */
+  --color-warning: 245 158 11; /* yellow-500 */
+  --color-error: 239 68 68; /* red-500 */
+  --color-gray: 107 114 128; /* gray-500 */
+  
+  --shadow-sm: 0 1px 2px 0 rgb(0 0 0 / 0.05);
+  --shadow-md: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
+  --shadow-lg: 0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1);
+  
+  --border-radius: 0.5rem;
+  --border-radius-lg: 0.75rem;
+  --border-radius-xl: 1rem;
+}
+
+/* Component-specific styling */
+.processing-panel {
+  box-shadow: 0 -10px 25px -5px rgb(0 0 0 / 0.1), 0 -4px 10px -6px rgb(0 0 0 / 0.1);
+}
+
+.sidebar-shadow {
+  box-shadow: 2px 0 10px -2px rgb(0 0 0 / 0.1);
+}
+
+/* Quality score ring customization */
+.quality-ring {
+  filter: drop-shadow(0 2px 4px rgb(0 0 0 / 0.1));
+}
+
+/* File type icons */
+.file-icon-pdf {
+  @apply text-red-600;
+}
+
+.file-icon-docx {
+  @apply text-blue-600;
+}
+
+.file-icon-image {
+  @apply text-green-600;
+}
+
+.file-icon-text {
+  @apply text-gray-600;
+}
+
+/* Progress indicators */
+.progress-bar {
+  @apply bg-gray-200 rounded-full overflow-hidden;
+}
+
+.progress-fill {
+  @apply bg-blue-600 h-full transition-all duration-300 ease-out rounded-full;
+}
+
+/* Toast notification customization */
+.toast-container {
+  @apply pointer-events-none fixed inset-0 flex items-end justify-center px-4 py-6 sm:items-start sm:justify-end sm:p-6;
+}
+
+.toast {
+  @apply pointer-events-auto w-full max-w-sm overflow-hidden rounded-lg bg-white shadow-lg ring-1 ring-black ring-opacity-5;
+}
+
+/* Accessibility improvements */
+.sr-only {
+  @apply absolute w-px h-px p-0 -m-px overflow-hidden whitespace-nowrap border-0;
+}
+
+.focus-ring {
+  @apply focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2;
+}
+
+/* State-based styling */
+.state-pending {
+  @apply bg-yellow-50 border-yellow-200 text-yellow-800;
+}
+
+.state-processing {
+  @apply bg-blue-50 border-blue-200 text-blue-800;
+}
+
+.state-completed {
+  @apply bg-green-50 border-green-200 text-green-800;
+}
+
+.state-failed {
+  @apply bg-red-50 border-red-200 text-red-800;
+}
+
+/* Drag and drop styling */
+.drop-zone {
+  @apply border-2 border-dashed border-gray-300 rounded-xl p-8 text-center transition-all;
+}
+
+.drop-zone.active {
+  @apply border-blue-400 bg-blue-50 transform scale-105;
+}
+
+.drop-zone.disabled {
+  @apply opacity-50 cursor-not-allowed;
+}
+
+/* File list optimizations */
+.file-list {
+  @apply space-y-2 max-h-96 overflow-y-auto scrollbar-thin;
+}
+
+.file-item {
+  @apply flex items-center space-x-3 p-3 rounded-lg border border-gray-200 hover:bg-gray-50 transition-colors cursor-pointer;
+}
+
+.file-item.selected {
+  @apply border-blue-500 bg-blue-50;
+}
+
+.file-item.processing {
+  @apply border-yellow-500 bg-yellow-50;
+}
+
+/* Button group styling */
+.button-group {
+  @apply inline-flex rounded-lg border border-gray-300 bg-white;
+}
+
+.button-group > button {
+  @apply border-0 border-r border-gray-300 last:border-r-0 first:rounded-l-lg last:rounded-r-lg;
+}
+
+/* Data table styling */
+.data-table {
+  @apply w-full border-collapse;
+}
+
+.data-table th {
+  @apply bg-gray-50 px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider;
+}
+
+.data-table td {
+  @apply px-6 py-4 whitespace-nowrap text-sm text-gray-900 border-b border-gray-200;
+}
+
+/* Code editor styling */
+.code-editor {
+  @apply font-mono text-sm bg-gray-900 text-gray-100 rounded-lg;
+}
+
+.code-line-numbers {
+  @apply text-gray-500 select-none pr-4 text-right;
+}
+
+/* Mobile responsive helpers */
+@media (max-width: 768px) {
+  .mobile-stack {
+    @apply flex-col space-y-4;
+  }
+  
+  .mobile-full {
+    @apply w-full;
+  }
+  
+  .mobile-hidden {
+    @apply hidden;
+  }
 }
