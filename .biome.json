@@ -1,0 +1,15 @@
+{
+  "$schema": "https://biomejs.dev/schemas/1.8.0/schema.json",
+  "overrides": [
+    {
+      "include": ["frontend/styles/**/*.css"],
+      "linter": {
+        "rules": {
+          "suspicious": {
+            "noUnknownAtRules": "off"
+          }
+        }
+      }
+    }
+  ]
+}
