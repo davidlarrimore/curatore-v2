@@ -27,12 +27,14 @@ interface TopNavigationProps {
   onMenuClick: () => void
   systemStatus: SystemStatus
   onStatusRefresh: () => void
+  sidebarCollapsed: boolean // NEW: Track sidebar state
 }
 
 export function TopNavigation({ 
   onMenuClick, 
   systemStatus, 
-  onStatusRefresh 
+  onStatusRefresh,
+  sidebarCollapsed // NEW: Receive sidebar state
 }: TopNavigationProps) {
   const pathname = usePathname()
   const router = useRouter()
@@ -86,7 +88,10 @@ export function TopNavigation({
 
   return (
     <>
-      <header className="bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+      <header className={`bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between transition-all duration-300 ${
+        // Adjust margin based on sidebar state - only on desktop
+        `lg:ml-${sidebarCollapsed ? '16' : '64'}`
+      }`}>
         <div className="flex items-center space-x-4">
           {/* Mobile menu button */}
           <Button
@@ -99,26 +104,26 @@ export function TopNavigation({
             <Menu className="w-5 h-5" />
           </Button>
 
-          {/* Logo and title */}
+          {/* Logo and title - hide on mobile when space is limited */}
           <div className="flex items-center space-x-3">
             <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
               <span className="text-white font-bold text-sm">C</span>
             </div>
-            <div>
+            <div className="hidden sm:block">
               <h1 className="text-xl font-semibold text-gray-900">Curatore v2</h1>
-              <p className="text-xs text-gray-500 hidden sm:block">RAG Document Processing</p>
+              <p className="text-xs text-gray-500 hidden md:block">RAG Document Processing</p>
             </div>
           </div>
 
-          {/* Breadcrumbs */}
-          <nav className="hidden md:flex items-center space-x-1 text-sm" aria-label="Breadcrumb">
-            {breadcrumbs.map((breadcrumb, index) => (
+          {/* Breadcrumbs - simplified for space */}
+          <nav className="hidden lg:flex items-center space-x-1 text-sm" aria-label="Breadcrumb">
+            {breadcrumbs.slice(-2).map((breadcrumb, index, arr) => (
               <div key={breadcrumb.href} className="flex items-center">
                 {index > 0 && <span className="text-gray-400 mx-2">/</span>}
                 <button
                   onClick={() => router.push(breadcrumb.href)}
                   className={`px-2 py-1 rounded hover:bg-gray-100 transition-colors ${
-                    index === breadcrumbs.length - 1
+                    index === arr.length - 1
                       ? 'text-gray-900 font-medium'
                       : 'text-gray-500 hover:text-gray-700'
                   }`}
@@ -132,21 +137,21 @@ export function TopNavigation({
 
         {/* Right side controls */}
         <div className="flex items-center space-x-2">
-          {/* System status indicators */}
-          <div className="hidden md:flex items-center space-x-3">
+          {/* System status indicators - compact on smaller screens */}
+          <div className="hidden md:flex items-center space-x-2">
             <Badge 
               variant={systemStatus.health === 'healthy' ? 'success' : 'error'}
               className="text-xs"
             >
               <Activity className="w-3 h-3 mr-1" />
-              API
+              <span className="hidden lg:inline">API</span>
             </Badge>
             <Badge 
               variant={systemStatus.llmConnected ? 'success' : 'error'}
               className="text-xs"
             >
               <Zap className="w-3 h-3 mr-1" />
-              LLM
+              <span className="hidden lg:inline">LLM</span>
             </Badge>
           </div>
 
@@ -180,6 +185,7 @@ export function TopNavigation({
             onClick={() => router.push('/settings')}
             title="Settings"
             aria-label="Open settings"
+            className="hidden sm:flex"
           >
             <Settings className="w-4 h-4" />
           </Button>
@@ -190,6 +196,7 @@ export function TopNavigation({
             title="Help & Documentation"
             aria-label="Help and documentation"
             onClick={() => window.open('http://localhost:8000/docs', '_blank')}
+            className="hidden md:flex"
           >
             <HelpCircle className="w-4 h-4" />
           </Button>

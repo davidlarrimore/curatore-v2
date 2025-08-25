@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react'
 import { Activity, Zap, HardDrive, Clock, Server, Wifi } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
-import { utils } from '@/lib/utils'
+import { utils } from '@/lib/api'
 
 interface SystemStatus {
   health: string
@@ -16,14 +16,20 @@ interface SystemStatus {
 
 interface StatusBarProps {
   systemStatus: SystemStatus
+  sidebarCollapsed: boolean // NEW: Track sidebar state
 }
 
-export function StatusBar({ systemStatus }: StatusBarProps) {
-  const [currentTime, setCurrentTime] = useState(new Date())
+export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
+  const [currentTime, setCurrentTime] = useState<Date | null>(null)
   const [connectionCount, setConnectionCount] = useState(0)
+  const [isClient, setIsClient] = useState(false)
 
-  // Update time every second
+  // Fix hydration issue by only showing time after client-side hydration
   useEffect(() => {
+    setIsClient(true)
+    setCurrentTime(new Date())
+    
+    // Update time every second only after hydration
     const timer = setInterval(() => {
       setCurrentTime(new Date())
     }, 1000)
@@ -50,6 +56,8 @@ export function StatusBar({ systemStatus }: StatusBarProps) {
 
   const getUptimeDisplay = () => {
     // In a real app, you'd track actual uptime
+    if (!isClient) return '0h 0m' // Prevent hydration mismatch
+    
     const uptime = Math.floor(Date.now() / 1000) % 86400 // Simulated daily reset
     const hours = Math.floor(uptime / 3600)
     const minutes = Math.floor((uptime % 3600) / 60)
@@ -57,7 +65,10 @@ export function StatusBar({ systemStatus }: StatusBarProps) {
   }
 
   return (
-    <div className="bg-gray-50 border-t border-gray-200 px-4 py-2 flex items-center justify-between text-xs text-gray-600">
+    <div className={`bg-gray-50 border-t border-gray-200 px-4 py-2 flex items-center justify-between text-xs text-gray-600 transition-all duration-300 z-60 relative ${
+      // Adjust margin based on sidebar state - only on desktop
+      `lg:ml-${sidebarCollapsed ? '16' : '64'}`
+    }`}>
       <div className="flex items-center space-x-6">
         {/* API Health Status */}
         <div className="flex items-center space-x-1">
@@ -112,10 +123,12 @@ export function StatusBar({ systemStatus }: StatusBarProps) {
           <span className="font-mono">{getUptimeDisplay()}</span>
         </div>
         
-        {/* Current Time */}
+        {/* Current Time - Only show after hydration */}
         <div className="flex items-center space-x-1">
           <Clock className="w-3 h-3" />
-          <span className="font-mono">{formatTime(currentTime)}</span>
+          <span className="font-mono">
+            {isClient && currentTime ? formatTime(currentTime) : '--:--:--'}
+          </span>
         </div>
         
         {/* Version */}

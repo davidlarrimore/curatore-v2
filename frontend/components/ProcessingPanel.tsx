@@ -15,11 +15,11 @@ interface ProcessingPanelProps {
   selectedFiles: FileInfo[];
   processingOptions: ProcessingOptions;
   onProcessingComplete: (results: ProcessingResult[]) => void;
-  onResultUpdate?: (results: ProcessingResult[]) => void; // Real-time updates
+  onResultUpdate?: (results: ProcessingResult[]) => void;
   onError: (error: string) => void;
   isVisible: boolean;
   onClose: () => void;
-  resetTrigger?: number; // NEW: External reset trigger
+  resetTrigger?: number;
 }
 
 type PanelState = 'minimized' | 'normal' | 'fullscreen';
@@ -32,7 +32,7 @@ export function ProcessingPanel({
   onError,
   isVisible,
   onClose,
-  resetTrigger = 0 // NEW: Default value
+  resetTrigger = 0
 }: ProcessingPanelProps) {
   const [panelState, setPanelState] = useState<PanelState>('normal');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -43,14 +43,13 @@ export function ProcessingPanel({
   const [processingStartTime, setProcessingStartTime] = useState<number>(0);
   const [processingComplete, setProcessingComplete] = useState(false);
 
-  // NEW: Reset internal state when resetTrigger changes
+  // Reset internal state when resetTrigger changes
   useEffect(() => {
     if (resetTrigger > 0) {
       resetInternalState();
     }
   }, [resetTrigger]);
 
-  // NEW: Function to reset all internal state
   const resetInternalState = () => {
     setPanelState('normal');
     setIsProcessing(false);
@@ -72,13 +71,11 @@ export function ProcessingPanel({
   // Handle fullscreen body scroll lock
   useEffect(() => {
     if (panelState === 'fullscreen') {
-      // Prevent body scroll when fullscreen
       document.body.style.overflow = 'hidden';
       return () => {
         document.body.style.overflow = 'unset';
       };
     } else {
-      // Ensure body scroll is restored when not fullscreen
       document.body.style.overflow = 'unset';
     }
   }, [panelState]);
@@ -86,7 +83,7 @@ export function ProcessingPanel({
   const addLog = (level: ProcessingLog['level'], message: string) => {
     const timestamp = new Date().toLocaleTimeString();
     const newLog: ProcessingLog = { timestamp, level, message };
-    setLogs(prev => [...prev.slice(-50), newLog]); // Keep last 50 logs
+    setLogs(prev => [...prev.slice(-50), newLog]);
   };
 
   const getLogIcon = (level: ProcessingLog['level']) => {
@@ -98,10 +95,8 @@ export function ProcessingPanel({
     }
   };
 
-  // Function to update results and notify parent
   const updateResults = (newResults: ProcessingResult[]) => {
     setResults(newResults);
-    // Immediately notify parent of the update
     if (onResultUpdate) {
       onResultUpdate(newResults);
     }
@@ -120,8 +115,8 @@ export function ProcessingPanel({
     setProcessingStartTime(Date.now());
     setProcessingComplete(false);
 
-    addLog('info', `🚀 Starting background processing of ${selectedFiles.length} files...`);
-    addLog('info', `🎯 Vector optimization: ${processingOptions.auto_optimize ? 'Enabled' : 'Disabled'}`);
+    addLog('info', `Starting background processing of ${selectedFiles.length} files...`);
+    addLog('info', `Vector optimization: ${processingOptions.auto_optimize ? 'Enabled' : 'Disabled'}`);
 
     try {
       const processedResults: ProcessingResult[] = [];
@@ -131,14 +126,14 @@ export function ProcessingPanel({
         setCurrentFile(file.filename);
         setProgress(((i) / selectedFiles.length) * 100);
 
-        addLog('info', `📄 Processing: ${file.filename}`);
+        addLog('info', `Processing: ${file.filename}`);
 
         try {
           const result = await processingApi.processDocument(file.document_id, processingOptions);
           
           if (result.success) {
-            addLog('success', `✅ Successfully processed: ${file.filename}`);
-            addLog('info', `📊 Conversion score: ${result.conversion_score}/100`);
+            addLog('success', `Successfully processed: ${file.filename}`);
+            addLog('info', `Conversion score: ${result.conversion_score}/100`);
             
             if (result.llm_evaluation) {
               const eval_scores = [
@@ -147,25 +142,24 @@ export function ProcessingPanel({
                 `Relevance: ${result.llm_evaluation.relevance_score || 'N/A'}/10`,
                 `Markdown: ${result.llm_evaluation.markdown_score || 'N/A'}/10`
               ].join(', ');
-              addLog('info', `📈 Quality scores - ${eval_scores}`);
+              addLog('info', `Quality scores - ${eval_scores}`);
             }
 
             if (result.pass_all_thresholds) {
-              addLog('success', `🎯 ${file.filename} is RAG-ready! ✨`);
+              addLog('success', `${file.filename} is RAG-ready!`);
             } else {
-              addLog('warning', `⚠️ ${file.filename} needs improvement to meet quality thresholds`);
+              addLog('warning', `${file.filename} needs improvement to meet quality thresholds`);
             }
           } else {
-            addLog('error', `❌ Processing failed for ${file.filename}: ${result.message}`);
+            addLog('error', `Processing failed for ${file.filename}: ${result.message}`);
           }
 
           processedResults.push(result);
-          // Use the updateResults function for real-time updates
           updateResults([...processedResults]);
 
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-          addLog('error', `❌ Error processing ${file.filename}: ${errorMessage}`);
+          addLog('error', `Error processing ${file.filename}: ${errorMessage}`);
           
           const failedResult: ProcessingResult = {
             document_id: file.document_id,
@@ -179,7 +173,6 @@ export function ProcessingPanel({
           };
           
           processedResults.push(failedResult);
-          // Use the updateResults function for real-time updates
           updateResults([...processedResults]);
         }
 
@@ -189,22 +182,21 @@ export function ProcessingPanel({
       setProgress(100);
       setCurrentFile('');
 
-      // Final summary
       const successful = processedResults.filter(r => r.success).length;
       const failed = processedResults.length - successful;
       const ragReady = processedResults.filter(r => r.pass_all_thresholds).length;
       const processingTime = (Date.now() - processingStartTime) / 1000;
 
-      addLog('success', `🎉 Processing complete!`);
-      addLog('info', `📊 Summary: ${successful} successful, ${failed} failed, ${ragReady} RAG-ready`);
-      addLog('info', `⏱️ Total time: ${utils.formatDuration(processingTime)}`);
+      addLog('success', `Processing complete!`);
+      addLog('info', `Summary: ${successful} successful, ${failed} failed, ${ragReady} RAG-ready`);
+      addLog('info', `Total time: ${utils.formatDuration(processingTime)}`);
 
       setProcessingComplete(true);
       onProcessingComplete(processedResults);
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      addLog('error', `❌ Batch processing failed: ${errorMessage}`);
+      addLog('error', `Batch processing failed: ${errorMessage}`);
       onError(errorMessage);
     } finally {
       setIsProcessing(false);
@@ -217,35 +209,61 @@ export function ProcessingPanel({
   const failed = results.length - successful;
   const ragReady = results.filter(r => r.pass_all_thresholds).length;
 
-  // Panel height classes based on state
+  // Panel positioning and size with proper z-index and sidebar awareness
   const getPanelClasses = () => {
-    const baseClasses = "fixed bottom-0 left-0 right-0 bg-white border-t border-gray-200 shadow-2xl transition-all duration-300 ease-in-out z-50";
+    // Base classes with lower z-index and sidebar margin
+    const baseClasses = "fixed bg-gray-900 border-t border-gray-700 shadow-2xl transition-all duration-300 ease-in-out z-20";
+    
+    // Use CSS custom properties for sidebar width awareness
+    const sidebarStyle = {
+      left: 'var(--sidebar-width, 16rem)',
+      right: '0'
+    };
     
     switch (panelState) {
       case 'minimized':
-        return `${baseClasses} h-16`;
+        return {
+          className: `${baseClasses} h-12`,
+          style: { 
+            ...sidebarStyle,
+            bottom: '2.5rem' // 40px above status bar
+          }
+        };
       case 'fullscreen':
-        return `${baseClasses} h-screen overflow-hidden`; // Prevent body scroll
+        return {
+          className: `${baseClasses} overflow-hidden`,
+          style: { 
+            ...sidebarStyle,
+            top: '4rem', // Below top navigation
+            bottom: '2.5rem' // Above status bar
+          }
+        };
       case 'normal':
       default:
-        return `${baseClasses} h-80`;
+        return {
+          className: `${baseClasses} h-80`,
+          style: { 
+            ...sidebarStyle,
+            bottom: '2.5rem' // 40px above status bar
+          }
+        };
     }
   };
 
   return (
     <div className={getPanelClasses()}>
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-gray-200 bg-gray-50">
+      {/* Header - Dark theme to match status bar but darker */}
+      <div className="flex items-center justify-between p-3 border-b border-gray-600 bg-gray-800">
         <div className="flex items-center space-x-4">
           <div className="flex items-center space-x-2">
             {isProcessing ? (
-              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-400"></div>
             ) : processingComplete ? (
-              <span className="text-green-600">✅</span>
+              <span className="text-green-400">✅</span>
             ) : (
-              <span className="text-blue-600">📄</span>
+              <span className="text-blue-400">📄</span>
             )}
-            <h3 className="font-medium text-gray-900">
+            <h3 className="font-medium text-gray-100">
               {isProcessing 
                 ? `Processing Documents... (${Math.round(progress)}%)`
                 : processingComplete
@@ -257,20 +275,20 @@ export function ProcessingPanel({
 
           {/* Mini stats when minimized */}
           {panelState === 'minimized' && (
-            <div className="flex items-center space-x-4 text-sm text-gray-600">
+            <div className="flex items-center space-x-4 text-xs text-gray-300">
               <span>{selectedFiles.length} files</span>
               {results.length > 0 && (
                 <>
                   <span>•</span>
-                  <span className="text-green-600">{successful} success</span>
+                  <span className="text-green-400">{successful} success</span>
                   <span>•</span>
-                  <span className="text-blue-600">{ragReady} RAG-ready</span>
+                  <span className="text-blue-400">{ragReady} RAG-ready</span>
                 </>
               )}
               {currentFile && (
                 <>
                   <span>•</span>
-                  <span className="text-blue-600">Processing: {currentFile}</span>
+                  <span className="text-blue-400">Processing: {currentFile}</span>
                 </>
               )}
             </div>
@@ -283,7 +301,7 @@ export function ProcessingPanel({
           <button
             type="button"
             onClick={() => setPanelState(panelState === 'minimized' ? 'normal' : 'minimized')}
-            className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+            className="p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-300 hover:text-gray-100"
             title={panelState === 'minimized' ? 'Restore' : 'Minimize'}
           >
             {panelState === 'minimized' ? (
@@ -301,7 +319,7 @@ export function ProcessingPanel({
           <button
             type="button"
             onClick={() => setPanelState(panelState === 'fullscreen' ? 'normal' : 'fullscreen')}
-            className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+            className="p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-300 hover:text-gray-100"
             title={panelState === 'fullscreen' ? 'Exit Fullscreen' : 'Fullscreen'}
           >
             {panelState === 'fullscreen' ? (
@@ -320,7 +338,7 @@ export function ProcessingPanel({
             <button
               type="button"
               onClick={onClose}
-              className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+              className="p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-300 hover:text-gray-100"
               title="Close"
             >
               <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -335,8 +353,8 @@ export function ProcessingPanel({
       {panelState !== 'minimized' && (
         <div className={`flex-1 overflow-hidden ${
           panelState === 'fullscreen' 
-            ? 'h-[calc(100vh-4rem)]' 
-            : 'h-[calc(20rem-4rem)]' // Fixed height for normal mode (320px - header)
+            ? 'h-[calc(100vh-8rem)]' // Account for header + status bar space
+            : 'h-[calc(20rem-3rem)]' // Normal mode height minus header
         }`}>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-4 h-full">
             {/* Progress and Stats */}
@@ -344,12 +362,12 @@ export function ProcessingPanel({
               {/* Progress Bar */}
               <div className="flex-shrink-0">
                 <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-gray-700">Progress</span>
-                  <span className="text-sm text-gray-600">{Math.round(progress)}%</span>
+                  <span className="text-sm font-medium text-gray-200">Progress</span>
+                  <span className="text-sm text-gray-300">{Math.round(progress)}%</span>
                 </div>
-                <div className="w-full bg-gray-200 rounded-full h-2">
+                <div className="w-full bg-gray-700 rounded-full h-2">
                   <div 
-                    className="bg-blue-600 h-2 rounded-full transition-all duration-300"
+                    className="bg-blue-500 h-2 rounded-full transition-all duration-300"
                     style={{ width: `${progress}%` }}
                   />
                 </div>
@@ -357,44 +375,44 @@ export function ProcessingPanel({
 
               {/* Current File */}
               {currentFile && (
-                <div className="flex items-center space-x-2 text-sm text-gray-600 flex-shrink-0">
-                  <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-600"></div>
-                  <span>Processing: <strong>{currentFile}</strong></span>
+                <div className="flex items-center space-x-2 text-sm text-gray-300 flex-shrink-0">
+                  <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-400"></div>
+                  <span>Processing: <strong className="text-gray-100">{currentFile}</strong></span>
                 </div>
               )}
 
               {/* Stats Grid */}
               {results.length > 0 && (
                 <div className="grid grid-cols-3 gap-3 flex-shrink-0">
-                  <div className="text-center p-3 bg-green-50 rounded-lg">
-                    <div className="text-xl font-bold text-green-600">{successful}</div>
-                    <div className="text-xs text-green-800">Successful</div>
+                  <div className="text-center p-3 bg-green-900 bg-opacity-30 rounded-lg border border-green-700">
+                    <div className="text-xl font-bold text-green-400">{successful}</div>
+                    <div className="text-xs text-green-300">Successful</div>
                   </div>
-                  <div className="text-center p-3 bg-red-50 rounded-lg">
-                    <div className="text-xl font-bold text-red-600">{failed}</div>
-                    <div className="text-xs text-red-800">Failed</div>
+                  <div className="text-center p-3 bg-red-900 bg-opacity-30 rounded-lg border border-red-700">
+                    <div className="text-xl font-bold text-red-400">{failed}</div>
+                    <div className="text-xs text-red-300">Failed</div>
                   </div>
-                  <div className="text-center p-3 bg-blue-50 rounded-lg">
-                    <div className="text-xl font-bold text-blue-600">{ragReady}</div>
-                    <div className="text-xs text-blue-800">RAG Ready</div>
+                  <div className="text-center p-3 bg-blue-900 bg-opacity-30 rounded-lg border border-blue-700">
+                    <div className="text-xl font-bold text-blue-400">{ragReady}</div>
+                    <div className="text-xs text-blue-300">RAG Ready</div>
                   </div>
                 </div>
               )}
 
               {/* Results Preview */}
               {results.length > 0 && (
-                <div className="border rounded-lg flex flex-col min-h-0 flex-1">
-                  <h4 className="font-medium p-3 border-b bg-gray-50 flex-shrink-0">Recent Results</h4>
+                <div className="border border-gray-600 rounded-lg flex flex-col min-h-0 flex-1 bg-gray-800">
+                  <h4 className="font-medium p-3 border-b border-gray-600 bg-gray-700 flex-shrink-0 text-gray-200">Recent Results</h4>
                   <div className="overflow-y-auto flex-1">
                     {results.slice(-3).map((result) => (
-                      <div key={result.document_id} className="flex items-center justify-between p-2 border-b last:border-b-0">
+                      <div key={result.document_id} className="flex items-center justify-between p-2 border-b border-gray-600 last:border-b-0">
                         <div className="flex items-center space-x-2">
                           <span className="text-sm">
                             {result.success ? (result.pass_all_thresholds ? '✅' : '⚠️') : '❌'}
                           </span>
-                          <span className="text-sm font-medium truncate">{result.filename}</span>
+                          <span className="text-sm font-medium truncate text-gray-200">{result.filename}</span>
                         </div>
-                        <span className="text-xs text-gray-500">{result.conversion_score}%</span>
+                        <span className="text-xs text-gray-400">{result.conversion_score}%</span>
                       </div>
                     ))}
                   </div>
@@ -402,21 +420,21 @@ export function ProcessingPanel({
               )}
             </div>
 
-            {/* Processing Log - Fixed height for normal mode */}
-            <div className={`border rounded-lg flex flex-col ${
+            {/* Processing Log - Dark terminal theme */}
+            <div className={`border border-gray-600 rounded-lg flex flex-col bg-gray-900 ${
               panelState === 'fullscreen' 
                 ? 'h-full' 
-                : 'h-64' // Fixed height for normal mode
+                : 'h-64'
             }`}>
-              <div className="flex items-center justify-between p-3 border-b bg-gray-50 flex-shrink-0">
-                <h4 className="font-medium">Processing Log</h4>
+              <div className="flex items-center justify-between p-3 border-b border-gray-600 bg-gray-800 flex-shrink-0">
+                <h4 className="font-medium text-gray-200">Processing Log</h4>
                 <div className="flex items-center space-x-2">
-                  <span className="text-xs text-gray-500">{logs.length} entries</span>
+                  <span className="text-xs text-gray-400">{logs.length} entries</span>
                   {logs.length > 0 && (
                     <button
                       type="button"
                       onClick={() => setLogs([])}
-                      className="text-xs text-gray-500 hover:text-gray-700 underline"
+                      className="text-xs text-gray-400 hover:text-gray-200 underline"
                     >
                       Clear
                     </button>
@@ -437,7 +455,6 @@ export function ProcessingPanel({
                       scrollbarColor: '#22c55e #1f2937'
                     }}
                     onWheel={(e) => {
-                      // Prevent event bubbling to parent when scrolling in fullscreen
                       if (panelState === 'fullscreen') {
                         e.stopPropagation();
                       }

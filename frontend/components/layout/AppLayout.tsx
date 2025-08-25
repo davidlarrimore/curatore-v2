@@ -63,7 +63,7 @@ export function AppLayout({ children }: AppLayoutProps) {
       }))
       
       // Only show error toast on initial load failure, not on refresh failures
-      if (prev => prev.health === 'checking') {
+      if (systemStatus.health === 'checking') {
         toast.error('Failed to load system status')
       }
     }
@@ -135,7 +135,9 @@ export function AppLayout({ children }: AppLayoutProps) {
   }, [])
 
   return (
-    <div className="h-full flex flex-col">
+    <div className="h-full flex flex-col" style={{
+      '--sidebar-width': sidebarCollapsed ? '4rem' : '16rem'
+    } as React.CSSProperties}>
       {/* Toast notifications with custom styling */}
       <Toaster
         position="top-right"
@@ -170,11 +172,12 @@ export function AppLayout({ children }: AppLayoutProps) {
         }}
       />
 
-      {/* Top Navigation */}
+      {/* Top Navigation - Pass sidebar state */}
       <TopNavigation
         onMenuClick={() => setSidebarOpen(true)}
         systemStatus={systemStatus}
         onStatusRefresh={loadSystemStatus}
+        sidebarCollapsed={sidebarCollapsed} // Pass sidebar state
       />
 
       <div className="flex-1 flex overflow-hidden">
@@ -188,7 +191,7 @@ export function AppLayout({ children }: AppLayoutProps) {
           onStatusRefresh={loadSystemStatus}
         />
 
-        {/* Main Content Area */}
+        {/* Main Content Area - Adjust margin based on sidebar state */}
         <main className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ${
           sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'
         }`}>
@@ -198,8 +201,11 @@ export function AppLayout({ children }: AppLayoutProps) {
         </main>
       </div>
 
-      {/* Status Bar */}
-      <StatusBar systemStatus={systemStatus} />
+      {/* Status Bar - Higher z-index to stay above processing panel */}
+      <StatusBar 
+        systemStatus={systemStatus}
+        sidebarCollapsed={sidebarCollapsed}
+      />
     </div>
   )
 }
