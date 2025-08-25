@@ -15,10 +15,11 @@ interface ProcessingPanelProps {
   selectedFiles: FileInfo[];
   processingOptions: ProcessingOptions;
   onProcessingComplete: (results: ProcessingResult[]) => void;
-  onResultUpdate?: (results: ProcessingResult[]) => void; // NEW: Real-time updates
+  onResultUpdate?: (results: ProcessingResult[]) => void; // Real-time updates
   onError: (error: string) => void;
   isVisible: boolean;
   onClose: () => void;
+  resetTrigger?: number; // NEW: External reset trigger
 }
 
 type PanelState = 'minimized' | 'normal' | 'fullscreen';
@@ -27,10 +28,11 @@ export function ProcessingPanel({
   selectedFiles,
   processingOptions,
   onProcessingComplete,
-  onResultUpdate, // NEW PROP
+  onResultUpdate,
   onError,
   isVisible,
-  onClose
+  onClose,
+  resetTrigger = 0 // NEW: Default value
 }: ProcessingPanelProps) {
   const [panelState, setPanelState] = useState<PanelState>('normal');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -40,6 +42,25 @@ export function ProcessingPanel({
   const [logs, setLogs] = useState<ProcessingLog[]>([]);
   const [processingStartTime, setProcessingStartTime] = useState<number>(0);
   const [processingComplete, setProcessingComplete] = useState(false);
+
+  // NEW: Reset internal state when resetTrigger changes
+  useEffect(() => {
+    if (resetTrigger > 0) {
+      resetInternalState();
+    }
+  }, [resetTrigger]);
+
+  // NEW: Function to reset all internal state
+  const resetInternalState = () => {
+    setPanelState('normal');
+    setIsProcessing(false);
+    setProgress(0);
+    setCurrentFile('');
+    setResults([]);
+    setLogs([]);
+    setProcessingStartTime(0);
+    setProcessingComplete(false);
+  };
 
   // Start processing when panel becomes visible
   useEffect(() => {
@@ -77,7 +98,7 @@ export function ProcessingPanel({
     }
   };
 
-  // NEW: Function to update results and notify parent
+  // Function to update results and notify parent
   const updateResults = (newResults: ProcessingResult[]) => {
     setResults(newResults);
     // Immediately notify parent of the update
@@ -139,7 +160,7 @@ export function ProcessingPanel({
           }
 
           processedResults.push(result);
-          // CHANGED: Use the new updateResults function for real-time updates
+          // Use the updateResults function for real-time updates
           updateResults([...processedResults]);
 
         } catch (error) {
@@ -158,7 +179,7 @@ export function ProcessingPanel({
           };
           
           processedResults.push(failedResult);
-          // CHANGED: Use the new updateResults function for real-time updates
+          // Use the updateResults function for real-time updates
           updateResults([...processedResults]);
         }
 

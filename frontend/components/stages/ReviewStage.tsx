@@ -2,6 +2,7 @@
 'use client'
 
 import { useState, useEffect } from 'react';
+import toast from 'react-hot-toast';
 import { ProcessingResult, QualityThresholds } from '@/types';
 import { contentApi, utils } from '@/lib/api';
 
@@ -59,6 +60,7 @@ export function ReviewStage({
       console.error('Failed to load document content:', error);
       setDocumentContent('Failed to load content');
       setEditedContent('');
+      toast.error('Failed to load document content');
     } finally {
       setIsLoading(false);
     }
@@ -68,6 +70,8 @@ export function ReviewStage({
     if (!selectedResult) return;
 
     setIsEditing(true);
+    const loadingToast = toast.loading('Saving and re-scoring document...');
+    
     try {
       const updatedResult = await contentApi.updateDocumentContent(
         selectedResult.document_id,
@@ -80,10 +84,12 @@ export function ReviewStage({
       );
       onResultsUpdate(updatedResults);
       setSelectedResult(updatedResult);
+      
+      toast.success('Document saved and re-scored successfully!', { id: loadingToast });
 
     } catch (error) {
       console.error('Failed to save and re-score:', error);
-      alert('Failed to save and re-score document');
+      toast.error('Failed to save and re-score document', { id: loadingToast });
     } finally {
       setIsEditing(false);
     }
@@ -93,6 +99,8 @@ export function ReviewStage({
     if (!selectedResult) return;
 
     setIsEditing(true);
+    const loadingToast = toast.loading('Applying vector optimization...');
+    
     try {
       const updatedResult = await contentApi.updateDocumentContent(
         selectedResult.document_id,
@@ -108,10 +116,15 @@ export function ReviewStage({
       onResultsUpdate(updatedResults);
       setSelectedResult(updatedResult);
       setEditedContent(updatedResult.conversion_result?.markdown_content || editedContent);
+      
+      toast.success('Vector optimization applied successfully!', { 
+        id: loadingToast,
+        icon: '🎯'
+      });
 
     } catch (error) {
       console.error('Failed to apply vector optimization:', error);
-      alert('Failed to apply vector optimization');
+      toast.error('Failed to apply vector optimization', { id: loadingToast });
     } finally {
       setIsEditing(false);
     }
@@ -121,6 +134,8 @@ export function ReviewStage({
     if (!selectedResult || !customPrompt.trim()) return;
 
     setIsEditing(true);
+    const loadingToast = toast.loading('Applying custom improvements...');
+    
     try {
       const updatedResult = await contentApi.updateDocumentContent(
         selectedResult.document_id,
@@ -135,10 +150,15 @@ export function ReviewStage({
       onResultsUpdate(updatedResults);
       setSelectedResult(updatedResult);
       setEditedContent(updatedResult.conversion_result?.markdown_content || editedContent);
+      
+      toast.success('Custom improvements applied successfully!', { 
+        id: loadingToast,
+        icon: '✨'
+      });
 
     } catch (error) {
       console.error('Failed to apply custom improvements:', error);
-      alert('Failed to apply custom improvements');
+      toast.error('Failed to apply custom improvements', { id: loadingToast });
     } finally {
       setIsEditing(false);
     }
@@ -191,7 +211,7 @@ export function ReviewStage({
             
             <p className="text-gray-600 mb-6">
               {isProcessing 
-                ? `Processing ${selectedFiles.length} document(s). You can monitor progress in the panel below.`
+                ? `Processing ${selectedFiles.length} document(s). You can monitor progress in the processing panel.`
                 : 'Documents will be processed when you start the operation.'
               }
             </p>
@@ -203,33 +223,24 @@ export function ReviewStage({
           <h4 className="font-medium text-blue-900 mb-2">💡 While You Wait</h4>
           <ul className="text-sm text-blue-800 space-y-1">
             <li>• Results will appear automatically as documents are processed</li>
-            <li>• You can monitor detailed progress in the processing panel below</li>
-            <li>• The system will notify you when all documents are complete</li>
+            <li>• You can monitor detailed progress in the processing panel</li>
             <li>• Each document is evaluated for clarity, completeness, relevance, and markdown quality</li>
+            <li>• The system will notify you when all documents are complete</li>
           </ul>
         </div>
       </div>
     );
   }
 
-  // Show results interface when we have at least one result (even if processing isn't complete)
+  // Show results interface when we have at least one result
   return (
     <div className="space-y-6">
-      {/* Header with processing status */}
+      {/* Streamlined Header */}
       <div className="text-center">
         <h2 className="text-2xl font-bold text-gray-900 mb-2">📊 Review Results</h2>
         <p className="text-gray-600">
-          {isProcessing 
-            ? `${processingResults.length} of ${selectedFiles.length} documents processed. More results coming...`
-            : `Review and improve your processed documents before finalizing`
-          }
+          Review and improve your processed documents before finalizing
         </p>
-        {isProcessing && (
-          <div className="mt-2 flex items-center justify-center space-x-2 text-sm text-blue-600">
-            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
-            <span>Processing continues in background...</span>
-          </div>
-        )}
       </div>
 
       {/* Summary Stats */}
@@ -253,22 +264,6 @@ export function ReviewStage({
           <div className="text-sm text-gray-800">Successful</div>
         </div>
       </div>
-
-      {/* Progress indicator when still processing */}
-      {isProcessing && (
-        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
-          <div className="flex items-center space-x-3">
-            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-yellow-600"></div>
-            <div>
-              <h4 className="font-medium text-yellow-900">Processing in Progress</h4>
-              <p className="text-sm text-yellow-800">
-                {processingResults.length} of {selectedFiles.length} documents completed. 
-                You can review completed results below while processing continues.
-              </p>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Main Content Area */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -557,14 +552,7 @@ export function ReviewStage({
                             disabled={isEditing}
                             className="flex items-center justify-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
-                            {isEditing ? (
-                              <>
-                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                                Saving...
-                              </>
-                            ) : (
-                              '💾 Save & Re-Score'
-                            )}
+                            💾 Save & Re-Score
                           </button>
 
                           <button
@@ -573,14 +561,7 @@ export function ReviewStage({
                             disabled={isEditing || selectedResult.vector_optimized}
                             className="flex items-center justify-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
-                            {isEditing ? (
-                              <>
-                                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2"></div>
-                                Optimizing...
-                              </>
-                            ) : (
-                              '🎯 Vector Optimize'
-                            )}
+                            🎯 Vector Optimize
                           </button>
 
                           <button
@@ -618,14 +599,7 @@ export function ReviewStage({
                                 disabled={isEditing || !customPrompt.trim()}
                                 className="w-full px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
-                                {isEditing ? (
-                                  <>
-                                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2 inline-block"></div>
-                                    Applying improvements...
-                                  </>
-                                ) : (
-                                  'Apply Custom Improvements'
-                                )}
+                                Apply Custom Improvements
                               </button>
                             </div>
                           </div>

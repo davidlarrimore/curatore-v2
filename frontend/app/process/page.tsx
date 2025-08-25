@@ -1,8 +1,9 @@
-// app/process/page.tsx
+// app/process/page.tsx - Updated with react-hot-toast
 'use client'
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
+import toast, { Toaster } from 'react-hot-toast';
 import { ProcessingStage, ProcessingState, FileInfo, ProcessingResult, ProcessingOptions } from '@/types';
 import { systemApi, utils } from '@/lib/api';
 import { UploadSelectStage } from '@/components/stages/UploadSelectStage';
@@ -41,6 +42,8 @@ export default function ProcessPage() {
   const [showProcessingPanel, setShowProcessingPanel] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isProcessingComplete, setIsProcessingComplete] = useState(false);
+  const [resetTrigger, setResetTrigger] = useState(0);
+  const [processingToastId, setProcessingToastId] = useState<string | null>(null);
 
   const [systemStatus, setSystemStatus] = useState({
     health: 'checking...',
@@ -86,7 +89,7 @@ export default function ProcessPage() {
 
     } catch (error) {
       console.error('Failed to load initial data:', error);
-      setError('Failed to load application data. Please refresh the page.');
+      toast.error('Failed to load application data. Please refresh the page.');
     } finally {
       setIsLoading(false);
     }
@@ -94,6 +97,12 @@ export default function ProcessPage() {
 
   // Complete reset function
   const resetAllState = () => {
+    // Dismiss any active processing toast
+    if (processingToastId) {
+      toast.dismiss(processingToastId);
+      setProcessingToastId(null);
+    }
+
     // Reset main state
     setState({
       currentStage: 'upload',
@@ -115,6 +124,9 @@ export default function ProcessPage() {
     // Reset error state
     setError('');
     setShowResetConfirm(false);
+
+    // Trigger processing panel reset
+    setResetTrigger(prev => prev + 1);
   };
 
   // Reset system handler
@@ -126,14 +138,13 @@ export default function ProcessPage() {
       // Reset all local state
       resetAllState();
       
-      // Show success message briefly
-      setError('✅ System reset successfully');
-      setTimeout(() => setError(''), 3000);
+      // Show success toast
+      toast.success('System reset successfully! All files and data cleared.');
       
     } catch (error) {
       console.error('Reset failed:', error);
       const errorMessage = error instanceof Error ? error.message : 'Reset failed';
-      setError(`❌ Reset failed: ${errorMessage}`);
+      toast.error(`Reset failed: ${errorMessage}`);
     } finally {
       setIsResetting(false);
     }
@@ -163,7 +174,7 @@ export default function ProcessPage() {
 
   const handleProcessStart = (files: FileInfo[], options: ProcessingOptions) => {
     if (!systemStatus.llmConnected) {
-      setError('Cannot process files: LLM connection is not available');
+      toast.error('Cannot process files: LLM connection is not available');
       return;
     }
 
@@ -179,6 +190,12 @@ export default function ProcessPage() {
     setShowProcessingPanel(true);
     setIsProcessing(true);
     setIsProcessingComplete(false);
+
+    // Start processing toast
+    const toastId = toast.loading('Starting document processing...', {
+      duration: Infinity, // Keep it visible
+    });
+    setProcessingToastId(toastId);
   };
 
   const handleProcessingComplete = (results: ProcessingResult[]) => {
@@ -190,19 +207,44 @@ export default function ProcessPage() {
     
     setIsProcessing(false);
     setIsProcessingComplete(true);
-    // Keep the processing panel open so user can see the logs/results
+
+    // Update processing toast with completion message
+    if (processingToastId) {
+      const successful = results.filter(r => r.success).length;
+      const ragReady = results.filter(r => r.pass_all_thresholds).length;
+      
+      toast.success(
+        `Processing complete! ${successful}/${results.length} successful, ${ragReady} RAG-ready`, 
+        { id: processingToastId, duration: 4000 }
+      );
+      
+      setProcessingToastId(null);
+    }
   };
 
   const handleProcessingError = (error: string) => {
-    setError(error);
+    toast.error(error);
     setIsProcessing(false);
     setIsProcessingComplete(false);
-    // Don't close the processing panel so user can see the error logs
+    
+    // Dismiss processing toast
+    if (processingToastId) {
+      toast.dismiss(processingToastId);
+      setProcessingToastId(null);
+    }
   };
 
-  // NEW: Handle real-time result updates from ProcessingPanel
+  // Handle real-time result updates from ProcessingPanel
   const handleResultUpdate = (results: ProcessingResult[]) => {
     setState(prev => ({ ...prev, processingResults: results }));
+    
+    // Update processing toast with current progress
+    if (processingToastId && isProcessing) {
+      toast.loading(
+        `Processing documents: ${results.length}/${state.selectedFiles.length} completed`,
+        { id: processingToastId }
+      );
+    }
   };
 
   const handleResultsUpdate = (results: ProcessingResult[]) => {
@@ -211,11 +253,15 @@ export default function ProcessPage() {
 
   const handleReviewComplete = () => {
     setCurrentStage('download');
-    setShowProcessingPanel(false); // Close processing panel when moving to download
+    setShowProcessingPanel(false);
+    toast.success('Review completed! Ready to download processed documents.');
   };
 
   const handleRestart = () => {
-    resetAllState(); // Use the centralized reset function
+    resetAllState();
+    toast('Session restarted. Ready to process new documents.', {
+      icon: '🔄'
+    });
   };
 
   const handleCloseProcessingPanel = () => {
@@ -248,6 +294,40 @@ export default function ProcessPage() {
 
   return (
     <div className="min-h-screen bg-gray-50">
+      {/* react-hot-toast container */}
+      <Toaster
+        position="top-right"
+        toastOptions={{
+          duration: 3000,
+          style: {
+            background: '#fff',
+            border: '1px solid #e5e7eb',
+            borderRadius: '0.75rem',
+            boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
+            fontSize: '0.875rem',
+            maxWidth: '400px'
+          },
+          success: {
+            iconTheme: {
+              primary: '#10b981',
+              secondary: '#fff',
+            },
+          },
+          error: {
+            iconTheme: {
+              primary: '#ef4444',
+              secondary: '#fff',
+            },
+          },
+          loading: {
+            iconTheme: {
+              primary: '#3b82f6',
+              secondary: '#fff',
+            },
+          },
+        }}
+      />
+
       {/* Header */}
       <div className="bg-white shadow-sm border-b">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
@@ -346,30 +426,6 @@ export default function ProcessPage() {
                   </button>
                 </div>
               </div>
-            </div>
-          </div>
-        )}
-
-        {/* Error Display */}
-        {error && (
-          <div className={`mb-6 rounded-lg p-4 ${
-            error.startsWith('✅') 
-              ? 'bg-green-50 border border-green-200'
-              : 'bg-red-50 border border-red-200'
-          }`}>
-            <div className="flex items-center justify-between">
-              <p className={error.startsWith('✅') ? 'text-green-800' : 'text-red-800'}>
-                {error}
-              </p>
-              <button
-                type="button"
-                onClick={() => setError('')}
-                className={`text-sm underline ${
-                  error.startsWith('✅') ? 'text-green-600 hover:text-green-800' : 'text-red-600 hover:text-red-800'
-                }`}
-              >
-                Dismiss
-              </button>
             </div>
           </div>
         )}
@@ -509,10 +565,11 @@ export default function ProcessPage() {
           quality_thresholds: state.config.quality_thresholds
         }}
         onProcessingComplete={handleProcessingComplete}
-        onResultUpdate={handleResultUpdate} // NEW: Real-time updates
+        onResultUpdate={handleResultUpdate}
         onError={handleProcessingError}
         isVisible={showProcessingPanel}
         onClose={handleCloseProcessingPanel}
+        resetTrigger={resetTrigger}
       />
     </div>
   );
