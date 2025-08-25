@@ -37,6 +37,136 @@ interface ProcessingState {
   resetCounter: number
 }
 
+interface ProgressStep {
+  id: string;
+  name: string;
+  subtitle: string;
+  icon: React.ComponentType<any>;
+}
+
+interface ChevronProgressBarProps {
+  steps: ProgressStep[];
+  currentStage: string;
+  processingResults: any[];
+  processingComplete: boolean;
+  onStageChange: (stage: string) => void;
+  getStageStatus: (stageId: string) => 'completed' | 'current' | 'pending';
+  stats: {
+    successful: number;
+    failed: number;
+    ragReady: number;
+  };
+}
+
+const ChevronProgressBar: React.FC<ChevronProgressBarProps> = ({
+  steps,
+  currentStage,
+  processingResults,
+  processingComplete,
+  onStageChange,
+  getStageStatus,
+  stats
+}) => {
+  return (
+    <div className="bg-gradient-to-r from-slate-50 to-slate-100 border-b border-slate-200">
+      <div className="px-6 py-6">
+        <nav aria-label="Processing Pipeline Progress" className="max-w-7xl mx-auto">
+          <div className="flex items-center justify-center overflow-x-auto">
+            {steps.map((step, stepIdx) => {
+              const status = getStageStatus(step.id);
+              const isCompleted = status === 'completed';
+              const isCurrent = status === 'current';
+              const isClickable = step.id === 'upload' || 
+                (step.id === 'review' && processingResults.length > 0) || 
+                (step.id === 'download' && processingComplete);
+
+              return (
+                <div key={step.id} className="flex items-center group relative">
+                  {/* Chevron Step Container */}
+                  <div className="relative">
+                    <button
+                      onClick={() => {
+                        if (isClickable) {
+                          onStageChange(step.id);
+                        }
+                      }}
+                      disabled={!isClickable}
+                      className={`
+                        relative flex items-center px-8 py-6 transition-all duration-300 transform
+                        ${stepIdx === 0 ? 'pl-6 rounded-l-2xl' : ''}
+                        ${stepIdx === steps.length - 1 ? 'pr-6 rounded-r-2xl' : 'pr-12'}
+                        ${isClickable ? 'cursor-pointer hover:scale-[1.02]' : 'cursor-default'}
+                        ${isCurrent 
+                          ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-xl z-30 scale-[1.02]' 
+                          : isCompleted
+                            ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 text-white shadow-lg z-20 hover:from-emerald-600 hover:to-emerald-700'
+                            : 'bg-white text-slate-600 shadow-md z-10 hover:bg-slate-50 hover:shadow-lg'
+                        }
+                        disabled:opacity-60 min-w-[280px]
+                      `}
+                      style={{
+                        clipPath: stepIdx === steps.length - 1 
+                          ? undefined 
+                          : 'polygon(0% 0%, calc(100% - 20px) 0%, 100% 50%, calc(100% - 20px) 100%, 0% 100%, 20px 50%)',
+                        marginLeft: stepIdx === 0 ? '0' : '-20px'
+                      }}
+                    >
+                      
+
+                      {/* Text Content */}
+                      <div className="ml-4 text-left flex-1 min-w-0">
+                        <div className={`
+                          font-bold text-lg leading-tight
+                          ${isCurrent ? 'text-white' : isCompleted ? 'text-white' : 'text-slate-800'}
+                        `}>
+                          {step.name}
+                        </div>
+                        <div className={`
+                          text-sm mt-1 leading-tight
+                          ${isCurrent ? 'text-blue-100' : isCompleted ? 'text-emerald-100' : 'text-slate-500'}
+                        `}>
+                          {step.subtitle}
+                        </div>
+                        
+                        {/* Progress indicators */}
+                        {step.id === 'review' && processingResults.length > 0 && (
+                          <div className={`
+                            text-xs mt-2 font-medium
+                            ${isCurrent ? 'text-blue-100' : isCompleted ? 'text-emerald-100' : 'text-slate-500'}
+                          `}>
+                            {stats.successful}/{processingResults.length} processed
+                          </div>
+                        )}
+                      </div>
+
+                    </button>
+
+                    {/* Hover effect overlay */}
+                    {isClickable && (
+                      <div className={`
+                        absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity duration-300
+                        ${stepIdx === 0 ? 'rounded-l-2xl' : ''}
+                        ${stepIdx === steps.length - 1 ? 'rounded-r-2xl' : ''}
+                        ${isCurrent ? 'bg-white' : 'bg-blue-600'}
+                      `} 
+                      style={{
+                        clipPath: stepIdx === steps.length - 1 
+                          ? undefined 
+                          : 'polygon(0% 0%, calc(100% - 20px) 0%, 100% 50%, calc(100% - 20px) 100%, 0% 100%, 20px 50%)',
+                        pointerEvents: 'none'
+                      }} />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </nav>
+      </div>
+    </div>
+  );
+};
+
 export default function ProcessPage() {
   const [state, setState] = useState<ProcessingState>({
     currentStage: 'upload',
@@ -180,7 +310,7 @@ export default function ProcessPage() {
   }
 
   // Get stage status for progress indicator
-  const getStageStatus = (stage: AppStage) => {
+  const getStageStatus = (stage: AppStage): 'completed' | 'current' | 'pending' => {
     if (stage === state.currentStage) return 'current'
     
     switch (stage) {
@@ -198,111 +328,105 @@ export default function ProcessPage() {
 
   const stats = utils.calculateStats(state.processingResults)
 
+  const steps = [
+    { id: 'upload', name: 'Upload & Select', subtitle: 'Choose source documents', icon: Upload },
+    { id: 'review', name: 'Review & Edit', subtitle: 'Quality assessment & optimization', icon: Eye },
+    { id: 'download', name: 'Export Results', subtitle: 'Download processed documents', icon: Download }
+  ];
+
   return (
     <div className="h-full flex flex-col">
-      {/* Page Header */}
-      {/* Enterprise Progress Header - Full Width */}
-      <div className="bg-gradient-to-r from-gray-50 to-gray-100 border-b border-gray-200">
-        <div className="px-6 py-4">
-          <nav aria-label="Processing Pipeline Progress">
-            <div className="flex items-center justify-between">
-              {[
-                { id: 'upload', name: 'Upload & Select', subtitle: 'Choose source documents', icon: Upload },
-                { id: 'review', name: 'Review & Edit', subtitle: 'Quality assessment & optimization', icon: Eye },
-                { id: 'download', name: 'Export Results', subtitle: 'Download processed documents', icon: Download }
-              ].map((step, stepIdx) => {
-                const status = getStageStatus(step.id as AppStage)
-                const isCompleted = status === 'completed'
-                const isCurrent = status === 'current'
+      {/* Enhanced Chevron Progress Header */}
+      <div className="bg-gradient-to-r from-slate-50 to-slate-100 border-b border-slate-200">
+        <div className="px-6 py-6">
+          <nav aria-label="Processing Pipeline Progress" className="max-w-7xl mx-auto">
+            <div className="flex items-center justify-center overflow-x-auto">
+              {steps.map((step, stepIdx) => {
+                const status = getStageStatus(step.id as AppStage);
+                const isCompleted = status === 'completed';
+                const isCurrent = status === 'current';
                 const isClickable = step.id === 'upload' || 
                   (step.id === 'review' && state.processingResults.length > 0) || 
-                  (step.id === 'download' && state.processingComplete)
+                  (step.id === 'download' && state.processingComplete);
 
                 return (
-                  <div key={step.id} className="flex items-center flex-1">
-                    {/* Step Container */}
-                    <div className="flex-1">
+                  <div key={step.id} className="flex items-center group relative">
+                    {/* Chevron Step Container */}
+                    <div className="relative">
                       <button
                         onClick={() => {
                           if (isClickable) {
-                            handleStageChange(step.id as AppStage)
+                            handleStageChange(step.id as AppStage);
                           }
                         }}
                         disabled={!isClickable}
-                        className={`w-full flex items-center justify-start space-x-4 p-4 rounded-xl transition-all duration-200 ${
-                          isCurrent
-                            ? 'bg-blue-600 text-white shadow-lg transform scale-[1.02]'
+                        className={`
+                          relative flex items-center px-8 py-6 transition-all duration-300 transform
+                          ${stepIdx === 0 ? 'pl-6 rounded-l-2xl' : ''}
+                          ${stepIdx === steps.length - 1 ? 'pr-6 rounded-r-2xl' : 'pr-12'}
+                          ${isClickable ? 'cursor-pointer hover:scale-[1.02]' : 'cursor-default'}
+                          ${isCurrent 
+                            ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-xl z-30 scale-[1.02]' 
                             : isCompleted
-                              ? 'bg-white border-2 border-blue-200 text-gray-900 hover:border-blue-300 shadow-md'
-                              : 'bg-white border-2 border-gray-200 text-gray-500 hover:border-gray-300'
-                        } ${isClickable ? 'cursor-pointer' : 'cursor-default'} disabled:opacity-60`}
+                              ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 text-white shadow-lg z-20 hover:from-emerald-600 hover:to-emerald-700'
+                              : 'bg-white text-slate-600 shadow-md z-10 hover:bg-slate-50 hover:shadow-lg'
+                          }
+                          disabled:opacity-60 min-w-[280px]
+                        `}
+                        style={{
+                          clipPath: stepIdx === steps.length - 1 
+                            ? undefined 
+                            : 'polygon(0% 0%, calc(100% - 20px) 0%, 100% 50%, calc(100% - 20px) 100%, 0% 100%, 20px 50%)',
+                          marginLeft: stepIdx === 0 ? '0' : '-20px'
+                        }}
                       >
-                        {/* Icon */}
-                        <div className={`p-2 rounded-lg ${
-                          isCurrent
-                            ? 'bg-blue-500 text-white'
-                            : isCompleted
-                              ? 'bg-blue-100 text-blue-600'
-                              : 'bg-gray-100 text-gray-400'
-                        }`}>
-                          {isCompleted && !isCurrent ? (
-                            <CheckCircle2 className="w-5 h-5" />
-                          ) : (
-                            <step.icon className="w-5 h-5" />
-                          )}
-                        </div>
-
+                        
                         {/* Text Content */}
-                        <div className="text-left flex-1">
-                          <div className={`font-semibold ${
-                            isCurrent ? 'text-white' : isCompleted ? 'text-gray-900' : 'text-gray-500'
-                          }`}>
+                        <div className="ml-4 text-left flex-1 min-w-0">
+                          <div className={`
+                            font-bold text-lg leading-tight
+                            ${isCurrent ? 'text-white' : isCompleted ? 'text-white' : 'text-slate-800'}
+                          `}>
                             {step.name}
                           </div>
-                          <div className={`text-sm ${
-                            isCurrent ? 'text-blue-100' : isCompleted ? 'text-gray-600' : 'text-gray-400'
-                          }`}>
+                          <div className={`
+                            text-sm mt-1 leading-tight
+                            ${isCurrent ? 'text-blue-100' : isCompleted ? 'text-emerald-100' : 'text-slate-500'}
+                          `}>
                             {step.subtitle}
                           </div>
-                        </div>
-
-                        {/* Status Indicator */}
-                        <div className="flex flex-col items-end">
-                          {isCurrent && (
-                            <div className="text-xs bg-blue-500 px-2 py-1 rounded-full text-white font-medium">
-                              ACTIVE
-                            </div>
-                          )}
-                          {isCompleted && !isCurrent && (
-                            <div className="text-xs bg-green-100 text-green-700 px-2 py-1 rounded-full font-medium">
-                              COMPLETE
-                            </div>
-                          )}
-                          {state.processingResults.length > 0 && step.id === 'review' && (
-                            <div className="text-xs text-gray-500 mt-1">
+                          
+                          {/* Progress indicators */}
+                          {step.id === 'review' && state.processingResults.length > 0 && (
+                            <div className={`
+                              text-xs mt-2 font-medium
+                              ${isCurrent ? 'text-blue-100' : isCompleted ? 'text-emerald-100' : 'text-slate-500'}
+                            `}>
                               {stats.successful}/{state.processingResults.length} processed
                             </div>
                           )}
                         </div>
-                      </button>
-                    </div>
 
-                    {/* Connector Line */}
-                    {stepIdx !== 2 && (
-                      <div className="flex items-center px-4">
-                        <div className={`h-0.5 w-8 ${
-                          isCompleted ? 'bg-blue-400' : 'bg-gray-300'
-                        } transition-colors duration-300`} />
-                        <div className={`w-3 h-3 rounded-full border-2 ${
-                          isCompleted ? 'border-blue-400 bg-blue-400' : 'border-gray-300 bg-white'
-                        } transition-colors duration-300`} />
-                        <div className={`h-0.5 w-8 ${
-                          isCompleted ? 'bg-blue-400' : 'bg-gray-300'
-                        } transition-colors duration-300`} />
-                      </div>
-                    )}
+                      </button>
+
+                      {/* Hover effect overlay */}
+                      {isClickable && (
+                        <div className={`
+                          absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity duration-300
+                          ${stepIdx === 0 ? 'rounded-l-2xl' : ''}
+                          ${stepIdx === steps.length - 1 ? 'rounded-r-2xl' : ''}
+                          ${isCurrent ? 'bg-white' : 'bg-blue-600'}
+                        `} 
+                        style={{
+                          clipPath: stepIdx === steps.length - 1 
+                            ? undefined 
+                            : 'polygon(0% 0%, calc(100% - 20px) 0%, 100% 50%, calc(100% - 20px) 100%, 0% 100%, 20px 50%)',
+                          pointerEvents: 'none'
+                        }} />
+                      )}
+                    </div>
                   </div>
-                )
+                );
               })}
             </div>
           </nav>
@@ -377,8 +501,6 @@ export default function ProcessPage() {
         onClose={handleCloseProcessingPanel}
         resetTrigger={state.resetCounter}
       />
-
-
     </div>
   )
 }

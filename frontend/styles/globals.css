@@ -599,3 +599,23 @@
     @apply hidden;
   }
 }
+
+@layer components {
+  .chevron-progress-step:hover {
+    transform: translateY(-2px);
+  }
+  
+  .chevron-progress-step.current {
+    transform: scale(1.02) translateY(-2px);
+    box-shadow: 0 20px 25px -5px rgb(0 0 0 / 0.1), 0 10px 10px -5px rgb(0 0 0 / 0.04);
+  }
+  
+  /* Mobile responsive adjustments */
+  @media (max-width: 1024px) {
+    .chevron-progress-step {
+      clip-path: none !important;
+      margin-left: 0 !important;
+      border-radius: 0.75rem;
+    }
+  }
+}
