@@ -118,9 +118,10 @@ export function TopNavigation({
           {/* Breadcrumbs - simplified for space */}
           <nav className="hidden lg:flex items-center space-x-1 text-sm" aria-label="Breadcrumb">
             {breadcrumbs.slice(-2).map((breadcrumb, index, arr) => (
-              <div key={breadcrumb.href} className="flex items-center">
+              <div key={`${breadcrumb.href}-${index}`} className="flex items-center">
                 {index > 0 && <span className="text-gray-400 mx-2">/</span>}
                 <button
+                  type="button"
                   onClick={() => router.push(breadcrumb.href)}
                   className={`px-2 py-1 rounded hover:bg-gray-100 transition-colors ${
                     index === arr.length - 1
