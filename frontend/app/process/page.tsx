@@ -14,6 +14,7 @@ import { UploadSelectStage } from '@/components/stages/UploadSelectStage'
 import { ProcessingPanel } from '@/components/ProcessingPanel'
 import { ReviewStage } from '@/components/stages/ReviewStage'
 import { DownloadStage } from '@/components/stages/DownloadStage'
+import { ProgressBar, ProgressStep, StepStatus } from '@/components/ui/ProgressBar'
 import { 
   Upload, 
   Eye, 
@@ -37,469 +38,307 @@ interface ProcessingState {
   resetCounter: number
 }
 
-interface ProgressStep {
-  id: string;
-  name: string;
-  subtitle: string;
-  icon: React.ComponentType<any>;
-}
-
-interface ChevronProgressBarProps {
-  steps: ProgressStep[];
-  currentStage: string;
-  processingResults: any[];
-  processingComplete: boolean;
-  onStageChange: (stage: string) => void;
-  getStageStatus: (stageId: string) => 'completed' | 'current' | 'pending';
-  stats: {
-    successful: number;
-    failed: number;
-    ragReady: number;
-  };
-}
-
-const ChevronProgressBar: React.FC<ChevronProgressBarProps> = ({
-  steps,
-  currentStage,
-  processingResults,
-  processingComplete,
-  onStageChange,
-  getStageStatus,
-  stats
-}) => {
-  return (
-    <div className="bg-gradient-to-r from-slate-50 to-slate-100 border-b border-slate-200">
-      <div className="px-6 py-6">
-        <nav aria-label="Processing Pipeline Progress" className="max-w-7xl mx-auto">
-          <div className="flex items-center justify-center overflow-x-auto">
-            {steps.map((step, stepIdx) => {
-              const status = getStageStatus(step.id);
-              const isCompleted = status === 'completed';
-              const isCurrent = status === 'current';
-              const isClickable = step.id === 'upload' || 
-                (step.id === 'review' && processingResults.length > 0) || 
-                (step.id === 'download' && processingComplete);
-
-              return (
-                <div key={step.id} className="flex items-center group relative">
-                  {/* Chevron Step Container */}
-                  <div className="relative">
-                    <button
-                      onClick={() => {
-                        if (isClickable) {
-                          onStageChange(step.id);
-                        }
-                      }}
-                      disabled={!isClickable}
-                      className={`
-                        relative flex items-center px-8 py-6 transition-all duration-300 transform
-                        ${stepIdx === 0 ? 'pl-6 rounded-l-2xl' : ''}
-                        ${stepIdx === steps.length - 1 ? 'pr-6 rounded-r-2xl' : 'pr-12'}
-                        ${isClickable ? 'cursor-pointer hover:scale-[1.02]' : 'cursor-default'}
-                        ${isCurrent 
-                          ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-xl z-30 scale-[1.02]' 
-                          : isCompleted
-                            ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 text-white shadow-lg z-20 hover:from-emerald-600 hover:to-emerald-700'
-                            : 'bg-white text-slate-600 shadow-md z-10 hover:bg-slate-50 hover:shadow-lg'
-                        }
-                        disabled:opacity-60 min-w-[280px]
-                      `}
-                      style={{
-                        clipPath: stepIdx === steps.length - 1 
-                          ? undefined 
-                          : 'polygon(0% 0%, calc(100% - 20px) 0%, 100% 50%, calc(100% - 20px) 100%, 0% 100%, 20px 50%)',
-                        marginLeft: stepIdx === 0 ? '0' : '-20px'
-                      }}
-                    >
-                      
-
-                      {/* Text Content */}
-                      <div className="ml-4 text-left flex-1 min-w-0">
-                        <div className={`
-                          font-bold text-lg leading-tight
-                          ${isCurrent ? 'text-white' : isCompleted ? 'text-white' : 'text-slate-800'}
-                        `}>
-                          {step.name}
-                        </div>
-                        <div className={`
-                          text-sm mt-1 leading-tight
-                          ${isCurrent ? 'text-blue-100' : isCompleted ? 'text-emerald-100' : 'text-slate-500'}
-                        `}>
-                          {step.subtitle}
-                        </div>
-                        
-                        {/* Progress indicators */}
-                        {step.id === 'review' && processingResults.length > 0 && (
-                          <div className={`
-                            text-xs mt-2 font-medium
-                            ${isCurrent ? 'text-blue-100' : isCompleted ? 'text-emerald-100' : 'text-slate-500'}
-                          `}>
-                            {stats.successful}/{processingResults.length} processed
-                          </div>
-                        )}
-                      </div>
-
-                    </button>
-
-                    {/* Hover effect overlay */}
-                    {isClickable && (
-                      <div className={`
-                        absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity duration-300
-                        ${stepIdx === 0 ? 'rounded-l-2xl' : ''}
-                        ${stepIdx === steps.length - 1 ? 'rounded-r-2xl' : ''}
-                        ${isCurrent ? 'bg-white' : 'bg-blue-600'}
-                      `} 
-                      style={{
-                        clipPath: stepIdx === steps.length - 1 
-                          ? undefined 
-                          : 'polygon(0% 0%, calc(100% - 20px) 0%, 100% 50%, calc(100% - 20px) 100%, 0% 100%, 20px 50%)',
-                        pointerEvents: 'none'
-                      }} />
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        </nav>
-      </div>
-    </div>
-  );
-};
-
-export default function ProcessPage() {
+export default function ProcessingPage() {
+  // State management
   const [state, setState] = useState<ProcessingState>({
     currentStage: 'upload',
-    sourceType: 'upload',
+    sourceType: 'local',
     selectedFiles: [],
     processingResults: [],
     processingComplete: false,
     isProcessing: false,
     processingOptions: {
-      auto_optimize: true,
-      ocr_settings: {
-        language: 'eng',
-        psm: 3
-      },
       quality_thresholds: {
-        conversion: 70,
-        clarity: 7,
-        completeness: 7,
-        relevance: 7,
-        markdown: 7
+        clarity_threshold: 7.0,
+        completeness_threshold: 8.0,
+        relevance_threshold: 6.0,
+        markdown_threshold: 7.0
+      },
+      ocr_settings: {
+        enabled: true,
+        language: 'en',
+        confidence_threshold: 0.8
+      },
+      processing_settings: {
+        chunk_size: 1000,
+        chunk_overlap: 200,
+        max_retries: 3
       }
     },
     resetCounter: 0
   })
 
-  // System configuration
-  const [supportedFormats, setSupportedFormats] = useState<string[]>([])
-  const [maxFileSize, setMaxFileSize] = useState<number>(52428800)
-  const [showProcessingPanel, setShowProcessingPanel] = useState(false)
+  // Processing panel state
+  const [panelVisible, setPanelVisible] = useState(false)
+  const [currentFile, setCurrentFile] = useState<string | null>(null)
+  const [processingLogs, setProcessingLogs] = useState<Array<{
+    type: 'info' | 'success' | 'error' | 'warning'
+    message: string
+    timestamp: Date
+  }>>([])
+  const [processingProgress, setProcessingProgress] = useState(0)
 
-  // Load system configuration on mount
+  // Progress bar configuration
+  const progressSteps: ProgressStep[] = [
+    { 
+      id: 'upload', 
+      name: 'Upload & Select', 
+      subtitle: 'Choose source documents', 
+      icon: Upload 
+    },
+    { 
+      id: 'review', 
+      name: 'Review & Edit', 
+      subtitle: 'Quality assessment & optimization', 
+      icon: Eye 
+    },
+    { 
+      id: 'download', 
+      name: 'Export Results', 
+      subtitle: 'Download processed documents', 
+      icon: Download 
+    }
+  ]
+
+  // Load saved options on component mount
   useEffect(() => {
-    loadSystemConfig()
+    const savedOptions = localStorage.getItem('processingOptions')
+    if (savedOptions) {
+      try {
+        const parsed = JSON.parse(savedOptions)
+        setState(prev => ({ ...prev, processingOptions: parsed }))
+      } catch (error) {
+        console.warn('Failed to load saved processing options:', error)
+      }
+    }
   }, [])
 
-  const loadSystemConfig = async () => {
-    try {
-      const [formatsData, configData] = await Promise.all([
-        systemApi.getSupportedFormats(),
-        systemApi.getConfig()
-      ])
+  // Save options to localStorage when they change
+  useEffect(() => {
+    localStorage.setItem('processingOptions', JSON.stringify(state.processingOptions))
+  }, [state.processingOptions])
 
-      setSupportedFormats(formatsData.supported_extensions)
-      setMaxFileSize(formatsData.max_file_size)
-      
-      setState(prev => ({
-        ...prev,
-        processingOptions: {
-          auto_optimize: configData.auto_optimize,
-          ocr_settings: configData.ocr_settings,
-          quality_thresholds: configData.quality_thresholds
-        }
-      }))
-    } catch (error) {
-      console.error('Failed to load system configuration:', error)
-      toast.error('Failed to load system configuration')
+  // Auto-advance to review stage when processing completes
+  useEffect(() => {
+    if (state.processingComplete && state.currentStage === 'upload') {
+      setState(prev => ({ ...prev, currentStage: 'review' }))
+    }
+  }, [state.processingComplete, state.currentStage])
+
+  // Progress bar logic
+  const getStepStatus = (stepId: string): StepStatus => {
+    switch (stepId) {
+      case 'upload':
+        return state.currentStage === 'upload' ? 'current' : 
+               state.selectedFiles.length > 0 ? 'completed' : 'pending'
+      case 'review':
+        return state.processingComplete ? 'completed' : 
+               state.isProcessing || state.currentStage === 'review' ? 'current' : 'pending'
+      case 'download':
+        return state.processingComplete && state.currentStage === 'download' ? 'current' : 
+               state.processingComplete ? 'completed' : 'pending'
+      default:
+        return 'pending'
+    }
+  }
+
+  const getStepClickable = (stepId: string): boolean => {
+    switch (stepId) {
+      case 'upload':
+        return true // Always can go back to upload
+      case 'review':
+        return state.processingResults.length > 0 || state.isProcessing
+      case 'download':
+        return state.processingComplete
+      default:
+        return false
     }
   }
 
   // Stage management
-  const handleStageChange = (stage: AppStage) => {
-    setState(prev => ({ ...prev, currentStage: stage }))
+  const handleStageChange = (newStage: string) => {
+    const stage = newStage as AppStage
+    if (getStepClickable(stage)) {
+      setState(prev => ({ ...prev, currentStage: stage }))
+    }
   }
 
-  const handleSourceTypeChange = (sourceType: 'local' | 'upload') => {
-    setState(prev => ({ 
-      ...prev, 
-      sourceType,
-      selectedFiles: [] // Clear selection when switching source
+  // File management
+  const handleFilesSelected = (files: FileInfo[]) => {
+    setState(prev => ({
+      ...prev,
+      selectedFiles: files,
+      processingResults: [],
+      processingComplete: false
     }))
   }
 
-  const handleSelectedFilesChange = (files: FileInfo[]) => {
-    setState(prev => ({ ...prev, selectedFiles: files }))
+  const handleSourceTypeChange = (sourceType: 'local' | 'upload') => {
+    setState(prev => ({
+      ...prev,
+      sourceType,
+      selectedFiles: [],
+      processingResults: [],
+      processingComplete: false
+    }))
+  }
+
+  // Processing management
+  const handleStartProcessing = async () => {
+    if (state.selectedFiles.length === 0) {
+      toast.error('Please select files to process')
+      return
+    }
+
+    setState(prev => ({ ...prev, isProcessing: true }))
+    setPanelVisible(true)
+    setProcessingLogs([])
+    setProcessingProgress(0)
+
+    try {
+      const results = await processingApi.processBatch(
+        state.selectedFiles,
+        state.processingOptions,
+        (progress, currentFile) => {
+          setProcessingProgress(progress)
+          setCurrentFile(currentFile)
+        }
+      )
+
+      setState(prev => ({
+        ...prev,
+        processingResults: results,
+        processingComplete: true,
+        isProcessing: false
+      }))
+
+      toast.success(`Successfully processed ${results.length} documents`)
+      
+    } catch (error) {
+      console.error('Processing failed:', error)
+      toast.error(error instanceof Error ? error.message : 'Processing failed')
+      setState(prev => ({ ...prev, isProcessing: false }))
+    }
   }
 
   const handleProcessingOptionsChange = (options: ProcessingOptions) => {
     setState(prev => ({ ...prev, processingOptions: options }))
   }
 
-  // Processing workflow
-  const handleStartProcessing = (files: FileInfo[], options: ProcessingOptions) => {
-    setState(prev => ({ 
-      ...prev, 
-      selectedFiles: files,
-      processingOptions: options,
-      processingResults: [],
-      processingComplete: false,
-      isProcessing: true,
-      currentStage: 'review'
-    }))
-    setShowProcessingPanel(true)
-  }
-
-  const handleProcessingComplete = (results: ProcessingResult[]) => {
-    setState(prev => ({ 
-      ...prev, 
-      processingResults: results,
-      processingComplete: true,
-      isProcessing: false
-    }))
-    
-    const stats = utils.calculateStats(results)
-    toast.success(
-      `Processing complete! ${stats.successful}/${stats.total} successful, ${stats.ragReady} RAG-ready`,
-      { duration: 5000 }
-    )
-  }
-
-  const handleResultsUpdate = (results: ProcessingResult[]) => {
-    setState(prev => ({ ...prev, processingResults: results }))
-  }
-
-  const handleProcessingError = (error: string) => {
-    setState(prev => ({ ...prev, isProcessing: false }))
-    toast.error(`Processing failed: ${error}`)
-  }
-
-  const handleReviewComplete = () => {
-    setState(prev => ({ ...prev, currentStage: 'download' }))
-    toast.success('Ready to download your processed documents!')
-  }
-
-  const handleRestart = () => {
+  // Results management
+  const handleResultUpdate = (updatedResult: ProcessingResult) => {
     setState(prev => ({
       ...prev,
-      currentStage: 'upload',
-      sourceType: 'upload',
+      processingResults: prev.processingResults.map(result =>
+        result.file_id === updatedResult.file_id ? updatedResult : result
+      )
+    }))
+  }
+
+  const handleResultsDownload = async (format: string) => {
+    try {
+      const blob = await processingApi.downloadResults(state.processingResults, format)
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = `processed_documents.${format}`
+      document.body.appendChild(a)
+      a.click()
+      document.body.removeChild(a)
+      URL.revokeObjectURL(url)
+      toast.success(`Downloaded results as ${format.toUpperCase()}`)
+    } catch (error) {
+      console.error('Download failed:', error)
+      toast.error('Failed to download results')
+    }
+  }
+
+  // System reset
+  const handleReset = () => {
+    setState(prev => ({
+      ...prev,
       selectedFiles: [],
       processingResults: [],
       processingComplete: false,
       isProcessing: false,
+      currentStage: 'upload',
       resetCounter: prev.resetCounter + 1
     }))
-    setShowProcessingPanel(false)
-    toast.success('Started new processing session')
-  }
-
-  const handleCloseProcessingPanel = () => {
-    setShowProcessingPanel(false)
-  }
-
-  // Get stage status for progress indicator
-  const getStageStatus = (stage: AppStage): 'completed' | 'current' | 'pending' => {
-    if (stage === state.currentStage) return 'current'
-    
-    switch (stage) {
-      case 'upload':
-        return state.selectedFiles.length > 0 ? 'completed' : 'pending'
-      case 'review':
-        return state.processingComplete ? 'completed' : 
-               state.isProcessing ? 'current' : 'pending'
-      case 'download':
-        return state.processingComplete && state.currentStage === 'download' ? 'current' : 'pending'
-      default:
-        return 'pending'
-    }
+    setPanelVisible(false)
+    setProcessingLogs([])
+    setProcessingProgress(0)
+    setCurrentFile(null)
+    toast.success('System reset successfully')
   }
 
   const stats = utils.calculateStats(state.processingResults)
 
-  const steps = [
-    { id: 'upload', name: 'Upload & Select', subtitle: 'Choose source documents', icon: Upload },
-    { id: 'review', name: 'Review & Edit', subtitle: 'Quality assessment & optimization', icon: Eye },
-    { id: 'download', name: 'Export Results', subtitle: 'Download processed documents', icon: Download }
-  ];
-
   return (
     <div className="h-full flex flex-col">
-      {/* Enhanced Chevron Progress Header */}
-      <div className="bg-gradient-to-r from-slate-50 to-slate-100 border-b border-slate-200">
-        <div className="px-6 py-6">
-          <nav aria-label="Processing Pipeline Progress" className="max-w-7xl mx-auto">
-            <div className="flex items-center justify-center overflow-x-auto">
-              {steps.map((step, stepIdx) => {
-                const status = getStageStatus(step.id as AppStage);
-                const isCompleted = status === 'completed';
-                const isCurrent = status === 'current';
-                const isClickable = step.id === 'upload' || 
-                  (step.id === 'review' && state.processingResults.length > 0) || 
-                  (step.id === 'download' && state.processingComplete);
+      {/* Progress Bar Component */}
+      <ProgressBar
+        steps={progressSteps}
+        currentStep={state.currentStage}
+        onStepChange={handleStageChange}
+        getStepStatus={getStepStatus}
+        getStepClickable={getStepClickable}
+        variant="slim"
+      />
 
-                return (
-                  <div key={step.id} className="flex items-center group relative">
-                    {/* Chevron Step Container */}
-                    <div className="relative">
-                      <button
-                        onClick={() => {
-                          if (isClickable) {
-                            handleStageChange(step.id as AppStage);
-                          }
-                        }}
-                        disabled={!isClickable}
-                        className={`
-                          relative flex items-center px-8 py-6 transition-all duration-300 transform
-                          ${stepIdx === 0 ? 'pl-6 rounded-l-2xl' : ''}
-                          ${stepIdx === steps.length - 1 ? 'pr-6 rounded-r-2xl' : 'pr-12'}
-                          ${isClickable ? 'cursor-pointer hover:scale-[1.02]' : 'cursor-default'}
-                          ${isCurrent 
-                            ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-xl z-30 scale-[1.02]' 
-                            : isCompleted
-                              ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 text-white shadow-lg z-20 hover:from-emerald-600 hover:to-emerald-700'
-                              : 'bg-white text-slate-600 shadow-md z-10 hover:bg-slate-50 hover:shadow-lg'
-                          }
-                          disabled:opacity-60 min-w-[280px]
-                        `}
-                        style={{
-                          clipPath: stepIdx === steps.length - 1 
-                            ? undefined 
-                            : 'polygon(0% 0%, calc(100% - 20px) 0%, 100% 50%, calc(100% - 20px) 100%, 0% 100%, 20px 50%)',
-                          marginLeft: stepIdx === 0 ? '0' : '-20px'
-                        }}
-                      >
-                        
-                        {/* Text Content */}
-                        <div className="ml-4 text-left flex-1 min-w-0">
-                          <div className={`
-                            font-bold text-lg leading-tight
-                            ${isCurrent ? 'text-white' : isCompleted ? 'text-white' : 'text-slate-800'}
-                          `}>
-                            {step.name}
-                          </div>
-                          <div className={`
-                            text-sm mt-1 leading-tight
-                            ${isCurrent ? 'text-blue-100' : isCompleted ? 'text-emerald-100' : 'text-slate-500'}
-                          `}>
-                            {step.subtitle}
-                          </div>
-                          
-                          {/* Progress indicators */}
-                          {step.id === 'review' && state.processingResults.length > 0 && (
-                            <div className={`
-                              text-xs mt-2 font-medium
-                              ${isCurrent ? 'text-blue-100' : isCompleted ? 'text-emerald-100' : 'text-slate-500'}
-                            `}>
-                              {stats.successful}/{state.processingResults.length} processed
-                            </div>
-                          )}
-                        </div>
-
-                      </button>
-
-                      {/* Hover effect overlay */}
-                      {isClickable && (
-                        <div className={`
-                          absolute inset-0 opacity-0 group-hover:opacity-10 transition-opacity duration-300
-                          ${stepIdx === 0 ? 'rounded-l-2xl' : ''}
-                          ${stepIdx === steps.length - 1 ? 'rounded-r-2xl' : ''}
-                          ${isCurrent ? 'bg-white' : 'bg-blue-600'}
-                        `} 
-                        style={{
-                          clipPath: stepIdx === steps.length - 1 
-                            ? undefined 
-                            : 'polygon(0% 0%, calc(100% - 20px) 0%, 100% 50%, calc(100% - 20px) 100%, 0% 100%, 20px 50%)',
-                          pointerEvents: 'none'
-                        }} />
-                      )}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          </nav>
-        </div>
-      </div>
-
-      {/* Main Content Area - Full height with proper overflow */}
+      {/* Main Content Area */}
       <div className="flex-1 overflow-auto">
-        <div className="max-w-7xl mx-auto px-6 py-6">
+        <div className="max-w-6xl mx-auto p-6">
           {/* Stage Content */}
           {state.currentStage === 'upload' && (
             <UploadSelectStage
+              key={state.resetCounter}
+              selectedFiles={state.selectedFiles}
+              onFilesSelected={handleFilesSelected}
               sourceType={state.sourceType}
               onSourceTypeChange={handleSourceTypeChange}
-              selectedFiles={state.selectedFiles}
-              onSelectedFilesChange={handleSelectedFilesChange}
-              onProcess={handleStartProcessing}
-              supportedFormats={supportedFormats}
-              maxFileSize={maxFileSize}
+              onStartProcessing={handleStartProcessing}
+              isProcessing={state.isProcessing}
               processingOptions={state.processingOptions}
               onProcessingOptionsChange={handleProcessingOptionsChange}
-              isProcessing={state.isProcessing}
+              onReset={handleReset}
             />
           )}
 
           {state.currentStage === 'review' && (
             <ReviewStage
-              processingResults={state.processingResults}
-              onResultsUpdate={handleResultsUpdate}
-              onComplete={handleReviewComplete}
-              qualityThresholds={state.processingOptions.quality_thresholds}
-              isProcessingComplete={state.processingComplete}
-              isProcessing={state.isProcessing}
               selectedFiles={state.selectedFiles}
+              processingResults={state.processingResults}
+              isProcessing={state.isProcessing}
+              processingComplete={state.processingComplete}
+              onResultUpdate={handleResultUpdate}
+              onAdvanceToDownload={() => handleStageChange('download')}
             />
           )}
 
           {state.currentStage === 'download' && (
             <DownloadStage
               processingResults={state.processingResults}
-              onRestart={handleRestart}
+              onDownload={handleResultsDownload}
+              onStartOver={handleReset}
+              stats={stats}
             />
-          )}
-
-          {/* Empty state for no stage selected */}
-          {!state.currentStage && (
-            <div className="text-center py-12">
-              <FileText className="w-16 h-16 text-gray-400 mx-auto mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 mb-2">Welcome to Curatore v2</h3>
-              <p className="text-gray-600 mb-6">
-                Transform your documents into RAG-ready, semantically optimized content
-              </p>
-              <button
-                onClick={() => handleStageChange('upload')}
-                className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-              >
-                Get Started
-              </button>
-            </div>
           )}
         </div>
       </div>
 
-      {/* Processing Panel - Overlays the main content */}
+      {/* Processing Panel */}
       <ProcessingPanel
-        selectedFiles={state.selectedFiles}
-        processingOptions={state.processingOptions}
-        onProcessingComplete={handleProcessingComplete}
-        onResultUpdate={handleResultsUpdate}
-        onError={handleProcessingError}
-        isVisible={showProcessingPanel}
-        onClose={handleCloseProcessingPanel}
-        resetTrigger={state.resetCounter}
+        isVisible={panelVisible}
+        onClose={() => setPanelVisible(false)}
+        isProcessing={state.isProcessing}
+        progress={processingProgress}
+        currentFile={currentFile}
+        results={state.processingResults}
+        processingComplete={state.processingComplete}
+        onError={(error) => {
+          toast.error(error)
+          setState(prev => ({ ...prev, isProcessing: false }))
+        }}
       />
     </div>
   )

@@ -21,7 +21,9 @@ import docx
 from openai import OpenAI
 import urllib3
 
-# Environment configuration
+# --- Standalone Environment Configuration ---
+# This section directly loads configuration from environment variables.
+# NOTE: In the main FastAPI app, this is handled by the Pydantic Settings class in `config.py`.
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1")
@@ -30,7 +32,11 @@ OPENAI_TIMEOUT = float(os.getenv("OPENAI_TIMEOUT", "60"))
 OPENAI_MAX_RETRIES = int(os.getenv("OPENAI_MAX_RETRIES", "3"))
 
 def clean_llm_response(text: str) -> str:
-    """Clean LLM response by removing markdown code block wrappers and extra formatting."""
+    """
+    Utility function to clean LLM-generated text by removing common artifacts
+    like markdown code block wrappers and excessive newlines.
+    NOTE: This logic is also present in the `LLMService`.
+    """
     if not text:
         return text
     
@@ -48,7 +54,8 @@ def clean_llm_response(text: str) -> str:
     
     return text
 
-# Initialize OpenAI client with custom configuration
+# --- Standalone OpenAI Client Initialization ---
+# This creates a separate client instance for this script, outside of the main app's services.
 _client = None
 if OPENAI_API_KEY:
     try:
@@ -81,9 +88,14 @@ if OPENAI_API_KEY:
         print(f"Warning: Failed to initialize OpenAI client: {e}")
         _client = None
 
+# List of supported file extensions for processing.
 SUPPORTED_EXTS = {".docx", ".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".md", ".txt"}
 
 def pdf_pages_to_images(pdf_path: Path, dpi: int = 220) -> List[Image.Image]:
+    """
+    Converts each page of a PDF file into a list of PIL Image objects.
+    This is used as a precursor to OCR for PDFs that don't have a text layer.
+    """
     imgs = []
     with fitz.open(str(pdf_path)) as doc:
         mat = fitz.Matrix(dpi/72, dpi/72)
@@ -95,8 +107,8 @@ def pdf_pages_to_images(pdf_path: Path, dpi: int = 220) -> List[Image.Image]:
 
 def ocr_image_with_tesseract(img: Image.Image, lang: str = "eng", psm: int = 3) -> Tuple[str, float]:
     """
-    Returns (text, avg_confidence [0..1]).
-    Uses image_to_string for text + image_to_data to compute confidence.
+    Performs OCR on a single image using Tesseract.
+    Returns a tuple containing the extracted text and the average confidence score (0.0 to 1.0).
     """
     config = f"--psm {psm}"
     text = pytesseract.image_to_string(img, lang=lang, config=config)
@@ -114,14 +126,13 @@ def ocr_image_with_tesseract(img: Image.Image, lang: str = "eng", psm: int = 3) 
 
 def convert_to_markdown(file_path: Path, ocr_lang="eng", ocr_psm=3) -> Tuple[Optional[str], bool, str]:
     """
-    Convert a document to Markdown/text.
-    Priority: MarkItDown -> format fallbacks -> OCR (Tesseract) when needed.
-    Returns (markdown_text, success, note)
+    Converts a document to Markdown/text format.
+    It uses a prioritized chain of methods: MarkItDown -> format-specific fallbacks -> OCR.
+    Returns a tuple of (markdown_text, success_boolean, note_string).
     """
     ext = file_path.suffix.lower()
     note = ""
-
-    # 1) MD/TXT direct
+    # 1) MD/TXT direct read
     if ext in {".md", ".txt"}:
         try:
             text = file_path.read_text(encoding="utf-8")
@@ -140,7 +151,7 @@ def convert_to_markdown(file_path: Path, ocr_lang="eng", ocr_psm=3) -> Tuple[Opt
     except Exception as e:
         note = f"MarkItDown failed: {e}; attempting fallbacks."
 
-    # 3) DOCX fallback
+    # 3) DOCX fallback using python-docx
     if ext == ".docx":
         try:
             d = docx.Document(str(file_path))
@@ -150,12 +161,13 @@ def convert_to_markdown(file_path: Path, ocr_lang="eng", ocr_psm=3) -> Tuple[Opt
         except Exception as e:
             return None, False, f"DOCX fallback failed: {e}"
 
-    # 4) PDF: text layer first, else rasterize+OCR
+    # 4) PDF: try text layer first, otherwise rasterize and OCR
     if ext == ".pdf":
         try:
             text = pdf_extract_text(str(file_path)) or ""
             if text.strip():
                 return text, True, "Extracted PDF text via pdfminer.six."
+            # If no text, fall back to OCR
             imgs = pdf_pages_to_images(file_path, dpi=220)
             if not imgs:
                 return None, False, f"No pages to OCR. {note}"
@@ -185,15 +197,13 @@ def convert_to_markdown(file_path: Path, ocr_lang="eng", ocr_psm=3) -> Tuple[Opt
 
 def score_conversion(original_text: Optional[str], markdown_text: str) -> Tuple[int, str]:
     """
-    Heuristic conversion score (0-100) combining:
-      - content coverage (ratio if original_text provided)
-      - markdown structure markers
-      - legibility (no odd chars, reasonable line length)
+    Calculates a heuristic conversion score (0-100) based on content coverage,
+    markdown structure markers (headings, lists), and basic legibility checks.
     """
     if not markdown_text:
         return 0, "No markdown produced."
 
-    # Content coverage
+    # Content coverage score
     content_score = 100
     if original_text:
         ow = original_text.split()
@@ -201,7 +211,7 @@ def score_conversion(original_text: Optional[str], markdown_text: str) -> Tuple[
         if len(ow) == 0:
             content_score = 0
         else:
-            ratio = min(len(mw) / len(ow), 1.0)
+            ratio = min(len(mw) / len(ow), 1.0) # Cap at 1.0
             content_score = int(ratio * 100)
 
     # Structure markers
@@ -213,17 +223,19 @@ def score_conversion(original_text: Optional[str], markdown_text: str) -> Tuple[
     if lists > 0:    structure_score += 30
     if tables > 3:   structure_score += 20
 
-    # Legibility
-    if "�" in markdown_text:
+    # Legibility score
+    if "" in markdown_text: # Check for replacement characters
         legibility_score = 0
     else:
         lines = markdown_text.splitlines() or [markdown_text]
         avg_len = sum(len(l) for l in lines) / len(lines)
         legibility_score = 20 if avg_len < 200 else 10
 
+    # Combine scores with weighting
     total = int(0.5 * content_score + structure_score + legibility_score)
     total = min(total, 100)
 
+    # Generate human-readable feedback
     fb = []
     if content_score < 100 and original_text:
         fb.append(f"Content preserved ~{content_score}%.")
@@ -237,14 +249,15 @@ def score_conversion(original_text: Optional[str], markdown_text: str) -> Tuple[
 
 def llm_json_eval(markdown_text: str) -> Dict[str, Any]:
     """
-    Ask the LLM to score clarity, completeness, relevance, markdown compatibility,
-    overall feedback, and pass/fail recommendation.
+    Sends the markdown text to the LLM for a quality evaluation.
+    The LLM is prompted to return a structured JSON object with scores and feedback.
     """
     if not _client:
         print("Warning: LLM evaluation skipped - no OpenAI client available")
         return {}
     
     try:
+        # System prompt defines the LLM's role and overall task.
         system = (
             "You are an expert documentation reviewer. "
             "Evaluate the document for Clarity, Completeness, Relevance, and Markdown Compatibility. "
@@ -252,6 +265,7 @@ def llm_json_eval(markdown_text: str) -> Dict[str, Any]:
             "Give overall improvement suggestions. "
             "Finally, return pass_recommendation as 'Pass' if ALL categories are sufficient, else 'Fail'."
         )
+        # Assistant prompt guides the LLM to produce a specific JSON format.
         fmt = (
             "Respond ONLY as compact JSON with keys: "
             "clarity_score, clarity_feedback, "
@@ -272,6 +286,7 @@ def llm_json_eval(markdown_text: str) -> Dict[str, Any]:
             ],
         )
         text = resp.choices[0].message.content
+        # Try to parse the JSON response, with a fallback to extract it from the text.
         try:
             return json.loads(text)
         except Exception:
@@ -287,7 +302,7 @@ def llm_json_eval(markdown_text: str) -> Dict[str, Any]:
         return {}
 
 def llm_improve(markdown_text: str, prompt: str) -> str:
-    """Ask the LLM to rewrite the markdown based on user's prompt."""
+    """Asks the LLM to rewrite and improve the markdown based on a user-provided prompt."""
     if not _client:
         print("Warning: LLM improvement skipped - no OpenAI client available")
         return markdown_text
@@ -302,7 +317,7 @@ def llm_improve(markdown_text: str, prompt: str) -> str:
         
         resp = _client.chat.completions.create(
             model=OPENAI_MODEL,
-            temperature=0.2,
+            temperature=0.2, # Allow some creativity for editing.
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
@@ -317,6 +332,7 @@ def llm_improve(markdown_text: str, prompt: str) -> str:
         return markdown_text
 
 def generate_report(doc_name: str, conversion_score: int, conversion_feedback: str, eval_data: Dict[str, Any]) -> str:
+    """Generates a human-readable markdown report summarizing the processing results."""
     lines = [f"# Feedback Report for **{doc_name}**", ""]
     lines += [f"**Conversion Quality:** {conversion_score}/100 – {conversion_feedback}", ""]
     if eval_data:
@@ -337,6 +353,7 @@ def generate_report(doc_name: str, conversion_score: int, conversion_feedback: s
     return "\n".join(lines)
 
 def meets_thresholds(conversion_score: int, eval_data: Dict[str, Any], thresholds: Dict[str,int]) -> bool:
+    """Checks if a document's scores meet the defined quality thresholds."""
     if not eval_data:
         return False
     try:
@@ -351,7 +368,7 @@ def meets_thresholds(conversion_score: int, eval_data: Dict[str, Any], threshold
         return False
 
 def test_llm_connection() -> Dict[str, Any]:
-    """Test the LLM connection and return status information."""
+    """Performs a live test of the connection to the configured LLM service."""
     if not _client:
         return {
             "connected": False,
@@ -361,7 +378,7 @@ def test_llm_connection() -> Dict[str, Any]:
         }
     
     try:
-        # Simple test query
+        # Send a simple, low-token request to test connectivity.
         resp = _client.chat.completions.create(
             model=OPENAI_MODEL,
             messages=[{"role": "user", "content": "Hello, respond with just 'OK'"}],
@@ -388,19 +405,27 @@ def test_llm_connection() -> Dict[str, Any]:
         }
 
 def process_file(fp: Path, ocr_lang="eng", ocr_psm=3, thresholds=None, processed_dir=Path("processed_documents")) -> Dict[str, Any]:
+    """
+    Runs a single file through the entire processing pipeline.
+    This function is designed for standalone script execution.
+    """
     thresholds = thresholds or {"conversion":70,"clarity":7,"completeness":7,"relevance":7,"markdown":7}
     processed_dir.mkdir(parents=True, exist_ok=True)
 
+    # Convert to markdown
     md_text, ok, conv_note = convert_to_markdown(fp, ocr_lang=ocr_lang, ocr_psm=ocr_psm)
     if not ok or not md_text:
         return {"file": str(fp), "ok": False, "message": f"Conversion failed. {conv_note}"}
 
+    # Save processed file
     out_md = processed_dir / f"{fp.stem}.md"
     out_md.write_text(md_text, encoding="utf-8")
 
+    # Score and evaluate
     conv_score, conv_fb = score_conversion(None, md_text)
     eval_data = llm_json_eval(md_text)
 
+    # Return a dictionary with all results
     return {
         "file": str(fp),
         "ok": True,
@@ -414,6 +439,9 @@ def process_file(fp: Path, ocr_lang="eng", ocr_psm=3, thresholds=None, processed
     }
 
 def process_folder(folder: Path, ocr_lang="eng", ocr_psm=3, thresholds=None, processed_dir=Path("processed_documents")) -> List[Dict[str, Any]]:
+    """
+    Processes all supported files within a given folder.
+    """
     results = []
     for fp in folder.glob("*"):
         if fp.suffix.lower() in SUPPORTED_EXTS and fp.is_file():

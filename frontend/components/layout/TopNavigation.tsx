@@ -116,7 +116,7 @@ export function TopNavigation({
           />
             </div>
             <div className="hidden sm:block">
-              <h1 className="text-xl font-semibold text-gray-900">Curatore v2</h1>
+              <h1 className="text-xl font-semibold text-gray-900">Curatorè v2</h1>
               <p className="text-xs text-gray-500 hidden md:block">RAG Document Processing</p>
             </div>
           </div>
