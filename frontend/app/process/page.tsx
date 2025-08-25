@@ -92,28 +92,39 @@ export default function ProcessPage() {
     }
   };
 
+  // Complete reset function
+  const resetAllState = () => {
+    // Reset main state
+    setState({
+      currentStage: 'upload',
+      sourceType: 'upload',
+      selectedFiles: [],
+      processingResults: [],
+      processingComplete: false,
+      config: state.config // Keep configuration
+    });
+    
+    // Reset stage
+    setCurrentStage('upload');
+    
+    // Reset processing panel state
+    setShowProcessingPanel(false);
+    setIsProcessing(false);
+    setIsProcessingComplete(false);
+    
+    // Reset error state
+    setError('');
+    setShowResetConfirm(false);
+  };
+
   // Reset system handler
   const handleResetSystem = async () => {
     setIsResetting(true);
     try {
       await systemApi.resetSystem();
       
-      // Reset local state
-      setState({
-        currentStage: 'upload',
-        sourceType: 'upload',
-        selectedFiles: [],
-        processingResults: [],
-        processingComplete: false,
-        config: state.config // Keep configuration
-      });
-      
-      setCurrentStage('upload');
-      setShowProcessingPanel(false);
-      setIsProcessing(false);
-      setIsProcessingComplete(false);
-      setError('');
-      setShowResetConfirm(false);
+      // Reset all local state
+      resetAllState();
       
       // Show success message briefly
       setError('✅ System reset successfully');
@@ -189,6 +200,11 @@ export default function ProcessPage() {
     // Don't close the processing panel so user can see the error logs
   };
 
+  // NEW: Handle real-time result updates from ProcessingPanel
+  const handleResultUpdate = (results: ProcessingResult[]) => {
+    setState(prev => ({ ...prev, processingResults: results }));
+  };
+
   const handleResultsUpdate = (results: ProcessingResult[]) => {
     setState(prev => ({ ...prev, processingResults: results }));
   };
@@ -199,24 +215,25 @@ export default function ProcessPage() {
   };
 
   const handleRestart = () => {
-    setState({
-      currentStage: 'upload',
-      sourceType: 'upload',
-      selectedFiles: [],
-      processingResults: [],
-      processingComplete: false,
-      config: state.config // Keep configuration
-    });
-    setCurrentStage('upload');
-    setShowProcessingPanel(false);
-    setIsProcessing(false);
-    setIsProcessingComplete(false);
-    setError('');
+    resetAllState(); // Use the centralized reset function
   };
 
   const handleCloseProcessingPanel = () => {
     setShowProcessingPanel(false);
   };
+
+  // Handle browser back/forward navigation
+  useEffect(() => {
+    const handlePopState = () => {
+      // If user navigates away and back, ensure we're in a clean state
+      if (currentStage === 'upload' && (isProcessing || showProcessingPanel)) {
+        resetAllState();
+      }
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, [currentStage, isProcessing, showProcessingPanel]);
 
   if (isLoading) {
     return (
@@ -492,6 +509,7 @@ export default function ProcessPage() {
           quality_thresholds: state.config.quality_thresholds
         }}
         onProcessingComplete={handleProcessingComplete}
+        onResultUpdate={handleResultUpdate} // NEW: Real-time updates
         onError={handleProcessingError}
         isVisible={showProcessingPanel}
         onClose={handleCloseProcessingPanel}

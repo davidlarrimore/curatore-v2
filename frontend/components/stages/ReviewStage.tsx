@@ -42,12 +42,12 @@ export function ReviewStage({
     }
   }, [selectedResult, activeTab]);
 
-  // Auto-select first result when processing completes
+  // Auto-select first result when processing completes OR when first result becomes available
   useEffect(() => {
-    if (isProcessingComplete && processingResults.length > 0 && !selectedResult) {
+    if (processingResults.length > 0 && !selectedResult) {
       setSelectedResult(processingResults[0]);
     }
-  }, [isProcessingComplete, processingResults]);
+  }, [processingResults, selectedResult]);
 
   const loadDocumentContent = async (documentId: string) => {
     setIsLoading(true);
@@ -159,8 +159,8 @@ export function ReviewStage({
   const ragReadyCount = successfulResults.filter(r => r.pass_all_thresholds).length;
   const vectorOptimizedCount = successfulResults.filter(r => r.vector_optimized).length;
 
-  // Show waiting state if processing hasn't completed
-  if (!isProcessingComplete) {
+  // Show waiting state only if no results are available yet
+  if (processingResults.length === 0 && !isProcessingComplete) {
     return (
       <div className="space-y-6">
         {/* Header */}
@@ -195,58 +195,6 @@ export function ReviewStage({
                 : 'Documents will be processed when you start the operation.'
               }
             </p>
-
-            {/* Show partial results if any are available */}
-            {processingResults.length > 0 && (
-              <div className="border-t pt-6">
-                <h4 className="font-medium text-gray-900 mb-4">Partial Results ({processingResults.length}/{selectedFiles.length})</h4>
-                
-                {/* Mini stats */}
-                <div className="grid grid-cols-3 gap-4 max-w-md mx-auto mb-4">
-                  <div className="text-center p-3 bg-green-50 rounded-lg">
-                    <div className="text-lg font-bold text-green-600">{successfulResults.length}</div>
-                    <div className="text-xs text-green-800">Successful</div>
-                  </div>
-                  <div className="text-center p-3 bg-blue-50 rounded-lg">
-                    <div className="text-lg font-bold text-blue-600">{ragReadyCount}</div>
-                    <div className="text-xs text-blue-800">RAG Ready</div>
-                  </div>
-                  <div className="text-center p-3 bg-purple-50 rounded-lg">
-                    <div className="text-lg font-bold text-purple-600">{vectorOptimizedCount}</div>
-                    <div className="text-xs text-purple-800">Optimized</div>
-                  </div>
-                </div>
-
-                {/* Recent results preview */}
-                <div className="max-w-2xl mx-auto">
-                  <div className="space-y-2">
-                    {processingResults.slice(-3).map((result) => (
-                      <div key={result.document_id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg">
-                        <div className="flex items-center space-x-3">
-                          <span className="text-xl">
-                            {result.success ? (result.pass_all_thresholds ? '✅' : '⚠️') : '❌'}
-                          </span>
-                          <div>
-                            <p className="font-medium text-gray-900">{result.filename}</p>
-                            <p className="text-sm text-gray-600">Score: {result.conversion_score}/100</p>
-                          </div>
-                        </div>
-                        
-                        <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-                          result.pass_all_thresholds 
-                            ? 'bg-green-100 text-green-800'
-                            : result.success
-                              ? 'bg-yellow-100 text-yellow-800'
-                              : 'bg-red-100 text-red-800'
-                        }`}>
-                          {result.pass_all_thresholds ? 'RAG Ready' : result.success ? 'Needs Work' : 'Failed'}
-                        </span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
           </div>
         </div>
 
@@ -264,22 +212,33 @@ export function ReviewStage({
     );
   }
 
-  // Show full review interface when processing is complete
+  // Show results interface when we have at least one result (even if processing isn't complete)
   return (
     <div className="space-y-6">
-      {/* Header */}
+      {/* Header with processing status */}
       <div className="text-center">
         <h2 className="text-2xl font-bold text-gray-900 mb-2">📊 Review Results</h2>
         <p className="text-gray-600">
-          Review and improve your processed documents before finalizing
+          {isProcessing 
+            ? `${processingResults.length} of ${selectedFiles.length} documents processed. More results coming...`
+            : `Review and improve your processed documents before finalizing`
+          }
         </p>
+        {isProcessing && (
+          <div className="mt-2 flex items-center justify-center space-x-2 text-sm text-blue-600">
+            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+            <span>Processing continues in background...</span>
+          </div>
+        )}
       </div>
 
       {/* Summary Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
         <div className="bg-blue-50 p-4 rounded-lg text-center">
           <div className="text-2xl font-bold text-blue-600">{processingResults.length}</div>
-          <div className="text-sm text-blue-800">Total Files</div>
+          <div className="text-sm text-blue-800">
+            {isProcessing ? `of ${selectedFiles.length}` : 'Total Files'}
+          </div>
         </div>
         <div className="bg-green-50 p-4 rounded-lg text-center">
           <div className="text-2xl font-bold text-green-600">{ragReadyCount}</div>
@@ -295,12 +254,31 @@ export function ReviewStage({
         </div>
       </div>
 
+      {/* Progress indicator when still processing */}
+      {isProcessing && (
+        <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4">
+          <div className="flex items-center space-x-3">
+            <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-yellow-600"></div>
+            <div>
+              <h4 className="font-medium text-yellow-900">Processing in Progress</h4>
+              <p className="text-sm text-yellow-800">
+                {processingResults.length} of {selectedFiles.length} documents completed. 
+                You can review completed results below while processing continues.
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Content Area */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Left Panel - Results List */}
         <div className="lg:col-span-1">
           <div className="bg-white rounded-lg border p-6">
-            <h3 className="text-lg font-medium mb-4">📋 Results ({successfulResults.length})</h3>
+            <h3 className="text-lg font-medium mb-4">
+              📋 Results ({successfulResults.length}
+              {isProcessing && ` of ${selectedFiles.length}`})
+            </h3>
             
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {successfulResults.map((result) => {
@@ -342,6 +320,20 @@ export function ReviewStage({
                   </button>
                 );
               })}
+              
+              {/* Show placeholder for pending files when still processing */}
+              {isProcessing && processingResults.length < selectedFiles.length && (
+                <div className="space-y-2">
+                  {Array.from({ length: selectedFiles.length - processingResults.length }).map((_, index) => (
+                    <div key={`pending-${index}`} className="p-3 border border-dashed border-gray-200 rounded-lg">
+                      <div className="flex items-center space-x-3">
+                        <div className="animate-pulse rounded-full h-4 w-4 bg-gray-300"></div>
+                        <span className="text-gray-500 text-sm">Processing...</span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         </div>
@@ -662,9 +654,23 @@ export function ReviewStage({
         <button
           type="button"
           onClick={onComplete}
-          className="px-8 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 font-medium text-lg"
+          disabled={isProcessing}
+          className={`px-8 py-3 rounded-lg font-medium text-lg transition-colors ${
+            isProcessing
+              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              : 'bg-green-600 text-white hover:bg-green-700'
+          }`}
         >
-          ✅ Finish Review
+          {isProcessing ? (
+            <>
+              <span className="flex items-center space-x-2">
+                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-400"></div>
+                <span>Processing {selectedFiles.length - processingResults.length} more...</span>
+              </span>
+            </>
+          ) : (
+            '✅ Finish Review'
+          )}
         </button>
       </div>
     </div>

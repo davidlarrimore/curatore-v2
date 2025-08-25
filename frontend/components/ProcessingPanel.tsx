@@ -15,6 +15,7 @@ interface ProcessingPanelProps {
   selectedFiles: FileInfo[];
   processingOptions: ProcessingOptions;
   onProcessingComplete: (results: ProcessingResult[]) => void;
+  onResultUpdate?: (results: ProcessingResult[]) => void; // NEW: Real-time updates
   onError: (error: string) => void;
   isVisible: boolean;
   onClose: () => void;
@@ -26,6 +27,7 @@ export function ProcessingPanel({
   selectedFiles,
   processingOptions,
   onProcessingComplete,
+  onResultUpdate, // NEW PROP
   onError,
   isVisible,
   onClose
@@ -72,6 +74,15 @@ export function ProcessingPanel({
       case 'warning': return '⚠️';
       case 'error': return '❌';
       default: return 'ℹ️';
+    }
+  };
+
+  // NEW: Function to update results and notify parent
+  const updateResults = (newResults: ProcessingResult[]) => {
+    setResults(newResults);
+    // Immediately notify parent of the update
+    if (onResultUpdate) {
+      onResultUpdate(newResults);
     }
   };
 
@@ -128,7 +139,8 @@ export function ProcessingPanel({
           }
 
           processedResults.push(result);
-          setResults([...processedResults]);
+          // CHANGED: Use the new updateResults function for real-time updates
+          updateResults([...processedResults]);
 
         } catch (error) {
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -146,7 +158,8 @@ export function ProcessingPanel({
           };
           
           processedResults.push(failedResult);
-          setResults([...processedResults]);
+          // CHANGED: Use the new updateResults function for real-time updates
+          updateResults([...processedResults]);
         }
 
         addLog('info', '─'.repeat(30));
