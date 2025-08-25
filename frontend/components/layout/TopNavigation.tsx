@@ -15,6 +15,7 @@ import {
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import { systemApi } from '@/lib/api'
+import Image from 'next/image'
 import toast from 'react-hot-toast'
 
 interface SystemStatus {
@@ -106,8 +107,13 @@ export function TopNavigation({
 
           {/* Logo and title - hide on mobile when space is limited */}
           <div className="flex items-center space-x-3">
-            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-purple-600 rounded-lg flex items-center justify-center">
-              <span className="text-white font-bold text-sm">C</span>
+            <div className="w-8 h-8 flex items-center justify-center">
+              <Image
+            src="/logo.png" // The path starts from the `public` folder
+            alt="Amivero Logo"
+            width={120} // Desired width in pixels
+            height={30} // Desired height in pixels
+          />
             </div>
             <div className="hidden sm:block">
               <h1 className="text-xl font-semibold text-gray-900">Curatore v2</h1>
