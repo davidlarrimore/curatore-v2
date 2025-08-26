@@ -388,12 +388,12 @@ export function UploadSelectStage({
                   type="number"
                   min="0"
                   max="100"
-                  value={processingOptions.quality_thresholds.conversion}
+                  value={processingOptions.quality_thresholds.conversion_threshold}
                   onChange={(e) => onProcessingOptionsChange({
                     ...processingOptions,
                     quality_thresholds: {
                       ...processingOptions.quality_thresholds,
-                      conversion: parseInt(e.target.value) || 0
+                      conversion_threshold: parseInt(e.target.value) || 0
                     }
                   })}
                   className="w-full px-2 py-1 border border-gray-300 rounded"
@@ -405,12 +405,12 @@ export function UploadSelectStage({
                   type="number"
                   min="1"
                   max="10"
-                  value={processingOptions.quality_thresholds.clarity}
+                  value={processingOptions.quality_thresholds.clarity_threshold}
                   onChange={(e) => onProcessingOptionsChange({
                     ...processingOptions,
                     quality_thresholds: {
                       ...processingOptions.quality_thresholds,
-                      clarity: parseInt(e.target.value) || 1
+                      clarity_threshold: parseInt(e.target.value) || 1
                     }
                   })}
                   className="w-full px-2 py-1 border border-gray-300 rounded"

@@ -38,6 +38,11 @@ interface ProcessingState {
   resetCounter: number
 }
 
+interface SystemConfig {
+  supportedFormats: string[]
+  maxFileSize: number
+}
+
 export default function ProcessingPage() {
   // State management
   const [state, setState] = useState<ProcessingState>({
@@ -49,6 +54,7 @@ export default function ProcessingPage() {
     isProcessing: false,
     processingOptions: {
       quality_thresholds: {
+        conversion_threshold: 70.0,
         clarity_threshold: 7.0,
         completeness_threshold: 8.0,
         relevance_threshold: 6.0,
@@ -63,20 +69,21 @@ export default function ProcessingPage() {
         chunk_size: 1000,
         chunk_overlap: 200,
         max_retries: 3
-      }
+      },
+      auto_optimize: true
     },
     resetCounter: 0
   })
 
+  // System config state
+  const [config, setConfig] = useState<SystemConfig>({
+    supportedFormats: [],
+    maxFileSize: 0
+  })
+  const [isLoadingConfig, setIsLoadingConfig] = useState(true)
+
   // Processing panel state
   const [panelVisible, setPanelVisible] = useState(false)
-  const [currentFile, setCurrentFile] = useState<string | null>(null)
-  const [processingLogs, setProcessingLogs] = useState<Array<{
-    type: 'info' | 'success' | 'error' | 'warning'
-    message: string
-    timestamp: Date
-  }>>([])
-  const [processingProgress, setProcessingProgress] = useState(0)
 
   // Progress bar configuration
   const progressSteps: ProgressStep[] = [
@@ -111,6 +118,25 @@ export default function ProcessingPage() {
         console.warn('Failed to load saved processing options:', error)
       }
     }
+  }, [])
+
+  // Load system config on mount
+  useEffect(() => {
+    const fetchConfig = async () => {
+      try {
+        const response = await systemApi.getSupportedFormats()
+        setConfig({
+          supportedFormats: response.supported_extensions,
+          maxFileSize: response.max_file_size
+        })
+      } catch (error) {
+        console.error('Failed to load system config:', error)
+        toast.error('Could not load system configuration.')
+      } finally {
+        setIsLoadingConfig(false)
+      }
+    }
+    fetchConfig()
   }, [])
 
   // Save options to localStorage when they change
@@ -164,7 +190,7 @@ export default function ProcessingPage() {
   }
 
   // File management
-  const handleFilesSelected = (files: FileInfo[]) => {
+  const handleSelectedFilesChange = (files: FileInfo[]) => {
     setState(prev => ({
       ...prev,
       selectedFiles: files,
@@ -184,41 +210,24 @@ export default function ProcessingPage() {
   }
 
   // Processing management
-  const handleStartProcessing = async () => {
+  const handleStartProcessing = () => {
     if (state.selectedFiles.length === 0) {
       toast.error('Please select files to process')
       return
     }
 
-    setState(prev => ({ ...prev, isProcessing: true }))
+    setState(prev => ({ 
+      ...prev, 
+      isProcessing: true,
+      processingComplete: false,
+      processingResults: [] 
+    }))
     setPanelVisible(true)
-    setProcessingLogs([])
-    setProcessingProgress(0)
+  }
 
-    try {
-      const results = await processingApi.processBatch(
-        state.selectedFiles,
-        state.processingOptions,
-        (progress, currentFile) => {
-          setProcessingProgress(progress)
-          setCurrentFile(currentFile)
-        }
-      )
-
-      setState(prev => ({
-        ...prev,
-        processingResults: results,
-        processingComplete: true,
-        isProcessing: false
-      }))
-
-      toast.success(`Successfully processed ${results.length} documents`)
-      
-    } catch (error) {
-      console.error('Processing failed:', error)
-      toast.error(error instanceof Error ? error.message : 'Processing failed')
-      setState(prev => ({ ...prev, isProcessing: false }))
-    }
+  const handleProcessingComplete = (results: ProcessingResult[]) => {
+    setState(prev => ({ ...prev, processingResults: results, processingComplete: true, isProcessing: false }))
+    toast.success('Processing complete!')
   }
 
   const handleProcessingOptionsChange = (options: ProcessingOptions) => {
@@ -226,16 +235,14 @@ export default function ProcessingPage() {
   }
 
   // Results management
-  const handleResultUpdate = (updatedResult: ProcessingResult) => {
+  const handleResultsUpdate = (updatedResults: ProcessingResult[]) => {
     setState(prev => ({
       ...prev,
-      processingResults: prev.processingResults.map(result =>
-        result.file_id === updatedResult.file_id ? updatedResult : result
-      )
+      processingResults: updatedResults
     }))
   }
 
-  const handleResultsDownload = async (format: string) => {
+  const handleResultsDownload = async (format: string) => { // This seems unused by DownloadStage
     try {
       const blob = await processingApi.downloadResults(state.processingResults, format)
       const url = URL.createObjectURL(blob)
@@ -265,9 +272,6 @@ export default function ProcessingPage() {
       resetCounter: prev.resetCounter + 1
     }))
     setPanelVisible(false)
-    setProcessingLogs([])
-    setProcessingProgress(0)
-    setCurrentFile(null)
     toast.success('System reset successfully')
   }
 
@@ -289,18 +293,19 @@ export default function ProcessingPage() {
       <div className="flex-1 overflow-auto">
         <div className="max-w-6xl mx-auto p-6">
           {/* Stage Content */}
-          {state.currentStage === 'upload' && (
+          {state.currentStage === 'upload' && !isLoadingConfig && (
             <UploadSelectStage
               key={state.resetCounter}
               selectedFiles={state.selectedFiles}
-              onFilesSelected={handleFilesSelected}
+              onSelectedFilesChange={handleSelectedFilesChange}
               sourceType={state.sourceType}
               onSourceTypeChange={handleSourceTypeChange}
-              onStartProcessing={handleStartProcessing}
+              onProcess={handleStartProcessing}
               isProcessing={state.isProcessing}
               processingOptions={state.processingOptions}
               onProcessingOptionsChange={handleProcessingOptionsChange}
-              onReset={handleReset}
+              supportedFormats={config.supportedFormats}
+              maxFileSize={config.maxFileSize}
             />
           )}
 
@@ -308,19 +313,24 @@ export default function ProcessingPage() {
             <ReviewStage
               selectedFiles={state.selectedFiles}
               processingResults={state.processingResults}
+              onResultsUpdate={handleResultsUpdate}
+              onComplete={() => handleStageChange('download')}
+              qualityThresholds={{
+                conversion: state.processingOptions.quality_thresholds.conversion_threshold,
+                clarity: state.processingOptions.quality_thresholds.clarity_threshold,
+                completeness: state.processingOptions.quality_thresholds.completeness_threshold,
+                relevance: state.processingOptions.quality_thresholds.relevance_threshold,
+                markdown: state.processingOptions.quality_thresholds.markdown_threshold,
+              }}
+              isProcessingComplete={state.processingComplete}
               isProcessing={state.isProcessing}
-              processingComplete={state.processingComplete}
-              onResultUpdate={handleResultUpdate}
-              onAdvanceToDownload={() => handleStageChange('download')}
             />
           )}
 
           {state.currentStage === 'download' && (
             <DownloadStage
               processingResults={state.processingResults}
-              onDownload={handleResultsDownload}
-              onStartOver={handleReset}
-              stats={stats}
+              onRestart={handleReset}
             />
           )}
         </div>
@@ -330,15 +340,15 @@ export default function ProcessingPage() {
       <ProcessingPanel
         isVisible={panelVisible}
         onClose={() => setPanelVisible(false)}
-        isProcessing={state.isProcessing}
-        progress={processingProgress}
-        currentFile={currentFile}
-        results={state.processingResults}
-        processingComplete={state.processingComplete}
+        selectedFiles={state.selectedFiles}
+        processingOptions={state.processingOptions}
+        onProcessingComplete={handleProcessingComplete}
+        onResultUpdate={handleResultsUpdate}
         onError={(error) => {
-          toast.error(error)
+          toast.error(`Processing error: ${error}`)
           setState(prev => ({ ...prev, isProcessing: false }))
         }}
+        resetTrigger={state.resetCounter}
       />
     </div>
   )

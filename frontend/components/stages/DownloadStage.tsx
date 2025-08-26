@@ -47,8 +47,8 @@ export function DownloadStage({
   const downloadIndividualFile = async (result: ProcessingResult) => {
     setIsDownloading(result.document_id);
     try {
-      const response = await fileApi.downloadDocument(result.document_id);
-      const blob = await response.blob();
+      // The API wrapper returns the blob directly, not a Response object.
+      const blob: Blob = await fileApi.downloadDocument(result.document_id);
       
       // Create download link
       const url = window.URL.createObjectURL(blob);

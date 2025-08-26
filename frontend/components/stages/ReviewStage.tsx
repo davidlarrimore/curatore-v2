@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { ProcessingResult, QualityThresholds } from '@/types';
-import { contentApi, utils } from '@/lib/api';
+import { contentApi } from '@/lib/api';
 
 interface ReviewStageProps {
   processingResults: ProcessingResult[];
@@ -170,6 +170,12 @@ export function ReviewStage({
     return 'text-red-600';
   };
 
+  const getPassFailColor = (passes: boolean) => {
+    return passes
+      ? 'bg-green-100 text-green-800'
+      : 'bg-red-100 text-red-800';
+  };
+
   const getScoreIcon = (score: number, threshold: number) => {
     if (score >= threshold) return '🟢';
     return '🔴';
@@ -278,8 +284,8 @@ export function ReviewStage({
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {successfulResults.map((result) => {
                 const isSelected = selectedResult?.document_id === result.document_id;
-                const qualityBadge = utils.getQualityColor(result.conversion_score, qualityThresholds.conversion);
-                const passBadge = utils.getPassFailColor(result.pass_all_thresholds);
+                const qualityBadge = getQualityColor(result.conversion_score, qualityThresholds.conversion);
+                const passBadge = getPassFailColor(result.pass_all_thresholds);
 
                 return (
                   <button
@@ -342,10 +348,10 @@ export function ReviewStage({
                 <div className="mb-6">
                   <h3 className="text-xl font-medium mb-2">📄 {selectedResult.filename}</h3>
                   <div className="flex items-center space-x-4">
-                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${utils.getQualityColor(selectedResult.conversion_score, qualityThresholds.conversion)}`}>
+                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getQualityColor(selectedResult.conversion_score, qualityThresholds.conversion)}`}>
                       Quality: {selectedResult.conversion_score}%
                     </span>
-                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${utils.getPassFailColor(selectedResult.pass_all_thresholds)}`}>
+                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getPassFailColor(selectedResult.pass_all_thresholds)}`}>
                       {selectedResult.pass_all_thresholds ? '✅ PASS' : '❌ FAIL'}
                     </span>
                     {selectedResult.vector_optimized && (
