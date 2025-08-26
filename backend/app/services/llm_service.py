@@ -1,13 +1,14 @@
 # backend/app/services/llm_service.py
 import json
 import re
-from typing import Optional, Dict, Any
+from typing import Optional
 from openai import OpenAI
 import httpx
 import urllib3
 
 from ..config import settings
 from ..models import LLMEvaluation, LLMConnectionStatus
+from ..utils.text_utils import clean_llm_response
 
 
 class LLMService:
@@ -44,27 +45,6 @@ class LLMService:
         except Exception as e:
             print(f"Warning: Failed to initialize OpenAI client: {e}")
             self._client = None
-    
-    @staticmethod
-    def _clean_markdown_response(text: str) -> str:
-        """Clean LLM response by removing markdown code block wrappers and extra formatting."""
-        if not text:
-            return text
-        
-        # Remove markdown code block wrappers (```markdown ... ``` or ``` ... ```)
-        # This handles multiple variations of markdown code blocks
-        text = re.sub(r'^```(?:markdown|md)?\s*\n', '', text, flags=re.MULTILINE)
-        text = re.sub(r'\n```\s*$', '', text, flags=re.MULTILINE)
-        text = re.sub(r'^```(?:markdown|md)?\s*', '', text)
-        text = re.sub(r'```\s*$', '', text)
-        
-        # Remove any leading/trailing whitespace
-        text = text.strip()
-        
-        # Remove multiple consecutive newlines (more than 2)
-        text = re.sub(r'\n{3,}', '\n\n', text)
-        
-        return text
     
     @property
     def is_available(self) -> bool:
@@ -192,7 +172,7 @@ class LLMService:
             improved_content = resp.choices[0].message.content.strip()
             
             # Clean the response to remove any markdown code block wrappers
-            return self._clean_markdown_response(improved_content)
+            return clean_llm_response(improved_content)
             
         except Exception as e:
             print(f"LLM improvement failed: {e}")
@@ -248,15 +228,7 @@ class LLMService:
             summary = resp.choices[0].message.content.strip()
             
             # Clean the response to remove any markdown formatting
-            summary = self._clean_markdown_response(summary)
-            
-            # Additional cleanup for summary-specific formatting
-            summary = re.sub(r'^## Summary\s*', '', summary, flags=re.IGNORECASE)
-            summary = re.sub(r'^Summary:\s*', '', summary, flags=re.IGNORECASE)  
-            summary = re.sub(r'^\*\*Summary\*\*:\s*', '', summary, flags=re.IGNORECASE)
-            summary = re.sub(r'^Document Summary:\s*', '', summary, flags=re.IGNORECASE)
-            summary = re.sub(r'^Analysis:\s*', '', summary, flags=re.IGNORECASE)
-            
+            summary = clean_llm_response(summary)
             return summary.strip()
             
         except Exception as e:

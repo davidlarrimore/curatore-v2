@@ -144,13 +144,6 @@ export default function ProcessingPage() {
     localStorage.setItem('processingOptions', JSON.stringify(state.processingOptions))
   }, [state.processingOptions])
 
-  // Auto-advance to review stage when processing completes
-  useEffect(() => {
-    if (state.processingComplete && state.currentStage === 'upload') {
-      setState(prev => ({ ...prev, currentStage: 'review' }))
-    }
-  }, [state.processingComplete, state.currentStage])
-
   // Progress bar logic
   const getStepStatus = (stepId: string): StepStatus => {
     switch (stepId) {
@@ -220,7 +213,8 @@ export default function ProcessingPage() {
       ...prev, 
       isProcessing: true,
       processingComplete: false,
-      processingResults: [] 
+      processingResults: [],
+      currentStage: 'review'
     }))
     setPanelVisible(true)
   }

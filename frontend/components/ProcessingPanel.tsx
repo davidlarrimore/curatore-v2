@@ -34,7 +34,7 @@ export function ProcessingPanel({
   onClose,
   resetTrigger = 0
 }: ProcessingPanelProps) {
-  const [panelState, setPanelState] = useState<PanelState>('normal');
+  const [panelState, setPanelState] = useState<PanelState>('minimized');
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
   const [currentFile, setCurrentFile] = useState<string>('');
@@ -51,7 +51,7 @@ export function ProcessingPanel({
   }, [resetTrigger]);
 
   const resetInternalState = () => {
-    setPanelState('normal');
+    setPanelState('minimized');
     setIsProcessing(false);
     setProgress(0);
     setCurrentFile('');
@@ -253,7 +253,10 @@ export function ProcessingPanel({
   return (
     <div className={getPanelClasses()}>
       {/* Header - Dark theme to match status bar but darker */}
-      <div className="flex items-center justify-between p-3 border-b border-gray-600 bg-gray-800">
+      <div 
+        className="flex items-center justify-between p-3 border-b border-gray-600 bg-gray-800 cursor-pointer"
+        onClick={() => setPanelState(panelState === 'minimized' ? 'normal' : 'minimized')}
+      >
         <div className="flex items-center space-x-4">
           <div className="flex items-center space-x-2">
             {isProcessing ? (
@@ -300,7 +303,10 @@ export function ProcessingPanel({
           {/* Minimize/Restore */}
           <button
             type="button"
-            onClick={() => setPanelState(panelState === 'minimized' ? 'normal' : 'minimized')}
+            onClick={(e) => {
+              e.stopPropagation();
+              setPanelState(panelState === 'minimized' ? 'normal' : 'minimized');
+            }}
             className="p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-300 hover:text-gray-100"
             title={panelState === 'minimized' ? 'Restore' : 'Minimize'}
           >
@@ -318,7 +324,10 @@ export function ProcessingPanel({
           {/* Fullscreen */}
           <button
             type="button"
-            onClick={() => setPanelState(panelState === 'fullscreen' ? 'normal' : 'fullscreen')}
+            onClick={(e) => {
+              e.stopPropagation();
+              setPanelState(panelState === 'fullscreen' ? 'normal' : 'fullscreen');
+            }}
             className="p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-300 hover:text-gray-100"
             title={panelState === 'fullscreen' ? 'Exit Fullscreen' : 'Fullscreen'}
           >
@@ -337,7 +346,10 @@ export function ProcessingPanel({
           {processingComplete && (
             <button
               type="button"
-              onClick={onClose}
+              onClick={(e) => {
+                e.stopPropagation();
+                onClose();
+              }}
               className="p-2 hover:bg-gray-700 rounded-lg transition-colors text-gray-300 hover:text-gray-100"
               title="Close"
             >
