@@ -19,7 +19,9 @@ import {
   HelpCircle,
   Layers,
   Database,
-  TestTube
+  TestTube,
+  PanelLeftOpen,
+  PanelLeftClose
 } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
 import { Button } from '@/components/ui/Button'
@@ -219,7 +221,7 @@ export function LeftSidebar({
   // Shared sidebar content
   const SidebarContent = () => (
     <div className="flex grow flex-col gap-y-5 overflow-y-auto bg-white border-r border-gray-200 px-6 py-4">
-      {/* Collapse button for desktop */}
+      {/* Collapse button for desktop - Updated with sidebar icons */}
       {!open && (
         <div className="hidden lg:flex lg:justify-end">
           <Button
@@ -229,7 +231,11 @@ export function LeftSidebar({
             className="p-1"
             aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
           >
-            {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+            {collapsed ? (
+              <PanelLeftOpen className="w-4 h-4" />
+            ) : (
+              <PanelLeftClose className="w-4 h-4" />
+            )}
           </Button>
         </div>
       )}
