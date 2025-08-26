@@ -264,8 +264,8 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
     );
 
     return (
-      <div className="space-y-4">
-        <div className="flex items-center justify-between">
+      <div className="space-y-4 flex flex-col h-full">
+        <div className="flex items-center justify-between flex-shrink-0">
           <h3 className="text-lg font-medium">{title} ({files.length})</h3>
           <div className="flex items-center space-x-2">
             {files.length > 0 && (
@@ -297,7 +297,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
         </div>
 
         {files.length === 0 ? (
-          <div className="text-center py-8 text-gray-500">
+          <div className="text-center py-8 text-gray-500 flex-shrink-0">
             <div className="text-4xl mb-2">📁</div>
             {sourceType === 'local' ? (
               <div>
@@ -311,34 +311,36 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
             )}
           </div>
         ) : (
-          <div className="space-y-2 max-h-64 overflow-y-auto">
-            {files.map((file) => {
-              const isSelected = selectedFiles.some(sf => sf.document_id === file.document_id);
-              return (
-                <div key={file.document_id} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50">
-                  <input
-                    type="checkbox"
-                    checked={isSelected}
-                    onChange={(e) => handleFileToggle(file, e.target.checked)}
-                    className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                  />
-                  <div className="flex-1">
-                    <p className="font-medium text-gray-900">{file.filename}</p>
-                    <div className="flex items-center space-x-2 text-sm text-gray-500">
-                      <span>{utils.formatFileSize(file.file_size)}</span>
-                      <span>•</span>
-                      <span>{new Date(file.upload_time).toLocaleDateString()}</span>
-                      {sourceType === 'local' && (
-                        <>
-                          <span>•</span>
-                          <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded text-xs">Batch</span>
-                        </>
-                      )}
+          <div className="flex-1 overflow-y-auto min-h-0">
+            <div className="space-y-2 pr-2">
+              {files.map((file) => {
+                const isSelected = selectedFiles.some(sf => sf.document_id === file.document_id);
+                return (
+                  <div key={file.document_id} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50">
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      onChange={(e) => handleFileToggle(file, e.target.checked)}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 flex-shrink-0"
+                    />
+                    <div className="flex-1 min-w-0">
+                      <p className="font-medium text-gray-900 truncate">{file.filename}</p>
+                      <div className="flex items-center space-x-2 text-sm text-gray-500">
+                        <span>{utils.formatFileSize(file.file_size)}</span>
+                        <span>•</span>
+                        <span>{new Date(file.upload_time).toLocaleDateString()}</span>
+                        {sourceType === 'local' && (
+                          <>
+                            <span>•</span>
+                            <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded text-xs">Batch</span>
+                          </>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
+            </div>
           </div>
         )}
       </div>
@@ -561,9 +563,9 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
 
         {/* Right Panel - File Selection */}
         <div className="lg:col-span-3 flex flex-col min-h-0">
-          <div className="bg-white rounded-lg border p-6 flex-1 flex flex-col">
+          <div className="bg-white rounded-lg border p-6 flex-1 flex flex-col min-h-0">
             {/* Source Type Switcher */}
-            <div className="flex space-x-2 bg-gray-100 p-1 rounded-lg mb-6">
+            <div className="flex space-x-2 bg-gray-100 p-1 rounded-lg mb-6 flex-shrink-0">
               <button
                 type="button"
                 onClick={() => onSourceTypeChange('local')}
@@ -591,18 +593,18 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
             {/* Content based on source type */}
             <div className="flex-1 flex flex-col min-h-0">
               {sourceType === 'local' ? (
-                <div className="flex-1 flex flex-col">
-                  <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+                <div className="flex-1 flex flex-col min-h-0">
+                  <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex-shrink-0">
                     <p className="text-sm text-blue-800">
                       <strong>Local Files:</strong> Place documents in the <code className="bg-blue-100 px-1 rounded">files/batch_files/</code> folder and click refresh.
                     </p>
                   </div>
-                  <div className="flex-1 overflow-hidden">
+                  <div className="flex-1 min-h-0">
                     {renderFileList(batchFiles, 'Local Files')}
                   </div>
                 </div>
               ) : (
-                <div className="flex-1 flex flex-col space-y-6">
+                <div className="flex-1 flex flex-col space-y-6 min-h-0">
                   {/* Upload Area */}
                   <div
                     className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-colors flex-shrink-0 ${
@@ -647,8 +649,8 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                     )}
                   </div>
 
-                  {/* Uploaded Files List */}
-                  <div className="flex-1 overflow-hidden">
+                  {/* Uploaded Files List - Now with better height management */}
+                  <div className="flex-1 min-h-0">
                     {renderFileList(uploadedFiles, 'Uploaded Files')}
                   </div>
                 </div>
