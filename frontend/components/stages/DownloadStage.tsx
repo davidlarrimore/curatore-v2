@@ -317,6 +317,13 @@ export function DownloadStage({
     window.URL.revokeObjectURL(url);
   };
 
+  // Helper function to format processing time as seconds only (no decimals)
+  const formatProcessingTimeSeconds = (timeInSeconds: number): string => {
+    if (!timeInSeconds) return 'N/A';
+    const seconds = Math.round(timeInSeconds); // Round to nearest whole second
+    return `${seconds}s`;
+  };
+
   const allSelected = successfulResults.length > 0 && selectedFiles.size === successfulResults.length;
   const someSelected = selectedFiles.size > 0;
   const isAnyDownloading = isBulkDownloading || isCombinedDownloading || isRAGDownloading;
@@ -419,22 +426,17 @@ export function DownloadStage({
                           />
                         </div>
 
-                        {/* File Name with Icon */}
+                        {/* File Name */}
                         <div className="col-span-4">
-                          <div className="flex items-center space-x-3">
-                            <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
-                              <span className="text-blue-600 text-sm">📄</span>
-                            </div>
-                            <div className="min-w-0 flex-1">
-                              <p className="font-medium text-gray-900 truncate" title={result.filename}>
-                                {result.filename}
+                          <div className="min-w-0">
+                            <p className="font-medium text-gray-900 truncate" title={result.filename}>
+                              {result.filename}
+                            </p>
+                            {result.document_summary && (
+                              <p className="text-xs text-gray-500 truncate mt-1" title={result.document_summary}>
+                                {result.document_summary}
                               </p>
-                              {result.document_summary && (
-                                <p className="text-xs text-gray-500 truncate mt-1" title={result.document_summary}>
-                                  {result.document_summary}
-                                </p>
-                              )}
-                            </div>
+                            )}
                           </div>
                         </div>
 
@@ -486,14 +488,14 @@ export function DownloadStage({
                           )}
                         </div>
 
-                        {/* Processing Time */}
+                        {/* Processing Time - UPDATED: Show only seconds */}
                         <div className="col-span-2">
                           <div className="text-gray-600">
                             {result.processing_time ? (
                               <div className="flex items-center space-x-1">
                                 <span className="text-gray-400">⏱️</span>
                                 <span className="font-mono text-xs">
-                                  {utils.formatDuration(result.processing_time)}
+                                  {formatProcessingTimeSeconds(result.processing_time)}
                                 </span>
                               </div>
                             ) : (
