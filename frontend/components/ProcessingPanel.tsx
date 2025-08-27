@@ -22,7 +22,7 @@ interface ProcessingPanelProps {
   isVisible: boolean;
   onClose: () => void;
   resetTrigger?: number;
-  onPanelStateChange?: (state: PanelState | 'hidden') => void; // NEW: Callback for state changes
+  onPanelStateChange?: (state: PanelState | 'hidden') => void;
 }
 
 export function ProcessingPanel({
@@ -34,7 +34,7 @@ export function ProcessingPanel({
   isVisible,
   onClose,
   resetTrigger = 0,
-  onPanelStateChange // NEW: Receive callback
+  onPanelStateChange
 }: ProcessingPanelProps) {
   const [panelState, setPanelState] = useState<PanelState>('minimized');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -45,7 +45,7 @@ export function ProcessingPanel({
   const [processingStartTime, setProcessingStartTime] = useState<number>(0);
   const [processingComplete, setProcessingComplete] = useState(false);
 
-  // NEW: Notify parent of panel state changes
+  // Notify parent of panel state changes
   useEffect(() => {
     if (onPanelStateChange) {
       if (isVisible) {
@@ -224,7 +224,7 @@ export function ProcessingPanel({
 
   // Panel positioning and size with proper z-index and sidebar awareness
   const getPanelClasses = () => {
-    // Base classes with proper z-index - use z-20 which should exist in Tailwind
+    // Base classes with proper z-index
     const baseClasses = "fixed bg-gray-900 border-t border-gray-700 shadow-2xl transition-all duration-300 ease-in-out z-20";
     
     // Use CSS custom properties for sidebar width awareness
@@ -239,7 +239,7 @@ export function ProcessingPanel({
           className: `${baseClasses} h-12`,
           style: { 
             ...sidebarStyle,
-            bottom: '52px' // Above the 40px status bar + 12px gap (more clearance)
+            bottom: '52px' // Above the 40px status bar + 12px gap
           }
         };
       case 'fullscreen':
@@ -254,10 +254,10 @@ export function ProcessingPanel({
       case 'normal':
       default:
         return {
-          className: `${baseClasses}`,
+          className: `${baseClasses} overflow-hidden`,
           style: { 
             ...sidebarStyle,
-            height: '320px', // Fixed height instead of h-80 class
+            height: '360px', // Increased height for better content space
             bottom: '52px' // Above the 40px status bar + 12px gap
           }
         };
@@ -268,7 +268,7 @@ export function ProcessingPanel({
     <div className={getPanelClasses().className} style={getPanelClasses().style}>
       {/* Header - Dark theme to match status bar but darker */}
       <div 
-        className="flex items-center justify-between p-3 border-b border-gray-600 bg-gray-800 cursor-pointer"
+        className="flex items-center justify-between p-3 border-b border-gray-600 bg-gray-800 cursor-pointer flex-shrink-0"
         onClick={() => setPanelState(panelState === 'minimized' ? 'normal' : 'minimized')}
       >
         <div className="flex items-center space-x-4">
@@ -377,126 +377,114 @@ export function ProcessingPanel({
 
       {/* Content (hidden when minimized) */}
       {panelState !== 'minimized' && (
-        <div className={`${
-          panelState === 'fullscreen' 
-            ? 'h-[calc(100vh-7rem)]' // Fullscreen: viewport - top nav (4rem) - header (3rem)
-            : 'h-[317px]' // Normal: 320px panel - 3px for header
-        } overflow-hidden`}>
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-4 h-full">
-            {/* Progress and Stats */}
-            <div className="flex flex-col space-y-4 h-full">
-              {/* Progress Bar */}
-              <div className="flex-shrink-0">
-                <div className="flex items-center justify-between mb-2">
-                  <span className="text-sm font-medium text-gray-200">Progress</span>
-                  <span className="text-sm text-gray-300">{Math.round(progress)}%</span>
+        <div className="flex-1 overflow-hidden">
+          <div className="h-full p-4">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-full">
+              {/* Progress and Stats - LEFT COLUMN */}
+              <div className="flex flex-col space-y-4 h-full min-h-0">
+                {/* Progress Bar - Fixed height */}
+                <div className="flex-shrink-0">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-gray-200">Progress</span>
+                    <span className="text-sm text-gray-300">{Math.round(progress)}%</span>
+                  </div>
+                  <div className="w-full bg-gray-700 rounded-full h-2">
+                    <div 
+                      className="bg-blue-500 h-2 rounded-full transition-all duration-300"
+                      style={{ width: `${progress}%` }}
+                    />
+                  </div>
                 </div>
-                <div className="w-full bg-gray-700 rounded-full h-2">
-                  <div 
-                    className="bg-blue-500 h-2 rounded-full transition-all duration-300"
-                    style={{ width: `${progress}%` }}
-                  />
-                </div>
-              </div>
 
-              {/* Current File */}
-              {currentFile && (
-                <div className="flex items-center space-x-2 text-sm text-gray-300 flex-shrink-0">
-                  <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-400"></div>
-                  <span>Processing: <strong className="text-gray-100">{currentFile}</strong></span>
-                </div>
-              )}
-
-              {/* Stats Grid */}
-              {results.length > 0 && (
-                <div className="grid grid-cols-3 gap-3 flex-shrink-0">
-                  <div className="text-center p-3 bg-green-900 bg-opacity-30 rounded-lg border border-green-700">
-                    <div className="text-xl font-bold text-green-400">{successful}</div>
-                    <div className="text-xs text-green-300">Successful</div>
-                  </div>
-                  <div className="text-center p-3 bg-red-900 bg-opacity-30 rounded-lg border border-red-700">
-                    <div className="text-xl font-bold text-red-400">{failed}</div>
-                    <div className="text-xs text-red-300">Failed</div>
-                  </div>
-                  <div className="text-center p-3 bg-blue-900 bg-opacity-30 rounded-lg border border-blue-700">
-                    <div className="text-xl font-bold text-blue-400">{ragReady}</div>
-                    <div className="text-xs text-blue-300">RAG Ready</div>
-                  </div>
-                </div>
-              )}
-
-              {/* Results Preview */}
-              {results.length > 0 && (
-                <div className="border border-gray-600 rounded-lg flex flex-col bg-gray-800 flex-1 min-h-0">
-                  <h4 className="font-medium p-3 border-b border-gray-600 bg-gray-700 flex-shrink-0 text-gray-200">Recent Results</h4>
-                  <div className="overflow-y-auto flex-1 min-h-0">
-                    {results.slice(-3).map((result) => (
-                      <div key={result.document_id} className="flex items-center justify-between p-2 border-b border-gray-600 last:border-b-0">
-                        <div className="flex items-center space-x-2">
-                          <span className="text-sm">
-                            {result.success ? (result.pass_all_thresholds ? '✅' : '⚠️') : '❌'}
-                          </span>
-                          <span className="text-sm font-medium truncate text-gray-200">{result.filename}</span>
-                        </div>
-                        <span className="text-xs text-gray-400">{result.conversion_score}%</span>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Processing Log - Dark terminal theme */}
-            <div className={`border border-gray-600 rounded-lg flex flex-col bg-gray-900 ${
-              panelState === 'fullscreen' 
-                ? 'h-full' 
-                : 'h-64'  // Fixed height for normal mode - roughly 256px
-            }`}>
-              <div className="flex items-center justify-between p-3 border-b border-gray-600 bg-gray-800 flex-shrink-0">
-                <h4 className="font-medium text-gray-200">Processing Log</h4>
-                <div className="flex items-center space-x-2">
-                  <span className="text-xs text-gray-400">{logs.length} entries</span>
-                  {logs.length > 0 && (
-                    <button
-                      type="button"
-                      onClick={() => setLogs([])}
-                      className="text-xs text-gray-400 hover:text-gray-200 underline"
-                    >
-                      Clear
-                    </button>
-                  )}
-                </div>
-              </div>
-              
-              <div className="bg-black text-green-400 font-mono text-xs flex-1 overflow-hidden relative">
-                {logs.length === 0 ? (
-                  <div className="p-4 text-center text-gray-500 h-full flex items-center justify-center">
-                    <p>Processing log will appear here...</p>
-                  </div>
-                ) : (
-                  <div 
-                    className="p-2 h-full overflow-y-auto scrollbar-thin scrollbar-thumb-green-400 scrollbar-track-gray-800"
-                    style={{ 
-                      scrollbarWidth: 'thin', 
-                      scrollbarColor: '#22c55e #1f2937'
-                    }}
-                  >
-                    {logs.map((log, index) => (
-                      <div key={index} className="flex items-start space-x-2 mb-1 min-h-[1.2rem]">
-                        <span className="text-gray-400 text-xs flex-shrink-0 w-20 font-mono">{log.timestamp}</span>
-                        <span className="flex-shrink-0">{getLogIcon(log.level)}</span>
-                        <span className={`flex-1 break-words ${
-                          log.level === 'error' ? 'text-red-400' :
-                          log.level === 'warning' ? 'text-yellow-400' :
-                          log.level === 'success' ? 'text-green-400' :
-                          'text-gray-300'
-                        }`}>
-                          {log.message}
-                        </span>
-                      </div>
-                    ))}
+                {/* Current File - Fixed height */}
+                {currentFile && (
+                  <div className="flex items-center space-x-2 text-sm text-gray-300 flex-shrink-0">
+                    <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-400"></div>
+                    <span>Processing: <strong className="text-gray-100">{currentFile}</strong></span>
                   </div>
                 )}
+
+                {/* Stats Grid - Fixed height */}
+                {results.length > 0 && (
+                  <div className="grid grid-cols-3 gap-3 flex-shrink-0">
+                    <div className="text-center p-3 bg-green-900 bg-opacity-30 rounded-lg border border-green-700">
+                      <div className="text-xl font-bold text-green-400">{successful}</div>
+                      <div className="text-xs text-green-300">Successful</div>
+                    </div>
+                    <div className="text-center p-3 bg-red-900 bg-opacity-30 rounded-lg border border-red-700">
+                      <div className="text-xl font-bold text-red-400">{failed}</div>
+                      <div className="text-xs text-red-300">Failed</div>
+                    </div>
+                    <div className="text-center p-3 bg-blue-900 bg-opacity-30 rounded-lg border border-blue-700">
+                      <div className="text-xl font-bold text-blue-400">{ragReady}</div>
+                      <div className="text-xs text-blue-300">RAG Ready</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Results Preview - Flexible height with scroll */}
+                {results.length > 0 && (
+                  <div className="border border-gray-600 rounded-lg flex flex-col bg-gray-800 flex-1 min-h-0">
+                    <h4 className="font-medium p-3 border-b border-gray-600 bg-gray-700 flex-shrink-0 text-gray-200">Recent Results</h4>
+                    <div className="overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800">
+                      {results.slice(-10).map((result) => (
+                        <div key={result.document_id} className="flex items-center justify-between p-3 border-b border-gray-600 last:border-b-0">
+                          <div className="flex items-center space-x-2 flex-1 min-w-0">
+                            <span className="text-sm flex-shrink-0">
+                              {result.success ? (result.pass_all_thresholds ? '✅' : '⚠️') : '❌'}
+                            </span>
+                            <span className="text-sm font-medium truncate text-gray-200">{result.filename}</span>
+                          </div>
+                          <span className="text-xs text-gray-400 flex-shrink-0">{result.conversion_score}%</span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Processing Log - RIGHT COLUMN */}
+              <div className="border border-gray-600 rounded-lg flex flex-col bg-gray-900 h-full min-h-0">
+                <div className="flex items-center justify-between p-3 border-b border-gray-600 bg-gray-800 flex-shrink-0">
+                  <h4 className="font-medium text-gray-200">Processing Log</h4>
+                  <div className="flex items-center space-x-2">
+                    <span className="text-xs text-gray-400">{logs.length} entries</span>
+                    {logs.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={() => setLogs([])}
+                        className="text-xs text-gray-400 hover:text-gray-200 underline"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                </div>
+                
+                <div className="bg-black text-green-400 font-mono text-xs flex-1 overflow-hidden relative min-h-0">
+                  {logs.length === 0 ? (
+                    <div className="p-4 text-center text-gray-500 h-full flex items-center justify-center">
+                      <p>Processing log will appear here...</p>
+                    </div>
+                  ) : (
+                    <div className="p-2 h-full overflow-y-auto scrollbar-thin scrollbar-thumb-green-400 scrollbar-track-gray-800">
+                      {logs.map((log, index) => (
+                        <div key={index} className="flex items-start space-x-2 mb-1 min-h-[1.2rem]">
+                          <span className="text-gray-400 text-xs flex-shrink-0 w-20 font-mono">{log.timestamp}</span>
+                          <span className="flex-shrink-0">{getLogIcon(log.level)}</span>
+                          <span className={`flex-1 break-words ${
+                            log.level === 'error' ? 'text-red-400' :
+                            log.level === 'warning' ? 'text-yellow-400' :
+                            log.level === 'success' ? 'text-green-400' :
+                            'text-gray-300'
+                          }`}>
+                            {log.message}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           </div>
