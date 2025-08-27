@@ -4,6 +4,17 @@
 import { useState, useRef, useCallback, useEffect, type FC } from 'react';
 import { FileInfo, ProcessingOptions } from '@/types';
 import { fileApi, utils } from '@/lib/api';
+import { 
+  FileText, 
+  Image, 
+  FileSpreadsheet, 
+  File,
+  Clock,
+  Zap,
+  Database,
+  CheckCircle2,
+  RefreshCw
+} from 'lucide-react';
 
 /**
  * Props for the UploadSelectStage component.
@@ -245,6 +256,54 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
   };
 
   /**
+   * Get file type icon and label based on extension
+   */
+  const getFileTypeInfo = (filename: string) => {
+    const ext = filename.split('.').pop()?.toLowerCase() || '';
+    
+    switch (ext) {
+      case 'pdf':
+        return { icon: FileText, label: 'PDF Document', color: 'text-red-600 bg-red-50' };
+      case 'docx':
+      case 'doc':
+        return { icon: FileText, label: 'Word Document', color: 'text-blue-600 bg-blue-50' };
+      case 'txt':
+      case 'md':
+        return { icon: FileText, label: 'Text Document', color: 'text-gray-600 bg-gray-50' };
+      case 'png':
+      case 'jpg':
+      case 'jpeg':
+      case 'bmp':
+      case 'tif':
+      case 'tiff':
+        return { icon: Image, label: 'Image File', color: 'text-green-600 bg-green-50' };
+      case 'xlsx':
+      case 'xls':
+        return { icon: FileSpreadsheet, label: 'Spreadsheet', color: 'text-emerald-600 bg-emerald-50' };
+      default:
+        return { icon: File, label: 'Document', color: 'text-gray-600 bg-gray-50' };
+    }
+  };
+
+  /**
+   * Estimate token count based on file size (rough approximation)
+   */
+  const estimateTokens = (fileSize: number): string => {
+    // Very rough estimation: ~4 characters per token, ~1 byte per character for text files
+    // For images and other binary formats, tokens will be much lower after OCR
+    const roughChars = fileSize;
+    const estimatedTokens = Math.round(roughChars / 4);
+    
+    if (estimatedTokens > 1000000) {
+      return `~${(estimatedTokens / 1000000).toFixed(1)}M`;
+    } else if (estimatedTokens > 1000) {
+      return `~${(estimatedTokens / 1000).toFixed(1)}k`;
+    } else {
+      return `~${estimatedTokens}`;
+    }
+  };
+
+  /**
    * A helper function to get the current list of files based on the `sourceType`.
    * @returns An array of `FileInfo` objects.
    */
@@ -253,7 +312,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
   };
 
   /**
-   * Renders the list of files with selection controls.
+   * Renders the list of files with selection controls in a compact table format.
    * @param files - The array of files to render.
    * @param title - The title to display above the file list.
    * @returns A JSX element representing the file list.
@@ -266,8 +325,19 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
     return (
       <div className="space-y-4 flex flex-col h-full">
         <div className="flex items-center justify-between flex-shrink-0">
-          <h3 className="text-lg font-medium">{title} ({files.length})</h3>
-          <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-4">
+            <h3 className="text-lg font-semibold text-gray-900">{title}</h3>
+            <span className="px-3 py-1 bg-gray-100 text-gray-700 text-sm font-medium rounded-full">
+              {files.length} files
+            </span>
+            {selectedFiles.length > 0 && (
+              <span className="px-3 py-1 bg-blue-100 text-blue-700 text-sm font-medium rounded-full">
+                {selectedFiles.length} selected
+              </span>
+            )}
+          </div>
+          
+          <div className="flex items-center space-x-3">
             {files.length > 0 && (
               <label className="flex items-center space-x-2 cursor-pointer">
                 <input
@@ -276,7 +346,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                   onChange={(e) => handleSelectAll(files, e.target.checked)}
                   className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
-                <span className="text-sm text-gray-600">Select All</span>
+                <span className="text-sm font-medium text-gray-700">Select All</span>
               </label>
             )}
             <button
@@ -289,51 +359,130 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                 }
               }}
               disabled={isRefreshing}
-              className="px-3 py-1 text-sm bg-gray-100 hover:bg-gray-200 rounded-md transition-colors disabled:opacity-50"
+              className="flex items-center space-x-2 px-3 py-2 text-sm font-medium bg-gray-100 hover:bg-gray-200 text-gray-700 rounded-lg transition-colors disabled:opacity-50"
             >
-              {isRefreshing ? '🔄' : '🔄'} Refresh
+              <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+              <span>Refresh</span>
             </button>
           </div>
         </div>
 
         {files.length === 0 ? (
-          <div className="text-center py-8 text-gray-500 flex-shrink-0">
-            <div className="text-4xl mb-2">📁</div>
+          <div className="text-center py-12 text-gray-500 flex-shrink-0 border-2 border-dashed border-gray-200 rounded-xl">
+            <div className="text-6xl mb-4">📂</div>
             {sourceType === 'local' ? (
               <div>
-                <p className="font-medium">No batch files found</p>
-                <p className="text-sm mt-1">
-                  Place files in the <code className="bg-gray-200 px-1 rounded">files/batch_files/</code> folder and refresh
+                <p className="text-xl font-medium mb-2">No batch files found</p>
+                <p className="text-sm">
+                  Place files in the <code className="bg-gray-200 text-gray-800 px-2 py-1 rounded font-mono">files/batch_files/</code> folder and refresh
                 </p>
               </div>
             ) : (
-              <p>No uploaded files found</p>
+              <div>
+                <p className="text-xl font-medium mb-2">No uploaded files</p>
+                <p className="text-sm">Upload files using the area above to get started</p>
+              </div>
             )}
           </div>
         ) : (
-          <div className="flex-1 overflow-y-auto min-h-0">
-            <div className="space-y-2 pr-2">
+          <div className="flex-1 overflow-y-auto min-h-0 border border-gray-200 rounded-lg">
+            {/* Table Header */}
+            <div className="bg-gray-50 border-b border-gray-200 px-6 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider">
+              <div className="grid grid-cols-12 gap-4 items-center">
+                <div className="col-span-1">Select</div>
+                <div className="col-span-4">File Name</div>
+                <div className="col-span-2">Type</div>
+                <div className="col-span-1">Size</div>
+                <div className="col-span-1">Tokens</div>
+                <div className="col-span-2">Modified</div>
+                <div className="col-span-1">Source</div>
+              </div>
+            </div>
+
+            {/* Table Body */}
+            <div className="divide-y divide-gray-200">
               {files.map((file) => {
                 const isSelected = selectedFiles.some(sf => sf.document_id === file.document_id);
+                const fileTypeInfo = getFileTypeInfo(file.filename);
+                const IconComponent = fileTypeInfo.icon;
+                const estimatedTokens = estimateTokens(file.file_size);
+
                 return (
-                  <div key={file.document_id} className="flex items-center space-x-3 p-3 border rounded-lg hover:bg-gray-50">
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={(e) => handleFileToggle(file, e.target.checked)}
-                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 flex-shrink-0"
-                    />
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium text-gray-900 truncate">{file.filename}</p>
-                      <div className="flex items-center space-x-2 text-sm text-gray-500">
-                        <span>{utils.formatFileSize(file.file_size)}</span>
-                        <span>•</span>
-                        <span>{new Date(file.upload_time).toLocaleDateString()}</span>
-                        {sourceType === 'local' && (
-                          <>
-                            <span>•</span>
-                            <span className="bg-blue-100 text-blue-800 px-2 py-0.5 rounded text-xs">Batch</span>
-                          </>
+                  <div key={file.document_id} className={`px-6 py-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50' : ''}`}>
+                    <div className="grid grid-cols-12 gap-4 items-center text-sm">
+                      {/* Checkbox */}
+                      <div className="col-span-1">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={(e) => handleFileToggle(file, e.target.checked)}
+                          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 focus:ring-offset-0"
+                        />
+                      </div>
+
+                      {/* File Name */}
+                      <div className="col-span-4">
+                        <div className="flex items-center space-x-3">
+                          <IconComponent className="w-5 h-5 text-gray-400 flex-shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <p className="font-medium text-gray-900 truncate" title={file.filename}>
+                              {file.filename}
+                            </p>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* File Type */}
+                      <div className="col-span-2">
+                        <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${fileTypeInfo.color}`}>
+                          {fileTypeInfo.label}
+                        </span>
+                      </div>
+
+                      {/* File Size */}
+                      <div className="col-span-1">
+                        <span className="text-gray-600 font-mono text-xs">
+                          {utils.formatFileSize(file.file_size)}
+                        </span>
+                      </div>
+
+                      {/* Estimated Tokens */}
+                      <div className="col-span-1">
+                        <div className="flex items-center space-x-1">
+                          <Zap className="w-3 h-3 text-amber-500" />
+                          <span className="text-gray-600 font-mono text-xs">
+                            {estimatedTokens}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Modified Date */}
+                      <div className="col-span-2">
+                        <div className="flex items-center space-x-1 text-gray-600">
+                          <Clock className="w-3 h-3" />
+                          <span className="text-xs">
+                            {new Date(file.upload_time).toLocaleDateString('en-US', {
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit'
+                            })}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Source */}
+                      <div className="col-span-1">
+                        {sourceType === 'local' ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
+                            <Database className="w-3 h-3 mr-1" />
+                            Batch
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                            <CheckCircle2 className="w-3 h-3 mr-1" />
+                            Upload
+                          </span>
                         )}
                       </div>
                     </div>
@@ -347,346 +496,426 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
     );
   };
 
-  const currentFiles = getCurrentFiles(); // Memoization could be used here if performance becomes an issue.
+  const currentFiles = getCurrentFiles();
 
   return (
-    <div className="h-full flex flex-col">
-
-      {/* Main Content Area - Two Column Layout */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-4 gap-6 min-h-0">
-        {/* Left Panel - Processing Settings */}
-        <div className="lg:col-span-1 space-y-6">
-          <div className="bg-white rounded-lg border p-6 h-fit">
-            <h3 className="text-lg font-medium mb-4 flex items-center">
-              ⚙️ Processing Settings
+    <div className="h-full flex flex-col space-y-6">
+      {/* Processing Settings - Now as a horizontal bar */}
+      <div className="bg-white rounded-lg border p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-6">
+            <h3 className="text-lg font-semibold text-gray-900 flex items-center">
+              <Zap className="w-5 h-5 mr-2 text-blue-600" />
+              Processing Configuration
             </h3>
             
-            {/* Vector DB Optimization */}
-            <div className="space-y-4">
-              <label className="flex items-start space-x-3">
-                <input
-                  type="checkbox"
-                  checked={processingOptions.auto_optimize}
-                  onChange={(e) => onProcessingOptionsChange({
-                    ...processingOptions,
-                    auto_optimize: e.target.checked
-                  })}
-                  className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 mt-0.5"
-                />
-                <div>
-                  <span className="font-medium text-gray-900">🎯 Vector DB Optimization</span>
-                  <p className="text-sm text-gray-600 mt-1">
-                    Automatically restructure documents for better vector database performance and semantic search
-                  </p>
-                </div>
-              </label>
-            </div>
+            {/* Vector DB Optimization Toggle */}
+            <label className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                checked={processingOptions.auto_optimize}
+                onChange={(e) => onProcessingOptionsChange({
+                  ...processingOptions,
+                  auto_optimize: e.target.checked
+                })}
+                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              />
+              <span className="text-sm font-medium text-gray-700">Vector DB Optimization</span>
+            </label>
 
-            {/* Quality Thresholds */}
-            <div className="mt-6 pt-6 border-t border-gray-200">
-              <div className="flex items-center justify-between mb-4">
-                <h4 className="font-medium text-gray-900">📊 Quality Thresholds</h4>
-                <span className="text-xs text-gray-500">All must be met for RAG readiness</span>
-              </div>
-
-              <div className="space-y-4">
-                {/* Conversion Quality */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-sm font-medium text-gray-700">Conversion Quality</label>
-                    <span className="text-sm text-gray-600">{processingOptions.quality_thresholds.conversion_threshold}/100</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="0"
-                    max="100"
-                    value={processingOptions.quality_thresholds.conversion_threshold}
-                    onChange={(e) => onProcessingOptionsChange({
-                      ...processingOptions,
-                      quality_thresholds: {
-                        ...processingOptions.quality_thresholds,
-                        conversion_threshold: parseInt(e.target.value)
-                      }
-                    })}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-
-                {/* Clarity */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-sm font-medium text-gray-700">Clarity</label>
-                    <span className="text-sm text-gray-600">{processingOptions.quality_thresholds.clarity_threshold}/10</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    value={processingOptions.quality_thresholds.clarity_threshold}
-                    onChange={(e) => onProcessingOptionsChange({
-                      ...processingOptions,
-                      quality_thresholds: {
-                        ...processingOptions.quality_thresholds,
-                        clarity_threshold: parseInt(e.target.value)
-                      }
-                    })}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-
-                {/* Completeness */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-sm font-medium text-gray-700">Completeness</label>
-                    <span className="text-sm text-gray-600">{processingOptions.quality_thresholds.completeness_threshold}/10</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    value={processingOptions.quality_thresholds.completeness_threshold}
-                    onChange={(e) => onProcessingOptionsChange({
-                      ...processingOptions,
-                      quality_thresholds: {
-                        ...processingOptions.quality_thresholds,
-                        completeness_threshold: parseInt(e.target.value)
-                      }
-                    })}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-
-                {/* Relevance */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-sm font-medium text-gray-700">Relevance</label>
-                    <span className="text-sm text-gray-600">{processingOptions.quality_thresholds.relevance_threshold}/10</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    value={processingOptions.quality_thresholds.relevance_threshold}
-                    onChange={(e) => onProcessingOptionsChange({
-                      ...processingOptions,
-                      quality_thresholds: {
-                        ...processingOptions.quality_thresholds,
-                        relevance_threshold: parseInt(e.target.value)
-                      }
-                    })}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-
-                {/* Markdown Quality */}
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="text-sm font-medium text-gray-700">Markdown Quality</label>
-                    <span className="text-sm text-gray-600">{processingOptions.quality_thresholds.markdown_threshold}/10</span>
-                  </div>
-                  <input
-                    type="range"
-                    min="1"
-                    max="10"
-                    value={processingOptions.quality_thresholds.markdown_threshold}
-                    onChange={(e) => onProcessingOptionsChange({
-                      ...processingOptions,
-                      quality_thresholds: {
-                        ...processingOptions.quality_thresholds,
-                        markdown_threshold: parseInt(e.target.value)
-                      }
-                    })}
-                    className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Advanced Settings Toggle */}
-            <div className="mt-6 pt-6 border-t border-gray-200">
-              <button
-                type="button"
-                onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
-                className="flex items-center justify-between w-full text-left"
+            {/* Quality Threshold Quick Setting */}
+            <div className="flex items-center space-x-2">
+              <span className="text-sm font-medium text-gray-700">Quality Threshold:</span>
+              <select
+                value={processingOptions.quality_thresholds.conversion_threshold}
+                onChange={(e) => onProcessingOptionsChange({
+                  ...processingOptions,
+                  quality_thresholds: {
+                    ...processingOptions.quality_thresholds,
+                    conversion_threshold: parseInt(e.target.value)
+                  }
+                })}
+                className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
               >
-                <span className="font-medium text-gray-900">🔧 Advanced Settings</span>
-                <svg
-                  className={`w-4 h-4 transition-transform ${showAdvancedSettings ? 'rotate-180' : ''}`}
-                  fill="none"
-                  stroke="currentColor"
-                  viewBox="0 0 24 24"
-                >
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </button>
+                <option value={50}>Lenient (50%)</option>
+                <option value={70}>Standard (70%)</option>
+                <option value={85}>Strict (85%)</option>
+                <option value={95}>Very Strict (95%)</option>
+              </select>
+            </div>
 
-              {showAdvancedSettings && (
-                <div className="mt-4 space-y-4">
-                  {/* OCR Language */}
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      OCR Language
-                    </label>
-                    <select
-                      value={processingOptions.ocr_settings.language}
+            {/* OCR Language Quick Setting */}
+            <div className="flex items-center space-x-2">
+              <span className="text-sm font-medium text-gray-700">OCR Language:</span>
+              <select
+                value={processingOptions.ocr_settings.language}
+                onChange={(e) => onProcessingOptionsChange({
+                  ...processingOptions,
+                  ocr_settings: {
+                    ...processingOptions.ocr_settings,
+                    language: e.target.value
+                  }
+                })}
+                className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="en">English</option>
+                <option value="eng+spa">English + Spanish</option>
+                <option value="fra">French</option>
+                <option value="deu">German</option>
+                <option value="chi_sim">Chinese (Simplified)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Advanced Settings Toggle */}
+          <button
+            type="button"
+            onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
+            className="flex items-center space-x-2 px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors"
+          >
+            <span>Advanced Settings</span>
+            <svg
+              className={`w-4 h-4 transition-transform ${showAdvancedSettings ? 'rotate-180' : ''}`}
+              fill="none"
+              stroke="currentColor"
+              viewBox="0 0 24 24"
+            >
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Advanced Settings Panel */}
+        {showAdvancedSettings && (
+          <div className="mt-4 pt-4 border-t border-gray-200">
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+              {/* Detailed Quality Thresholds */}
+              <div className="space-y-3">
+                <h4 className="font-medium text-gray-900">Quality Thresholds</h4>
+                {Object.entries({
+                  'Clarity': 'clarity_threshold',
+                  'Completeness': 'completeness_threshold',
+                  'Relevance': 'relevance_threshold',
+                  'Markdown': 'markdown_threshold'
+                }).map(([label, key]) => (
+                  <div key={key} className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-gray-700">{label}</label>
+                    <div className="flex items-center space-x-2">
+                      <input
+                        type="range"
+                        min="1"
+                        max="10"
+                        value={processingOptions.quality_thresholds[key as keyof typeof processingOptions.quality_thresholds]}
+                        onChange={(e) => onProcessingOptionsChange({
+                          ...processingOptions,
+                          quality_thresholds: {
+                            ...processingOptions.quality_thresholds,
+                            [key]: parseInt(e.target.value)
+                          }
+                        })}
+                        className="w-16 h-1"
+                      />
+                      <span className="text-xs text-gray-600 w-6">
+                        {processingOptions.quality_thresholds[key as keyof typeof processingOptions.quality_thresholds]}/10
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Processing Settings */}
+              <div className="space-y-3">
+                <h4 className="font-medium text-gray-900">Processing</h4>
+                <div className="space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-700">Max Retries:</span>
+                    <input
+                      type="number"
+                      min="1"
+                      max="5"
+                      value={processingOptions.processing_settings.max_retries}
+                      onChange={(e) => onProcessingOptionsChange({
+                        ...processingOptions,
+                        processing_settings: {
+                          ...processingOptions.processing_settings,
+                          max_retries: parseInt(e.target.value)
+                        }
+                      })}
+                      className="w-12 px-1 py-0.5 border border-gray-300 rounded text-xs"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-700">Chunk Size:</span>
+                    <input
+                      type="number"
+                      min="500"
+                      max="2000"
+                      step="100"
+                      value={processingOptions.processing_settings.chunk_size}
+                      onChange={(e) => onProcessingOptionsChange({
+                        ...processingOptions,
+                        processing_settings: {
+                          ...processingOptions.processing_settings,
+                          chunk_size: parseInt(e.target.value)
+                        }
+                      })}
+                      className="w-16 px-1 py-0.5 border border-gray-300 rounded text-xs"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-700">Chunk Overlap:</span>
+                    <input
+                      type="number"
+                      min="50"
+                      max="500"
+                      step="50"
+                      value={processingOptions.processing_settings.chunk_overlap}
+                      onChange={(e) => onProcessingOptionsChange({
+                        ...processingOptions,
+                        processing_settings: {
+                          ...processingOptions.processing_settings,
+                          chunk_overlap: parseInt(e.target.value)
+                        }
+                      })}
+                      className="w-16 px-1 py-0.5 border border-gray-300 rounded text-xs"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* OCR Settings */}
+              <div className="space-y-3">
+                <h4 className="font-medium text-gray-900">OCR Configuration</h4>
+                <div className="space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-700">Confidence:</span>
+                    <input
+                      type="number"
+                      min="0.1"
+                      max="1.0"
+                      step="0.1"
+                      value={processingOptions.ocr_settings.confidence_threshold}
                       onChange={(e) => onProcessingOptionsChange({
                         ...processingOptions,
                         ocr_settings: {
                           ...processingOptions.ocr_settings,
-                          language: e.target.value
+                          confidence_threshold: parseFloat(e.target.value)
                         }
                       })}
-                      className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 text-sm"
-                    >
-                      <option value="en">English</option>
-                      <option value="eng+spa">English + Spanish</option>
-                      <option value="fra">French</option>
-                      <option value="deu">German</option>
-                      <option value="chi_sim">Chinese (Simplified)</option>
-                    </select>
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* Configuration Tips */}
-            <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg">
-              <h5 className="font-medium text-blue-900 mb-2">💡 Configuration Tips</h5>
-              <ul className="text-xs text-blue-800 space-y-1">
-                <li>• Higher thresholds ensure better quality but may reject more documents</li>
-                <li>• Vector optimization restructures content for semantic search</li>
-                <li>• Adjust thresholds based on your quality requirements</li>
-              </ul>
-            </div>
-          </div>
-        </div>
-
-        {/* Right Panel - File Selection */}
-        <div className="lg:col-span-3 flex flex-col min-h-0">
-          <div className="bg-white rounded-lg border p-6 flex-1 flex flex-col min-h-0">
-            {/* Source Type Switcher */}
-            <div className="flex space-x-2 bg-gray-100 p-1 rounded-lg mb-6 flex-shrink-0">
-              <button
-                type="button"
-                onClick={() => onSourceTypeChange('local')}
-                className={`flex-1 px-4 py-2 rounded-md transition-colors ${
-                  sourceType === 'local'
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                📂 Local Documents
-              </button>
-              <button
-                type="button"
-                onClick={() => onSourceTypeChange('upload')}
-                className={`flex-1 px-4 py-2 rounded-md transition-colors ${
-                  sourceType === 'upload'
-                    ? 'bg-white text-gray-900 shadow-sm'
-                    : 'text-gray-600 hover:text-gray-900'
-                }`}
-              >
-                ⬆️ Upload Documents
-              </button>
-            </div>
-
-            {/* Content based on source type */}
-            <div className="flex-1 flex flex-col min-h-0">
-              {sourceType === 'local' ? (
-                <div className="flex-1 flex flex-col min-h-0">
-                  <div className="mb-4 p-4 bg-blue-50 border border-blue-200 rounded-lg flex-shrink-0">
-                    <p className="text-sm text-blue-800">
-                      <strong>Local Files:</strong> Place documents in the <code className="bg-blue-100 px-1 rounded">files/batch_files/</code> folder and click refresh.
-                    </p>
-                  </div>
-                  <div className="flex-1 min-h-0">
-                    {renderFileList(batchFiles, 'Local Files')}
-                  </div>
-                </div>
-              ) : (
-                <div className="flex-1 flex flex-col space-y-6 min-h-0">
-                  {/* Upload Area */}
-                  <div
-                    className={`relative border-2 border-dashed rounded-xl p-8 text-center transition-colors flex-shrink-0 ${
-                      dragActive
-                        ? 'border-blue-400 bg-blue-50'
-                        : 'border-gray-300 hover:border-gray-400'
-                    }`}
-                    onDragEnter={handleDrag}
-                    onDragLeave={handleDrag}
-                    onDragOver={handleDrag}
-                    onDrop={handleDrop}
-                  >
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      multiple
-                      onChange={handleFileSelect}
-                      accept={supportedFormats.join(',')}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-                      disabled={isUploading}
+                      className="w-12 px-1 py-0.5 border border-gray-300 rounded text-xs"
                     />
-                    
-                    <div className="space-y-4">
-                      <div className="text-6xl">📄</div>
-                      <div>
-                        <p className="text-lg font-medium text-gray-700">
-                          {isUploading ? 'Uploading...' : 'Drop files here or click to browse'}
-                        </p>
-                        <p className="text-sm text-gray-500 mt-1">
-                          Supported: {supportedFormats.join(', ')} • Max: {utils.formatFileSize(maxFileSize)}
-                        </p>
-                      </div>
-                    </div>
-
-                    {isUploading && (
-                      <div className="absolute inset-0 bg-white bg-opacity-75 flex items-center justify-center">
-                        <div className="flex items-center space-x-2">
-                          <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                          <span className="text-blue-600">Uploading files...</span>
-                        </div>
-                      </div>
-                    )}
                   </div>
+                  <label className="flex items-center space-x-2">
+                    <input
+                      type="checkbox"
+                      checked={processingOptions.ocr_settings.enabled}
+                      onChange={(e) => onProcessingOptionsChange({
+                        ...processingOptions,
+                        ocr_settings: {
+                          ...processingOptions.ocr_settings,
+                          enabled: e.target.checked
+                        }
+                      })}
+                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                    />
+                    <span className="text-gray-700">Enable OCR</span>
+                  </label>
+                </div>
+              </div>
 
-                  {/* Uploaded Files List - Now with better height management */}
-                  <div className="flex-1 min-h-0">
-                    {renderFileList(uploadedFiles, 'Uploaded Files')}
+              {/* System Info */}
+              <div className="space-y-3">
+                <h4 className="font-medium text-gray-900">System Limits</h4>
+                <div className="space-y-1 text-xs text-gray-600">
+                  <div className="flex items-center justify-between">
+                    <span>Max File Size:</span>
+                    <span className="font-mono">{utils.formatFileSize(maxFileSize)}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Supported Formats:</span>
+                    <span className="font-mono">{supportedFormats.length} types</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Available Files:</span>
+                    <span className="font-mono">{currentFiles.length} files</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span>Selected:</span>
+                    <span className="font-mono text-blue-600">{selectedFiles.length} files</span>
                   </div>
                 </div>
-              )}
-            </div>
-
-            {/* Process Button */}
-            <div className="border-t pt-6 mt-6 flex-shrink-0">
-              <div className="flex items-center justify-between">
-                <div>
-                  {selectedFiles.length > 0 && (
-                    <p className="text-sm text-gray-600">
-                      {selectedFiles.length} file(s) selected for processing
-                      {sourceType === 'local' && (
-                        <span className="ml-2 text-blue-600">(from batch files)</span>
-                      )}
-                    </p>
-                  )}
-                </div>
-                <button
-                  type="button"
-                  onClick={handleProcess}
-                  disabled={selectedFiles.length === 0 || isProcessing}
-                  className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-                >
-                  {isProcessing ? (
-                    <span className="flex items-center space-x-2">
-                      <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                      <span>Processing...</span>
-                    </span>
-                  ) : (
-                    `🚀 Process ${selectedFiles.length} File(s)`
-                  )}
-                </button>
               </div>
             </div>
+          </div>
+        )}
+      </div>
+
+      {/* Source Type Switcher - Now more prominent */}
+      <div className="bg-white rounded-lg border p-1">
+        <div className="grid grid-cols-2 gap-1">
+          <button
+            type="button"
+            onClick={() => onSourceTypeChange('local')}
+            className={`flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
+              sourceType === 'local'
+                ? 'bg-blue-600 text-white shadow-md'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+            }`}
+          >
+            <Database className="w-5 h-5" />
+            <span>Local Batch Files</span>
+            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+              sourceType === 'local' 
+                ? 'bg-white bg-opacity-20 text-white' 
+                : 'bg-gray-200 text-gray-600'
+            }`}>
+              {batchFiles.length}
+            </span>
+          </button>
+          <button
+            type="button"
+            onClick={() => onSourceTypeChange('upload')}
+            className={`flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
+              sourceType === 'upload'
+                ? 'bg-blue-600 text-white shadow-md'
+                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+            }`}
+          >
+            <CheckCircle2 className="w-5 h-5" />
+            <span>Uploaded Files</span>
+            <span className={`px-2 py-1 rounded-full text-xs font-medium ${
+              sourceType === 'upload' 
+                ? 'bg-white bg-opacity-20 text-white' 
+                : 'bg-gray-200 text-gray-600'
+            }`}>
+              {uploadedFiles.length}
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* Main Content Area - Full width file browser */}
+      <div className="flex-1 bg-white rounded-lg border flex flex-col min-h-0">
+        {sourceType === 'upload' && (
+          /* Upload Area - Compact when files exist */
+          <div className={`border-b p-6 ${uploadedFiles.length > 0 ? '' : 'flex-1'}`}>
+            <div
+              className={`relative border-2 border-dashed rounded-lg transition-all ${
+                uploadedFiles.length > 0 ? 'p-4' : 'p-12'
+              } text-center ${
+                dragActive
+                  ? 'border-blue-400 bg-blue-50'
+                  : 'border-gray-300 hover:border-gray-400'
+              }`}
+              onDragEnter={handleDrag}
+              onDragLeave={handleDrag}
+              onDragOver={handleDrag}
+              onDrop={handleDrop}
+            >
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                onChange={handleFileSelect}
+                accept={supportedFormats.join(',')}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+                disabled={isUploading}
+              />
+              
+              <div className={`space-y-2 ${uploadedFiles.length > 0 ? 'text-sm' : ''}`}>
+                <div className={uploadedFiles.length > 0 ? 'text-2xl' : 'text-6xl'}>📄</div>
+                <div>
+                  <p className={`font-medium text-gray-700 ${uploadedFiles.length > 0 ? 'text-sm' : 'text-lg'}`}>
+                    {isUploading ? 'Uploading files...' : uploadedFiles.length > 0 ? 'Drop more files or click to browse' : 'Drop files here or click to browse'}
+                  </p>
+                  <p className={`text-gray-500 mt-1 ${uploadedFiles.length > 0 ? 'text-xs' : 'text-sm'}`}>
+                    {supportedFormats.join(', ')} • Max: {utils.formatFileSize(maxFileSize)}
+                  </p>
+                </div>
+              </div>
+
+              {isUploading && (
+                <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center rounded-lg">
+                  <div className="flex items-center space-x-3">
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
+                    <span className="text-blue-600 font-medium">Uploading files...</span>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* File List Area */}
+        <div className="flex-1 p-6 min-h-0">
+          {sourceType === 'local' ? (
+            <div className="h-full">
+              {renderFileList(batchFiles, 'Local Batch Files')}
+            </div>
+          ) : (
+            <div className="h-full">
+              {renderFileList(uploadedFiles, 'Uploaded Files')}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Action Bar - Fixed at bottom */}
+      <div className="bg-white rounded-lg border p-4">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center space-x-6">
+            <div className="text-sm text-gray-600">
+              <span className="font-medium">{selectedFiles.length}</span> of <span className="font-medium">{currentFiles.length}</span> files selected
+            </div>
+            
+            {selectedFiles.length > 0 && (
+              <div className="flex items-center space-x-4 text-sm text-gray-600">
+                <div className="flex items-center space-x-1">
+                  <span>Total size:</span>
+                  <span className="font-mono font-medium">
+                    {utils.formatFileSize(
+                      selectedFiles.reduce((sum, file) => sum + file.file_size, 0)
+                    )}
+                  </span>
+                </div>
+                <div className="flex items-center space-x-1">
+                  <Zap className="w-3 h-3 text-amber-500" />
+                  <span>Est. tokens:</span>
+                  <span className="font-mono font-medium text-amber-600">
+                    {estimateTokens(
+                      selectedFiles.reduce((sum, file) => sum + file.file_size, 0)
+                    )}
+                  </span>
+                </div>
+              </div>
+            )}
+          </div>
+
+          <div className="flex items-center space-x-3">
+            {sourceType === 'local' && selectedFiles.length > 0 && (
+              <span className="text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded-full font-medium">
+                Processing from batch files
+              </span>
+            )}
+            
+            <button
+              type="button"
+              onClick={handleProcess}
+              disabled={selectedFiles.length === 0 || isProcessing}
+              className="flex items-center space-x-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-colors"
+            >
+              {isProcessing ? (
+                <>
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  <span>Processing {selectedFiles.length} files...</span>
+                </>
+              ) : (
+                <>
+                  <Zap className="w-4 h-4" />
+                  <span>Process {selectedFiles.length} File{selectedFiles.length !== 1 ? 's' : ''}</span>
+                </>
+              )}
+            </button>
           </div>
         </div>
       </div>
