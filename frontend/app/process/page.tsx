@@ -26,6 +26,7 @@ import {
 } from 'lucide-react'
 
 type AppStage = 'upload' | 'review' | 'download'
+type ProcessingPanelState = 'hidden' | 'minimized' | 'normal' | 'fullscreen'
 
 interface ProcessingState {
   currentStage: AppStage
@@ -82,8 +83,9 @@ export default function ProcessingPage() {
   })
   const [isLoadingConfig, setIsLoadingConfig] = useState(true)
 
-  // Processing panel state
+  // Processing panel state - NEW
   const [panelVisible, setPanelVisible] = useState(false)
+  const [processingPanelState, setProcessingPanelState] = useState<ProcessingPanelState>('hidden')
 
   // Progress bar configuration
   const progressSteps: ProgressStep[] = [
@@ -228,6 +230,11 @@ export default function ProcessingPage() {
     setState(prev => ({ ...prev, processingOptions: options }))
   }
 
+  // NEW: Handle processing panel state changes
+  const handleProcessingPanelStateChange = (newState: ProcessingPanelState) => {
+    setProcessingPanelState(newState)
+  }
+
   // Results management
   const handleResultsUpdate = (updatedResults: ProcessingResult[]) => {
     setState(prev => ({
@@ -266,6 +273,7 @@ export default function ProcessingPage() {
       resetCounter: prev.resetCounter + 1
     }))
     setPanelVisible(false)
+    setProcessingPanelState('hidden')
     toast.success('System reset successfully')
   }
 
@@ -300,6 +308,7 @@ export default function ProcessingPage() {
               onProcessingOptionsChange={handleProcessingOptionsChange}
               supportedFormats={config.supportedFormats}
               maxFileSize={config.maxFileSize}
+              processingPanelState={processingPanelState} // NEW: Pass processing panel state
             />
           )}
 
@@ -318,6 +327,7 @@ export default function ProcessingPage() {
               }}
               isProcessingComplete={state.processingComplete}
               isProcessing={state.isProcessing}
+              processingPanelState={processingPanelState} // NEW: Pass processing panel state
             />
           )}
 
@@ -325,6 +335,7 @@ export default function ProcessingPage() {
             <DownloadStage
               processingResults={state.processingResults}
               onRestart={handleReset}
+              processingPanelState={processingPanelState} // NEW: Pass processing panel state
             />
           )}
         </div>
@@ -343,6 +354,7 @@ export default function ProcessingPage() {
           setState(prev => ({ ...prev, isProcessing: false }))
         }}
         resetTrigger={state.resetCounter}
+        onPanelStateChange={handleProcessingPanelStateChange} // NEW: Handle panel state changes
       />
     </div>
   )

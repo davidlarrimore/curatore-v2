@@ -8,11 +8,13 @@ import { fileApi, utils } from '@/lib/api';
 interface DownloadStageProps {
   processingResults: ProcessingResult[];
   onRestart: () => void;
+  processingPanelState?: 'hidden' | 'minimized' | 'normal' | 'fullscreen';
 }
 
 export function DownloadStage({
   processingResults,
-  onRestart
+  onRestart,
+  processingPanelState = 'hidden'
 }: DownloadStageProps) {
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [isDownloading, setIsDownloading] = useState<string>('');
@@ -175,7 +177,7 @@ export function DownloadStage({
   const someSelected = selectedFiles.size > 0;
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-24">
       {/* Header */}
       <div className="text-center">
         <h2 className="text-2xl font-bold text-gray-900 mb-2">⬇️ Download Results</h2>
@@ -362,29 +364,37 @@ export function DownloadStage({
         </div>
       </div>
 
-      {/* Action Buttons */}
-      <div className="flex justify-center space-x-4 pt-6 border-t">
-        <button
-          type="button"
-          onClick={onRestart}
-          className="px-6 py-3 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium"
-        >
-          🔄 Start Over
-        </button>
-        
-        <button
-          type="button"
-          onClick={() => window.location.reload()}
-          className="px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 font-medium"
-        >
-          🏠 New Session
-        </button>
-      </div>
-
       {/* Help Text */}
       <div className="text-center text-sm text-gray-500">
         <p>💡 Tip: RAG-ready files have passed all quality thresholds and are optimized for vector databases</p>
       </div>
+
+      {/* Fixed Action Buttons - Bottom Right with Processing Panel Awareness */}
+      {processingPanelState !== 'fullscreen' && (
+        <div className={`fixed right-6 z-40 flex flex-col space-y-3 transition-all duration-300 ${
+          processingPanelState === 'normal' 
+            ? 'bottom-[384px]'  // Above normal processing panel: 320px panel + 52px (status + gap) + 12px margin = 384px
+            : processingPanelState === 'minimized'
+            ? 'bottom-[112px]'  // Above minimized panel: 48px panel + 52px (status + gap) + 12px margin = 112px
+            : 'bottom-16'       // Above status bar only: 52px (status + gap) + 12px margin = 64px (bottom-16)
+        }`}>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="px-6 py-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 font-medium text-sm transition-all shadow-lg hover:shadow-xl hover:-translate-y-1"
+          >
+            🏠 New Session
+          </button>
+          
+          <button
+            type="button"
+            onClick={onRestart}
+            className="px-6 py-3 bg-gray-600 text-white rounded-full hover:bg-gray-700 font-medium text-sm transition-all shadow-lg hover:shadow-xl hover:-translate-y-1"
+          >
+            🔄 Start Over
+          </button>
+        </div>
+      )}
     </div>
   );
 }

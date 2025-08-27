@@ -11,6 +11,8 @@ interface ProcessingLog {
   message: string;
 }
 
+type PanelState = 'minimized' | 'normal' | 'fullscreen';
+
 interface ProcessingPanelProps {
   selectedFiles: FileInfo[];
   processingOptions: ProcessingOptions;
@@ -20,9 +22,8 @@ interface ProcessingPanelProps {
   isVisible: boolean;
   onClose: () => void;
   resetTrigger?: number;
+  onPanelStateChange?: (state: PanelState | 'hidden') => void; // NEW: Callback for state changes
 }
-
-type PanelState = 'minimized' | 'normal' | 'fullscreen';
 
 export function ProcessingPanel({
   selectedFiles,
@@ -32,7 +33,8 @@ export function ProcessingPanel({
   onError,
   isVisible,
   onClose,
-  resetTrigger = 0
+  resetTrigger = 0,
+  onPanelStateChange // NEW: Receive callback
 }: ProcessingPanelProps) {
   const [panelState, setPanelState] = useState<PanelState>('minimized');
   const [isProcessing, setIsProcessing] = useState(false);
@@ -42,6 +44,17 @@ export function ProcessingPanel({
   const [logs, setLogs] = useState<ProcessingLog[]>([]);
   const [processingStartTime, setProcessingStartTime] = useState<number>(0);
   const [processingComplete, setProcessingComplete] = useState(false);
+
+  // NEW: Notify parent of panel state changes
+  useEffect(() => {
+    if (onPanelStateChange) {
+      if (isVisible) {
+        onPanelStateChange(panelState);
+      } else {
+        onPanelStateChange('hidden');
+      }
+    }
+  }, [panelState, isVisible, onPanelStateChange]);
 
   // Reset internal state when resetTrigger changes
   useEffect(() => {
@@ -211,7 +224,7 @@ export function ProcessingPanel({
 
   // Panel positioning and size with proper z-index and sidebar awareness
   const getPanelClasses = () => {
-    // Base classes with lower z-index and sidebar margin
+    // Base classes with proper z-index - use z-20 which should exist in Tailwind
     const baseClasses = "fixed bg-gray-900 border-t border-gray-700 shadow-2xl transition-all duration-300 ease-in-out z-20";
     
     // Use CSS custom properties for sidebar width awareness
@@ -226,7 +239,7 @@ export function ProcessingPanel({
           className: `${baseClasses} h-12`,
           style: { 
             ...sidebarStyle,
-            bottom: '2.5rem' // 40px above status bar
+            bottom: '52px' // Above the 40px status bar + 12px gap (more clearance)
           }
         };
       case 'fullscreen':
@@ -235,23 +248,24 @@ export function ProcessingPanel({
           style: { 
             ...sidebarStyle,
             top: '4rem', // Below top navigation
-            bottom: '2.5rem' // Above status bar
+            bottom: '52px' // Above the 40px status bar + 12px gap
           }
         };
       case 'normal':
       default:
         return {
-          className: `${baseClasses} h-80`,
+          className: `${baseClasses}`,
           style: { 
             ...sidebarStyle,
-            bottom: '2.5rem' // 40px above status bar
+            height: '320px', // Fixed height instead of h-80 class
+            bottom: '52px' // Above the 40px status bar + 12px gap
           }
         };
     }
   };
 
   return (
-    <div className={getPanelClasses()}>
+    <div className={getPanelClasses().className} style={getPanelClasses().style}>
       {/* Header - Dark theme to match status bar but darker */}
       <div 
         className="flex items-center justify-between p-3 border-b border-gray-600 bg-gray-800 cursor-pointer"
@@ -363,14 +377,14 @@ export function ProcessingPanel({
 
       {/* Content (hidden when minimized) */}
       {panelState !== 'minimized' && (
-        <div className={`flex-1 overflow-hidden ${
+        <div className={`${
           panelState === 'fullscreen' 
-            ? 'h-[calc(100vh-8rem)]' // Account for header + status bar space
-            : 'h-[calc(20rem-3rem)]' // Normal mode height minus header
-        }`}>
+            ? 'h-[calc(100vh-7rem)]' // Fullscreen: viewport - top nav (4rem) - header (3rem)
+            : 'h-[317px]' // Normal: 320px panel - 3px for header
+        } overflow-hidden`}>
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 p-4 h-full">
             {/* Progress and Stats */}
-            <div className="space-y-4 overflow-y-auto">
+            <div className="flex flex-col space-y-4 h-full">
               {/* Progress Bar */}
               <div className="flex-shrink-0">
                 <div className="flex items-center justify-between mb-2">
@@ -413,9 +427,9 @@ export function ProcessingPanel({
 
               {/* Results Preview */}
               {results.length > 0 && (
-                <div className="border border-gray-600 rounded-lg flex flex-col min-h-0 flex-1 bg-gray-800">
+                <div className="border border-gray-600 rounded-lg flex flex-col bg-gray-800 flex-1 min-h-0">
                   <h4 className="font-medium p-3 border-b border-gray-600 bg-gray-700 flex-shrink-0 text-gray-200">Recent Results</h4>
-                  <div className="overflow-y-auto flex-1">
+                  <div className="overflow-y-auto flex-1 min-h-0">
                     {results.slice(-3).map((result) => (
                       <div key={result.document_id} className="flex items-center justify-between p-2 border-b border-gray-600 last:border-b-0">
                         <div className="flex items-center space-x-2">
@@ -436,7 +450,7 @@ export function ProcessingPanel({
             <div className={`border border-gray-600 rounded-lg flex flex-col bg-gray-900 ${
               panelState === 'fullscreen' 
                 ? 'h-full' 
-                : 'h-64'
+                : 'h-64'  // Fixed height for normal mode - roughly 256px
             }`}>
               <div className="flex items-center justify-between p-3 border-b border-gray-600 bg-gray-800 flex-shrink-0">
                 <h4 className="font-medium text-gray-200">Processing Log</h4>
@@ -465,11 +479,6 @@ export function ProcessingPanel({
                     style={{ 
                       scrollbarWidth: 'thin', 
                       scrollbarColor: '#22c55e #1f2937'
-                    }}
-                    onWheel={(e) => {
-                      if (panelState === 'fullscreen') {
-                        e.stopPropagation();
-                      }
                     }}
                   >
                     {logs.map((log, index) => (

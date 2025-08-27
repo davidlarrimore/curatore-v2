@@ -14,6 +14,7 @@ interface ReviewStageProps {
   isProcessingComplete: boolean;
   isProcessing: boolean;
   selectedFiles: any[];
+  processingPanelState?: 'hidden' | 'minimized' | 'normal' | 'fullscreen';
 }
 
 type TabType = 'quality' | 'editor';
@@ -25,7 +26,8 @@ export function ReviewStage({
   qualityThresholds,
   isProcessingComplete,
   isProcessing,
-  selectedFiles
+  selectedFiles,
+  processingPanelState = 'hidden'
 }: ReviewStageProps) {
   const [selectedResult, setSelectedResult] = useState<ProcessingResult | null>(null);
   const [activeTab, setActiveTab] = useState<TabType>('quality');
@@ -188,7 +190,7 @@ export function ReviewStage({
   // Show waiting state only if no results are available yet
   if (processingResults.length === 0 && !isProcessingComplete) {
     return (
-      <div className="space-y-6">
+      <div className="space-y-6 pb-24">
         {/* Header */}
         <div className="text-center">
           <h2 className="text-2xl font-bold text-gray-900 mb-2">📊 Review Results</h2>
@@ -240,7 +242,7 @@ export function ReviewStage({
 
   // Show results interface when we have at least one result
   return (
-    <div className="space-y-6">
+    <div className="space-y-6 pb-24">
       {/* Streamlined Header */}
       <div className="text-center">
         <h2 className="text-2xl font-bold text-gray-900 mb-2">📊 Review Results</h2>
@@ -629,30 +631,36 @@ export function ReviewStage({
         </div>
       </div>
 
-      {/* Complete Review Button */}
-      <div className="flex justify-center pt-6 border-t">
-        <button
-          type="button"
-          onClick={onComplete}
-          disabled={isProcessing}
-          className={`px-8 py-3 rounded-lg font-medium text-lg transition-colors ${
-            isProcessing
-              ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-              : 'bg-green-600 text-white hover:bg-green-700'
-          }`}
-        >
-          {isProcessing ? (
-            <>
+      {/* Fixed Action Button - Bottom Right with Processing Panel Awareness */}
+      {processingPanelState !== 'fullscreen' && (
+        <div className={`fixed right-6 z-40 transition-all duration-300 ${
+          processingPanelState === 'normal' 
+            ? 'bottom-[384px]'  // Above normal processing panel: 320px panel + 52px (status + gap) + 12px margin = 384px
+            : processingPanelState === 'minimized'
+            ? 'bottom-[112px]'  // Above minimized panel: 48px panel + 52px (status + gap) + 12px margin = 112px
+            : 'bottom-16'       // Above status bar only: 52px (status + gap) + 12px margin = 64px (bottom-16)
+        }`}>
+          <button
+            type="button"
+            onClick={onComplete}
+            disabled={isProcessing}
+            className={`px-6 py-3 rounded-full font-medium text-sm transition-all shadow-lg hover:shadow-xl ${
+              isProcessing
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                : 'bg-green-600 text-white hover:bg-green-700 hover:-translate-y-1'
+            }`}
+          >
+            {isProcessing ? (
               <span className="flex items-center space-x-2">
-                <div className="animate-spin rounded-full h-5 w-5 border-b-2 border-gray-400"></div>
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400"></div>
                 <span>Processing {selectedFiles.length - processingResults.length} more...</span>
               </span>
-            </>
-          ) : (
-            '✅ Finish Review'
-          )}
-        </button>
-      </div>
+            ) : (
+              '✅ Finish Review'
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

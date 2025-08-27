@@ -40,6 +40,8 @@ interface UploadSelectStageProps {
   onProcessingOptionsChange: (options: ProcessingOptions) => void;
   /** A boolean indicating if a processing job is currently in progress. */
   isProcessing: boolean;
+  /** Processing panel state for button positioning */
+  processingPanelState?: 'hidden' | 'minimized' | 'normal' | 'fullscreen';
 }
 
 /**
@@ -57,7 +59,8 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
   maxFileSize,
   processingOptions,
   onProcessingOptionsChange,
-  isProcessing
+  isProcessing,
+  processingPanelState = 'hidden'
 }) => {
   // State for files fetched from the server's 'uploads' directory.
   const [uploadedFiles, setUploadedFiles] = useState<FileInfo[]>([]);
@@ -499,7 +502,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
   const currentFiles = getCurrentFiles();
 
   return (
-    <div className="h-full flex flex-col space-y-6">
+    <div className="h-full flex flex-col space-y-6 pb-24">
       {/* Processing Settings - Now as a horizontal bar */}
       <div className="bg-white rounded-lg border p-4">
         <div className="flex items-center justify-between">
@@ -860,65 +863,39 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
         </div>
       </div>
 
-      {/* Action Bar - Fixed at bottom */}
-      <div className="bg-white rounded-lg border p-4">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center space-x-6">
-            <div className="text-sm text-gray-600">
-              <span className="font-medium">{selectedFiles.length}</span> of <span className="font-medium">{currentFiles.length}</span> files selected
-            </div>
-            
-            {selectedFiles.length > 0 && (
-              <div className="flex items-center space-x-4 text-sm text-gray-600">
-                <div className="flex items-center space-x-1">
-                  <span>Total size:</span>
-                  <span className="font-mono font-medium">
-                    {utils.formatFileSize(
-                      selectedFiles.reduce((sum, file) => sum + file.file_size, 0)
-                    )}
-                  </span>
-                </div>
-                <div className="flex items-center space-x-1">
-                  <Zap className="w-3 h-3 text-amber-500" />
-                  <span>Est. tokens:</span>
-                  <span className="font-mono font-medium text-amber-600">
-                    {estimateTokens(
-                      selectedFiles.reduce((sum, file) => sum + file.file_size, 0)
-                    )}
-                  </span>
-                </div>
-              </div>
-            )}
-          </div>
-
-          <div className="flex items-center space-x-3">
-            {sourceType === 'local' && selectedFiles.length > 0 && (
-              <span className="text-xs text-purple-600 bg-purple-50 px-2 py-1 rounded-full font-medium">
-                Processing from batch files
+      {/* Fixed Action Button - Bottom Right with Processing Panel Awareness */}
+      {processingPanelState !== 'fullscreen' && (
+        <div className={`fixed right-6 z-40 transition-all duration-300 ${
+          processingPanelState === 'normal' 
+            ? 'bottom-96'  // Above normal processing panel: 320px panel + 40px status bar + margin = 384px  
+            : processingPanelState === 'minimized'
+            ? 'bottom-20'  // Above minimized panel: 48px panel + 40px status bar = 88px, use bottom-20 for margin
+            : 'bottom-12'  // Above status bar only: 40px status bar + small margin
+        }`}>
+          <button
+            type="button"
+            onClick={handleProcess}
+            disabled={selectedFiles.length === 0 || isProcessing}
+            className={`px-6 py-3 rounded-full font-medium text-sm transition-all shadow-lg hover:shadow-xl ${
+              selectedFiles.length === 0 || isProcessing
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                : 'bg-blue-600 text-white hover:bg-blue-700 hover:-translate-y-1'
+            }`}
+          >
+            {isProcessing ? (
+              <span className="flex items-center space-x-2">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400"></div>
+                <span>Processing {selectedFiles.length} files...</span>
+              </span>
+            ) : (
+              <span className="flex items-center space-x-2">
+                <Zap className="w-4 h-4" />
+                <span>Process {selectedFiles.length} File{selectedFiles.length !== 1 ? 's' : ''}</span>
               </span>
             )}
-            
-            <button
-              type="button"
-              onClick={handleProcess}
-              disabled={selectedFiles.length === 0 || isProcessing}
-              className="flex items-center space-x-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium transition-colors"
-            >
-              {isProcessing ? (
-                <>
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  <span>Processing {selectedFiles.length} files...</span>
-                </>
-              ) : (
-                <>
-                  <Zap className="w-4 h-4" />
-                  <span>Process {selectedFiles.length} File{selectedFiles.length !== 1 ? 's' : ''}</span>
-                </>
-              )}
-            </button>
-          </div>
+          </button>
         </div>
-      </div>
+      )}
     </div>
   );
 };
