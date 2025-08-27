@@ -19,6 +19,8 @@ export function DownloadStage({
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
   const [isDownloading, setIsDownloading] = useState<string>('');
   const [isBulkDownloading, setIsBulkDownloading] = useState<boolean>(false);
+  const [isCombinedDownloading, setIsCombinedDownloading] = useState<boolean>(false);
+  const [isRAGDownloading, setIsRAGDownloading] = useState<boolean>(false);
 
   const successfulResults = processingResults.filter(r => r.success);
   const ragReadyResults = successfulResults.filter(r => r.pass_all_thresholds);
@@ -40,10 +42,6 @@ export function DownloadStage({
     } else {
       setSelectedFiles(new Set());
     }
-  };
-
-  const handleSelectRAGReady = () => {
-    setSelectedFiles(new Set(ragReadyResults.map(r => r.document_id)));
   };
 
   const downloadIndividualFile = async (result: ProcessingResult) => {
@@ -104,7 +102,7 @@ export function DownloadStage({
       return;
     }
 
-    setIsBulkDownloading(true);
+    setIsRAGDownloading(true);
     try {
       for (const result of ragReadyResults) {
         await downloadIndividualFile(result);
@@ -115,7 +113,153 @@ export function DownloadStage({
       console.error('RAG-ready download failed:', error);
       alert('RAG-ready download failed. Some files may not have been downloaded.');
     } finally {
-      setIsBulkDownloading(false);
+      setIsRAGDownloading(false);
+    }
+  };
+
+  // NEW: Function to adjust markdown hierarchy
+  const adjustMarkdownHierarchy = (content: string): string => {
+    if (!content) return content;
+    
+    // Split content into lines
+    const lines = content.split('\n');
+    const adjustedLines: string[] = [];
+    
+    for (const line of lines) {
+      // Check if line starts with markdown headers
+      const headerMatch = line.match(/^(#{1,6})\s+(.*)$/);
+      if (headerMatch) {
+        const headerLevel = headerMatch[1]; // The # symbols
+        const headerText = headerMatch[2]; // The text after #
+        
+        // Add one more # to increase the nesting level (shift everything down one level)
+        // But cap at maximum of 6 levels (######)
+        const newLevel = headerLevel.length < 6 ? '#' + headerLevel : headerLevel;
+        adjustedLines.push(`${newLevel} ${headerText}`);
+      } else {
+        adjustedLines.push(line);
+      }
+    }
+    
+    return adjustedLines.join('\n');
+  };
+
+  // NEW: Function to download all files in a single markdown file
+  const downloadCombinedMarkdown = async () => {
+    if (successfulResults.length === 0) {
+      alert('No processed files available for combined download');
+      return;
+    }
+
+    setIsCombinedDownloading(true);
+    
+    // Add a small delay to ensure the UI updates before starting the heavy work
+    await new Promise(resolve => setTimeout(resolve, 50));
+    
+    try {
+      const combinedSections: string[] = [];
+      
+      // Add main title and summary
+      const timestamp = new Date().toLocaleString();
+      const passRate = successfulResults.length > 0 ? (ragReadyResults.length / successfulResults.length * 100).toFixed(1) : '0';
+      
+      combinedSections.push(`# Curatore Processing Results - Combined Export`);
+      combinedSections.push(`*Generated on ${timestamp}*`);
+      combinedSections.push(``);
+      combinedSections.push(`**Processing Summary:**`);
+      combinedSections.push(`- Total Files: ${successfulResults.length}`);
+      combinedSections.push(`- RAG Ready: ${ragReadyResults.length} (${passRate}%)`);
+      combinedSections.push(`- Vector Optimized: ${vectorOptimizedResults.length}`);
+      combinedSections.push(``);
+      combinedSections.push(`---`);
+      combinedSections.push(``);
+
+      // Process each successful result with proper async handling
+      for (let i = 0; i < successfulResults.length; i++) {
+        const result = successfulResults[i];
+        
+        // Add a small delay between requests to prevent overwhelming the browser
+        if (i > 0) {
+          await new Promise(resolve => setTimeout(resolve, 100));
+        }
+        
+        try {
+          // Use the API endpoint correctly
+          const response = await fetch(`http://localhost:8000/api/documents/${result.document_id}/content`);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch content: ${response.statusText}`);
+          }
+          const data = await response.json();
+          const content = data.content || '';
+
+          // Create section header with filename and summary
+          combinedSections.push(`# ${result.filename}`);
+          
+          if (result.document_summary) {
+            combinedSections.push(``);
+            combinedSections.push(`*${result.document_summary}*`);
+          }
+
+          // Add processing metadata
+          const statusEmoji = result.pass_all_thresholds ? '✅' : '⚠️';
+          const optimizedEmoji = result.vector_optimized ? ' 🎯' : '';
+          combinedSections.push(``);
+          combinedSections.push(`**Processing Status:** ${statusEmoji} ${result.pass_all_thresholds ? 'RAG Ready' : 'Needs Improvement'}${optimizedEmoji}`);
+          combinedSections.push(`**Conversion Score:** ${result.conversion_score}/100`);
+          
+          if (result.llm_evaluation) {
+            const scores = [
+              `Clarity: ${result.llm_evaluation.clarity_score || 'N/A'}/10`,
+              `Completeness: ${result.llm_evaluation.completeness_score || 'N/A'}/10`,
+              `Relevance: ${result.llm_evaluation.relevance_score || 'N/A'}/10`,
+              `Markdown: ${result.llm_evaluation.markdown_score || 'N/A'}/10`
+            ].join(', ');
+            combinedSections.push(`**Quality Scores:** ${scores}`);
+          }
+
+          combinedSections.push(``);
+          combinedSections.push(`---`);
+          combinedSections.push(``);
+
+          // Adjust the markdown hierarchy and add the content
+          const adjustedContent = adjustMarkdownHierarchy(content);
+          combinedSections.push(adjustedContent);
+          
+          // Add separator between documents
+          combinedSections.push(``);
+          combinedSections.push(``);
+          combinedSections.push(`---`);
+          combinedSections.push(``);
+          
+        } catch (error) {
+          console.error(`Failed to fetch content for ${result.filename}:`, error);
+          // Add error note for this document
+          combinedSections.push(`# ${result.filename}`);
+          combinedSections.push(``);
+          combinedSections.push(`*Error: Could not load content for this document*`);
+          combinedSections.push(``);
+          combinedSections.push(`---`);
+          combinedSections.push(``);
+        }
+      }
+
+      // Create and download the combined file
+      const combinedContent = combinedSections.join('\n');
+      const blob = new Blob([combinedContent], { type: 'text/markdown' });
+      const url = window.URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `curatore_combined_export_${new Date().toISOString().split('T')[0]}.md`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      window.URL.revokeObjectURL(url);
+
+    } catch (error) {
+      console.error('Combined download failed:', error);
+      alert('Failed to create combined markdown file. Please try downloading files individually.');
+    } finally {
+      setIsCombinedDownloading(false);
     }
   };
 
@@ -175,6 +319,7 @@ export function DownloadStage({
 
   const allSelected = successfulResults.length > 0 && selectedFiles.size === successfulResults.length;
   const someSelected = selectedFiles.size > 0;
+  const isAnyDownloading = isBulkDownloading || isCombinedDownloading || isRAGDownloading;
 
   return (
     <div className="space-y-6 pb-24">
@@ -207,12 +352,17 @@ export function DownloadStage({
       </div>
 
       {/* Download Options */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Individual Downloads */}
-        <div className="bg-white rounded-lg border p-6">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="text-lg font-medium">📄 Individual Downloads</h3>
-            <div className="flex items-center space-x-2">
+      <div className="grid grid-cols-1 lg:grid-cols-4 gap-6">
+        {/* Individual Downloads - Now takes 3/4 of the width */}
+        <div className="lg:col-span-3 bg-white rounded-lg border p-6">
+          <div className="flex items-center justify-between mb-6">
+            <div className="flex items-center space-x-4">
+              <h3 className="text-lg font-semibold text-gray-900">📄 Individual Downloads</h3>
+              <span className="px-3 py-1 bg-gray-100 text-gray-700 text-sm font-medium rounded-full">
+                {successfulResults.length} files
+              </span>
+            </div>
+            <div className="flex items-center space-x-3">
               <label className="flex items-center space-x-2 cursor-pointer">
                 <input
                   type="checkbox"
@@ -220,76 +370,190 @@ export function DownloadStage({
                   onChange={(e) => handleSelectAll(e.target.checked)}
                   className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
-                <span className="text-sm text-gray-600">Select All</span>
+                <span className="text-sm font-medium text-gray-700">Select All</span>
               </label>
             </div>
           </div>
 
-          <div className="space-y-2 max-h-64 overflow-y-auto">
-            {successfulResults.map((result) => {
-              const isSelected = selectedFiles.has(result.document_id);
-              const isDownloadingThis = isDownloading === result.document_id;
+          {successfulResults.length === 0 ? (
+            <div className="text-center py-12 text-gray-500 border-2 border-dashed border-gray-200 rounded-xl">
+              <div className="text-6xl mb-4">📭</div>
+              <p className="text-xl font-medium mb-2">No successful files available</p>
+              <p className="text-sm">Complete document processing to see downloadable files here</p>
+            </div>
+          ) : (
+            <div className="border border-gray-200 rounded-lg overflow-hidden">
+              {/* Table Header */}
+              <div className="bg-gray-50 border-b border-gray-200 px-6 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider">
+                <div className="grid grid-cols-12 gap-4 items-center">
+                  <div className="col-span-1">Select</div>
+                  <div className="col-span-4">File Name</div>
+                  <div className="col-span-2">Status</div>
+                  <div className="col-span-2">Quality Score</div>
+                  <div className="col-span-2">Processing Time</div>
+                  <div className="col-span-1">Download</div>
+                </div>
+              </div>
 
-              return (
-                <div key={result.document_id} className="flex items-center justify-between p-3 border rounded-lg hover:bg-gray-50">
-                  <div className="flex items-center space-x-3 flex-1">
-                    <input
-                      type="checkbox"
-                      checked={isSelected}
-                      onChange={(e) => handleFileToggle(result.document_id, e.target.checked)}
-                      className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
-                    />
-                    <div className="flex-1">
-                      <div className="flex items-center space-x-2">
-                        <span className="font-medium text-gray-900">{result.filename}</span>
-                        {result.pass_all_thresholds && <span className="text-green-600">✅</span>}
-                        {result.vector_optimized && <span className="text-purple-600">🎯</span>}
-                      </div>
-                      <div className="text-sm text-gray-500">
-                        Score: {result.conversion_score}% • 
-                        {result.processing_time && ` ${utils.formatDuration(result.processing_time)}`}
+              {/* Table Body */}
+              <div className="divide-y divide-gray-200 max-h-96 overflow-y-auto">
+                {successfulResults.map((result) => {
+                  const isSelected = selectedFiles.has(result.document_id);
+                  const isDownloadingThis = isDownloading === result.document_id;
+
+                  return (
+                    <div 
+                      key={result.document_id} 
+                      className={`px-6 py-4 hover:bg-gray-50 transition-colors ${
+                        isSelected ? 'bg-blue-50 border-l-4 border-blue-500' : ''
+                      }`}
+                    >
+                      <div className="grid grid-cols-12 gap-4 items-center text-sm">
+                        {/* Checkbox */}
+                        <div className="col-span-1">
+                          <input
+                            type="checkbox"
+                            checked={isSelected}
+                            onChange={(e) => handleFileToggle(result.document_id, e.target.checked)}
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 focus:ring-offset-0"
+                          />
+                        </div>
+
+                        {/* File Name with Icon */}
+                        <div className="col-span-4">
+                          <div className="flex items-center space-x-3">
+                            <div className="w-8 h-8 bg-blue-100 rounded-lg flex items-center justify-center flex-shrink-0">
+                              <span className="text-blue-600 text-sm">📄</span>
+                            </div>
+                            <div className="min-w-0 flex-1">
+                              <p className="font-medium text-gray-900 truncate" title={result.filename}>
+                                {result.filename}
+                              </p>
+                              {result.document_summary && (
+                                <p className="text-xs text-gray-500 truncate mt-1" title={result.document_summary}>
+                                  {result.document_summary}
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                        </div>
+
+                        {/* Status */}
+                        <div className="col-span-2">
+                          <div className="flex items-center space-x-2">
+                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
+                              result.pass_all_thresholds
+                                ? 'bg-green-100 text-green-800'
+                                : 'bg-yellow-100 text-yellow-800'
+                            }`}>
+                              {result.pass_all_thresholds ? '✅ RAG Ready' : '⚠️ Needs Work'}
+                            </span>
+                            {result.vector_optimized && (
+                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                                🎯 Optimized
+                              </span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Quality Score */}
+                        <div className="col-span-2">
+                          <div className="flex items-center space-x-2">
+                            <div className="flex-1 bg-gray-200 rounded-full h-2">
+                              <div 
+                                className={`h-2 rounded-full transition-all duration-300 ${
+                                  result.conversion_score >= 85 ? 'bg-green-500' :
+                                  result.conversion_score >= 70 ? 'bg-yellow-500' :
+                                  'bg-red-500'
+                                }`}
+                                style={{ width: `${result.conversion_score}%` }}
+                              />
+                            </div>
+                            <span className="text-xs font-mono text-gray-600 w-8">
+                              {result.conversion_score}%
+                            </span>
+                          </div>
+                          {result.llm_evaluation && (
+                            <div className="flex items-center space-x-1 mt-1 text-xs text-gray-500">
+                              <span>📊 {result.llm_evaluation.clarity_score || 'N/A'}</span>
+                              <span>•</span>
+                              <span>📋 {result.llm_evaluation.completeness_score || 'N/A'}</span>
+                              <span>•</span>
+                              <span>🎯 {result.llm_evaluation.relevance_score || 'N/A'}</span>
+                              <span>•</span>
+                              <span>📝 {result.llm_evaluation.markdown_score || 'N/A'}</span>
+                            </div>
+                          )}
+                        </div>
+
+                        {/* Processing Time */}
+                        <div className="col-span-2">
+                          <div className="text-gray-600">
+                            {result.processing_time ? (
+                              <div className="flex items-center space-x-1">
+                                <span className="text-gray-400">⏱️</span>
+                                <span className="font-mono text-xs">
+                                  {utils.formatDuration(result.processing_time)}
+                                </span>
+                              </div>
+                            ) : (
+                              <span className="text-gray-400 text-xs">N/A</span>
+                            )}
+                          </div>
+                        </div>
+
+                        {/* Download Button */}
+                        <div className="col-span-1">
+                          <button
+                            type="button"
+                            onClick={() => downloadIndividualFile(result)}
+                            disabled={isDownloadingThis || isAnyDownloading}
+                            className="w-8 h-8 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center transition-colors"
+                            title="Download processed file"
+                          >
+                            {isDownloadingThis ? (
+                              <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
+                            ) : (
+                              <span className="text-xs">💾</span>
+                            )}
+                          </button>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                  
-                  <button
-                    type="button"
-                    onClick={() => downloadIndividualFile(result)}
-                    disabled={isDownloadingThis}
-                    className="px-3 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
-                  >
-                    {isDownloadingThis ? (
-                      <div className="flex items-center space-x-1">
-                        <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
-                        <span>...</span>
-                      </div>
-                    ) : (
-                      '💾'
-                    )}
-                  </button>
-                </div>
-              );
-            })}
-          </div>
-
-          {successfulResults.length === 0 && (
-            <div className="text-center py-8 text-gray-500">
-              <div className="text-4xl mb-2">📭</div>
-              <p>No successful files available for download</p>
+                  );
+                })}
+              </div>
             </div>
           )}
         </div>
 
-        {/* Bulk Downloads */}
-        <div className="bg-white rounded-lg border p-6">
-          <h3 className="text-lg font-medium mb-4">📦 Bulk Downloads</h3>
+        {/* Bulk Downloads - Now takes 1/4 of the width */}
+        <div className="lg:col-span-1 bg-white rounded-lg border p-4">
+          <h3 className="text-lg font-medium mb-3">📦 Bulk Downloads</h3>
           
           <div className="space-y-3">
+            {/* NEW: Download Combined Markdown */}
+            <button
+              type="button"
+              onClick={downloadCombinedMarkdown}
+              disabled={successfulResults.length === 0 || isAnyDownloading}
+              className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+            >
+              {isCombinedDownloading ? (
+                <div className="flex items-center justify-center space-x-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  <span>Creating Combined File...</span>
+                </div>
+              ) : (
+                `📋 Download Combined Markdown (${successfulResults.length} files)`
+              )}
+            </button>
+
             {/* Download Selected */}
             <button
               type="button"
               onClick={downloadSelectedFiles}
-              disabled={!someSelected || isBulkDownloading}
+              disabled={!someSelected || isAnyDownloading}
               className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
             >
               {isBulkDownloading ? (
@@ -306,22 +570,18 @@ export function DownloadStage({
             <button
               type="button"
               onClick={downloadRAGReadyFiles}
-              disabled={ragReadyResults.length === 0 || isBulkDownloading}
+              disabled={ragReadyResults.length === 0 || isAnyDownloading}
               className="w-full px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
             >
-              🎯 Download RAG-Ready Only ({ragReadyResults.length})
+              {isRAGDownloading ? (
+                <div className="flex items-center justify-center space-x-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                  <span>Downloading...</span>
+                </div>
+              ) : (
+                `🎯 Download RAG-Ready Only (${ragReadyResults.length})`
+              )}
             </button>
-
-            {/* Quick Select RAG Ready */}
-            {ragReadyResults.length > 0 && (
-              <button
-                type="button"
-                onClick={handleSelectRAGReady}
-                className="w-full px-4 py-2 bg-green-100 text-green-700 rounded-lg hover:bg-green-200 font-medium"
-              >
-                ✨ Select All RAG-Ready Files
-              </button>
-            )}
 
             {/* Download Summary Report */}
             <button
@@ -334,27 +594,27 @@ export function DownloadStage({
           </div>
 
           {/* Processing Statistics */}
-          <div className="mt-6 pt-4 border-t">
-            <h4 className="font-medium mb-2">📈 Final Statistics</h4>
-            <div className="text-sm space-y-1">
+          <div className="mt-4 pt-3 border-t">
+            <h4 className="font-medium mb-2 text-sm">📈 Statistics</h4>
+            <div className="text-xs space-y-1">
               {ragReadyResults.length === successfulResults.length && successfulResults.length > 0 ? (
-                <div className="text-green-600 font-medium">🎉 All files are RAG-ready!</div>
+                <div className="text-green-600 font-medium">🎉 All RAG-ready!</div>
               ) : ragReadyResults.length > 0 ? (
                 <div className="text-blue-600">
-                  ✅ {ragReadyResults.length}/{successfulResults.length} files are RAG-ready
+                  ✅ {ragReadyResults.length}/{successfulResults.length} RAG-ready
                 </div>
               ) : (
-                <div className="text-yellow-600">⚠️ No files meet all quality thresholds</div>
+                <div className="text-yellow-600">⚠️ No files meet thresholds</div>
               )}
               
               {vectorOptimizedResults.length > 0 && (
                 <div className="text-purple-600">
-                  🔧 {vectorOptimizedResults.length} files were vector optimized
+                  🔧 {vectorOptimizedResults.length} optimized
                 </div>
               )}
               
               <div className="text-gray-600">
-                📊 Average score: {successfulResults.length > 0 
+                📊 Avg: {successfulResults.length > 0 
                   ? Math.round(successfulResults.reduce((sum, r) => sum + r.conversion_score, 0) / successfulResults.length)
                   : 0
                 }/100
@@ -366,12 +626,12 @@ export function DownloadStage({
 
       {/* Help Text */}
       <div className="text-center text-sm text-gray-500">
-        <p>💡 Tip: RAG-ready files have passed all quality thresholds and are optimized for vector databases</p>
+        <p>💡 Tip: The combined markdown file automatically adjusts header levels and includes file summaries</p>
       </div>
 
-      {/* Fixed Action Buttons - Bottom Right with Processing Panel Awareness */}
+      {/* Fixed Action Button - Bottom Right with Processing Panel Awareness - UPDATED: Single button */}
       {processingPanelState !== 'fullscreen' && (
-        <div className={`fixed right-6 z-40 flex flex-col space-y-3 transition-all duration-300 ${
+        <div className={`fixed right-6 z-40 transition-all duration-300 ${
           processingPanelState === 'normal' 
             ? 'bottom-[384px]'  // Above normal processing panel: 320px panel + 52px (status + gap) + 12px margin = 384px
             : processingPanelState === 'minimized'
@@ -380,18 +640,10 @@ export function DownloadStage({
         }`}>
           <button
             type="button"
-            onClick={() => window.location.reload()}
+            onClick={onRestart}
             className="px-6 py-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 font-medium text-sm transition-all shadow-lg hover:shadow-xl hover:-translate-y-1"
           >
-            🏠 New Session
-          </button>
-          
-          <button
-            type="button"
-            onClick={onRestart}
-            className="px-6 py-3 bg-gray-600 text-white rounded-full hover:bg-gray-700 font-medium text-sm transition-all shadow-lg hover:shadow-xl hover:-translate-y-1"
-          >
-            🔄 Start Over
+            🔄 Process New Documents
           </button>
         </div>
       )}
