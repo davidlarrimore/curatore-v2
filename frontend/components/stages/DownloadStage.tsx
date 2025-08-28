@@ -122,51 +122,53 @@ export function DownloadStage({
 
   const downloadCombinedArchive = async () => {
     if (successfulResults.length === 0) {
-      toast.error('No processed files available for combined download');
+      toast.error('No processed files available');
       return;
     }
 
     setIsCombinedDownloading(true);
-    const loadingToast = toast.loading(`Creating combined ZIP archive with ${successfulResults.length} files...`);
+    const loadingToast = toast.loading(`Creating complete archive with ${successfulResults.length} files...`);
     
     try {
-      const allDocumentIds = successfulResults.map(r => r.document_id);
+      const allIds = successfulResults.map(r => r.document_id);
       const timestamp = utils.generateTimestamp();
-      const zipName = `curatore_combined_export_${timestamp}.zip`;
+      const zipName = `curatore_complete_${timestamp}.zip`;
       
-      const blob = await fileApi.downloadBulkDocuments(allDocumentIds, 'combined', zipName);
+      const blob = await fileApi.downloadBulkDocuments(allIds, 'combined', zipName);
       utils.downloadBlob(blob, zipName);
       
-      toast.success(`Downloaded combined archive with ${successfulResults.length} files`, { 
+      toast.success('Downloaded complete archive with summary', { 
         id: loadingToast,
-        icon: '📋'
+        icon: '📁'
       });
     } catch (error) {
-      console.error('Combined download failed:', error);
+      console.error('Combined archive download failed:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      toast.error(`Combined download failed: ${errorMessage}`, { id: loadingToast });
+      toast.error(`Combined archive download failed: ${errorMessage}`, { id: loadingToast });
     } finally {
       setIsCombinedDownloading(false);
     }
   };
 
-  const generateSummaryReport = () => {
-    const timestamp = new Date().toISOString().split('T')[0];
-    const passRate = successfulResults.length > 0 ? (ragReadyResults.length / successfulResults.length * 100).toFixed(1) : '0';
-    
+  const downloadProcessingSummary = () => {
+    if (successfulResults.length === 0) {
+      toast.error('No processing data available for summary');
+      return;
+    }
+
+    const timestamp = utils.generateTimestamp();
     const reportLines = [
-      '# Curatore Processing Summary Report',
-      `Generated: ${new Date().toLocaleString()}`,
+      '# Curatore Processing Summary',
+      `Generated: ${new Date().toISOString()}`,
       '',
       '## Overview',
-      `- Total Files Processed: ${processingResults.length}`,
-      `- Successfully Processed: ${successfulResults.length}`,
-      `- RAG Ready Files: ${ragReadyResults.length}`,
+      `- Total Files Processed: ${successfulResults.length}`,
+      `- RAG-Ready Files: ${ragReadyResults.length}`,
       `- Vector Optimized Files: ${vectorOptimizedResults.length}`,
-      `- Pass Rate: ${passRate}%`,
+      `- Selected for Download: ${selectedFiles.size}`,
       '',
-      '## Processing Results',
-      '',
+      '## Individual File Results',
+      ''
     ];
 
     successfulResults.forEach(result => {
@@ -272,14 +274,14 @@ export function DownloadStage({
             </div>
           ) : (
             <div className="border border-gray-200 rounded-lg overflow-hidden">
-              {/* Table Header */}
+              {/* Table Header - Updated column distribution */}
               <div className="bg-gray-50 border-b border-gray-200 px-6 py-3 text-xs font-semibold text-gray-600 uppercase tracking-wider">
                 <div className="grid grid-cols-12 gap-4 items-center">
                   <div className="col-span-1">Select</div>
-                  <div className="col-span-4">File Name</div>
+                  <div className="col-span-5">File Name</div>
                   <div className="col-span-2">Status</div>
                   <div className="col-span-2">Quality Score</div>
-                  <div className="col-span-2">Processing Time</div>
+                  <div className="col-span-1">Time</div>
                   <div className="col-span-1">Download</div>
                 </div>
               </div>
@@ -294,48 +296,53 @@ export function DownloadStage({
                     <div 
                       key={result.document_id} 
                       className={`px-6 py-4 hover:bg-gray-50 transition-colors ${
-                        isSelected ? 'bg-blue-50 border-l-4 border-blue-500' : ''
+                        isSelected ? 'bg-blue-50 border-blue-200' : ''
                       }`}
                     >
-                      <div className="grid grid-cols-12 gap-4 items-center text-sm">
-                        {/* Checkbox */}
+                      <div className="grid grid-cols-12 gap-4 items-center">
+                        {/* Select Checkbox */}
                         <div className="col-span-1">
                           <input
                             type="checkbox"
                             checked={isSelected}
                             onChange={(e) => handleFileToggle(result.document_id, e.target.checked)}
-                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500 focus:ring-offset-0"
+                            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                            disabled={isAnyDownloading}
                           />
                         </div>
 
-                        {/* File Name */}
-                        <div className="col-span-4">
-                          <div className="min-w-0">
-                            <p className="font-medium text-gray-900 truncate" title={result.filename}>
-                              {result.filename}
-                            </p>
-                            {result.document_summary && (
-                              <p className="text-xs text-gray-500 truncate mt-1" title={result.document_summary}>
-                                {result.document_summary}
+                        {/* File Name - Increased from col-span-4 to col-span-5 */}
+                        <div className="col-span-5">
+                          <div className="flex items-center space-x-2">
+                            <span className="text-gray-400">
+                              {result.vector_optimized ? '🎯' : '📄'}
+                            </span>
+                            <div className="min-w-0 flex-1">
+                              <p className="text-sm font-medium text-gray-900 truncate" title={result.filename}>
+                                {result.filename}
                               </p>
-                            )}
+                              {result.document_summary && (
+                                <p className="text-xs text-gray-500 truncate mt-1" title={result.document_summary}>
+                                  {result.document_summary}
+                                </p>
+                              )}
+                            </div>
                           </div>
                         </div>
 
                         {/* Status */}
                         <div className="col-span-2">
                           <div className="flex items-center space-x-2">
-                            <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${
-                              result.pass_all_thresholds
-                                ? 'bg-green-100 text-green-800'
-                                : 'bg-yellow-100 text-yellow-800'
-                            }`}>
-                              {result.pass_all_thresholds ? '✅ RAG Ready' : '⚠️ Needs Work'}
-                            </span>
-                            {result.vector_optimized && (
-                              <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
-                                🎯 Optimized
-                              </span>
+                            {result.pass_all_thresholds ? (
+                              <div className="flex items-center space-x-1">
+                                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                                <span className="text-xs font-medium text-green-700">RAG Ready</span>
+                              </div>
+                            ) : (
+                              <div className="flex items-center space-x-1">
+                                <span className="w-2 h-2 bg-yellow-500 rounded-full"></span>
+                                <span className="text-xs font-medium text-yellow-700">Needs Review</span>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -345,7 +352,7 @@ export function DownloadStage({
                           <div className="flex items-center space-x-2">
                             <div className="flex-1 bg-gray-200 rounded-full h-2">
                               <div 
-                                className={`h-2 rounded-full transition-all duration-300 ${
+                                className={`h-2 rounded-full transition-all ${
                                   result.conversion_score >= 85 ? 'bg-green-500' :
                                   result.conversion_score >= 70 ? 'bg-yellow-500' :
                                   'bg-red-500'
@@ -370,12 +377,11 @@ export function DownloadStage({
                           )}
                         </div>
 
-                        {/* Processing Time */}
-                        <div className="col-span-2">
+                        {/* Processing Time - Reduced from col-span-2 to col-span-1 */}
+                        <div className="col-span-1">
                           <div className="text-gray-600">
                             {result.processing_time ? (
-                              <div className="flex items-center space-x-1">
-                                <span className="text-gray-400">⏱️</span>
+                              <div className="flex items-center justify-center">
                                 <span className="font-mono text-xs">
                                   {formatProcessingTimeSeconds(result.processing_time)}
                                 </span>
@@ -396,9 +402,11 @@ export function DownloadStage({
                             title="Download processed file"
                           >
                             {isDownloadingThis ? (
-                              <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white"></div>
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
                             ) : (
-                              <span className="text-xs">💾</span>
+                              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                              </svg>
                             )}
                           </button>
                         </div>
@@ -411,155 +419,108 @@ export function DownloadStage({
           )}
         </div>
 
-        {/* Bulk Downloads - Now takes 1/4 of the width */}
-        <div className="lg:col-span-1 bg-white rounded-lg border p-4">
-          <h3 className="text-lg font-medium mb-3">📦 Bulk Downloads</h3>
-          
-          <div className="space-y-3">
-            {/* NEW: Download Combined Archive (ZIP with individual + combined files) */}
-            <button
-              type="button"
-              onClick={downloadCombinedArchive}
-              disabled={successfulResults.length === 0 || isAnyDownloading}
-              className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-            >
-              {isCombinedDownloading ? (
-                <div className="flex items-center justify-center space-x-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  <span>Creating Archive...</span>
-                </div>
-              ) : (
-                `📋 Combined Archive (${successfulResults.length} files)`
-              )}
-            </button>
+        {/* Bulk Download Options - Takes remaining 1/4 of the width */}
+        <div className="lg:col-span-1 space-y-6">
+          {/* Selected Files Download */}
+          <div className="bg-white rounded-lg border p-6">
+            <h3 className="text-lg font-semibold text-gray-900 mb-4 flex items-center">
+              <span className="mr-2">📦</span>
+              Bulk Downloads
+            </h3>
 
-            {/* Download Selected as ZIP */}
-            <button
-              type="button"
-              onClick={downloadSelectedFiles}
-              disabled={!someSelected || isAnyDownloading}
-              className="w-full px-4 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-            >
-              {isBulkDownloading ? (
-                <div className="flex items-center justify-center space-x-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  <span>Creating ZIP...</span>
-                </div>
-              ) : (
-                `📦 Selected as ZIP (${selectedFiles.size})`
-              )}
-            </button>
+            <div className="space-y-3">
+              {/* Selected Files */}
+              <button
+                type="button"
+                onClick={downloadSelectedFiles}
+                disabled={selectedFiles.size === 0 || isBulkDownloading || isAnyDownloading}
+                className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 transition-colors"
+              >
+                {isBulkDownloading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    <span>Downloading...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>📋</span>
+                    <span>Selected ({selectedFiles.size})</span>
+                  </>
+                )}
+              </button>
 
-            {/* Download RAG Ready as ZIP */}
-            <button
-              type="button"
-              onClick={downloadRAGReadyFiles}
-              disabled={ragReadyResults.length === 0 || isAnyDownloading}
-              className="w-full px-4 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-            >
-              {isRAGDownloading ? (
-                <div className="flex items-center justify-center space-x-2">
-                  <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  <span>Creating ZIP...</span>
-                </div>
-              ) : (
-                `🎯 RAG-Ready ZIP (${ragReadyResults.length})`
-              )}
-            </button>
+              {/* Combined Archive */}
+              <button
+                type="button"
+                onClick={downloadCombinedArchive}
+                disabled={successfulResults.length === 0 || isCombinedDownloading || isAnyDownloading}
+                className="w-full bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 transition-colors"
+              >
+                {isCombinedDownloading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    <span>Creating...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>📁</span>
+                    <span>Complete Archive</span>
+                  </>
+                )}
+              </button>
 
-            {/* Download Summary Report */}
-            <button
-              type="button"
-              onClick={generateSummaryReport}
-              disabled={isAnyDownloading}
-              className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 font-medium"
-            >
-              📊 Summary Report
-            </button>
+              {/* RAG-Ready Files */}
+              <button
+                type="button"
+                onClick={downloadRAGReadyFiles}
+                disabled={ragReadyResults.length === 0 || isRAGDownloading || isAnyDownloading}
+                className="w-full bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 transition-colors"
+              >
+                {isRAGDownloading ? (
+                  <>
+                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                    <span>Preparing...</span>
+                  </>
+                ) : (
+                  <>
+                    <span>🎯</span>
+                    <span>RAG-Ready ({ragReadyResults.length})</span>
+                  </>
+                )}
+              </button>
 
-            {/* Divider */}
-            <div className="border-t border-gray-200 my-4"></div>
+              {/* Processing Summary */}
+              <button
+                type="button"
+                onClick={downloadProcessingSummary}
+                disabled={successfulResults.length === 0 || isAnyDownloading}
+                className="w-full bg-gray-600 text-white px-4 py-2 rounded-lg hover:bg-gray-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 transition-colors"
+              >
+                <span>📊</span>
+                <span>Summary Report</span>
+              </button>
+            </div>
 
-            {/* Download Format Info */}
-            <div className="text-xs text-gray-600 space-y-2">
-              <div className="font-medium">Download Types:</div>
-              <div className="space-y-1">
-                <div>📋 <strong>Combined Archive:</strong> Individual files + combined markdown + summary</div>
-                <div>📦 <strong>Selected ZIP:</strong> Only selected individual files</div>
-                <div>🎯 <strong>RAG-Ready ZIP:</strong> Only files that pass all quality thresholds</div>
-                <div>📊 <strong>Summary:</strong> Processing statistics and quality report</div>
-              </div>
+            {/* Help Text */}
+            <div className="mt-4 pt-4 border-t border-gray-200">
+              <p className="text-xs text-gray-500 text-center">
+                Select files above, then choose a download option
+              </p>
             </div>
           </div>
 
-          {/* Processing Statistics */}
-          <div className="mt-4 pt-3 border-t">
-            <h4 className="font-medium mb-2 text-sm">📈 Statistics</h4>
-            <div className="text-xs space-y-1">
-              {ragReadyResults.length === successfulResults.length && successfulResults.length > 0 ? (
-                <div className="text-green-600 font-medium">🎉 All RAG-ready!</div>
-              ) : ragReadyResults.length > 0 ? (
-                <div className="text-blue-600">
-                  ✅ {ragReadyResults.length}/{successfulResults.length} RAG-ready
-                </div>
-              ) : (
-                <div className="text-yellow-600">⚠️ No files meet thresholds</div>
-              )}
-              
-              {vectorOptimizedResults.length > 0 && (
-                <div className="text-purple-600">
-                  🔧 {vectorOptimizedResults.length} optimized
-                </div>
-              )}
-              
-              <div className="text-gray-600">
-                📊 Avg: {successfulResults.length > 0 
-                  ? Math.round(successfulResults.reduce((sum, r) => sum + r.conversion_score, 0) / successfulResults.length)
-                  : 0
-                }/100
-              </div>
+          {/* Download Info */}
+          <div className="bg-blue-50 rounded-lg p-4">
+            <h4 className="font-medium text-blue-900 mb-2">💡 Download Types</h4>
+            <div className="space-y-2 text-xs text-blue-800">
+              <div><strong>Selected:</strong> Custom file selection</div>
+              <div><strong>Complete:</strong> All files + merged + summary</div>
+              <div><strong>RAG-Ready:</strong> Quality-filtered files</div>
+              <div><strong>Summary:</strong> Processing report</div>
             </div>
           </div>
         </div>
       </div>
-
-      {/* Help Text */}
-      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
-        <h4 className="font-medium text-blue-900 mb-2">💡 Download Guide</h4>
-        <div className="text-sm text-blue-800 space-y-1">
-          <div>• <strong>Combined Archive:</strong> Best for comprehensive exports - includes individual files, a merged document, and processing summary</div>
-          <div>• <strong>Selected ZIP:</strong> Choose specific files to download as a convenient archive</div>
-          <div>• <strong>RAG-Ready ZIP:</strong> Only files that meet all quality thresholds - perfect for production RAG systems</div>
-          <div>• <strong>Individual Downloads:</strong> Get single files for quick review or testing</div>
-        </div>
-      </div>
-
-      {/* Fixed Action Button - Bottom Right with Processing Panel Awareness */}
-      {processingPanelState !== 'fullscreen' && (
-        <div className={`fixed right-6 z-40 transition-all duration-300 ${
-          processingPanelState === 'normal' 
-            ? 'bottom-[424px]'  // Above normal processing panel: 360px panel + 52px (status + gap) + 12px margin = 424px
-            : processingPanelState === 'minimized'
-            ? 'bottom-[112px]'  // Above minimized panel: 48px panel + 52px (status + gap) + 12px margin = 112px
-            : 'bottom-16'       // Above status bar only: 52px (status + gap) + 12px margin = 64px (bottom-16)
-        }`}>
-          <button
-            type="button"
-            onClick={onRestart}
-            disabled={isAnyDownloading}
-            className="px-6 py-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 disabled:opacity-50 font-medium text-sm transition-all shadow-lg hover:shadow-xl hover:-translate-y-1"
-          >
-            {isAnyDownloading ? (
-              <span className="flex items-center space-x-2">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                <span>Creating Archive...</span>
-              </span>
-            ) : (
-              '🔄 Process New Documents'
-            )}
-          </button>
-        </div>
-      )}
     </div>
   );
 }
