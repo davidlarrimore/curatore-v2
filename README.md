@@ -6,10 +6,10 @@ A modern multi-tier RAG (Retrieval Augmented Generation) document processing and
 
 ## 🏗️ Architecture
 
-**Curatore v2** features a modern multi-tier architecture:
+**Curatore v2** features a modern multi-tier architecture with comprehensive documentation:
 
 - **Frontend**: Next.js 14 (App Router) + TailwindCSS
-- **Backend**: Python + FastAPI  
+- **Backend**: Python + FastAPI with fully documented services
 - **Processing**: Document conversion, OCR, LLM optimization
 - **Runtime**: Docker + docker-compose with hot-reload
 
@@ -18,20 +18,23 @@ A modern multi-tier RAG (Retrieval Augmented Generation) document processing and
 ### 🔄 Document Processing Pipeline
 
 - **Multi-format support**: PDF, DOCX, images (PNG, JPG, JPEG, BMP, TIF, TIFF), Markdown, and text files
-- **Intelligent conversion**: MarkItDown, format-specific fallbacks, OCR with Tesseract
-- **High-quality extraction** with configurable OCR settings
+- **Intelligent conversion chain**: MarkItDown → format-specific converters → OCR fallbacks
+- **High-quality extraction** with configurable OCR settings and Tesseract integration
+- **Comprehensive error handling** with graceful degradation
 
 ### 🎯 Vector Database Optimization
 
 - **Automatic optimization** for vector database chunking and retrieval
 - **Context-rich formatting** ensures chunks are meaningful when retrieved independently
 - **Semantic search ready** with keyword enhancement and consistent structure
+- **LLM-powered optimization** with specialized prompts for RAG applications
 
 ### 📊 Quality Assessment & Scoring
 
 - **Conversion quality scoring** (0-100) based on content coverage, structure, and legibility
 - **LLM-powered evaluation** across four dimensions: Clarity, Completeness, Relevance, Markdown Compatibility
 - **Configurable quality thresholds** for RAG readiness assessment
+- **Automated threshold validation** for production readiness
 
 ### 📦 Advanced Download & Export Options
 
@@ -54,6 +57,68 @@ A modern multi-tier RAG (Retrieval Augmented Generation) document processing and
 - **OpenAI API compatibility** with custom endpoint support
 - **Local LLM support**: Ollama, LM Studio, OpenWebUI
 - **Connection testing** with detailed status reporting
+- **Comprehensive error handling** and fallback mechanisms
+
+## 🏛️ Backend Architecture
+
+### Fully Documented Services
+
+The backend consists of comprehensively documented services with modern Python standards:
+
+#### Core Services
+- **`document_service.py`** - Complete document processing pipeline
+  - Multi-format conversion with intelligent fallback chains
+  - OCR processing with Tesseract integration
+  - Quality scoring and threshold validation
+  - LLM integration for optimization and evaluation
+  - Batch processing capabilities
+  - File management with Docker volume support
+
+- **`llm_service.py`** - Large Language Model integration
+  - Document quality evaluation (4 dimensions)
+  - Content improvement with custom prompts
+  - Vector database optimization for RAG
+  - Document summarization
+  - Connection testing and status monitoring
+  - SSL verification control for local deployments
+
+- **`storage_service.py`** - In-memory storage management
+  - Thread-safe processing result storage
+  - CRUD operations for individual and batch results
+  - Automatic cross-referencing between batch and individual results
+  - Complete system reset functionality
+
+- **`zip_service.py`** - ZIP archive creation service
+  - Individual document archives with summaries
+  - Combined exports with merged documents
+  - Detailed processing summaries with quality metrics
+  - Header hierarchy adjustment for combined documents
+  - Temporary file management with automatic cleanup
+
+#### Documentation Standards
+- **Comprehensive docstrings** following Google/NumPy conventions
+- **Complete type hints** for all parameters and return values
+- **Usage examples** for all major methods
+- **Error handling documentation** with failure modes and recovery
+- **Integration patterns** showing service interactions
+- **Performance considerations** and optimization notes
+
+### API Structure
+```
+backend/app/
+├── services/                    # Core business logic services
+│   ├── document_service.py     # Document processing pipeline
+│   ├── llm_service.py          # LLM integration and evaluation
+│   ├── storage_service.py      # In-memory storage management
+│   └── zip_service.py          # Archive creation and export
+├── api/                        # API routing and endpoints
+│   └── routers/
+│       ├── documents.py        # Document processing endpoints
+│       └── system.py           # System health and configuration
+├── models.py                   # Pydantic data models
+├── config.py                   # Application configuration
+└── main.py                     # FastAPI application setup
+```
 
 ## 🚀 Quick Start
 
@@ -184,14 +249,9 @@ OPENAI_API_KEY=lm-studio
    - **Quick Downloads**: Direct access from processing panel
    - **Processing Reports**: Detailed statistics and quality analysis
 
-5. **System Monitoring**
-   - LLM connection status
-   - API health checks
-   - Processing statistics
-
 ### API Usage
 
-The FastAPI backend provides comprehensive RESTful endpoints:
+The FastAPI backend provides comprehensive RESTful endpoints with full OpenAPI documentation:
 
 #### Basic Document Operations
 ```bash
@@ -250,47 +310,79 @@ curl -X POST "http://localhost:8000/api/documents/batch/process" \
   }'
 ```
 
-See full API documentation at: http://localhost:8000/docs
+#### System Monitoring
+```bash
+# Test LLM connection
+curl "http://localhost:8000/api/llm/status"
+
+# Check API health
+curl "http://localhost:8000/api/health"
+
+# Get supported formats
+curl "http://localhost:8000/api/config/supported-formats"
+```
+
+See full API documentation at: **http://localhost:8000/docs**
+
+## 📊 Quality Metrics
+
+### Conversion Quality (0-100)
+
+- **Content Coverage** (50% weight): Ratio of extracted vs. original content
+- **Structure Preservation** (0-80 points): Headings, lists, tables detection  
+- **Readability** (0-20 points): Character encoding and line length analysis
+
+### LLM Evaluation (1-10 each)
+
+- **Clarity**: Document structure, readability, logical flow
+- **Completeness**: Information preservation, missing content detection
+- **Relevance**: Content focus, unnecessary information identification  
+- **Markdown Quality**: Formatting consistency, structure quality
+
+### RAG Readiness
+
+Documents are "RAG Ready" when they meet all configured thresholds and are optimized for:
+
+- Vector database chunking
+- Semantic search retrieval
+- Independent chunk meaning
+- Question-answer performance
 
 ## 📦 Download & Export Features
 
-### Download Types
+### Archive Types
 
-1. **Individual Downloads** (`.md` files)
-   - Single processed markdown files
-   - Optimized for vector databases
-   - Direct file access for testing
+1. **Standard Archives**
+   ```
+   curatore_export_20250827_143022.zip
+   ├── processed_documents/
+   │   ├── document1.md
+   │   ├── document2.md
+   │   └── document3.md
+   └── PROCESSING_SUMMARY_20250827_143022.md
+   ```
 
-2. **ZIP Archives**
-   - **Combined Archive**: Includes individual files, merged document, and processing summary
-   - **Selected Files**: Custom selection of processed documents
-   - **RAG-Ready Only**: Files that pass all quality thresholds
-   - **Processing Summary**: Statistics and quality reports
+2. **Combined Archives**
+   ```
+   curatore_combined_export_20250827_143022.zip
+   ├── individual_files/
+   │   ├── document1.md
+   │   ├── document2.md
+   │   └── document3.md
+   ├── COMBINED_EXPORT_20250827_143022.md
+   └── PROCESSING_SUMMARY_20250827_143022.md
+   ```
 
-3. **Quick Downloads**
-   - Available directly from the processing panel
-   - One-click access to RAG-ready files
-   - Immediate download after processing completion
-
-### Archive Structure
-
-When downloading ZIP archives, files are organized as follows:
-
-```
-curatore_export_20250827_143022.zip
-├── individual_files/           # Original processed files
-│   ├── document1.md
-│   ├── document2.md
-│   └── document3.md
-├── COMBINED_EXPORT_*.md        # All documents merged with adjusted hierarchy
-└── PROCESSING_SUMMARY_*.md     # Detailed processing report with quality metrics
-```
+3. **RAG-Ready Archives**
+   - Contains only documents meeting all quality thresholds
+   - Filtered for production readiness
+   - Includes optimization status indicators
 
 ### Combined Markdown Features
 
-- **Adjusted Header Hierarchy**: Headers are automatically nested to prevent conflicts
+- **Adjusted Header Hierarchy**: Headers automatically nested to prevent conflicts
 - **Document Summaries**: Each section includes processing metadata and quality scores
-- **Quality Indicators**: Visual status indicators for RAG readiness and optimization
+- **Quality Indicators**: Visual status indicators (✅ RAG Ready, ⚠️ Needs Improvement, 🎯 Vector Optimized)
 - **Unified Structure**: Consistent formatting across all merged documents
 
 ## 🔧 Development
@@ -306,16 +398,29 @@ curatore-v2/
 ├── frontend/                    # Next.js TypeScript frontend
 ├── backend/                     # FastAPI Python backend
 │   └── app/
-│       ├── services/
-│       │   ├── zip_service.py   # NEW: ZIP archive creation service
-│       │   ├── document_service.py
-│       │   ├── llm_service.py
-│       │   └── storage_service.py
-│       └── models.py            # Updated with ZIP-related models
+│       ├── services/            # Fully documented core services
+│       │   ├── document_service.py  # Document processing pipeline
+│       │   ├── llm_service.py       # LLM integration service
+│       │   ├── storage_service.py   # In-memory storage management
+│       │   └── zip_service.py       # ZIP archive creation service
+│       ├── api/                 # API routing
+│       ├── models.py            # Pydantic data models
+│       ├── config.py            # Application configuration
+│       └── main.py              # FastAPI application setup
 ├── docker-compose.yml           # Development setup
 ├── .env.example                 # Environment template
 └── README.md                    # This file
 ```
+
+### Code Documentation
+
+All backend services are comprehensively documented with:
+
+- **Modern Python standards**: Type hints, docstrings, error handling
+- **Usage examples**: Practical code examples for each major method
+- **Integration patterns**: How services work together
+- **Error handling**: Comprehensive coverage of failure modes
+- **Performance considerations**: Optimization notes and best practices
 
 ### Running Development Environment
 
@@ -334,7 +439,7 @@ docker-compose logs -f backend
 docker-compose logs -f frontend
 ```
 
-### Testing Download Features
+### Testing Features
 
 ```bash
 # Test individual document download
@@ -343,62 +448,12 @@ curl "http://localhost:8000/api/documents/{doc_id}/download"
 # Test RAG-ready ZIP download
 curl "http://localhost:8000/api/documents/download/rag-ready" -o rag_files.zip
 
-# Test bulk ZIP download
-curl -X POST "http://localhost:8000/api/documents/download/bulk" \
-  -H "Content-Type: application/json" \
-  -d '{"document_ids": ["doc1", "doc2"], "download_type": "combined"}' \
-  -o bulk_export.zip
-
 # Test LLM connection
 curl "http://localhost:8000/api/llm/status"
 
 # Check API health
 curl "http://localhost:8000/api/health"
 ```
-
-## 📊 Quality Metrics
-
-### Conversion Quality (0-100)
-
-- **Content Coverage**: Ratio of extracted vs. original content
-- **Structure Preservation**: Headings, lists, tables detection  
-- **Readability**: Character encoding and line length analysis
-
-### LLM Evaluation (1-10 each)
-
-- **Clarity**: Document structure, readability, logical flow
-- **Completeness**: Information preservation, missing content detection
-- **Relevance**: Content focus, unnecessary information identification  
-- **Markdown Quality**: Formatting consistency, structure quality
-
-### RAG Readiness
-
-Documents are "RAG Ready" when they meet all configured thresholds and are optimized for:
-
-- Vector database chunking
-- Semantic search retrieval
-- Independent chunk meaning
-- Question-answer performance
-
-## 📥 Export Formats & Use Cases
-
-### For RAG Implementation
-
-1. **Download RAG-Ready ZIP**: Contains only documents that pass all quality thresholds
-2. **Use Vector Optimized files**: Enhanced structure for better semantic search
-3. **Import Combined Export**: Single file for bulk vector database import
-
-### For Review & Quality Assurance
-
-1. **Download Processing Summary**: Detailed quality metrics and improvement suggestions
-2. **Combined Archive**: Complete export with individual files and merged document
-3. **Individual Downloads**: File-by-file review and testing
-
-### For Production Deployment
-
-1. **RAG-Ready Files**: Production-ready documents for immediate use
-2. **Quality Reports**: Documentation for compliance and quality assurance
-3. **Bulk Processing**: Batch operations with comprehensive statistics
 
 ## 🚀 Deployment
 
@@ -417,69 +472,91 @@ docker-compose -f docker-compose.prod.yml up -d
 - **CPU**: OCR processing is CPU-intensive
 - **Memory**: Large documents require sufficient RAM  
 - **Storage**: Plan for document and output storage (ZIP files are created in temp directory)
-- **LLM API**: Consider rate limits and costs
+- **LLM API**: Consider rate limits and costs for OpenAI API or local LLM requirements
 - **Network**: ZIP downloads may be large for bulk operations
 
-## 🔄 Migration from v1
+## 📈 Performance & Scalability
 
-If migrating from Curatore v1 (Streamlit), use the migration script:
+### Processing Performance
+- **Sequential batch processing** prevents resource contention
+- **Intelligent conversion chains** with optimized fallback strategies
+- **Memory-efficient** processing with automatic cleanup
+- **Configurable quality thresholds** for performance vs. quality trade-offs
 
-```bash
-./scripts/migrate-to-v2.sh
-```
+### File Management
+- **Docker volume mounts** for persistent storage
+- **Automatic file cleanup** on startup and reset
+- **Temporary file management** with background cleanup
+- **Efficient file organization** with UUID-based naming
 
-See `MIGRATION_NOTES.md` for detailed migration information.
+## 🔍 Monitoring & Debugging
+
+### Comprehensive Logging
+- **Processing pipeline status** with emoji indicators
+- **Error tracking** with detailed stack traces
+- **Performance metrics** with processing time tracking
+- **LLM interaction monitoring** with connection status
+
+### Health Checks
+- **API health endpoints** for monitoring
+- **LLM connection testing** with detailed status
+- **File system validation** with Docker volume checks
+- **Quality threshold monitoring** with pass/fail tracking
 
 ## 🤝 Contributing
 
-1. Fork the repository
-2. Create a feature branch (`git checkout -b feature/amazing-feature`)
-3. Commit your changes (`git commit -m 'Add amazing feature'`)
-4. Push to the branch (`git push origin feature/amazing-feature`)
-5. Open a Pull Request
+### Development Guidelines
+- **Follow documentation standards** established in service files
+- **Add comprehensive docstrings** for all new methods
+- **Include usage examples** in documentation
+- **Add proper error handling** with logging
+- **Write type hints** for all parameters and returns
+
+### Code Standards
+```bash
+# Code formatting
+black backend/app/
+isort backend/app/
+
+# Type checking
+mypy backend/app/
+
+# Testing
+pytest backend/tests/
+```
+
+## 📚 API Documentation
+
+Complete API documentation is available at **http://localhost:8000/docs** when running the application.
+
+### Key Endpoints
+
+- **Document Management**: Upload, process, download, delete
+- **Batch Processing**: Multi-document processing with options
+- **Quality Assessment**: Threshold configuration and evaluation
+- **Export Operations**: ZIP creation, combined exports, RAG-ready filtering
+- **System Health**: Connection testing, configuration, monitoring
+
+## 🔐 Security Considerations
+
+- **File upload validation** with extension and size limits
+- **Content sanitization** with filename cleaning
+- **SSL verification control** for local LLM deployments
+- **API key management** with environment variable configuration
+- **Temporary file cleanup** to prevent disk space issues
 
 ## 📝 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+[Add your license information here]
 
-## 🆘 Troubleshooting
+## 🙏 Acknowledgments
 
-### Common Issues
+- **MarkItDown**: Primary document conversion library
+- **Tesseract OCR**: Image-based text extraction
+- **FastAPI**: Modern Python web framework
+- **Next.js**: React framework for the frontend
+- **OpenAI API**: LLM integration for quality assessment
 
-**LLM Connection Failed**:
-- Check API key and endpoint in `.env`
-- Test connection via System Status panel
-- Verify network connectivity
+---
 
-**OCR Poor Quality**:
-- Adjust `OCR_PSM` setting for document type
-- Check `OCR_LANG` configuration
-- Ensure Tesseract is properly installed
-
-**File Upload Issues**:
-- Check file size limits (`MAX_FILE_SIZE`)
-- Verify supported formats
-- Check browser console for errors
-
-**Processing Failures**:
-- Review API logs: `docker-compose logs backend`
-- Check processing results for error details
-- Verify all dependencies are installed
-
-**ZIP Download Issues**:
-- Check available disk space for temporary files
-- Verify document processing completed successfully
-- Review browser console for download errors
-- Ensure all selected documents exist in processed directory
-
-### Performance Tips
-
-**Large Batch Processing**:
-- Process files in smaller batches if memory is limited
-- Monitor processing panel for real-time status
-- Use quality thresholds to filter results before download
-
-**ZIP Archive Optimization**:
-- Combined archives include both individual and merged files
-- RAG-ready downloads filter automatically by quality scores
-- Processing summaries provide detailed quality metrics
+*Built with ❤️ for the RAG community*

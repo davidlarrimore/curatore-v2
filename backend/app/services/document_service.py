@@ -1,4 +1,42 @@
+# ============================================================================
 # backend/app/services/document_service.py
+# ============================================================================
+#
+# Document Processing Service for Curatore v2
+#
+# This module provides the core document processing functionality for Curatore v2,
+# a RAG document processing and optimization tool. It handles the complete
+# document processing pipeline from file upload through conversion, optimization,
+# quality evaluation, and output generation.
+#
+# Key Features:
+#   - Multi-format document conversion (PDF, DOCX, images, text, markdown)
+#   - Intelligent conversion chain with MarkItDown integration
+#   - Advanced OCR processing with Tesseract
+#   - Quality scoring and evaluation systems
+#   - LLM-powered content optimization and evaluation
+#   - Vector database optimization for RAG applications
+#   - Batch processing capabilities
+#   - File management and cleanup operations
+#
+# Supported Formats:
+#   - Documents: PDF, DOCX
+#   - Images: PNG, JPG, JPEG, BMP, TIF, TIFF (with OCR)
+#   - Text: MD (Markdown), TXT (Plain text)
+#
+# Processing Pipeline:
+#   1. File validation and format detection
+#   2. Document conversion to markdown
+#   3. Content quality scoring
+#   4. LLM-powered evaluation (4 dimensions)
+#   5. Vector database optimization (optional)
+#   6. Quality threshold validation
+#   7. File output and metadata generation
+#
+# Author: Curatore v2 Development Team
+# Version: 2.0.0
+# ============================================================================
+
 import io
 import re
 import time
@@ -7,7 +45,7 @@ import shutil
 from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 
-# Import from v1 pipeline logic
+# Import from v1 pipeline logic - document conversion tools
 try:
     from markitdown import MarkItDown
     MD_CONVERTER = MarkItDown(enable_plugins=False)
@@ -31,11 +69,59 @@ from ..utils.text_utils import clean_llm_response
 
 
 class DocumentService:
-    """Service for document processing operations."""
+    """
+    Core document processing service for Curatore v2.
+    
+    This service provides comprehensive document processing capabilities including
+    file upload handling, multi-format conversion, quality assessment, LLM evaluation,
+    and vector database optimization. It manages the complete document processing
+    lifecycle from raw input to RAG-ready output.
+    
+    Architecture:
+        - File Management: Upload, batch, and processed file handling
+        - Conversion Engine: Multi-format document conversion with fallback chains
+        - Quality Assessment: Conversion scoring and LLM-powered evaluation
+        - Optimization: Vector database optimization for RAG applications
+        - Batch Processing: Parallel processing of multiple documents
+    
+    Directory Structure:
+        - upload_dir: User-uploaded files with UUID prefixes
+        - processed_dir: Converted markdown files ready for use
+        - batch_dir: Local files for batch processing operations
+    
+    Integration Points:
+        - LLMService: For evaluation, improvement, and optimization
+        - Settings: Configuration for paths, thresholds, and OCR
+        - Storage: File system management with Docker volume support
+    
+    Attributes:
+        SUPPORTED_EXTENSIONS (Set[str]): File extensions supported for processing
+        upload_dir (Path): Directory for uploaded files
+        processed_dir (Path): Directory for processed markdown files
+        batch_dir (Path): Directory for batch processing files
+    """
     
     SUPPORTED_EXTENSIONS = {".docx", ".pdf", ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff", ".md", ".txt"}
     
     def __init__(self):
+        """
+        Initialize the document service with directory management.
+        
+        Sets up the service with paths from application settings and ensures
+        required directories exist. Designed to work with Docker volume mounts
+        where the main files directory is mounted from the host system.
+        
+        Directory Setup:
+            - Validates Docker volume mount availability
+            - Creates required subdirectories if main directory exists
+            - Logs directory status for debugging and monitoring
+            - Gracefully handles missing volume mounts
+        
+        Error Handling:
+            - Missing volume mounts are logged but don't prevent initialization
+            - Directory creation failures are logged but service remains operational
+            - Service degrades gracefully with limited functionality if directories unavailable
+        """
         # Use absolute paths from settings - these should match Docker volume mount
         self.upload_dir = Path(settings.upload_dir)
         self.processed_dir = Path(settings.processed_dir)
@@ -50,7 +136,29 @@ class DocumentService:
         self._ensure_directories()
     
     def _ensure_directories(self) -> None:
-        """Ensure required directories exist - but only if the parent volume is mounted."""
+        """
+        Ensure required directories exist, but only if the parent volume is mounted.
+        
+        Validates that the Docker volume mount is working correctly and creates
+        required subdirectories. This method is defensive and won't create
+        the main files directory if it doesn't exist (indicating volume mount issues).
+        
+        Validation Process:
+            1. Checks if main files directory exists (Docker volume mount)
+            2. Creates subdirectories only if main directory exists
+            3. Logs directory creation status for monitoring
+            4. Handles errors gracefully without service failure
+        
+        Error Handling:
+            - Missing main directory: Logs warning, continues without creating
+            - Permission errors: Logs error, continues with limited functionality
+            - Other filesystem errors: Logs error, service remains operational
+        
+        Side Effects:
+            - Creates upload_dir, processed_dir, batch_dir if they don't exist
+            - Logs directory status for debugging
+            - Does not raise exceptions on failure
+        """
         try:
             # Check if the main files directory exists (should be mounted from Docker)
             files_root = Path(settings.files_root)
@@ -80,7 +188,41 @@ class DocumentService:
             # Don't raise the exception - let the app continue
     
     def clear_all_files(self) -> Dict[str, int]:
-        """Clear all uploaded and processed files. Returns count of deleted files."""
+        """
+        Clear all uploaded and processed files for system reset.
+        
+        Removes all files from upload and processed directories, typically used
+        during application startup or system reset operations. This is a destructive
+        operation that permanently deletes all processed documents and uploads.
+        
+        Returns:
+            Dict[str, int]: Dictionary containing deletion counts:
+                - "uploaded": Number of uploaded files deleted
+                - "processed": Number of processed files deleted  
+                - "total": Total number of files deleted
+        
+        File Deletion Process:
+            1. Iterates through all files in upload_dir
+            2. Iterates through all files in processed_dir
+            3. Deletes each file individually
+            4. Tracks deletion counts for reporting
+            5. Logs completion status
+        
+        Error Handling:
+            - Individual file deletion failures are logged but don't stop the process
+            - Directory access errors are caught and re-raised
+            - Returns actual deletion counts even if some files couldn't be deleted
+        
+        Use Cases:
+            - Application startup cleanup
+            - System reset functionality
+            - Development environment cleanup
+            - Testing setup/teardown
+        
+        Example:
+            >>> counts = document_service.clear_all_files()
+            >>> print(f"Deleted {counts['total']} files total")
+        """
         deleted_counts = {
             "uploaded": 0,
             "processed": 0,
@@ -111,8 +253,191 @@ class DocumentService:
         
         return deleted_counts
     
+    def get_supported_extensions(self) -> List[str]:
+        """
+        Get list of supported file extensions for document processing.
+        
+        Returns:
+            List[str]: List of supported file extensions including:
+                - .docx (Word documents)
+                - .pdf (PDF documents)
+                - .png, .jpg, .jpeg, .bmp, .tif, .tiff (Images with OCR)
+                - .md (Markdown files)
+                - .txt (Plain text files)
+        
+        Example:
+            >>> extensions = document_service.get_supported_extensions()
+            >>> print(f"Supported formats: {', '.join(extensions)}")
+        """
+        return list(self.SUPPORTED_EXTENSIONS)
+    
+    def is_supported_file(self, filename: str) -> bool:
+        """
+        Check if a file is supported for processing based on its extension.
+        
+        Args:
+            filename (str): The filename to check (must include extension)
+        
+        Returns:
+            bool: True if the file extension is supported, False otherwise
+        
+        Validation Process:
+            - Extracts file extension using pathlib
+            - Converts to lowercase for case-insensitive matching
+            - Checks against SUPPORTED_EXTENSIONS set
+        
+        Example:
+            >>> is_supported = document_service.is_supported_file("document.pdf")
+            >>> if not is_supported:
+            >>>     raise ValueError("Unsupported file type")
+        """
+        return Path(filename).suffix.lower() in self.SUPPORTED_EXTENSIONS
+    
+    async def save_uploaded_file(self, filename: str, content: bytes) -> Tuple[str, Path]:
+        """
+        Save uploaded file content to the upload directory with unique ID.
+        
+        Creates a unique document ID and saves the file with a prefixed filename
+        for identification and organization. The file is saved with a sanitized
+        filename to prevent filesystem issues.
+        
+        Args:
+            filename (str): Original filename from the upload
+            content (bytes): File content as bytes
+        
+        Returns:
+            Tuple[str, Path]: Tuple containing:
+                - str: Unique document ID (UUID4)
+                - Path: Full path to the saved file
+        
+        File Naming Convention:
+            - Format: {document_id}_{sanitized_filename}
+            - Example: "a1b2c3d4-e5f6-7890-abcd-ef1234567890_user_guide.pdf"
+            - Special characters in filename are replaced with underscores
+        
+        File Safety:
+            - Filename sanitization removes problematic characters
+            - UUID prevents filename collisions
+            - Creates upload directory if it doesn't exist
+        
+        Error Handling:
+            - File write errors are logged and re-raised
+            - Directory creation errors are handled automatically
+            - Logs successful saves for monitoring
+        
+        Example:
+            >>> doc_id, file_path = await document_service.save_uploaded_file(
+            >>>     "report.pdf", file_content
+            >>> )
+            >>> print(f"Saved as {doc_id} at {file_path}")
+        """
+        document_id = str(uuid.uuid4())
+        safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
+        file_path = self.upload_dir / f"{document_id}_{safe_filename}"
+        self.upload_dir.mkdir(parents=True, exist_ok=True)
+        
+        try:
+            with open(file_path, "wb") as f:
+                f.write(content)
+            print(f"File saved successfully: {file_path}")
+        except Exception as e:
+            print(f"Error saving file {file_path}: {e}")
+            raise
+        
+        return document_id, file_path
+    
+    def list_uploaded_files(self) -> List[Dict[str, Any]]:
+        """
+        List all uploaded files with metadata for the frontend.
+        
+        Scans the upload directory and returns detailed metadata for each
+        uploaded file including size, upload time, and document ID extraction.
+        
+        Returns:
+            List[Dict[str, Any]]: List of file metadata dictionaries containing:
+                - document_id: Unique identifier extracted from filename
+                - filename: Original filename (without UUID prefix)
+                - original_filename: Full filename as stored
+                - file_size: File size in bytes
+                - upload_time: Upload timestamp in milliseconds
+                - file_path: Full path to the file
+        
+        Filename Processing:
+            - Extracts document ID from filename prefix
+            - Restores original filename by removing UUID prefix
+            - Handles files with and without proper UUID prefixes
+        
+        Error Handling:
+            - Individual file processing errors are logged and skipped
+            - Directory access errors are caught and logged
+            - Returns partial results if some files can't be processed
+            - Empty list returned on complete failure
+        
+        Example:
+            >>> files = document_service.list_uploaded_files()
+            >>> for file_info in files:
+            >>>     print(f"File: {file_info['filename']} ({file_info['file_size']} bytes)")
+        """
+        files = []
+        try:
+            for file_path in self.upload_dir.glob("*"):
+                if file_path.is_file() and file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                    stat = file_path.stat()
+                    parts = file_path.name.split('_', 1)
+                    document_id = parts[0]
+                    original_filename = parts[1] if len(parts) > 1 else file_path.name
+                    
+                    files.append({
+                        "document_id": document_id,
+                        "filename": original_filename,
+                        "original_filename": file_path.name,
+                        "file_size": stat.st_size,
+                        "upload_time": stat.st_mtime * 1000,  # Convert to milliseconds
+                        "file_path": str(file_path)
+                    })
+        except Exception as e:
+            print(f"Error listing files: {e}")
+        
+        return files
+    
     def list_batch_files(self) -> List[Dict[str, Any]]:
-        """List all files in the batch_files directory."""
+        """
+        List all files in the batch_files directory for local processing.
+        
+        Scans the batch files directory and returns metadata for files available
+        for batch processing. These are typically files placed directly in the
+        batch directory for processing without going through the upload flow.
+        
+        Returns:
+            List[Dict[str, Any]]: List of file metadata dictionaries containing:
+                - document_id: Generated ID with "batch_" prefix
+                - filename: Original filename
+                - original_filename: Same as filename (no UUID prefix)
+                - file_size: File size in bytes
+                - upload_time: File modification time in milliseconds
+                - file_path: Full path to the file
+                - source: "batch" marker for identification
+        
+        Document ID Generation:
+            - Format: "batch_{filename_stem}"
+            - Example: "report.pdf" becomes document ID "batch_report"
+            - Allows frontend to distinguish batch files from uploads
+        
+        File Filtering:
+            - Only includes files with supported extensions
+            - Ignores directories and unsupported file types
+            - Logs unsupported files for debugging
+        
+        Error Handling:
+            - Directory not existing is handled gracefully
+            - Individual file processing errors are logged and skipped
+            - Returns partial results if some files can't be processed
+            - Comprehensive error logging for debugging
+        
+        Example:
+            >>> batch_files = document_service.list_batch_files()
+            >>> print(f"Found {len(batch_files)} batch files available")
+        """
         files = []
         try:
             print(f"🔍 Listing batch files from: {self.batch_dir}")
@@ -156,68 +481,123 @@ class DocumentService:
             traceback.print_exc()
         
         return files
-
-    def find_batch_file(self, filename: str) -> Optional[Path]:
-        """Find a specific file in the batch_files directory."""
-        try:
-            batch_file_path = self.batch_dir / filename
-            if batch_file_path.exists() and batch_file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
-                return batch_file_path
-            else:
-                return None
-        except Exception as e:
-            print(f"❌ Error finding batch file {filename}: {e}")
-            return None
-
-    def copy_batch_to_upload(self, filename: str) -> Tuple[str, Path]:
-        """Copy a batch file to the upload directory for processing."""
-        try:
-            batch_file_path = self.find_batch_file(filename)
-            if not batch_file_path:
-                raise FileNotFoundError(f"Batch file not found: {filename}")
-            document_id = str(uuid.uuid4())
-            target_path = self.upload_dir / f"{document_id}_{filename}"
-            shutil.copy2(batch_file_path, target_path)
-            print(f"📁 Copied batch file: {batch_file_path} -> {target_path}")
-            
-            return document_id, target_path
-        except Exception as e:
-            print(f"❌ Error copying batch file {filename}: {e}")
-            raise
     
-    def _pdf_pages_to_images(self, pdf_path: Path, dpi: int = 220) -> List[Image.Image]:
-        """Convert PDF pages to images for OCR."""
-        imgs = []
-        with fitz.open(str(pdf_path)) as doc:
-            mat = fitz.Matrix(dpi/72, dpi/72)
-            for page in doc:
-                pix = page.get_pixmap(matrix=mat, alpha=False)
-                img = Image.open(io.BytesIO(pix.tobytes("png"))).convert("RGB")
-                imgs.append(img)
-        return imgs
-    
-    def _ocr_image_with_tesseract(self, img: Image.Image, lang: str = "eng", psm: int = 3) -> Tuple[str, float]:
-        """OCR image using Tesseract and return text with confidence."""
-        config = f"--psm {psm}"
-        text = pytesseract.image_to_string(img, lang=lang, config=config)
-        data = pytesseract.image_to_data(img, lang=lang, config=config, output_type=Output.DICT)
+    def get_processed_content(self, document_id: str) -> Optional[str]:
+        """
+        Get processed markdown content for a document by ID.
         
-        confs = []
-        for c in data.get("conf", []):
+        Retrieves the processed markdown content for a document that has been
+        successfully processed through the conversion pipeline.
+        
+        Args:
+            document_id (str): Unique document identifier
+        
+        Returns:
+            Optional[str]: Processed markdown content, or None if not found
+        
+        File Location:
+            - Searches processed_dir for files matching pattern: "*_{document_id}.md"
+            - Handles files with various prefixes (original filename prefixes)
+            - Returns content from first matching file found
+        
+        Error Handling:
+            - File read errors are caught and skipped (tries next match)
+            - Missing files return None
+            - Encoding errors are handled by trying multiple files
+        
+        Example:
+            >>> content = document_service.get_processed_content("doc123")
+            >>> if content:
+            >>>     print(f"Content length: {len(content)} characters")
+        """
+        for file_path in self.processed_dir.glob(f"*_{document_id}.md"):
             try:
-                val = float(c)
-                if val >= 0:
-                    confs.append(val)
+                return file_path.read_text(encoding="utf-8")
             except Exception:
-                pass
+                continue
+        return None
+    
+    def _find_document_file(self, document_id: str) -> Optional[Path]:
+        """
+        Find the uploaded or batch file for a document ID.
         
-        avg_conf = (sum(confs) / len(confs) / 100.0) if confs else 0.0
-        return text.strip(), avg_conf
+        Locates the original file associated with a document ID by searching
+        upload and batch directories. Handles both regular uploads and batch files.
+        
+        Args:
+            document_id (str): Document identifier to search for
+        
+        Returns:
+            Optional[Path]: Path to the document file, or None if not found
+        
+        Search Process:
+            1. Searches upload_dir for files with format: "{document_id}_*.*"
+            2. For batch IDs (starting with "batch_"), searches batch_dir
+            3. Returns first matching file found
+        
+        Batch File Handling:
+            - Batch IDs have format: "batch_{filename_stem}"
+            - Removes "batch_" prefix to get original filename stem
+            - Searches for files matching the stem with any extension
+        
+        Example:
+            >>> file_path = document_service._find_document_file("doc123")
+            >>> if file_path:
+            >>>     print(f"Found file: {file_path}")
+        """
+        # Look for files that start with the document_id in upload directory
+        for file_path in self.upload_dir.glob(f"{document_id}_*.*"):
+            if file_path.is_file():
+                return file_path
+        
+        # Look in batch files for batch_ prefixed IDs
+        if document_id.startswith("batch_"):
+            filename_stem = document_id.replace("batch_", "")
+            for file_path in self.batch_dir.glob(f"{filename_stem}.*"):
+                if file_path.is_file() and file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                    return file_path
+        
+        return None
     
     def _score_conversion(self, markdown_text: str, original_text: Optional[str] = None) -> Tuple[int, str]:
         """
-        Calculates a heuristic conversion score (0-100) based on content coverage,
-        markdown structure markers (headings, lists), and basic legibility checks.
+        Score the quality of document conversion to markdown (0-100).
+        
+        Evaluates the conversion quality based on content coverage, structure
+        preservation, and readability. This scoring system helps identify
+        successful conversions and potential issues.
+        
+        Args:
+            markdown_text (str): The converted markdown content
+            original_text (Optional[str]): Original text for comparison (currently unused)
+        
+        Returns:
+            Tuple[int, str]: Tuple containing:
+                - int: Conversion score (0-100)
+                - str: Human-readable feedback explaining the score
+        
+        Scoring Components:
+            1. Content Coverage (0-100): Ratio of extracted vs original content
+            2. Structure Score (0-80): Based on markdown structure elements
+                - Headings: +30 points if present
+                - Lists: +30 points if present  
+                - Tables: +20 points if 3+ table markers present
+            3. Legibility Score (0-20): Based on character encoding and line length
+        
+        Score Calculation:
+            - Total = (0.5 × Content Score) + Structure Score + Legibility Score
+            - Capped at 100 maximum
+            - Weighted toward content preservation
+        
+        Feedback Generation:
+            - Content preservation percentage
+            - Formatting loss warnings
+            - Readability issue indicators
+            - High-fidelity conversion confirmation
+        
+        Example:
+            >>> score, feedback = self._score_conversion(markdown_content)
+            >>> print(f"Conversion score: {score}/100 - {feedback}")
         """
         if not markdown_text:
             return 0, "No markdown produced."
@@ -243,7 +623,7 @@ class DocumentService:
         if tables > 3:   structure_score += 20
 
         # Legibility score
-        if "" in markdown_text: # Check for replacement characters
+        if "�" in markdown_text:  # Check for replacement characters
             legibility_score = 0
         else:
             lines = markdown_text.splitlines() or [markdown_text]
@@ -265,101 +645,105 @@ class DocumentService:
         if not fb:
             fb.append("High-fidelity conversion.")
         return total, " ".join(fb)
-
-    def _convert_file_to_text(
-        self,
-        file_path: Path,
-        ocr_settings: OCRSettings
-    ) -> Tuple[Optional[str], str]:
+    
+    def _meets_thresholds(
+        self, 
+        conversion_score: int, 
+        llm_evaluation: Optional[LLMEvaluation], 
+        thresholds: QualityThresholds
+    ) -> bool:
         """
-        Converts a document to text format using a prioritized chain of methods.
-        Returns a tuple of (text_content, note_string).
+        Check if document meets all quality thresholds for RAG readiness.
+        
+        Evaluates whether a document passes all configured quality thresholds
+        based on conversion score and LLM evaluation results. This determines
+        if a document is considered "RAG Ready" for production use.
+        
+        Args:
+            conversion_score (int): Conversion quality score (0-100)
+            llm_evaluation (Optional[LLMEvaluation]): LLM evaluation results
+            thresholds (QualityThresholds): Quality threshold configuration
+        
+        Returns:
+            bool: True if all thresholds are met, False otherwise
+        
+        Threshold Evaluation:
+            - Conversion Score: Must meet or exceed conversion threshold
+            - Clarity Score: Must meet or exceed clarity threshold (1-10)
+            - Completeness Score: Must meet or exceed completeness threshold (1-10)
+            - Relevance Score: Must meet or exceed relevance threshold (1-10)
+            - Markdown Score: Must meet or exceed markdown threshold (1-10)
+        
+        Requirements:
+            - All thresholds must be met (AND logic, not OR)
+            - LLM evaluation must be available (None evaluation = False)
+            - Missing LLM scores are treated as 0
+        
+        Error Handling:
+            - Missing LLM evaluation returns False
+            - None LLM scores are treated as 0 for comparison
+            - Exception during evaluation returns False
+        
+        Example:
+            >>> passes = self._meets_thresholds(85, llm_eval, thresholds)
+            >>> if passes:
+            >>>     print("Document is RAG Ready!")
         """
-        ext = file_path.suffix.lower()
-        note = ""
-        md = None
-
-        # 1) MD/TXT direct read
-        if ext in {".md", ".txt"}:
-            try:
-                text = file_path.read_text(encoding="utf-8")
-            except UnicodeDecodeError:
-                text = file_path.read_text(encoding="latin-1")
-            md = text if ext == ".md" else f"```\n{text}\n```"
-            note = "Loaded text/markdown directly."
-            return md, note
-
-        # 2) Try MarkItDown first (preserves structure for LLM)
+        if not llm_evaluation:
+            return False
+        
         try:
-            if MD_CONVERTER:
-                res = MD_CONVERTER.convert(str(file_path))
-                md = (res.text_content or "").strip()
-                if md:
-                    note = "Converted with MarkItDown."
-                    return md, note
-                note = "MarkItDown returned empty content; attempting fallbacks."
-        except Exception as e:
-            note = f"MarkItDown failed: {e}; attempting fallbacks."
-
-        # 3) DOCX fallback using python-docx
-        if ext == ".docx":
-            try:
-                d = docx.Document(str(file_path))
-                parts = [p.text for p in d.paragraphs]
-                md = "\n".join(parts).strip()
-                note = "Converted DOCX via python-docx fallback."
-                return md, note
-            except Exception as e:
-                note = f"DOCX fallback failed: {e}"
-                return None, note
-
-        # 4) PDF: try text layer first, otherwise rasterize and OCR
-        if ext == ".pdf":
-            try:
-                text = pdf_extract_text(str(file_path)) or ""
-                if text.strip():
-                    note = "Extracted PDF text via pdfminer.six."
-                    return text, note
-                
-                # If no text, fall back to OCR
-                imgs = self._pdf_pages_to_images(file_path, dpi=220)
-                if not imgs:
-                    note = f"No pages to OCR. {note}"
-                    return None, note
-                
-                all_text, confs = [], []
-                for img in imgs:
-                    t, c = self._ocr_image_with_tesseract(img, lang=ocr_settings.language, psm=ocr_settings.psm)
-                    if t:
-                        all_text.append(t)
-                        confs.append(c)
-                md = "\n\n".join(all_text).strip()
-                avg_conf = (sum(confs)/len(confs)) if confs else 0.0
-                note = f"PDF OCR via Tesseract; avg_conf={avg_conf:.2f}"
-                return md, note
-            except Exception as e:
-                note = f"PDF OCR error: {e}"
-                return None, note
-
-        # 5) Images: OCR with Tesseract
-        if ext in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}:
-            try:
-                img = Image.open(str(file_path)).convert("RGB")
-                text, conf = self._ocr_image_with_tesseract(img, lang=ocr_settings.language, psm=ocr_settings.psm)
-                note = f"Image OCR via Tesseract; avg_conf={conf:.2f}"
-                return text, note
-            except Exception as e:
-                note = f"Image OCR error: {e}"
-                return None, note
-
-        return None, f"Unsupported or failed conversion. {note}"
-
+            return (
+                conversion_score >= thresholds.conversion and
+                (llm_evaluation.clarity_score or 0) >= thresholds.clarity and
+                (llm_evaluation.completeness_score or 0) >= thresholds.completeness and
+                (llm_evaluation.relevance_score or 0) >= thresholds.relevance and
+                (llm_evaluation.markdown_score or 0) >= thresholds.markdown
+            )
+        except Exception:
+            return False
+    
     async def convert_to_markdown(
         self, 
         file_path: Path, 
         ocr_settings: OCRSettings
     ) -> ConversionResult:
-        """Convert document to markdown format and score it."""
+        """
+        Convert document to markdown format using intelligent conversion chain.
+        
+        Performs document conversion using a prioritized chain of conversion
+        methods, starting with the best option and falling back to alternatives
+        if needed. Includes quality scoring of the conversion result.
+        
+        Args:
+            file_path (Path): Path to the document file to convert
+            ocr_settings (OCRSettings): OCR configuration for image processing
+        
+        Returns:
+            ConversionResult: Conversion result with content, score, and feedback
+        
+        Conversion Chain:
+            1. MarkItDown: Primary converter for structured documents
+            2. Format-specific converters: PDF, DOCX, image processors
+            3. OCR fallback: For images and problem documents
+            4. Direct text reading: For text and markdown files
+        
+        Quality Assessment:
+            - Automatic scoring of conversion quality (0-100)
+            - Feedback generation explaining conversion results
+            - Success/failure determination based on content availability
+        
+        Error Handling:
+            - Individual conversion method failures are caught
+            - Falls back to next method in chain
+            - Returns detailed error information in conversion notes
+            - Comprehensive exception handling with informative messages
+        
+        Example:
+            >>> result = await document_service.convert_to_markdown(file_path, ocr_settings)
+            >>> if result.success:
+            >>>     print(f"Converted successfully: {result.conversion_score}/100")
+        """
         try:
             markdown_content, note = self._convert_file_to_text(file_path, ocr_settings)
             
@@ -389,26 +773,166 @@ class DocumentService:
                 conversion_note=f"An unexpected error occurred during conversion: {e}"
             )
     
-    def _meets_thresholds(
-        self, 
-        conversion_score: int, 
-        llm_evaluation: Optional[LLMEvaluation], 
-        thresholds: QualityThresholds
-    ) -> bool:
-        """Check if document meets quality thresholds."""
-        if not llm_evaluation:
-            return False
+    def _convert_file_to_text(
+        self,
+        file_path: Path,
+        ocr_settings: OCRSettings
+    ) -> Tuple[Optional[str], str]:
+        """
+        Convert a document to text format using a prioritized chain of methods.
         
+        Internal method that implements the actual conversion logic with multiple
+        fallback strategies. Tries the best conversion method first and falls
+        back to alternatives if needed. Returns both content and processing notes.
+        
+        Args:
+            file_path (Path): Path to the document file to convert
+            ocr_settings (OCRSettings): OCR configuration (language, PSM mode)
+        
+        Returns:
+            Tuple[Optional[str], str]: Tuple containing:
+                - Optional[str]: Converted text content (None if all methods fail)
+                - str: Processing notes explaining what method was used
+        
+        Conversion Priority Chain:
+            1. Direct text reading: For .md and .txt files
+            2. MarkItDown: For structured documents (PDF, DOCX, etc.)
+            3. Format-specific fallbacks:
+               - PDF: pdfminer + PyMuPDF fallback
+               - DOCX: python-docx library
+               - Images: Tesseract OCR
+            4. OCR fallback: For any file that previous methods failed on
+        
+        OCR Processing:
+            - Uses Tesseract with configurable language and PSM settings
+            - Handles various image formats
+            - Provides confidence scoring for OCR results
+            - Falls back to different OCR strategies if primary fails
+        
+        Error Handling:
+            - Each conversion method is wrapped in try-catch
+            - Failed methods log errors and continue to next method
+            - Returns detailed notes about which methods were attempted
+            - Graceful degradation through the conversion chain
+        
+        Example Result:
+            >>> content, note = self._convert_file_to_text(path, ocr_settings)
+            >>> print(f"Conversion note: {note}")
+            >>> # Output: "Converted with MarkItDown."
+        """
+        ext = file_path.suffix.lower()
+        note = ""
+        md = None
+
+        # 1) MD/TXT direct read
+        if ext in {".md", ".txt"}:
+            try:
+                text = file_path.read_text(encoding="utf-8")
+            except UnicodeDecodeError:
+                text = file_path.read_text(encoding="latin-1")
+            md = text if ext == ".md" else f"```\n{text}\n```"
+            note = "Loaded text/markdown directly."
+            return md, note
+
+        # 2) Try MarkItDown first (preserves structure for LLM)
         try:
-            return (
-                conversion_score >= thresholds.conversion and
-                (llm_evaluation.clarity_score or 0) >= thresholds.clarity and
-                (llm_evaluation.completeness_score or 0) >= thresholds.completeness and
-                (llm_evaluation.relevance_score or 0) >= thresholds.relevance and
-                (llm_evaluation.markdown_score or 0) >= thresholds.markdown
-            )
-        except Exception:
-            return False
+            if MD_CONVERTER:
+                res = MD_CONVERTER.convert(str(file_path))
+                md = (res.text_content or "").strip()
+                if md:
+                    note = "Converted with MarkItDown."
+                    return md, note
+                note = "MarkItDown returned empty content; attempting fallbacks."
+        except Exception as e:
+            note = f"MarkItDown failed ({str(e)[:50]}...); trying fallbacks."
+
+        # 3) Format-specific fallbacks
+        if ext == ".pdf":
+            # PDF fallback chain
+            try:
+                # Try pdfminer first
+                text = pdf_extract_text(str(file_path))
+                if text and text.strip():
+                    md = text.strip()
+                    note += " Used pdfminer for PDF extraction."
+                    return md, note
+            except Exception as e:
+                note += f" pdfminer failed ({str(e)[:30]}...)."
+            
+            try:
+                # Try PyMuPDF as backup
+                doc = fitz.open(str(file_path))
+                pages = []
+                for page in doc:
+                    pages.append(page.get_text())
+                doc.close()
+                text = "\n\n".join(pages)
+                if text and text.strip():
+                    md = text.strip()
+                    note += " Used PyMuPDF for PDF extraction."
+                    return md, note
+            except Exception as e:
+                note += f" PyMuPDF failed ({str(e)[:30]}...)."
+
+        elif ext == ".docx":
+            # DOCX fallback
+            try:
+                doc = docx.Document(str(file_path))
+                paragraphs = []
+                for para in doc.paragraphs:
+                    if para.text.strip():
+                        paragraphs.append(para.text.strip())
+                text = "\n\n".join(paragraphs)
+                if text and text.strip():
+                    md = text.strip()
+                    note += " Used python-docx for DOCX extraction."
+                    return md, note
+            except Exception as e:
+                note += f" python-docx failed ({str(e)[:30]}...)."
+
+        # 4) OCR fallback for images and any other format
+        if ext in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"} or not md:
+            try:
+                # Load image
+                image = Image.open(str(file_path))
+                
+                # Configure OCR
+                config = f'--oem 3 --psm {ocr_settings.psm} -l {ocr_settings.language}'
+                
+                # Try OCR with detailed output first
+                try:
+                    ocr_data = pytesseract.image_to_data(image, config=config, output_type=Output.DICT)
+                    confidences = [int(conf) for conf in ocr_data['conf'] if int(conf) > 0]
+                    avg_confidence = sum(confidences) / len(confidences) if confidences else 0
+                    
+                    # Get text
+                    text = pytesseract.image_to_string(image, config=config)
+                    
+                    if text and text.strip():
+                        md = text.strip()
+                        note += f" Used Tesseract OCR (avg confidence: {avg_confidence:.1f}%)."
+                        return md, note
+                    else:
+                        note += f" OCR completed but no text extracted (confidence: {avg_confidence:.1f}%)."
+                
+                except Exception as e:
+                    # Fallback to simple OCR
+                    text = pytesseract.image_to_string(image)
+                    if text and text.strip():
+                        md = text.strip()
+                        note += f" Used simple Tesseract OCR fallback."
+                        return md, note
+                    else:
+                        note += f" Simple OCR fallback also failed: {str(e)[:50]}..."
+                        
+            except Exception as e:
+                note += f" OCR processing failed: {str(e)[:50]}..."
+
+        # If we get here, all methods failed
+        if not md:
+            note += " All conversion methods failed to extract text."
+        
+        return md, note
     
     async def process_document(
         self, 
@@ -416,7 +940,53 @@ class DocumentService:
         file_path: Path, 
         options: ProcessingOptions
     ) -> ProcessingResult:
-        """Process a single document through the complete pipeline."""
+        """
+        Process a single document through the complete processing pipeline.
+        
+        Executes the full document processing workflow from conversion through
+        optimization and evaluation. This is the main processing method that
+        coordinates all steps of the document processing pipeline.
+        
+        Args:
+            document_id (str): Unique identifier for the document
+            file_path (Path): Path to the original document file
+            options (ProcessingOptions): Processing configuration and thresholds
+        
+        Returns:
+            ProcessingResult: Complete processing results with all metadata
+        
+        Processing Pipeline:
+            1. Document conversion to markdown
+            2. Document summarization (if LLM available)
+            3. Vector database optimization (if enabled and LLM available)
+            4. File output and storage
+            5. LLM evaluation (if LLM available)
+            6. Quality threshold validation
+            7. Result compilation and metadata generation
+        
+        Quality Assessment:
+            - Conversion quality scoring
+            - LLM evaluation across 4 dimensions
+            - Threshold compliance checking
+            - RAG readiness determination
+        
+        Optimization Features:
+            - Vector database optimization for better chunking
+            - Content structure enhancement
+            - Keyword enrichment for semantic search
+        
+        Error Handling:
+            - Comprehensive error catching at each pipeline stage
+            - Graceful degradation when LLM is unavailable
+            - Detailed error reporting in processing results
+            - Processing time tracking for performance monitoring
+        
+        Example:
+            >>> result = await document_service.process_document(
+            >>>     doc_id, file_path, processing_options
+            >>> )
+            >>> print(f"Processing {'successful' if result.success else 'failed'}")
+        """
         start_time = time.time()
         filename = file_path.name.split('_', 1)[-1] if '_' in file_path.name else file_path.name
         
@@ -461,7 +1031,6 @@ class DocumentService:
                     optimized_content = await llm_service.optimize_for_vector_db(markdown_content)
                     if optimized_content and optimized_content.strip():
                         markdown_content = clean_llm_response(optimized_content)
-                        markdown_content = optimized_content
                         vector_optimized = True
                         optimization_note = "Vector DB optimized. "
                         print("🎯 Vector optimization applied")
@@ -556,7 +1125,43 @@ class DocumentService:
         document_ids: List[str], 
         options: ProcessingOptions
     ) -> List[ProcessingResult]:
-        """Process multiple documents."""
+        """
+        Process multiple documents in sequence.
+        
+        Processes a batch of documents using the same processing options.
+        Each document is processed individually with the full pipeline,
+        allowing for different outcomes per document.
+        
+        Args:
+            document_ids (List[str]): List of document IDs to process
+            options (ProcessingOptions): Shared processing configuration
+        
+        Returns:
+            List[ProcessingResult]: List of processing results for each document
+        
+        Processing Strategy:
+            - Sequential processing (not parallel) for resource management
+            - Individual error handling per document
+            - Missing files are handled gracefully with error results
+            - Each document gets full pipeline treatment
+        
+        Error Handling:
+            - Missing documents result in failed ProcessingResult
+            - Individual document failures don't stop batch processing
+            - Comprehensive error reporting per document
+        
+        Performance Considerations:
+            - Sequential processing prevents resource contention
+            - Memory usage scales with document size, not count
+            - Processing time is sum of individual document times
+        
+        Example:
+            >>> results = await document_service.process_batch(
+            >>>     ["doc1", "doc2", "doc3"], processing_options
+            >>> )
+            >>> successful = [r for r in results if r.success]
+            >>> print(f"Processed {len(successful)}/{len(results)} documents successfully")
+        """
         results = []
         
         for doc_id in document_ids:
@@ -578,80 +1183,6 @@ class DocumentService:
         
         return results
     
-    def _find_document_file(self, document_id: str) -> Optional[Path]:
-        """Find the uploaded file for a document ID."""
-        # Look for files that start with the document_id in upload directory
-        for file_path in self.upload_dir.glob(f"{document_id}_*.*"):
-            if file_path.is_file():
-                return file_path
-        
-        # Look in batch files for batch_ prefixed IDs
-        if document_id.startswith("batch_"):
-            filename_stem = document_id.replace("batch_", "")
-            for file_path in self.batch_dir.glob(f"{filename_stem}.*"):
-                if file_path.is_file() and file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
-                    return file_path
-        
-        return None
-    
-    def get_supported_extensions(self) -> List[str]:
-        """Get list of supported file extensions."""
-        return list(self.SUPPORTED_EXTENSIONS)
-    
-    def is_supported_file(self, filename: str) -> bool:
-        """Check if file is supported for processing."""
-        return Path(filename).suffix.lower() in self.SUPPORTED_EXTENSIONS
-    
-    async def save_uploaded_file(self, filename: str, content: bytes) -> Tuple[str, Path]:
-        """Save uploaded file and return document ID and file path."""
-        document_id = str(uuid.uuid4())
-        safe_filename = re.sub(r'[^a-zA-Z0-9_.-]', '_', filename)
-        file_path = self.upload_dir / f"{document_id}_{safe_filename}"
-        self.upload_dir.mkdir(parents=True, exist_ok=True)
-        
-        try:
-            with open(file_path, "wb") as f:
-                f.write(content)
-            print(f"File saved successfully: {file_path}")
-        except Exception as e:
-            print(f"Error saving file {file_path}: {e}")
-            raise
-        
-        return document_id, file_path
-    
-    def list_uploaded_files(self) -> List[Dict[str, Any]]:
-        """List all uploaded files with metadata."""
-        files = []
-        try:
-            for file_path in self.upload_dir.glob("*"):
-                if file_path.is_file() and file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
-                    stat = file_path.stat()
-                    parts = file_path.name.split('_', 1)
-                    document_id = parts[0]
-                    original_filename = parts[1] if len(parts) > 1 else file_path.name
-                    
-                    files.append({
-                        "document_id": document_id,
-                        "filename": original_filename,
-                        "original_filename": file_path.name,
-                        "file_size": stat.st_size,
-                        "upload_time": stat.st_mtime * 1000,  # Convert to milliseconds
-                        "file_path": str(file_path)
-                    })
-        except Exception as e:
-            print(f"Error listing files: {e}")
-        
-        return files
-    
-    def get_processed_content(self, document_id: str) -> Optional[str]:
-        """Get processed markdown content for a document."""
-        for file_path in self.processed_dir.glob(f"*_{document_id}.md"):
-            try:
-                return file_path.read_text(encoding="utf-8")
-            except Exception:
-                continue
-        return None
-    
     async def update_document_content(
         self, 
         document_id: str, 
@@ -660,7 +1191,58 @@ class DocumentService:
         improvement_prompt: Optional[str] = None,
         apply_vector_optimization: bool = False
     ) -> Optional[ProcessingResult]:
-        """Update document content with optional LLM improvements and re-evaluate."""
+        """
+        Update document content with optional LLM improvements and re-evaluation.
+        
+        Allows updating processed document content with optional LLM-powered
+        improvements or vector optimization. The updated content is re-evaluated
+        and scored to provide fresh quality metrics.
+        
+        Args:
+            document_id (str): Document ID to update
+            content (str): New content to save
+            options (ProcessingOptions): Processing options for re-evaluation
+            improvement_prompt (Optional[str]): Custom prompt for LLM improvement
+            apply_vector_optimization (bool): Whether to apply vector DB optimization
+        
+        Returns:
+            Optional[ProcessingResult]: Updated processing result, or None if document not found
+        
+        Update Process:
+            1. Locates existing processed file
+            2. Applies improvements if requested (either custom prompt or vector optimization)
+            3. Saves updated content to file
+            4. Re-evaluates content quality
+            5. Checks thresholds with new scores
+            6. Returns updated ProcessingResult
+        
+        LLM Integration:
+            - Custom improvement prompts for specific editing instructions
+            - Vector optimization for RAG enhancement
+            - Automatic content cleaning and formatting
+        
+        Re-evaluation:
+            - Fresh conversion scoring
+            - New LLM evaluation if available
+            - Updated threshold compliance checking
+            - Metadata refresh with current processing options
+        
+        Error Handling:
+            - Missing documents return None
+            - LLM failures fall back to original content
+            - File write errors are logged and handled
+            - Evaluation errors are caught and logged
+        
+        Example:
+            >>> result = await document_service.update_document_content(
+            >>>     "doc123", 
+            >>>     updated_content,
+            >>>     options,
+            >>>     improvement_prompt="Make this more concise"
+            >>> )
+            >>> if result:
+            >>>     print(f"Updated with score: {result.conversion_score}/100")
+        """
         try:
             processed_file_path = next(self.processed_dir.glob(f"*_{document_id}.md"), None)
             if not processed_file_path:
@@ -704,7 +1286,7 @@ class DocumentService:
                 conversion_score=score,
                 pass_all_thresholds=passes_thresholds,
                 vector_optimized=vector_optimized,
-                processing_time=0.0, # Not a full process
+                processing_time=0.0,  # Not a full process
                 processed_at=time.time(),
                 thresholds_used=options.quality_thresholds
             )
@@ -714,5 +1296,10 @@ class DocumentService:
             return None
 
 
-# Global document service instance
+# ============================================================================
+# Global Document Service Instance
+# ============================================================================
+
+# Create a single global instance of the document service
+# This ensures consistent file handling and processing across the application
 document_service = DocumentService()

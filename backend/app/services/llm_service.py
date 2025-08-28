@@ -1,4 +1,33 @@
+# ============================================================================
 # backend/app/services/llm_service.py
+# ============================================================================
+#
+# Large Language Model (LLM) Service for Curatore v2
+#
+# This module provides comprehensive LLM integration for document processing,
+# evaluation, improvement, and optimization. It supports OpenAI-compatible APIs
+# including local LLM servers (Ollama, LM Studio, OpenWebUI) and hosted services.
+#
+# Key Features:
+#   - Document quality evaluation with structured scoring
+#   - Content improvement and rewriting with custom prompts
+#   - Vector database optimization for RAG applications
+#   - Document summarization with configurable length
+#   - Connection testing and status monitoring
+#   - SSL verification control for local deployments
+#   - Comprehensive error handling and fallback mechanisms
+#
+# Supported LLM Providers:
+#   - OpenAI API (GPT-3.5, GPT-4, etc.)
+#   - Local Ollama servers
+#   - LM Studio local servers  
+#   - OpenWebUI deployments
+#   - Any OpenAI-compatible API endpoint
+#
+# Author: Curatore v2 Development Team
+# Version: 2.0.0
+# ============================================================================
+
 import json
 import re
 from typing import Optional
@@ -12,14 +41,68 @@ from ..utils.text_utils import clean_llm_response
 
 
 class LLMService:
-    """Service for LLM interactions."""
+    """
+    Large Language Model service for document processing and evaluation.
+    
+    This service provides a unified interface for interacting with LLMs for various
+    document processing tasks including evaluation, improvement, optimization, and
+    summarization. It supports OpenAI-compatible APIs and handles connection
+    management, SSL verification, and error recovery.
+    
+    Connection Management:
+        - Automatic client initialization from configuration
+        - SSL verification control for local LLM servers
+        - Connection testing with detailed status reporting
+        - Graceful degradation when LLM is unavailable
+    
+    Processing Features:
+        - Document quality evaluation (4 dimensions)
+        - Content improvement with custom prompts
+        - Vector database optimization for RAG
+        - Document summarization with length control
+        - JSON response parsing with fallback extraction
+    
+    Attributes:
+        _client (Optional[OpenAI]): Initialized OpenAI client or None if unavailable
+    """
     
     def __init__(self):
+        """
+        Initialize the LLM service with automatic client configuration.
+        
+        Attempts to create an OpenAI client using configuration from settings.
+        If initialization fails (missing API key, network issues, etc.), the
+        client will be None and all LLM features will gracefully degrade.
+        
+        Side Effects:
+            - Disables SSL warnings if SSL verification is disabled
+            - Creates HTTP client with custom timeout and SSL settings
+            - Sets _client to None if initialization fails
+        """
         self._client: Optional[OpenAI] = None
         self._initialize_client()
     
     def _initialize_client(self) -> None:
-        """Initialize OpenAI client with configuration."""
+        """
+        Initialize OpenAI client with configuration from settings.
+        
+        Creates an OpenAI client with custom HTTP client configuration for
+        SSL verification control and timeout management. This method is
+        called during service initialization and can be called again to
+        reinitialize the client if settings change.
+        
+        Configuration Sources:
+            - settings.openai_api_key: API key for authentication
+            - settings.openai_base_url: Custom endpoint URL (for local LLMs)
+            - settings.openai_verify_ssl: SSL verification control
+            - settings.openai_timeout: Request timeout in seconds
+            - settings.openai_max_retries: Maximum retry attempts
+        
+        Error Handling:
+            - Missing API key: Client set to None, no error raised
+            - Network/SSL issues: Client set to None, warning printed
+            - Configuration errors: Client set to None, exception details logged
+        """
         if not settings.openai_api_key:
             self._client = None
             return
@@ -48,11 +131,51 @@ class LLMService:
     
     @property
     def is_available(self) -> bool:
-        """Check if LLM client is available."""
+        """
+        Check if LLM client is available for processing.
+        
+        Returns:
+            bool: True if the LLM client is initialized and ready, False otherwise
+        
+        Usage:
+            >>> if llm_service.is_available:
+            >>>     result = await llm_service.evaluate_document(content)
+            >>> else:
+            >>>     print("LLM not available, skipping evaluation")
+        """
         return self._client is not None
     
     async def test_connection(self) -> LLMConnectionStatus:
-        """Test the LLM connection and return status."""
+        """
+        Test the LLM connection and return detailed status information.
+        
+        Performs a simple API call to verify that the LLM is reachable and
+        responding correctly. This is useful for health checks, configuration
+        validation, and debugging connection issues.
+        
+        Returns:
+            LLMConnectionStatus: Detailed connection status including:
+                - connected: Whether the connection succeeded
+                - endpoint: The API endpoint being used
+                - model: The configured model name
+                - error: Error message if connection failed
+                - response: Sample response from the LLM if successful
+                - ssl_verify: SSL verification setting
+                - timeout: Request timeout setting
+        
+        Test Process:
+            1. Checks if client is initialized
+            2. Sends a simple "Hello" message to the LLM
+            3. Expects "OK" response (tests model response capability)
+            4. Returns detailed status with all configuration info
+        
+        Example:
+            >>> status = await llm_service.test_connection()
+            >>> if status.connected:
+            >>>     print(f"LLM ready: {status.model} at {status.endpoint}")
+            >>> else:
+            >>>     print(f"LLM error: {status.error}")
+        """
         if not self._client:
             return LLMConnectionStatus(
                 connected=False,
@@ -90,7 +213,41 @@ class LLMService:
             )
     
     async def evaluate_document(self, markdown_text: str) -> Optional[LLMEvaluation]:
-        """Evaluate document quality using LLM."""
+        """
+        Evaluate document quality using LLM across four key dimensions.
+        
+        Performs comprehensive document evaluation using structured prompting to
+        assess document quality for RAG applications. The LLM evaluates content
+        across four dimensions and provides actionable feedback for improvements.
+        
+        Args:
+            markdown_text (str): The markdown content to evaluate
+        
+        Returns:
+            Optional[LLMEvaluation]: Structured evaluation results or None if LLM unavailable
+        
+        Evaluation Dimensions:
+            1. Clarity (1-10): Document structure, readability, logical flow
+            2. Completeness (1-10): Information preservation, missing content detection  
+            3. Relevance (1-10): Content focus, unnecessary information identification
+            4. Markdown Quality (1-10): Formatting consistency, structure quality
+        
+        Response Structure:
+            - Individual scores and feedback for each dimension
+            - Overall improvement suggestions
+            - Pass/Fail recommendation for RAG readiness
+            - JSON format with fallback parsing for malformed responses
+        
+        Error Handling:
+            - Client unavailable: Returns None
+            - API errors: Returns None, logs error details
+            - JSON parsing errors: Attempts regex extraction, returns None on failure
+        
+        Example:
+            >>> evaluation = await llm_service.evaluate_document(content)
+            >>> if evaluation and evaluation.clarity_score >= 7:
+            >>>     print(f"Document clarity is good: {evaluation.clarity_feedback}")
+        """
         if not self._client:
             return None
         
@@ -116,7 +273,7 @@ class LLMService:
             
             resp = self._client.chat.completions.create(
                 model=settings.openai_model,
-                temperature=0,
+                temperature=0,  # Deterministic evaluation
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": content},
@@ -131,7 +288,7 @@ class LLMService:
                 eval_data = json.loads(response_text)
                 return LLMEvaluation(**eval_data)
             except json.JSONDecodeError:
-                # Try to extract JSON from response
+                # Try to extract JSON from response using regex
                 json_match = re.search(r'\{[\s\S]*\}', response_text)
                 if json_match:
                     try:
@@ -147,7 +304,43 @@ class LLMService:
             return None
     
     async def improve_document(self, markdown_text: str, prompt: str) -> str:
-        """Improve document using LLM with custom prompt."""
+        """
+        Improve document content using LLM with a custom improvement prompt.
+        
+        Uses the LLM to rewrite and improve document content based on specific
+        user instructions. This method preserves factual content while improving
+        structure, clarity, and formatting according to the provided prompt.
+        
+        Args:
+            markdown_text (str): The original markdown content to improve
+            prompt (str): Custom instructions for how to improve the document
+        
+        Returns:
+            str: Improved markdown content, or original content if LLM unavailable/fails
+        
+        Improvement Process:
+            1. Sends structured prompt with improvement instructions
+            2. Includes original content in markdown code block
+            3. Requests only the improved content (no wrappers)
+            4. Cleans response to remove any code block formatting
+            5. Falls back to original content on any error
+        
+        Temperature Settings:
+            - Uses temperature=0.2 for controlled creativity
+            - Balances improvement with content preservation
+            - Maintains factual accuracy while enhancing presentation
+        
+        Error Handling:
+            - Client unavailable: Returns original content
+            - API errors: Returns original content, logs error
+            - Response parsing errors: Returns original content
+        
+        Example:
+            >>> prompt = "Make this more concise and add bullet points for key features"
+            >>> improved = await llm_service.improve_document(content, prompt)
+            >>> if improved != content:
+            >>>     print("Document was successfully improved")
+        """
         if not self._client:
             return markdown_text
         
@@ -162,7 +355,7 @@ class LLMService:
             
             resp = self._client.chat.completions.create(
                 model=settings.openai_model,
-                temperature=0.2,
+                temperature=0.2,  # Allow controlled creativity for editing
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -179,7 +372,45 @@ class LLMService:
             return markdown_text
     
     async def optimize_for_vector_db(self, markdown_text: str) -> str:
-        """Optimize document for vector database storage and retrieval."""
+        """
+        Optimize document content specifically for vector database storage and retrieval.
+        
+        Applies specialized optimization to make documents more suitable for RAG
+        applications by improving structure, adding context, and enhancing semantic
+        searchability while preserving all factual information.
+        
+        Args:
+            markdown_text (str): The original markdown content to optimize
+        
+        Returns:
+            str: Vector-optimized markdown content, or original content if LLM unavailable
+        
+        Optimization Guidelines Applied:
+            1. Clear Structure: Descriptive headings capturing key concepts
+            2. Chunk-Friendly: Self-contained sections that can stand alone  
+            3. Context Rich: Each section includes sufficient context for independent retrieval
+            4. Keyword Rich: Natural inclusion of relevant keywords and synonyms
+            5. Consistent Format: Uniform markdown formatting for easy parsing
+            6. Concise but Complete: Removes redundancy while preserving information
+            7. Question-Answer Ready: Structures content to answer potential queries
+            8. Cross-References: Adds context when referencing other sections
+        
+        Implementation:
+            - Uses the improve_document method with specialized RAG optimization prompt
+            - Focuses on semantic search enhancement
+            - Maintains factual accuracy while improving retrievability
+            - Optimizes for vector embedding and similarity matching
+        
+        Use Cases:
+            - Preparing documents for vector database ingestion
+            - Enhancing semantic search performance
+            - Improving RAG question-answering accuracy
+            - Creating self-contained, context-rich content chunks
+        
+        Example:
+            >>> optimized = await llm_service.optimize_for_vector_db(content)
+            >>> # optimized content will have better structure and context for RAG
+        """
         optimization_prompt = """
         Reformat this document to be optimized for vector database storage and retrieval. Follow these guidelines:
 
@@ -199,7 +430,41 @@ class LLMService:
         return await self.improve_document(markdown_text, optimization_prompt)
     
     async def summarize_document(self, markdown_text: str, filename: str) -> str:
-        """Generate a summary of the document content."""
+        """
+        Generate a concise summary of document content for metadata and previews.
+        
+        Creates a professional 2-3 sentence summary that captures the document's
+        main topic, type, and key content highlights. This is used for document
+        previews, processing reports, and quick content identification.
+        
+        Args:
+            markdown_text (str): The full markdown content to summarize
+            filename (str): Original filename (for context, currently not used in prompt)
+        
+        Returns:
+            str: Concise document summary, or error message if LLM unavailable/fails
+        
+        Summary Structure:
+            1. Main topic/subject matter identification
+            2. Document type classification (report, manual, guide, etc.)  
+            3. Key content highlights and document purpose
+        
+        Length Control:
+            - Limited to 200 tokens maximum
+            - Targets 2-3 sentences for optimal readability
+            - Maintains professional, informative tone
+            - Removes markdown formatting from output
+        
+        Error Handling:
+            - Client unavailable: Returns unavailability message
+            - API errors: Returns error message with truncated details
+            - Response parsing errors: Returns cleaned response or error message
+        
+        Example:
+            >>> summary = await llm_service.summarize_document(content, "user_guide.pdf")
+            >>> print(f"Document summary: {summary}")
+            >>> # Output: "This technical user guide covers software installation..."
+        """
         if not self._client:
             return f"Unable to generate summary - LLM not available"
         
@@ -217,7 +482,7 @@ class LLMService:
             
             resp = self._client.chat.completions.create(
                 model=settings.openai_model,
-                temperature=0.1,
+                temperature=0.1,  # Deterministic summaries
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -236,5 +501,10 @@ class LLMService:
             return f"Summary generation failed: {str(e)[:100]}..."
 
 
-# Global LLM service instance
+# ============================================================================
+# Global LLM Service Instance
+# ============================================================================
+
+# Create a single global instance of the LLM service
+# This ensures consistent configuration and connection management across the application
 llm_service = LLMService()
