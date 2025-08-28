@@ -33,12 +33,21 @@ A modern multi-tier RAG (Retrieval Augmented Generation) document processing and
 - **LLM-powered evaluation** across four dimensions: Clarity, Completeness, Relevance, Markdown Compatibility
 - **Configurable quality thresholds** for RAG readiness assessment
 
+### 📦 Advanced Download & Export Options
+
+- **ZIP Archive Creation**: Bulk download multiple documents as organized ZIP files
+- **Combined Markdown Export**: Single file containing all processed documents with adjusted hierarchy
+- **RAG-Ready Filtering**: Download only documents that meet quality thresholds
+- **Processing Summaries**: Detailed reports with quality metrics and processing statistics
+- **Individual & Bulk Downloads**: Flexible export options for different use cases
+
 ### 🌐 Modern Web Interface
 
 - **Drag & drop file upload** with real-time processing
-- **Live processing status** with detailed feedback
+- **Live processing status** with detailed feedback and quick download actions
 - **Quality score visualization** with actionable insights
 - **Batch processing support** with comprehensive statistics
+- **Processing panel** with real-time logs and quick export options
 
 ### 🔌 Flexible LLM Integration
 
@@ -158,23 +167,33 @@ OPENAI_API_KEY=lm-studio
 
 2. **Processing**
    - Automatic processing with vector optimization
-   - Live progress tracking
+   - Live progress tracking in processing panel
    - Quality score monitoring
 
 3. **Review Results**
    - View processing statistics
-   - Download optimized documents  
+   - Edit and re-score documents inline
    - Review quality scores and feedback
 
-4. **System Monitoring**
+4. **Download & Export**
+   - **Individual Downloads**: Single markdown files
+   - **ZIP Archives**: Bulk downloads with multiple options:
+     - Combined Archive: Individual files + merged document + summary
+     - Selected Files: Custom selection as ZIP
+     - RAG-Ready Only: Files meeting quality thresholds
+   - **Quick Downloads**: Direct access from processing panel
+   - **Processing Reports**: Detailed statistics and quality analysis
+
+5. **System Monitoring**
    - LLM connection status
    - API health checks
    - Processing statistics
 
 ### API Usage
 
-The FastAPI backend provides RESTful endpoints:
+The FastAPI backend provides comprehensive RESTful endpoints:
 
+#### Basic Document Operations
 ```bash
 # Upload document
 curl -X POST "http://localhost:8000/api/documents/upload" \
@@ -187,13 +206,92 @@ curl -X POST "http://localhost:8000/api/documents/{id}/process" \
 
 # Get processing result
 curl "http://localhost:8000/api/documents/{id}/result"
+```
 
-# Download processed document
+#### Download Operations
+```bash
+# Download individual document
 curl "http://localhost:8000/api/documents/{id}/download" \
   -o processed_document.md
+
+# Download RAG-ready files as ZIP
+curl "http://localhost:8000/api/documents/download/rag-ready?zip_name=my_rag_files.zip" \
+  -o rag_ready_files.zip
+
+# Bulk download as ZIP
+curl -X POST "http://localhost:8000/api/documents/download/bulk" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "document_ids": ["doc1", "doc2", "doc3"],
+    "download_type": "combined",
+    "zip_name": "my_export.zip",
+    "include_summary": true
+  }' \
+  -o bulk_export.zip
+```
+
+#### Batch Processing
+```bash
+# Process multiple documents
+curl -X POST "http://localhost:8000/api/documents/batch/process" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "document_ids": ["doc1", "doc2", "doc3"],
+    "options": {
+      "auto_optimize": true,
+      "quality_thresholds": {
+        "conversion": 75,
+        "clarity": 8,
+        "completeness": 7,
+        "relevance": 7,
+        "markdown": 7
+      }
+    }
+  }'
 ```
 
 See full API documentation at: http://localhost:8000/docs
+
+## 📦 Download & Export Features
+
+### Download Types
+
+1. **Individual Downloads** (`.md` files)
+   - Single processed markdown files
+   - Optimized for vector databases
+   - Direct file access for testing
+
+2. **ZIP Archives**
+   - **Combined Archive**: Includes individual files, merged document, and processing summary
+   - **Selected Files**: Custom selection of processed documents
+   - **RAG-Ready Only**: Files that pass all quality thresholds
+   - **Processing Summary**: Statistics and quality reports
+
+3. **Quick Downloads**
+   - Available directly from the processing panel
+   - One-click access to RAG-ready files
+   - Immediate download after processing completion
+
+### Archive Structure
+
+When downloading ZIP archives, files are organized as follows:
+
+```
+curatore_export_20250827_143022.zip
+├── individual_files/           # Original processed files
+│   ├── document1.md
+│   ├── document2.md
+│   └── document3.md
+├── COMBINED_EXPORT_*.md        # All documents merged with adjusted hierarchy
+└── PROCESSING_SUMMARY_*.md     # Detailed processing report with quality metrics
+```
+
+### Combined Markdown Features
+
+- **Adjusted Header Hierarchy**: Headers are automatically nested to prevent conflicts
+- **Document Summaries**: Each section includes processing metadata and quality scores
+- **Quality Indicators**: Visual status indicators for RAG readiness and optimization
+- **Unified Structure**: Consistent formatting across all merged documents
 
 ## 🔧 Development
 
@@ -207,6 +305,13 @@ curatore-v2/
 │   └── batch_files/             # Local files for batch processing
 ├── frontend/                    # Next.js TypeScript frontend
 ├── backend/                     # FastAPI Python backend
+│   └── app/
+│       ├── services/
+│       │   ├── zip_service.py   # NEW: ZIP archive creation service
+│       │   ├── document_service.py
+│       │   ├── llm_service.py
+│       │   └── storage_service.py
+│       └── models.py            # Updated with ZIP-related models
 ├── docker-compose.yml           # Development setup
 ├── .env.example                 # Environment template
 └── README.md                    # This file
@@ -229,18 +334,26 @@ docker-compose logs -f backend
 docker-compose logs -f frontend
 ```
 
-### Testing
+### Testing Download Features
 
 ```bash
+# Test individual document download
+curl "http://localhost:8000/api/documents/{doc_id}/download"
+
+# Test RAG-ready ZIP download
+curl "http://localhost:8000/api/documents/download/rag-ready" -o rag_files.zip
+
+# Test bulk ZIP download
+curl -X POST "http://localhost:8000/api/documents/download/bulk" \
+  -H "Content-Type: application/json" \
+  -d '{"document_ids": ["doc1", "doc2"], "download_type": "combined"}' \
+  -o bulk_export.zip
+
 # Test LLM connection
 curl "http://localhost:8000/api/llm/status"
 
 # Check API health
 curl "http://localhost:8000/api/health"
-
-# Upload test document
-curl -X POST "http://localhost:8000/api/documents/upload" \
-  -F "file=@test.pdf"
 ```
 
 ## 📊 Quality Metrics
@@ -267,6 +380,26 @@ Documents are "RAG Ready" when they meet all configured thresholds and are optim
 - Independent chunk meaning
 - Question-answer performance
 
+## 📥 Export Formats & Use Cases
+
+### For RAG Implementation
+
+1. **Download RAG-Ready ZIP**: Contains only documents that pass all quality thresholds
+2. **Use Vector Optimized files**: Enhanced structure for better semantic search
+3. **Import Combined Export**: Single file for bulk vector database import
+
+### For Review & Quality Assurance
+
+1. **Download Processing Summary**: Detailed quality metrics and improvement suggestions
+2. **Combined Archive**: Complete export with individual files and merged document
+3. **Individual Downloads**: File-by-file review and testing
+
+### For Production Deployment
+
+1. **RAG-Ready Files**: Production-ready documents for immediate use
+2. **Quality Reports**: Documentation for compliance and quality assurance
+3. **Bulk Processing**: Batch operations with comprehensive statistics
+
 ## 🚀 Deployment
 
 ### Production Docker
@@ -283,8 +416,9 @@ docker-compose -f docker-compose.prod.yml up -d
 
 - **CPU**: OCR processing is CPU-intensive
 - **Memory**: Large documents require sufficient RAM  
-- **Storage**: Plan for document and output storage
+- **Storage**: Plan for document and output storage (ZIP files are created in temp directory)
 - **LLM API**: Consider rate limits and costs
+- **Network**: ZIP downloads may be large for bulk operations
 
 ## 🔄 Migration from v1
 
@@ -318,30 +452,34 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 - Verify network connectivity
 
 **OCR Poor Quality**:
-
 - Adjust `OCR_PSM` setting for document type
 - Check `OCR_LANG` configuration
 - Ensure Tesseract is properly installed
 
 **File Upload Issues**:
-
 - Check file size limits (`MAX_FILE_SIZE`)
 - Verify supported formats
 - Check browser console for errors
 
 **Processing Failures**:
-
 - Review API logs: `docker-compose logs backend`
 - Check processing results for error details
 - Verify all dependencies are installed
 
-### Getting Help
+**ZIP Download Issues**:
+- Check available disk space for temporary files
+- Verify document processing completed successfully
+- Review browser console for download errors
+- Ensure all selected documents exist in processed directory
 
-- 📚 API Documentation: http://localhost:8000/docs
-- 🔍 Health Checks: Use the System Status panel
-- 📋 Logs: `docker-compose logs -f`
-- 🐛 Issues: Create a GitHub issue with logs and configuration
+### Performance Tips
 
----
+**Large Batch Processing**:
+- Process files in smaller batches if memory is limited
+- Monitor processing panel for real-time status
+- Use quality thresholds to filter results before download
 
-**Curatore v2** - Modern, scalable document processing for RAG applications
+**ZIP Archive Optimization**:
+- Combined archives include both individual and merged files
+- RAG-ready downloads filter automatically by quality scores
+- Processing summaries provide detailed quality metrics

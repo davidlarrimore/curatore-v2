@@ -3,7 +3,8 @@
 
 import { useState, useEffect } from 'react';
 import { ProcessingResult, FileInfo, ProcessingOptions } from '@/types';
-import { processingApi, utils } from '@/lib/api';
+import { processingApi, utils, fileApi } from '@/lib/api';
+import toast from 'react-hot-toast';
 
 interface ProcessingLog {
   timestamp: string;
@@ -44,6 +45,8 @@ export function ProcessingPanel({
   const [logs, setLogs] = useState<ProcessingLog[]>([]);
   const [processingStartTime, setProcessingStartTime] = useState<number>(0);
   const [processingComplete, setProcessingComplete] = useState(false);
+  // NEW: State for quick download actions
+  const [quickDownloadLoading, setQuickDownloadLoading] = useState<string>('');
 
   // Notify parent of panel state changes
   useEffect(() => {
@@ -72,6 +75,7 @@ export function ProcessingPanel({
     setLogs([]);
     setProcessingStartTime(0);
     setProcessingComplete(false);
+    setQuickDownloadLoading('');
   };
 
   // Start processing when panel becomes visible
@@ -112,6 +116,62 @@ export function ProcessingPanel({
     setResults(newResults);
     if (onResultUpdate) {
       onResultUpdate(newResults);
+    }
+  };
+
+  // NEW: Quick download functions for the processing panel
+  const quickDownloadRAGReady = async () => {
+    const ragReadyResults = results.filter(r => r.pass_all_thresholds);
+    if (ragReadyResults.length === 0) {
+      toast.error('No RAG-ready files available yet');
+      return;
+    }
+
+    setQuickDownloadLoading('rag');
+    try {
+      const timestamp = utils.generateTimestamp();
+      const zipName = `curatore_rag_ready_${timestamp}.zip`;
+      
+      const blob = await fileApi.downloadRAGReadyDocuments(zipName);
+      utils.downloadBlob(blob, zipName);
+      
+      addLog('success', `Downloaded ${ragReadyResults.length} RAG-ready files as ZIP`);
+      toast.success(`Downloaded ${ragReadyResults.length} RAG-ready files`, { icon: '🎯' });
+    } catch (error) {
+      console.error('Quick RAG download failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Download failed';
+      addLog('error', `Quick RAG download failed: ${errorMessage}`);
+      toast.error('Failed to download RAG-ready files');
+    } finally {
+      setQuickDownloadLoading('');
+    }
+  };
+
+  const quickDownloadAll = async () => {
+    const successfulResults = results.filter(r => r.success);
+    if (successfulResults.length === 0) {
+      toast.error('No processed files available yet');
+      return;
+    }
+
+    setQuickDownloadLoading('all');
+    try {
+      const allDocumentIds = successfulResults.map(r => r.document_id);
+      const timestamp = utils.generateTimestamp();
+      const zipName = `curatore_all_processed_${timestamp}.zip`;
+      
+      const blob = await fileApi.downloadBulkDocuments(allDocumentIds, 'individual', zipName);
+      utils.downloadBlob(blob, zipName);
+      
+      addLog('success', `Downloaded all ${successfulResults.length} processed files as ZIP`);
+      toast.success(`Downloaded ${successfulResults.length} processed files`, { icon: '📦' });
+    } catch (error) {
+      console.error('Quick download all failed:', error);
+      const errorMessage = error instanceof Error ? error.message : 'Download failed';
+      addLog('error', `Quick download all failed: ${errorMessage}`);
+      toast.error('Failed to download all files');
+    } finally {
+      setQuickDownloadLoading('');
     }
   };
 
@@ -206,6 +266,15 @@ export function ProcessingPanel({
 
       setProcessingComplete(true);
       onProcessingComplete(processedResults);
+
+      // Show completion toast with quick action
+      toast.success(
+        `Processing complete! ${ragReady} of ${successful} files are RAG-ready`,
+        { 
+          duration: 6000,
+          icon: '🎉'
+        }
+      );
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
@@ -314,6 +383,45 @@ export function ProcessingPanel({
 
         {/* Controls */}
         <div className="flex items-center space-x-2">
+          {/* NEW: Quick Download Actions when processing is complete */}
+          {processingComplete && ragReady > 0 && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                quickDownloadRAGReady();
+              }}
+              disabled={quickDownloadLoading !== ''}
+              className="px-3 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors disabled:opacity-50"
+              title="Quick download RAG-ready files as ZIP"
+            >
+              {quickDownloadLoading === 'rag' ? (
+                <div className="animate-spin rounded-full h-3 w-3 border-b border-white"></div>
+              ) : (
+                '🎯 RAG ZIP'
+              )}
+            </button>
+          )}
+
+          {processingComplete && successful > 0 && (
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                quickDownloadAll();
+              }}
+              disabled={quickDownloadLoading !== ''}
+              className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors disabled:opacity-50"
+              title="Quick download all processed files as ZIP"
+            >
+              {quickDownloadLoading === 'all' ? (
+                <div className="animate-spin rounded-full h-3 w-3 border-b border-white"></div>
+              ) : (
+                '📦 All ZIP'
+              )}
+            </button>
+          )}
+
           {/* Minimize/Restore */}
           <button
             type="button"
@@ -422,6 +530,51 @@ export function ProcessingPanel({
                   </div>
                 )}
 
+                {/* NEW: Quick Actions Panel - Fixed height */}
+                {processingComplete && results.length > 0 && (
+                  <div className="border border-gray-600 rounded-lg bg-gray-800 p-4 flex-shrink-0">
+                    <h4 className="font-medium text-gray-200 mb-3 flex items-center">
+                      <span className="mr-2">⚡</span>
+                      Quick Downloads
+                    </h4>
+                    <div className="grid grid-cols-1 gap-2">
+                      {ragReady > 0 && (
+                        <button
+                          type="button"
+                          onClick={quickDownloadRAGReady}
+                          disabled={quickDownloadLoading !== ''}
+                          className="w-full px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-sm rounded transition-colors disabled:opacity-50"
+                        >
+                          {quickDownloadLoading === 'rag' ? (
+                            <div className="flex items-center justify-center space-x-2">
+                              <div className="animate-spin rounded-full h-3 w-3 border-b border-white"></div>
+                              <span>Creating ZIP...</span>
+                            </div>
+                          ) : (
+                            `🎯 Download ${ragReady} RAG-Ready Files`
+                          )}
+                        </button>
+                      )}
+                      
+                      <button
+                        type="button"
+                        onClick={quickDownloadAll}
+                        disabled={quickDownloadLoading !== '' || successful === 0}
+                        className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors disabled:opacity-50"
+                      >
+                        {quickDownloadLoading === 'all' ? (
+                          <div className="flex items-center justify-center space-x-2">
+                            <div className="animate-spin rounded-full h-3 w-3 border-b border-white"></div>
+                            <span>Creating ZIP...</span>
+                          </div>
+                        ) : (
+                          `📦 Download All ${successful} Files`
+                        )}
+                      </button>
+                    </div>
+                  </div>
+                )}
+
                 {/* Results Preview - Flexible height with scroll */}
                 {results.length > 0 && (
                   <div className="border border-gray-600 rounded-lg flex flex-col bg-gray-800 flex-1 min-h-0">
@@ -435,7 +588,12 @@ export function ProcessingPanel({
                             </span>
                             <span className="text-sm font-medium truncate text-gray-200">{result.filename}</span>
                           </div>
-                          <span className="text-xs text-gray-400 flex-shrink-0">{result.conversion_score}%</span>
+                          <div className="flex items-center space-x-2 flex-shrink-0">
+                            <span className="text-xs text-gray-400">{result.conversion_score}%</span>
+                            {result.vector_optimized && (
+                              <span className="text-xs text-purple-400">🎯</span>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>

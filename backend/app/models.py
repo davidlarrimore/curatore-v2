@@ -112,6 +112,24 @@ class BatchProcessingResult(BaseModel):
     completed_at: Optional[datetime] = None
 
 
+class BulkDownloadRequest(BaseModel):
+    """Request model for bulk download operations."""
+    document_ids: List[str]
+    download_type: str = Field(default="individual", description="Type of download: individual, combined, rag_ready")
+    zip_name: Optional[str] = Field(None, description="Custom name for the ZIP file")
+    include_summary: bool = Field(default=True, description="Include processing summary in archive")
+
+
+class ZipArchiveInfo(BaseModel):
+    """Information about a created ZIP archive."""
+    filename: str
+    file_count: int
+    total_size: int
+    created_at: datetime
+    download_type: str
+    includes_summary: bool
+
+
 class LLMConnectionStatus(BaseModel):
     """LLM connection test result."""
     connected: bool
@@ -153,3 +171,19 @@ class ErrorResponse(BaseModel):
     error: str
     detail: Optional[str] = None
     timestamp: datetime = Field(default_factory=datetime.now)
+
+
+class SupportedFormatsResponse(BaseModel):
+    """Response for supported file formats."""
+    supported_extensions: List[str]
+    max_file_size: int
+    description: str = "Supported file formats for document processing"
+
+
+class SystemResetResponse(BaseModel):
+    """Response for system reset operation."""
+    success: bool
+    message: str
+    timestamp: datetime
+    files_cleared: Dict[str, int] = Field(default_factory=dict)
+    storage_cleared: bool = False

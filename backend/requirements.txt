@@ -23,3 +23,6 @@ aiofiles>=0.24.0
 
 # Additional utilities
 python-dotenv>=1.0.0
+
+# ZIP file creation
+zipfile38>=0.0.3

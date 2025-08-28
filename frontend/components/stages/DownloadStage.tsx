@@ -4,6 +4,7 @@
 import { useState } from 'react';
 import { ProcessingResult } from '@/types';
 import { fileApi, utils } from '@/lib/api';
+import toast from 'react-hot-toast';
 
 interface DownloadStageProps {
   processingResults: ProcessingResult[];
@@ -47,24 +48,14 @@ export function DownloadStage({
   const downloadIndividualFile = async (result: ProcessingResult) => {
     setIsDownloading(result.document_id);
     try {
-      // The API wrapper returns the blob directly, not a Response object.
       const blob: Blob = await fileApi.downloadDocument(result.document_id);
-      
-      // Create download link
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `${result.filename.split('.')[0]}.md`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-      
+      const filename = `${result.filename.split('.')[0]}.md`;
+      utils.downloadBlob(blob, filename);
+      toast.success(`Downloaded ${filename}`, { icon: '💾' });
     } catch (error) {
       console.error('Download failed:', error);
-      // Fixed: Handle unknown error type
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      alert(`Failed to download ${result.filename}: ${errorMessage}`);
+      toast.error(`Failed to download ${result.filename}: ${errorMessage}`);
     } finally {
       setIsDownloading('');
     }
@@ -72,25 +63,29 @@ export function DownloadStage({
 
   const downloadSelectedFiles = async () => {
     if (selectedFiles.size === 0) {
-      alert('Please select files to download');
+      toast.error('Please select files to download');
       return;
     }
 
     setIsBulkDownloading(true);
+    const loadingToast = toast.loading(`Creating ZIP archive with ${selectedFiles.size} files...`);
+    
     try {
-      // Fixed: Convert Set to Array for iteration
       const selectedArray = Array.from(selectedFiles);
-      for (const documentId of selectedArray) {
-        const result = successfulResults.find(r => r.document_id === documentId);
-        if (result) {
-          await downloadIndividualFile(result);
-          // Add small delay between downloads
-          await new Promise(resolve => setTimeout(resolve, 500));
-        }
-      }
+      const timestamp = utils.generateTimestamp();
+      const zipName = `curatore_selected_${timestamp}.zip`;
+      
+      const blob = await fileApi.downloadBulkDocuments(selectedArray, 'individual', zipName);
+      utils.downloadBlob(blob, zipName);
+      
+      toast.success(`Downloaded ${selectedFiles.size} files as ZIP archive`, { 
+        id: loadingToast,
+        icon: '📦'
+      });
     } catch (error) {
       console.error('Bulk download failed:', error);
-      alert('Bulk download failed. Some files may not have been downloaded.');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      toast.error(`Bulk download failed: ${errorMessage}`, { id: loadingToast });
     } finally {
       setIsBulkDownloading(false);
     }
@@ -98,166 +93,58 @@ export function DownloadStage({
 
   const downloadRAGReadyFiles = async () => {
     if (ragReadyResults.length === 0) {
-      alert('No RAG-ready files available');
+      toast.error('No RAG-ready files available');
       return;
     }
 
     setIsRAGDownloading(true);
+    const loadingToast = toast.loading(`Creating ZIP archive with ${ragReadyResults.length} RAG-ready files...`);
+    
     try {
-      for (const result of ragReadyResults) {
-        await downloadIndividualFile(result);
-        // Add small delay between downloads
-        await new Promise(resolve => setTimeout(resolve, 500));
-      }
+      const timestamp = utils.generateTimestamp();
+      const zipName = `curatore_rag_ready_${timestamp}.zip`;
+      
+      const blob = await fileApi.downloadRAGReadyDocuments(zipName);
+      utils.downloadBlob(blob, zipName);
+      
+      toast.success(`Downloaded ${ragReadyResults.length} RAG-ready files as ZIP archive`, { 
+        id: loadingToast,
+        icon: '🎯'
+      });
     } catch (error) {
       console.error('RAG-ready download failed:', error);
-      alert('RAG-ready download failed. Some files may not have been downloaded.');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      toast.error(`RAG-ready download failed: ${errorMessage}`, { id: loadingToast });
     } finally {
       setIsRAGDownloading(false);
     }
   };
 
-  // NEW: Function to adjust markdown hierarchy
-  const adjustMarkdownHierarchy = (content: string): string => {
-    if (!content) return content;
-    
-    // Split content into lines
-    const lines = content.split('\n');
-    const adjustedLines: string[] = [];
-    
-    for (const line of lines) {
-      // Check if line starts with markdown headers
-      const headerMatch = line.match(/^(#{1,6})\s+(.*)$/);
-      if (headerMatch) {
-        const headerLevel = headerMatch[1]; // The # symbols
-        const headerText = headerMatch[2]; // The text after #
-        
-        // Add one more # to increase the nesting level (shift everything down one level)
-        // But cap at maximum of 6 levels (######)
-        const newLevel = headerLevel.length < 6 ? '#' + headerLevel : headerLevel;
-        adjustedLines.push(`${newLevel} ${headerText}`);
-      } else {
-        adjustedLines.push(line);
-      }
-    }
-    
-    return adjustedLines.join('\n');
-  };
-
-  // NEW: Function to download all files in a single markdown file
-  const downloadCombinedMarkdown = async () => {
+  const downloadCombinedArchive = async () => {
     if (successfulResults.length === 0) {
-      alert('No processed files available for combined download');
+      toast.error('No processed files available for combined download');
       return;
     }
 
     setIsCombinedDownloading(true);
-    
-    // Add a small delay to ensure the UI updates before starting the heavy work
-    await new Promise(resolve => setTimeout(resolve, 50));
+    const loadingToast = toast.loading(`Creating combined ZIP archive with ${successfulResults.length} files...`);
     
     try {
-      const combinedSections: string[] = [];
+      const allDocumentIds = successfulResults.map(r => r.document_id);
+      const timestamp = utils.generateTimestamp();
+      const zipName = `curatore_combined_export_${timestamp}.zip`;
       
-      // Add main title and summary
-      const timestamp = new Date().toLocaleString();
-      const passRate = successfulResults.length > 0 ? (ragReadyResults.length / successfulResults.length * 100).toFixed(1) : '0';
+      const blob = await fileApi.downloadBulkDocuments(allDocumentIds, 'combined', zipName);
+      utils.downloadBlob(blob, zipName);
       
-      combinedSections.push(`# Curatore Processing Results - Combined Export`);
-      combinedSections.push(`*Generated on ${timestamp}*`);
-      combinedSections.push(``);
-      combinedSections.push(`**Processing Summary:**`);
-      combinedSections.push(`- Total Files: ${successfulResults.length}`);
-      combinedSections.push(`- RAG Ready: ${ragReadyResults.length} (${passRate}%)`);
-      combinedSections.push(`- Vector Optimized: ${vectorOptimizedResults.length}`);
-      combinedSections.push(``);
-      combinedSections.push(`---`);
-      combinedSections.push(``);
-
-      // Process each successful result with proper async handling
-      for (let i = 0; i < successfulResults.length; i++) {
-        const result = successfulResults[i];
-        
-        // Add a small delay between requests to prevent overwhelming the browser
-        if (i > 0) {
-          await new Promise(resolve => setTimeout(resolve, 100));
-        }
-        
-        try {
-          // Use the API endpoint correctly
-          const response = await fetch(`http://localhost:8000/api/documents/${result.document_id}/content`);
-          if (!response.ok) {
-            throw new Error(`Failed to fetch content: ${response.statusText}`);
-          }
-          const data = await response.json();
-          const content = data.content || '';
-
-          // Create section header with filename and summary
-          combinedSections.push(`# ${result.filename}`);
-          
-          if (result.document_summary) {
-            combinedSections.push(``);
-            combinedSections.push(`*${result.document_summary}*`);
-          }
-
-          // Add processing metadata
-          const statusEmoji = result.pass_all_thresholds ? '✅' : '⚠️';
-          const optimizedEmoji = result.vector_optimized ? ' 🎯' : '';
-          combinedSections.push(``);
-          combinedSections.push(`**Processing Status:** ${statusEmoji} ${result.pass_all_thresholds ? 'RAG Ready' : 'Needs Improvement'}${optimizedEmoji}`);
-          combinedSections.push(`**Conversion Score:** ${result.conversion_score}/100`);
-          
-          if (result.llm_evaluation) {
-            const scores = [
-              `Clarity: ${result.llm_evaluation.clarity_score || 'N/A'}/10`,
-              `Completeness: ${result.llm_evaluation.completeness_score || 'N/A'}/10`,
-              `Relevance: ${result.llm_evaluation.relevance_score || 'N/A'}/10`,
-              `Markdown: ${result.llm_evaluation.markdown_score || 'N/A'}/10`
-            ].join(', ');
-            combinedSections.push(`**Quality Scores:** ${scores}`);
-          }
-
-          combinedSections.push(``);
-          combinedSections.push(`---`);
-          combinedSections.push(``);
-
-          // Adjust the markdown hierarchy and add the content
-          const adjustedContent = adjustMarkdownHierarchy(content);
-          combinedSections.push(adjustedContent);
-          
-          // Add separator between documents
-          combinedSections.push(``);
-          combinedSections.push(``);
-          combinedSections.push(`---`);
-          combinedSections.push(``);
-          
-        } catch (error) {
-          console.error(`Failed to fetch content for ${result.filename}:`, error);
-          // Add error note for this document
-          combinedSections.push(`# ${result.filename}`);
-          combinedSections.push(``);
-          combinedSections.push(`*Error: Could not load content for this document*`);
-          combinedSections.push(``);
-          combinedSections.push(`---`);
-          combinedSections.push(``);
-        }
-      }
-
-      // Create and download the combined file
-      const combinedContent = combinedSections.join('\n');
-      const blob = new Blob([combinedContent], { type: 'text/markdown' });
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `curatore_combined_export_${new Date().toISOString().split('T')[0]}.md`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      window.URL.revokeObjectURL(url);
-
+      toast.success(`Downloaded combined archive with ${successfulResults.length} files`, { 
+        id: loadingToast,
+        icon: '📋'
+      });
     } catch (error) {
       console.error('Combined download failed:', error);
-      alert('Failed to create combined markdown file. Please try downloading files individually.');
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
+      toast.error(`Combined download failed: ${errorMessage}`, { id: loadingToast });
     } finally {
       setIsCombinedDownloading(false);
     }
@@ -307,14 +194,9 @@ export function DownloadStage({
 
     const reportContent = reportLines.join('\n');
     const blob = new Blob([reportContent], { type: 'text/markdown' });
-    const url = window.URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url;
-    a.download = `curatore_summary_${timestamp}.md`;
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
-    window.URL.revokeObjectURL(url);
+    const filename = `curatore_summary_${timestamp}.md`;
+    utils.downloadBlob(blob, filename);
+    toast.success(`Downloaded summary report: ${filename}`, { icon: '📊' });
   };
 
   // Helper function to format processing time as seconds only (no decimals)
@@ -488,7 +370,7 @@ export function DownloadStage({
                           )}
                         </div>
 
-                        {/* Processing Time - UPDATED: Show only seconds */}
+                        {/* Processing Time */}
                         <div className="col-span-2">
                           <div className="text-gray-600">
                             {result.processing_time ? (
@@ -534,24 +416,24 @@ export function DownloadStage({
           <h3 className="text-lg font-medium mb-3">📦 Bulk Downloads</h3>
           
           <div className="space-y-3">
-            {/* NEW: Download Combined Markdown */}
+            {/* NEW: Download Combined Archive (ZIP with individual + combined files) */}
             <button
               type="button"
-              onClick={downloadCombinedMarkdown}
+              onClick={downloadCombinedArchive}
               disabled={successfulResults.length === 0 || isAnyDownloading}
               className="w-full px-4 py-3 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
             >
               {isCombinedDownloading ? (
                 <div className="flex items-center justify-center space-x-2">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  <span>Creating Combined File...</span>
+                  <span>Creating Archive...</span>
                 </div>
               ) : (
-                `📋 Download Combined Markdown (${successfulResults.length} files)`
+                `📋 Combined Archive (${successfulResults.length} files)`
               )}
             </button>
 
-            {/* Download Selected */}
+            {/* Download Selected as ZIP */}
             <button
               type="button"
               onClick={downloadSelectedFiles}
@@ -561,14 +443,14 @@ export function DownloadStage({
               {isBulkDownloading ? (
                 <div className="flex items-center justify-center space-x-2">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  <span>Downloading...</span>
+                  <span>Creating ZIP...</span>
                 </div>
               ) : (
-                `📦 Download Selected (${selectedFiles.size})`
+                `📦 Selected as ZIP (${selectedFiles.size})`
               )}
             </button>
 
-            {/* Download RAG Ready */}
+            {/* Download RAG Ready as ZIP */}
             <button
               type="button"
               onClick={downloadRAGReadyFiles}
@@ -578,10 +460,10 @@ export function DownloadStage({
               {isRAGDownloading ? (
                 <div className="flex items-center justify-center space-x-2">
                   <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                  <span>Downloading...</span>
+                  <span>Creating ZIP...</span>
                 </div>
               ) : (
-                `🎯 Download RAG-Ready Only (${ragReadyResults.length})`
+                `🎯 RAG-Ready ZIP (${ragReadyResults.length})`
               )}
             </button>
 
@@ -589,10 +471,25 @@ export function DownloadStage({
             <button
               type="button"
               onClick={generateSummaryReport}
-              className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 font-medium"
+              disabled={isAnyDownloading}
+              className="w-full px-4 py-2 bg-gray-600 text-white rounded-lg hover:bg-gray-700 disabled:opacity-50 font-medium"
             >
-              📊 Download Summary Report
+              📊 Summary Report
             </button>
+
+            {/* Divider */}
+            <div className="border-t border-gray-200 my-4"></div>
+
+            {/* Download Format Info */}
+            <div className="text-xs text-gray-600 space-y-2">
+              <div className="font-medium">Download Types:</div>
+              <div className="space-y-1">
+                <div>📋 <strong>Combined Archive:</strong> Individual files + combined markdown + summary</div>
+                <div>📦 <strong>Selected ZIP:</strong> Only selected individual files</div>
+                <div>🎯 <strong>RAG-Ready ZIP:</strong> Only files that pass all quality thresholds</div>
+                <div>📊 <strong>Summary:</strong> Processing statistics and quality report</div>
+              </div>
+            </div>
           </div>
 
           {/* Processing Statistics */}
@@ -627,11 +524,17 @@ export function DownloadStage({
       </div>
 
       {/* Help Text */}
-      <div className="text-center text-sm text-gray-500">
-        <p>💡 Tip: The combined markdown file automatically adjusts header levels and includes file summaries</p>
+      <div className="bg-blue-50 border border-blue-200 rounded-lg p-4">
+        <h4 className="font-medium text-blue-900 mb-2">💡 Download Guide</h4>
+        <div className="text-sm text-blue-800 space-y-1">
+          <div>• <strong>Combined Archive:</strong> Best for comprehensive exports - includes individual files, a merged document, and processing summary</div>
+          <div>• <strong>Selected ZIP:</strong> Choose specific files to download as a convenient archive</div>
+          <div>• <strong>RAG-Ready ZIP:</strong> Only files that meet all quality thresholds - perfect for production RAG systems</div>
+          <div>• <strong>Individual Downloads:</strong> Get single files for quick review or testing</div>
+        </div>
       </div>
 
-      {/* Fixed Action Button - Bottom Right with Processing Panel Awareness - UPDATED: Single button */}
+      {/* Fixed Action Button - Bottom Right with Processing Panel Awareness */}
       {processingPanelState !== 'fullscreen' && (
         <div className={`fixed right-6 z-40 transition-all duration-300 ${
           processingPanelState === 'normal' 
@@ -643,9 +546,17 @@ export function DownloadStage({
           <button
             type="button"
             onClick={onRestart}
-            className="px-6 py-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 font-medium text-sm transition-all shadow-lg hover:shadow-xl hover:-translate-y-1"
+            disabled={isAnyDownloading}
+            className="px-6 py-3 bg-blue-600 text-white rounded-full hover:bg-blue-700 disabled:opacity-50 font-medium text-sm transition-all shadow-lg hover:shadow-xl hover:-translate-y-1"
           >
-            🔄 Process New Documents
+            {isAnyDownloading ? (
+              <span className="flex items-center space-x-2">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
+                <span>Creating Archive...</span>
+              </span>
+            ) : (
+              '🔄 Process New Documents'
+            )}
           </button>
         </div>
       )}

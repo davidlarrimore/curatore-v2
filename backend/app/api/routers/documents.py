@@ -5,18 +5,22 @@ from datetime import datetime
 from typing import List, Optional
 from pathlib import Path
 
-from fastapi import APIRouter, File, UploadFile, HTTPException
+from fastapi import APIRouter, File, UploadFile, HTTPException, Query
 from fastapi.responses import FileResponse
+from pydantic import BaseModel
 
 from ...config import settings
 from ...models import (
     FileUploadResponse, ProcessingResult, BatchProcessingRequest,
-    BatchProcessingResult, DocumentEditRequest, ProcessingOptions
+    BatchProcessingResult, DocumentEditRequest, ProcessingOptions,
+    BulkDownloadRequest, ZipArchiveInfo
 )
 from ...services.document_service import document_service
 from ...services.storage_service import storage_service
+from ...services.zip_service import zip_service
 
 router = APIRouter()
+
 
 @router.get("/documents/uploaded", tags=["Documents"])
 async def list_uploaded_files():
@@ -179,6 +183,92 @@ async def download_document(document_id: str):
                 media_type="text/markdown"
             )
     raise HTTPException(status_code=404, detail="Processed document not found")
+
+@router.post("/documents/download/bulk", tags=["Results"])
+async def download_bulk_documents(request: BulkDownloadRequest):
+    """Download multiple documents as a ZIP archive."""
+    if not request.document_ids:
+        raise HTTPException(status_code=400, detail="No document IDs provided")
+    
+    # Get processing results for metadata
+    results = []
+    for doc_id in request.document_ids:
+        result = storage_service.get_processing_result(doc_id)
+        if result and result.success:
+            results.append(result)
+    
+    if not results:
+        raise HTTPException(status_code=404, detail="No processed documents found for the provided IDs")
+    
+    try:
+        # Filter document IDs based on download type
+        if request.download_type == "rag_ready":
+            filtered_ids = [r.document_id for r in results if r.pass_all_thresholds]
+            if not filtered_ids:
+                raise HTTPException(status_code=404, detail="No RAG-ready documents found")
+        else:
+            filtered_ids = [r.document_id for r in results]
+        
+        # Create ZIP archive based on type
+        if request.download_type == "combined":
+            zip_path, file_count = zip_service.create_combined_markdown_zip(
+                filtered_ids, 
+                results, 
+                request.zip_name
+            )
+        else:
+            zip_path, file_count = zip_service.create_zip_archive(
+                filtered_ids, 
+                request.zip_name,
+                request.include_summary
+            )
+        
+        if file_count == 0:
+            raise HTTPException(status_code=404, detail="No files found to archive")
+        
+        # Return the ZIP file
+        return FileResponse(
+            path=zip_path,
+            filename=Path(zip_path).name,
+            media_type="application/zip",
+            background=lambda: zip_service.cleanup_zip_file(zip_path)  # Clean up after download
+        )
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create archive: {str(e)}")
+
+@router.get("/documents/download/rag-ready", tags=["Results"])
+async def download_rag_ready_documents(
+    zip_name: Optional[str] = Query(None, description="Custom name for the ZIP file"),
+    include_summary: bool = Query(True, description="Include processing summary")
+):
+    """Download all RAG-ready documents as a ZIP archive."""
+    all_results = storage_service.get_all_processing_results()
+    rag_ready_results = [r for r in all_results if r.success and r.pass_all_thresholds]
+    
+    if not rag_ready_results:
+        raise HTTPException(status_code=404, detail="No RAG-ready documents found")
+    
+    try:
+        rag_ready_ids = [r.document_id for r in rag_ready_results]
+        zip_path, file_count = zip_service.create_zip_archive(
+            rag_ready_ids,
+            zip_name or "curatore_rag_ready_export.zip",
+            include_summary
+        )
+        
+        if file_count == 0:
+            raise HTTPException(status_code=404, detail="No RAG-ready files found to archive")
+        
+        return FileResponse(
+            path=zip_path,
+            filename=Path(zip_path).name,
+            media_type="application/zip",
+            background=lambda: zip_service.cleanup_zip_file(zip_path)
+        )
+    
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to create RAG-ready archive: {str(e)}")
 
 @router.get("/batch/{batch_id}/result", response_model=BatchProcessingResult, tags=["Results"])
 async def get_batch_result(batch_id: str):
