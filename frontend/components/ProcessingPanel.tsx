@@ -189,7 +189,7 @@ export function ProcessingPanel({
     setProcessingComplete(false);
 
     addLog('info', `Starting background processing of ${selectedFiles.length} files...`);
-    addLog('info', `Vector optimization: ${processingOptions.auto_optimize ? 'Enabled' : 'Disabled'}`);
+    addLog('info', `Vector optimization: ${processingOptions.auto_optimize ? 'ON' : 'OFF'}`);
 
     try {
       const processedResults: ProcessingResult[] = [];
@@ -197,40 +197,34 @@ export function ProcessingPanel({
       for (let i = 0; i < selectedFiles.length; i++) {
         const file = selectedFiles[i];
         setCurrentFile(file.filename);
-        setProgress(((i) / selectedFiles.length) * 100);
+        setProgress((i / selectedFiles.length) * 100);
 
         addLog('info', `Processing: ${file.filename}`);
 
         try {
-          const result = await processingApi.processDocument(file.document_id, processingOptions);
-          
-          if (result.success) {
-            addLog('success', `Successfully processed: ${file.filename}`);
-            addLog('info', `Conversion score: ${result.conversion_score}/100`);
-            
-            if (result.llm_evaluation) {
-              const eval_scores = [
-                `Clarity: ${result.llm_evaluation.clarity_score || 'N/A'}/10`,
-                `Completeness: ${result.llm_evaluation.completeness_score || 'N/A'}/10`,
-                `Relevance: ${result.llm_evaluation.relevance_score || 'N/A'}/10`,
-                `Markdown: ${result.llm_evaluation.markdown_score || 'N/A'}/10`
-              ].join(', ');
-              addLog('info', `Quality scores - ${eval_scores}`);
-            }
+          const result = await processingApi.processDocument(file.document_id, {
+            auto_optimize: processingOptions.auto_optimize,
+            quality_thresholds: processingOptions.quality_thresholds
+          });
 
-            if (result.pass_all_thresholds) {
-              addLog('success', `${file.filename} is RAG-ready!`);
-            } else {
-              addLog('warning', `${file.filename} needs improvement to meet quality thresholds`);
+          const conversionScore = result.conversion_score ?? 0;
+          const success = result.success && conversionScore > 0;
+          const passThresholds = result.pass_all_thresholds ?? false;
+
+          if (success) {
+            addLog('success', `✅ ${file.filename} processed successfully (${conversionScore}/100)`);
+            if (passThresholds) {
+              addLog('success', `🎯 ${file.filename} is RAG-ready`);
             }
           } else {
-            addLog('error', `Processing failed for ${file.filename}: ${result.message}`);
+            addLog('warning', `⚠️ ${file.filename} processed with issues (${conversionScore}/100)`);
           }
 
           processedResults.push(result);
           updateResults([...processedResults]);
 
         } catch (error) {
+          console.error(`Error processing ${file.filename}:`, error);
           const errorMessage = error instanceof Error ? error.message : 'Unknown error';
           addLog('error', `Error processing ${file.filename}: ${errorMessage}`);
           
@@ -278,10 +272,12 @@ export function ProcessingPanel({
 
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-      addLog('error', `Batch processing failed: ${errorMessage}`);
-      onError(errorMessage);
+      addLog('error', `Processing failed: ${errorMessage}`);
+      onError(`Processing failed: ${errorMessage}`);
+      setProcessingComplete(false);
     } finally {
       setIsProcessing(false);
+      setCurrentFile('');
     }
   };
 
@@ -358,70 +354,29 @@ export function ProcessingPanel({
               }
             </h3>
           </div>
-
-          {/* Mini stats when minimized */}
-          {panelState === 'minimized' && (
-            <div className="flex items-center space-x-4 text-xs text-gray-300">
-              <span>{selectedFiles.length} files</span>
-              {results.length > 0 && (
-                <>
-                  <span>•</span>
-                  <span className="text-green-400">{successful} success</span>
-                  <span>•</span>
-                  <span className="text-blue-400">{ragReady} RAG-ready</span>
-                </>
-              )}
-              {currentFile && (
-                <>
-                  <span>•</span>
-                  <span className="text-blue-400">Processing: {currentFile}</span>
-                </>
-              )}
-            </div>
-          )}
+          
+          {/* Summary stats - Always visible */}
+          <div className="flex items-center space-x-4 text-sm text-gray-300">
+            <span>{selectedFiles.length} files</span>
+            {results.length > 0 && (
+              <>
+                <span>•</span>
+                <span className="text-green-400">{successful} success</span>
+                <span>•</span>
+                <span className="text-blue-400">{ragReady} RAG-ready</span>
+              </>
+            )}
+            {currentFile && isProcessing && (
+              <>
+                <span>•</span>
+                <span className="text-blue-400">Processing: {currentFile}</span>
+              </>
+            )}
+          </div>
         </div>
 
-        {/* Controls */}
+        {/* Header Controls - ZIP download buttons removed */}
         <div className="flex items-center space-x-2">
-          {/* NEW: Quick Download Actions when processing is complete */}
-          {processingComplete && ragReady > 0 && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                quickDownloadRAGReady();
-              }}
-              disabled={quickDownloadLoading !== ''}
-              className="px-3 py-1 text-xs bg-green-600 hover:bg-green-700 text-white rounded transition-colors disabled:opacity-50"
-              title="Quick download RAG-ready files as ZIP"
-            >
-              {quickDownloadLoading === 'rag' ? (
-                <div className="animate-spin rounded-full h-3 w-3 border-b border-white"></div>
-              ) : (
-                '🎯 RAG ZIP'
-              )}
-            </button>
-          )}
-
-          {processingComplete && successful > 0 && (
-            <button
-              type="button"
-              onClick={(e) => {
-                e.stopPropagation();
-                quickDownloadAll();
-              }}
-              disabled={quickDownloadLoading !== ''}
-              className="px-3 py-1 text-xs bg-blue-600 hover:bg-blue-700 text-white rounded transition-colors disabled:opacity-50"
-              title="Quick download all processed files as ZIP"
-            >
-              {quickDownloadLoading === 'all' ? (
-                <div className="animate-spin rounded-full h-3 w-3 border-b border-white"></div>
-              ) : (
-                '📦 All ZIP'
-              )}
-            </button>
-          )}
-
           {/* Minimize/Restore */}
           <button
             type="button"
@@ -530,60 +485,19 @@ export function ProcessingPanel({
                   </div>
                 )}
 
-                {/* NEW: Quick Actions Panel - Fixed height */}
-                {processingComplete && results.length > 0 && (
-                  <div className="border border-gray-600 rounded-lg bg-gray-800 p-4 flex-shrink-0">
-                    <h4 className="font-medium text-gray-200 mb-3 flex items-center">
-                      <span className="mr-2">⚡</span>
-                      Quick Downloads
-                    </h4>
-                    <div className="grid grid-cols-1 gap-2">
-                      {ragReady > 0 && (
-                        <button
-                          type="button"
-                          onClick={quickDownloadRAGReady}
-                          disabled={quickDownloadLoading !== ''}
-                          className="w-full px-3 py-2 bg-green-600 hover:bg-green-700 text-white text-sm rounded transition-colors disabled:opacity-50"
-                        >
-                          {quickDownloadLoading === 'rag' ? (
-                            <div className="flex items-center justify-center space-x-2">
-                              <div className="animate-spin rounded-full h-3 w-3 border-b border-white"></div>
-                              <span>Creating ZIP...</span>
-                            </div>
-                          ) : (
-                            `🎯 Download ${ragReady} RAG-Ready Files`
-                          )}
-                        </button>
-                      )}
-                      
-                      <button
-                        type="button"
-                        onClick={quickDownloadAll}
-                        disabled={quickDownloadLoading !== '' || successful === 0}
-                        className="w-full px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm rounded transition-colors disabled:opacity-50"
-                      >
-                        {quickDownloadLoading === 'all' ? (
-                          <div className="flex items-center justify-center space-x-2">
-                            <div className="animate-spin rounded-full h-3 w-3 border-b border-white"></div>
-                            <span>Creating ZIP...</span>
-                          </div>
-                        ) : (
-                          `📦 Download All ${successful} Files`
-                        )}
-                      </button>
-                    </div>
-                  </div>
-                )}
 
-                {/* Results Preview - Flexible height with scroll */}
+
+                {/* Results List - Scrollable */}
                 {results.length > 0 && (
-                  <div className="border border-gray-600 rounded-lg flex flex-col bg-gray-800 flex-1 min-h-0">
-                    <h4 className="font-medium p-3 border-b border-gray-600 bg-gray-700 flex-shrink-0 text-gray-200">Recent Results</h4>
-                    <div className="overflow-y-auto flex-1 scrollbar-thin scrollbar-thumb-gray-600 scrollbar-track-gray-800">
-                      {results.slice(-10).map((result) => (
-                        <div key={result.document_id} className="flex items-center justify-between p-3 border-b border-gray-600 last:border-b-0">
-                          <div className="flex items-center space-x-2 flex-1 min-w-0">
-                            <span className="text-sm flex-shrink-0">
+                  <div className="border border-gray-600 rounded-lg flex flex-col flex-1 min-h-0">
+                    <div className="p-3 border-b border-gray-600 bg-gray-800 flex-shrink-0">
+                      <h4 className="font-medium text-gray-200">Processing Results</h4>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-gray-800">
+                      {results.map((result, index) => (
+                        <div key={index} className="flex items-center justify-between p-2 hover:bg-gray-700 rounded text-sm">
+                          <div className="flex items-center space-x-2 min-w-0 flex-1">
+                            <span className="flex-shrink-0">
                               {result.success ? (result.pass_all_thresholds ? '✅' : '⚠️') : '❌'}
                             </span>
                             <span className="text-sm font-medium truncate text-gray-200">{result.filename}</span>

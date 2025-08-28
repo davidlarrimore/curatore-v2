@@ -631,11 +631,11 @@ export function ReviewStage({
         </div>
       </div>
 
-      {/* Fixed Action Button - Bottom Right with Processing Panel Awareness */}
+{/* Fixed Action Button - Bottom Right with Processing Panel Awareness */}
       {processingPanelState !== 'fullscreen' && (
         <div className={`fixed right-6 z-40 transition-all duration-300 ${
           processingPanelState === 'normal' 
-            ? 'bottom-[384px]'  // Above normal processing panel: 320px panel + 52px (status + gap) + 12px margin = 384px
+            ? 'bottom-[424px]'  // Above normal processing panel: 360px panel + 52px (status + gap) + 12px margin = 424px
             : processingPanelState === 'minimized'
             ? 'bottom-[112px]'  // Above minimized panel: 48px panel + 52px (status + gap) + 12px margin = 112px
             : 'bottom-16'       // Above status bar only: 52px (status + gap) + 12px margin = 64px (bottom-16)
