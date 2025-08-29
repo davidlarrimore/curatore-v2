@@ -13,7 +13,8 @@ import {
   Zap,
   Database,
   CheckCircle2,
-  RefreshCw
+  RefreshCw,
+  Trash2
 } from 'lucide-react';
 
 /**
@@ -118,6 +119,52 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
       setIsRefreshing(false);
     }
   }, []);
+
+  /**
+   * Delete a single uploaded file by document ID, then refresh lists and selections.
+   */
+  const handleDeleteUploadedFile = useCallback(async (file: FileInfo) => {
+    if (sourceType !== 'upload') return;
+    const confirmed = confirm(`Delete uploaded file "${file.filename}"? This cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+      await fileApi.deleteDocument(file.document_id);
+      // Remove from uploaded list immediately for responsiveness
+      setUploadedFiles(prev => prev.filter(f => f.document_id !== file.document_id));
+      // Remove from selected files if present
+      onSelectedFilesChange(selectedFiles.filter(f => f.document_id !== file.document_id));
+    } catch (error) {
+      console.error('Failed to delete file:', error);
+      alert('Failed to delete file. Please try again.');
+    }
+  }, [onSelectedFilesChange, selectedFiles, sourceType]);
+
+  /**
+   * Delete all uploaded files (bulk). Iterates over current uploaded files.
+   */
+  const handleDeleteAllUploadedFiles = useCallback(async () => {
+    if (sourceType !== 'upload' || uploadedFiles.length === 0) return;
+    const confirmed = confirm(`Delete ALL uploaded files (${uploadedFiles.length})? This cannot be undone.`);
+    if (!confirmed) return;
+
+    try {
+      const deletions = await Promise.allSettled(
+        uploadedFiles.map(f => fileApi.deleteDocument(f.document_id))
+      );
+      const failed = deletions.filter(r => r.status === 'rejected');
+      if (failed.length > 0) {
+        alert(`${failed.length} file(s) could not be deleted. Some items may remain.`);
+      }
+      // Refresh uploaded list and clear any selected that were uploaded
+      await loadUploadedFiles();
+      const uploadedIds = new Set(uploadedFiles.map(f => f.document_id));
+      onSelectedFilesChange(selectedFiles.filter(f => !uploadedIds.has(f.document_id)));
+    } catch (error) {
+      console.error('Failed bulk delete:', error);
+      alert('Failed to delete all files. Please try again.');
+    }
+  }, [loadUploadedFiles, onSelectedFilesChange, selectedFiles, sourceType, uploadedFiles]);
 
   /**
    * Handles the file upload process for an array of File objects.
@@ -352,6 +399,16 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                 <span className="text-sm font-medium text-gray-700">Select All</span>
               </label>
             )}
+            {sourceType === 'upload' && files.length > 0 && (
+              <button
+                type="button"
+                onClick={handleDeleteAllUploadedFiles}
+                className="flex items-center space-x-2 px-3 py-2 text-sm font-medium bg-red-50 hover:bg-red-100 text-red-700 rounded-lg transition-colors"
+              >
+                <Trash2 className="w-4 h-4" />
+                <span>Delete All</span>
+              </button>
+            )}
             <button
               type="button"
               onClick={() => {
@@ -474,19 +531,31 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                         </div>
                       </div>
 
-                      {/* Source */}
+                      {/* Source + Actions (for uploaded files) */}
                       <div className="col-span-1">
-                        {sourceType === 'local' ? (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
-                            <Database className="w-3 h-3 mr-1" />
-                            Batch
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
-                            <CheckCircle2 className="w-3 h-3 mr-1" />
-                            Upload
-                          </span>
-                        )}
+                        <div className="flex items-center justify-between">
+                          {sourceType === 'local' ? (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
+                              <Database className="w-3 h-3 mr-1" />
+                              Batch
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-800">
+                              <CheckCircle2 className="w-3 h-3 mr-1" />
+                              Upload
+                            </span>
+                          )}
+                          {sourceType === 'upload' && (
+                            <button
+                              type="button"
+                              title="Delete file"
+                              onClick={() => handleDeleteUploadedFile(file)}
+                              className="ml-2 p-1 rounded hover:bg-red-50 text-red-600"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          )}
+                        </div>
                       </div>
                     </div>
                   </div>
