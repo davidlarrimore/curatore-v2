@@ -14,7 +14,8 @@ import {
   Database,
   CheckCircle2,
   RefreshCw,
-  Trash2
+  Trash2,
+  HelpCircle
 } from 'lucide-react';
 
 /**
@@ -63,6 +64,21 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
   isProcessing,
   processingPanelState = 'hidden'
 }) => {
+  // Tooltip helpers
+  const getThresholdTip = (label: string): string => {
+    switch (label) {
+      case 'Clarity':
+        return 'Minimum readability/legibility score (1–10) a document must meet.';
+      case 'Completeness':
+        return 'Minimum coverage score (1–10) to ensure content is not missing key parts.';
+      case 'Relevance':
+        return 'Minimum on-topic score (1–10) to ensure content matches intent.';
+      case 'Markdown':
+        return 'Minimum formatting quality score (1–10) for clean Markdown output.';
+      default:
+        return '';
+    }
+  };
   // State for files fetched from the server's 'uploads' directory.
   const [uploadedFiles, setUploadedFiles] = useState<FileInfo[]>([]);
   // State for files fetched from the server's 'batch_files' directory.
@@ -592,12 +608,20 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                 })}
                 className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
               />
-              <span className="text-sm font-medium text-gray-700">Vector DB Optimization</span>
+              <span className="text-sm font-medium text-gray-700 relative inline-flex items-center group cursor-help">
+                Vector DB Optimization
+                <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Rewrites structure for better chunking and retrieval; can adjust headings and sections.</span>
+              </span>
             </label>
 
             {/* Quality Threshold Quick Setting */}
             <div className="flex items-center space-x-2">
-              <span className="text-sm font-medium text-gray-700">Quality Threshold:</span>
+              <span className="text-sm font-medium text-gray-700 relative inline-flex items-center group cursor-help">
+                Quality Threshold
+                <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Minimum conversion quality (0–100). Documents below this may be flagged or fail conversion.</span>
+              </span>
               <select
                 value={processingOptions.quality_thresholds.conversion_threshold}
                 onChange={(e) => onProcessingOptionsChange({
@@ -616,27 +640,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
               </select>
             </div>
 
-            {/* OCR Language Quick Setting */}
-            <div className="flex items-center space-x-2">
-              <span className="text-sm font-medium text-gray-700">OCR Language:</span>
-              <select
-                value={processingOptions.ocr_settings.language}
-                onChange={(e) => onProcessingOptionsChange({
-                  ...processingOptions,
-                  ocr_settings: {
-                    ...processingOptions.ocr_settings,
-                    language: e.target.value
-                  }
-                })}
-                className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-              >
-                <option value="en">English</option>
-                <option value="eng+spa">English + Spanish</option>
-                <option value="fra">French</option>
-                <option value="deu">German</option>
-                <option value="chi_sim">Chinese (Simplified)</option>
-              </select>
-            </div>
+            {/* OCR Language Quick Setting removed: use Advanced Language Code field */}
           </div>
 
           {/* Advanced Settings Toggle */}
@@ -671,7 +675,11 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                   'Markdown': 'markdown_threshold'
                 }).map(([label, key]) => (
                   <div key={key} className="flex items-center justify-between">
-                    <label className="text-xs font-medium text-gray-700">{label}</label>
+                    <label className="text-xs font-medium text-gray-700 relative inline-flex items-center group cursor-help">
+                      {label}
+                      <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                      <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">{getThresholdTip(label)}</span>
+                    </label>
                     <div className="flex items-center space-x-2">
                       <input
                         type="range"
@@ -700,7 +708,11 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                 <h4 className="font-medium text-gray-900">Processing</h4>
                 <div className="space-y-2 text-xs">
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-700">Max Retries:</span>
+                    <span className="text-gray-700 relative inline-flex items-center group cursor-help">
+                      Max Retries
+                      <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                      <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Number of times to retry a failed processing step per document.</span>
+                    </span>
                     <input
                       type="number"
                       min="1"
@@ -717,7 +729,11 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                     />
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-700">Chunk Size:</span>
+                    <span className="text-gray-700 relative inline-flex items-center group cursor-help">
+                      Chunk Size
+                      <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                      <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Target characters per chunk used for embeddings and retrieval.</span>
+                    </span>
                     <input
                       type="number"
                       min="500"
@@ -735,7 +751,11 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                     />
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-700">Chunk Overlap:</span>
+                    <span className="text-gray-700 relative inline-flex items-center group cursor-help">
+                      Chunk Overlap
+                      <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                      <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Characters overlapped between adjacent chunks to preserve context.</span>
+                    </span>
                     <input
                       type="number"
                       min="50"
@@ -759,8 +779,77 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
               <div className="space-y-3">
                 <h4 className="font-medium text-gray-900">OCR Configuration</h4>
                 <div className="space-y-2 text-xs">
+                  {/* Language Code (advanced) */}
                   <div className="flex items-center justify-between">
-                    <span className="text-gray-700">Confidence:</span>
+                    <label className="text-gray-700">
+                      <span className="relative inline-flex items-center group cursor-help">
+                        <span className="mr-1">Language Code:</span>
+                        <HelpCircle className="w-3 h-3 text-gray-400" />
+                        <span
+                          className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity"
+                          role="tooltip"
+                        >
+                          Use Tesseract codes like 'eng' for English or 'eng+spa' for English+Spanish.
+                        </span>
+                      </span>
+                    </label>
+                    <input
+                      type="text"
+                      value={processingOptions.ocr_settings.language}
+                      onChange={(e) => onProcessingOptionsChange({
+                        ...processingOptions,
+                        ocr_settings: {
+                          ...processingOptions.ocr_settings,
+                          language: e.target.value
+                        }
+                      })}
+                      placeholder="e.g., eng, eng+spa, fra"
+                      className="w-36 px-1 py-0.5 border border-gray-300 rounded text-xs"
+                    />
+                  </div>
+
+                  {/* Page Segmentation Mode (PSM) */}
+                  <div className="flex items-center justify-between">
+                    <label className="text-gray-700 relative inline-flex items-center group cursor-help">
+                      PSM
+                      <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                      <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Page Segmentation Mode: guides Tesseract on page layout (e.g., single block, line, or automatic).</span>
+                    </label>
+                    <select
+                      value={(processingOptions.ocr_settings as any).psm ?? 3}
+                      onChange={(e) => onProcessingOptionsChange({
+                        ...processingOptions,
+                        ocr_settings: {
+                          ...processingOptions.ocr_settings,
+                          psm: parseInt(e.target.value)
+                        }
+                      })}
+                      className="w-36 px-1 py-0.5 border border-gray-300 rounded text-xs"
+                    >
+                      <option value={0}>0 - OSD only</option>
+                      <option value={1}>1 - Auto with OSD</option>
+                      <option value={2}>2 - Auto without OSD</option>
+                      <option value={3}>3 - Fully automatic (default)</option>
+                      <option value={4}>4 - Single column text</option>
+                      <option value={5}>5 - Single uniform block</option>
+                      <option value={6}>6 - Single uniform block</option>
+                      <option value={7}>7 - Single text line</option>
+                      <option value={8}>8 - Single word</option>
+                      <option value={9}>9 - Single word in circle</option>
+                      <option value={10}>10 - Single character</option>
+                      <option value={11}>11 - Sparse text</option>
+                      <option value={12}>12 - Sparse text with OSD</option>
+                      <option value={13}>13 - Raw line</option>
+                    </select>
+                  </div>
+                  
+
+                  <div className="flex items-center justify-between">
+                    <span className="text-gray-700 relative inline-flex items-center group cursor-help">
+                      Confidence
+                      <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                      <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Minimum OCR confidence (0.1–1.0). Lower accepts more text but increases noise.</span>
+                    </span>
                     <input
                       type="number"
                       min="0.1"
@@ -777,7 +866,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                       className="w-12 px-1 py-0.5 border border-gray-300 rounded text-xs"
                     />
                   </div>
-                  <label className="flex items-center space-x-2">
+                  <label className="flex items-center space-x-2 group cursor-help">
                     <input
                       type="checkbox"
                       checked={processingOptions.ocr_settings.enabled}
@@ -790,7 +879,11 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                       })}
                       className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                     />
-                    <span className="text-gray-700">Enable OCR</span>
+                    <span className="text-gray-700 relative inline-flex items-center">
+                      Enable OCR
+                      <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                      <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Run OCR for images or scanned PDFs. Disable for born-digital text files.</span>
+                    </span>
                   </label>
                 </div>
               </div>

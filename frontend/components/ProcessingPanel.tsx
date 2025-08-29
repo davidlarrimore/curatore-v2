@@ -262,10 +262,10 @@ export function ProcessingPanel({
       const perFileMap: Record<string, { job_id: string; filename: string }> = {};
       for (const f of selectedFiles) {
         try {
-          const resp = await processingApi.enqueueDocument(f.document_id, {
-            auto_optimize: processingOptions.auto_optimize,
-            quality_thresholds: processingOptions.quality_thresholds
-          } as any);
+          const resp = await processingApi.enqueueDocument(
+            f.document_id,
+            processingOptions as any
+          );
           perFileMap[f.document_id] = { job_id: resp.job_id, filename: f.filename };
         } catch (e: any) {
           addLog('error', `Failed to enqueue ${f.filename}: ${e?.message || 'enqueue failed'}`);
@@ -294,10 +294,10 @@ export function ProcessingPanel({
           const fallbackJobMap: Record<string, { job_id: string; filename: string }> = {};
           for (const f of selectedFiles) {
             try {
-              const resp = await processingApi.enqueueDocument(f.document_id, {
-                auto_optimize: processingOptions.auto_optimize,
-                quality_thresholds: processingOptions.quality_thresholds
-              } as any);
+              const resp = await processingApi.enqueueDocument(
+                f.document_id,
+                processingOptions as any
+              );
               fallbackJobMap[f.document_id] = { job_id: resp.job_id, filename: f.filename };
             } catch (e: any) {
               addLog('error', `Failed to enqueue ${f.filename}: ${e?.message || 'enqueue failed'}`);

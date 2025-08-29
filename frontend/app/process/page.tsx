@@ -63,8 +63,9 @@ export default function ProcessingPage() {
       },
       ocr_settings: {
         enabled: true,
-        language: 'en',
-        confidence_threshold: 0.8
+        language: 'eng',
+        confidence_threshold: 0.8,
+        psm: 3
       },
       processing_settings: {
         chunk_size: 1000,
