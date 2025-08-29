@@ -228,13 +228,6 @@ export function DownloadStage({
 
   return (
     <div className="space-y-6 pb-24">
-      {/* Header */}
-      <div className="text-center">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">⬇️ Download Results</h2>
-        <p className="text-gray-600">
-          Download your processed documents and reports
-        </p>
-      </div>
 
       {/* Summary Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">

@@ -347,6 +347,7 @@ export default function ProcessingPage() {
         onClose={() => setPanelVisible(false)}
         selectedFiles={state.selectedFiles}
         processingOptions={state.processingOptions}
+        sourceType={state.sourceType}
         onProcessingComplete={handleProcessingComplete}
         onResultUpdate={handleResultsUpdate}
         onError={(error) => {

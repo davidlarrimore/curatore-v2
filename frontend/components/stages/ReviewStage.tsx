@@ -250,16 +250,6 @@ export function ReviewStage({
   if (processingResults.length === 0 && !isProcessingComplete) {
     return (
       <div className="space-y-6 pb-24">
-        {/* Header */}
-        <div className="text-center">
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">📊 Review Results</h2>
-          <p className="text-gray-600">
-            {isProcessing 
-              ? 'Processing documents in the background. Results will appear here as they complete.'
-              : 'Waiting for documents to process...'
-            }
-          </p>
-        </div>
 
         {/* Processing Status */}
         <div className="bg-white rounded-lg border p-8">
@@ -302,13 +292,6 @@ export function ReviewStage({
   // Show results interface when we have at least one result
   return (
     <div className="space-y-6 pb-24">
-      {/* Streamlined Header */}
-      <div className="text-center">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">📊 Review Results</h2>
-        <p className="text-gray-600">
-          Review and improve your processed documents before finalizing
-        </p>
-      </div>
 
       {/* Summary Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
