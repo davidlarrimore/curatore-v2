@@ -14,6 +14,7 @@ interface SystemStatus {
   isLoading: boolean
   supportedFormats: string[]
   maxFileSize: number
+  backendVersion?: string
 }
 
 interface AppLayoutProps {
@@ -52,7 +53,8 @@ export function AppLayout({ children }: AppLayoutProps) {
         llmConnected: healthStatus.llm_connected,
         isLoading: false,
         supportedFormats: formatsData.supported_extensions,
-        maxFileSize: formatsData.max_file_size
+        maxFileSize: formatsData.max_file_size,
+        backendVersion: healthStatus.version
       })
     } catch (error) {
       console.error('Failed to load system status:', error)

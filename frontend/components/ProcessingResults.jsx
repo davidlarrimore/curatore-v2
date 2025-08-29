@@ -25,7 +25,7 @@ export function ProcessingResults({ documents, onDelete, onRefresh, apiUrl, isLo
 
   const downloadDocument = async (documentId, filename) => {
     try {
-      const response = await fetch(`${apiUrl}/api/documents/${documentId}/download`)
+      const response = await fetch(`${apiUrl}/api/v1/documents/${documentId}/download`)
       if (response.ok) {
         const blob = await response.blob()
         const url = window.URL.createObjectURL(blob)
@@ -49,7 +49,7 @@ export function ProcessingResults({ documents, onDelete, onRefresh, apiUrl, isLo
     }
 
     try {
-      const response = await fetch(`${apiUrl}/api/documents/${documentId}/content`)
+      const response = await fetch(`${apiUrl}/api/v1/documents/${documentId}/content`)
       if (response.ok) {
         const data = await response.json()
         setShowContent(prev => ({ ...prev, [documentId]: data.content }))

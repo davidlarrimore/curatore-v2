@@ -1,4 +1,4 @@
-# backend/app/api/routers/documents.py
+# backend/app/api/v1/routers/documents.py
 import time
 import uuid
 from datetime import datetime
@@ -9,15 +9,22 @@ from fastapi import APIRouter, File, UploadFile, HTTPException, Query
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from ...config import settings
-from ...models import (
-    FileUploadResponse, ProcessingResult, BatchProcessingRequest,
-    BatchProcessingResult, DocumentEditRequest, ProcessingOptions,
-    BulkDownloadRequest, ZipArchiveInfo
+from ....config import settings
+from ..models import (
+    FileUploadResponse,
+    DocumentEditRequest,
+    ProcessingOptions,
+    BulkDownloadRequest,
+    ZipArchiveInfo,
+    V1ProcessingOptions,
+    V1BatchProcessingRequest,
+    V1ProcessingResult,
+    V1BatchProcessingResult,
 )
-from ...services.document_service import document_service
-from ...services.storage_service import storage_service
-from ...services.zip_service import zip_service
+from ....services.document_service import document_service
+from ....models import BatchProcessingResult
+from ....services.storage_service import storage_service
+from ....services.zip_service import zip_service
 
 router = APIRouter()
 
@@ -69,31 +76,37 @@ async def upload_document(file: UploadFile = File(...)):
         message="File uploaded successfully"
     )
 
-@router.post("/documents/{document_id}/process", response_model=ProcessingResult, tags=["Processing"])
+@router.post("/documents/{document_id}/process", response_model=V1ProcessingResult, tags=["Processing"])
 async def process_document(
     document_id: str,
-    options: Optional[ProcessingOptions] = None
+    options: Optional[V1ProcessingOptions] = None,
 ):
     """Process a single document."""
+    domain_options: ProcessingOptions
     if not options:
-        options = ProcessingOptions()
+        domain_options = ProcessingOptions()
+    else:
+        domain_options = options.to_domain()
     
     file_path = document_service._find_document_file(document_id)
     if not file_path:
         raise HTTPException(status_code=404, detail="Document not found")
     
-    result = await document_service.process_document(document_id, file_path, options)
+    result = await document_service.process_document(document_id, file_path, domain_options)
     storage_service.save_processing_result(result)
     return result
 
-@router.post("/documents/batch/{filename}/process", response_model=ProcessingResult, tags=["Processing"])
+@router.post("/documents/batch/{filename}/process", response_model=V1ProcessingResult, tags=["Processing"])
 async def process_batch_file(
     filename: str,
-    options: Optional[ProcessingOptions] = None
+    options: Optional[V1ProcessingOptions] = None,
 ):
     """Process a single file from the batch_files directory."""
+    domain_options: ProcessingOptions
     if not options:
-        options = ProcessingOptions()
+        domain_options = ProcessingOptions()
+    else:
+        domain_options = options.to_domain()
     
     batch_file_path = document_service.find_batch_file(filename)
     if not batch_file_path:
@@ -101,23 +114,24 @@ async def process_batch_file(
     
     document_id = f"batch_{batch_file_path.stem}"
     
-    result = await document_service.process_document(document_id, batch_file_path, options)
+    result = await document_service.process_document(document_id, batch_file_path, domain_options)
     storage_service.save_processing_result(result)
     return result
 
-@router.post("/documents/batch/process", response_model=BatchProcessingResult, tags=["Processing"])
-async def process_batch(request: BatchProcessingRequest):
+@router.post("/documents/batch/process", response_model=V1BatchProcessingResult, tags=["Processing"])
+async def process_batch(request: V1BatchProcessingRequest):
     """Process multiple documents in batch."""
     batch_id = str(uuid.uuid4())
     start_time = time.time()
     
-    results = await document_service.process_batch(request.document_ids, request.options)
+    domain_options = request.options.to_domain() if request.options else None
+    results = await document_service.process_batch(request.document_ids, domain_options)
     
     successful = len([r for r in results if r.success])
     failed = len(results) - successful
-    rag_ready = len([r for r in results if r.pass_all_thresholds])
+    rag_ready = len([r for r in results if getattr(r, 'is_rag_ready', getattr(r, 'pass_all_thresholds', False))])
     
-    batch_result = BatchProcessingResult(
+    batch_result = V1BatchProcessingResult(
         batch_id=batch_id,
         total_files=len(results),
         successful=successful,
@@ -132,7 +146,7 @@ async def process_batch(request: BatchProcessingRequest):
     storage_service.save_batch_result(batch_result)
     return batch_result
 
-@router.get("/documents/{document_id}/result", response_model=ProcessingResult, tags=["Results"])
+@router.get("/documents/{document_id}/result", response_model=V1ProcessingResult, tags=["Results"])
 async def get_processing_result(document_id: str):
     """Get processing result for a document."""
     result = storage_service.get_processing_result(document_id)
@@ -148,20 +162,23 @@ async def get_document_content(document_id: str):
         raise HTTPException(status_code=404, detail="Processed content not found")
     return {"content": content}
 
-@router.put("/documents/{document_id}/content", response_model=ProcessingResult, tags=["Results"])
+@router.put("/documents/{document_id}/content", response_model=V1ProcessingResult, tags=["Results"])
 async def update_document_content(
-    document_id: str, 
+    document_id: str,
     request: DocumentEditRequest,
-    options: Optional[ProcessingOptions] = None
+    options: Optional[V1ProcessingOptions] = None,
 ):
     """Update document content with optional LLM improvements."""
+    domain_options: ProcessingOptions
     if not options:
-        options = ProcessingOptions()
+        domain_options = ProcessingOptions()
+    else:
+        domain_options = options.to_domain()
 
     result = await document_service.update_document_content(
         document_id=document_id,
         content=request.content,
-        options=options,
+        options=domain_options,
         improvement_prompt=request.improvement_prompt,
         apply_vector_optimization=request.apply_vector_optimization
     )
@@ -203,7 +220,7 @@ async def download_bulk_documents(request: BulkDownloadRequest):
     try:
         # Filter document IDs based on download type
         if request.download_type == "rag_ready":
-            filtered_ids = [r.document_id for r in results if r.pass_all_thresholds]
+            filtered_ids = [r.document_id for r in results if getattr(r, 'is_rag_ready', getattr(r, 'pass_all_thresholds', False))]
             if not filtered_ids:
                 raise HTTPException(status_code=404, detail="No RAG-ready documents found")
         else:
@@ -244,7 +261,7 @@ async def download_rag_ready_documents(
 ):
     """Download all RAG-ready documents as a ZIP archive."""
     all_results = storage_service.get_all_processing_results()
-    rag_ready_results = [r for r in all_results if r.success and r.pass_all_thresholds]
+    rag_ready_results = [r for r in all_results if r.success and getattr(r, 'is_rag_ready', getattr(r, 'pass_all_thresholds', False))]
     
     if not rag_ready_results:
         raise HTTPException(status_code=404, detail="No RAG-ready documents found")
@@ -270,7 +287,7 @@ async def download_rag_ready_documents(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to create RAG-ready archive: {str(e)}")
 
-@router.get("/batch/{batch_id}/result", response_model=BatchProcessingResult, tags=["Results"])
+@router.get("/batch/{batch_id}/result", response_model=V1BatchProcessingResult, tags=["Results"])
 async def get_batch_result(batch_id: str):
     """Get batch processing result."""
     result = storage_service.get_batch_result(batch_id)
@@ -278,7 +295,7 @@ async def get_batch_result(batch_id: str):
         raise HTTPException(status_code=404, detail="Batch result not found")
     return result
 
-@router.get("/documents", response_model=List[ProcessingResult], tags=["Results"])
+@router.get("/documents", response_model=List[V1ProcessingResult], tags=["Results"])
 async def list_processed_documents():
     """List all processed documents."""
     return storage_service.get_all_processing_results()

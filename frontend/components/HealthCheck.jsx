@@ -2,6 +2,7 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { API_PATH_VERSION } from '@/lib/api'
 
 export function HealthCheck({ apiUrl, health, llmConnected }) {
   const [llmStatus, setLlmStatus] = useState(null)
@@ -10,7 +11,7 @@ export function HealthCheck({ apiUrl, health, llmConnected }) {
   const refreshLlmStatus = async () => {
     setIsRefreshing(true)
     try {
-      const response = await fetch(`${apiUrl}/api/llm/status`)
+      const response = await fetch(`${apiUrl}/api/v1/llm/status`)
       const status = await response.json()
       setLlmStatus(status)
     } catch (error) {
@@ -121,7 +122,7 @@ export function HealthCheck({ apiUrl, health, llmConnected }) {
         <div className="border-t pt-4 mt-4">
           <div className="flex gap-2">
             <a
-              href={`${apiUrl}/docs`}
+              href={`${apiUrl}/api/${API_PATH_VERSION}/docs`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex-1 text-center bg-blue-50 text-blue-700 px-3 py-2 rounded-lg text-sm hover:bg-blue-100 transition-colors"
@@ -129,12 +130,20 @@ export function HealthCheck({ apiUrl, health, llmConnected }) {
               📚 API Docs
             </a>
             <a
-              href={`${apiUrl}/api/health`}
+              href={`${apiUrl}/api/v1/health`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex-1 text-center bg-gray-50 text-gray-700 px-3 py-2 rounded-lg text-sm hover:bg-gray-100 transition-colors"
             >
-              ❤️ Health
+              ❤️ Health v1
+            </a>
+            <a
+              href={`${apiUrl}/api/v2/health`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="flex-1 text-center bg-gray-50 text-gray-700 px-3 py-2 rounded-lg text-sm hover:bg-gray-100 transition-colors"
+            >
+              💙 Health v2
             </a>
           </div>
         </div>

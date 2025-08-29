@@ -234,6 +234,9 @@ class ConversionResult(BaseModel):
             conversion_feedback="Good structure preservation"
         )
     """
+    success: bool = Field(
+        description="Whether conversion produced usable content"
+    )
     markdown_content: str = Field(
         description="Converted markdown content"
     )
@@ -256,6 +259,10 @@ class ConversionResult(BaseModel):
     processing_time: float = Field(
         ge=0,
         description="Time taken for conversion in seconds"
+    )
+    conversion_note: str = Field(
+        default="",
+        description="Notes about conversion method or fallbacks used"
     )
 
 

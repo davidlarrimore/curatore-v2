@@ -147,10 +147,12 @@ export function LeftSidebar({
   ]
 
   // Quick actions
+  const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+  const { API_PATH_VERSION } = require('@/lib/api')
   const quickActions: NavItem[] = [
     { name: 'Upload Files', href: '/process', icon: Upload },
     { name: 'View Results', href: '/process', icon: BarChart3 },
-    { name: 'API Documentation', href: 'http://localhost:8000/docs', icon: HelpCircle }
+    { name: 'API Documentation', href: `${apiBase}/api/${API_PATH_VERSION}/docs`, icon: HelpCircle }
   ]
 
   // Mobile sidebar component

@@ -38,6 +38,7 @@
 # ============================================================================
 
 import io
+from datetime import datetime
 import re
 import time
 import uuid
@@ -481,6 +482,35 @@ class DocumentService:
             traceback.print_exc()
         
         return files
+
+    def find_batch_file(self, filename: str) -> Optional[Path]:
+        """
+        Locate a file in the batch directory by filename or stem.
+
+        Accepts a filename (including spaces or URL-decoded characters) and
+        attempts to resolve it within the configured batch directory. If an
+        exact match is not found, falls back to searching by stem.
+
+        Args:
+            filename (str): The filename to search for (e.g., "report.pdf").
+
+        Returns:
+            Optional[Path]: Full path if found, otherwise None.
+        """
+        try:
+            # 1) Exact match
+            candidate = self.batch_dir / filename
+            if candidate.exists() and candidate.is_file() and candidate.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                return candidate
+
+            # 2) Stem match (handle cases where extension might differ)
+            stem = Path(filename).stem
+            for p in self.batch_dir.glob(f"{stem}.*"):
+                if p.is_file() and p.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                    return p
+        except Exception as e:
+            print(f"Error finding batch file '{filename}': {e}")
+        return None
     
     def get_processed_content(self, document_id: str) -> Optional[str]:
         """
@@ -647,10 +677,10 @@ class DocumentService:
         return total, " ".join(fb)
     
     def _meets_thresholds(
-        self, 
-        conversion_score: int, 
-        llm_evaluation: Optional[LLMEvaluation], 
-        thresholds: QualityThresholds
+        self,
+        conversion_score: int,
+        llm_evaluation: Optional[LLMEvaluation],
+        thresholds: Optional[QualityThresholds],
     ) -> bool:
         """
         Check if document meets all quality thresholds for RAG readiness.
@@ -691,21 +721,45 @@ class DocumentService:
         """
         if not llm_evaluation:
             return False
-        
+
+        # Normalize thresholds (support both v1 payload and domain model names)
         try:
+            if thresholds is None:
+                conv = settings.default_conversion_threshold
+                clr = settings.default_clarity_threshold
+                comp = settings.default_completeness_threshold
+                rel = settings.default_relevance_threshold
+                mdq = settings.default_markdown_threshold
+            else:
+                conv = getattr(thresholds, "conversion", None)
+                if conv is None:
+                    conv = getattr(thresholds, "conversion_quality", settings.default_conversion_threshold)
+                clr = getattr(thresholds, "clarity", None)
+                if clr is None:
+                    clr = getattr(thresholds, "clarity_score", settings.default_clarity_threshold)
+                comp = getattr(thresholds, "completeness", None)
+                if comp is None:
+                    comp = getattr(thresholds, "completeness_score", settings.default_completeness_threshold)
+                rel = getattr(thresholds, "relevance", None)
+                if rel is None:
+                    rel = getattr(thresholds, "relevance_score", settings.default_relevance_threshold)
+                mdq = getattr(thresholds, "markdown", None)
+                if mdq is None:
+                    mdq = getattr(thresholds, "markdown_quality", settings.default_markdown_threshold)
+
             return (
-                conversion_score >= thresholds.conversion and
-                (llm_evaluation.clarity_score or 0) >= thresholds.clarity and
-                (llm_evaluation.completeness_score or 0) >= thresholds.completeness and
-                (llm_evaluation.relevance_score or 0) >= thresholds.relevance and
-                (llm_evaluation.markdown_score or 0) >= thresholds.markdown
+                conversion_score >= int(conv)
+                and (llm_evaluation.clarity_score or 0) >= int(clr)
+                and (llm_evaluation.completeness_score or 0) >= int(comp)
+                and (llm_evaluation.relevance_score or 0) >= int(rel)
+                and (llm_evaluation.markdown_score or 0) >= int(mdq)
             )
         except Exception:
             return False
     
     async def convert_to_markdown(
-        self, 
-        file_path: Path, 
+        self,
+        file_path: Path,
         ocr_settings: OCRSettings
     ) -> ConversionResult:
         """
@@ -744,15 +798,20 @@ class DocumentService:
             >>> if result.success:
             >>>     print(f"Converted successfully: {result.conversion_score}/100")
         """
+        start = time.time()
         try:
             markdown_content, note = self._convert_file_to_text(file_path, ocr_settings)
             
             if markdown_content is None:
                 return ConversionResult(
                     success=False,
+                    markdown_content="",
                     conversion_score=0,
                     conversion_feedback="Conversion failed to produce text.",
-                    conversion_note=note
+                    word_count=0,
+                    char_count=0,
+                    processing_time=time.time() - start,
+                    conversion_note=note,
                 )
 
             score, feedback = self._score_conversion(markdown_content)
@@ -762,15 +821,22 @@ class DocumentService:
                 markdown_content=markdown_content,
                 conversion_score=score,
                 conversion_feedback=feedback,
-                conversion_note=note
+                word_count=len(markdown_content.split()),
+                char_count=len(markdown_content),
+                processing_time=time.time() - start,
+                conversion_note=note,
             )
             
         except Exception as e:
             return ConversionResult(
                 success=False,
+                markdown_content="",
                 conversion_score=0,
                 conversion_feedback=f"Conversion error: {e}",
-                conversion_note=f"An unexpected error occurred during conversion: {e}"
+                word_count=0,
+                char_count=0,
+                processing_time=time.time() - start,
+                conversion_note=f"An unexpected error occurred during conversion: {e}",
             )
     
     def _convert_file_to_text(
@@ -1002,11 +1068,14 @@ class DocumentService:
                     filename=filename,
                     status=ProcessingStatus.FAILED,
                     success=False,
-                    message=f"Conversion failed: {conversion_result.conversion_feedback}",
+                    error_message=f"Conversion failed: {conversion_result.conversion_feedback}",
                     original_path=str(file_path),
                     conversion_result=conversion_result,
+                    llm_evaluation=None,
+                    is_rag_ready=False,
                     processing_time=time.time() - start_time,
-                    thresholds_used=options.quality_thresholds
+                    processed_at=datetime.now(),
+                    file_size=0,
                 )
             
             markdown_content = conversion_result.markdown_content
@@ -1026,7 +1095,7 @@ class DocumentService:
             # Step 3: Vector DB optimization (if enabled)
             vector_optimized = False
             optimization_note = ""
-            if options.auto_optimize and llm_service.is_available:
+            if options.vector_optimize and llm_service.is_available:
                 try:
                     optimized_content = await llm_service.optimize_for_vector_db(markdown_content)
                     if optimized_content and optimized_content.strip():
@@ -1052,11 +1121,14 @@ class DocumentService:
                     filename=filename,
                     status=ProcessingStatus.FAILED,
                     success=False,
-                    message=f"Failed to save processed content: {str(e)}",
+                    error_message=f"Failed to save processed content: {str(e)}",
                     original_path=str(file_path),
                     conversion_result=conversion_result,
+                    llm_evaluation=None,
+                    is_rag_ready=False,
                     processing_time=time.time() - start_time,
-                    thresholds_used=options.quality_thresholds
+                    processed_at=datetime.now(),
+                    file_size=0,
                 )
             
             # Update conversion result with any optimization notes
@@ -1097,11 +1169,11 @@ class DocumentService:
                 llm_evaluation=llm_evaluation,
                 document_summary=document_summary,
                 conversion_score=conversion_result.conversion_score,
-                pass_all_thresholds=passes_thresholds,
+                is_rag_ready=passes_thresholds,
                 vector_optimized=vector_optimized,
                 processing_time=processing_time,
-                processed_at=time.time(),
-                thresholds_used=options.quality_thresholds
+                processed_at=datetime.now(),
+                file_size=output_path.stat().st_size if output_path.exists() else 0,
             )
             
         except Exception as e:
@@ -1109,15 +1181,31 @@ class DocumentService:
             import traceback
             traceback.print_exc()
             
+            # Construct a minimal conversion_result for error context
+            minimal_conv = ConversionResult(
+                success=False,
+                markdown_content="",
+                conversion_score=0,
+                conversion_feedback=f"Processing error: {str(e)}",
+                word_count=0,
+                char_count=0,
+                processing_time=time.time() - start_time,
+                conversion_note="Processing pipeline error",
+            )
+
             return ProcessingResult(
                 document_id=document_id,
                 filename=filename,
                 status=ProcessingStatus.FAILED,
                 success=False,
-                message=f"Processing error: {str(e)}",
+                error_message=f"Processing error: {str(e)}",
                 original_path=str(file_path),
+                conversion_result=minimal_conv,
+                llm_evaluation=None,
+                is_rag_ready=False,
                 processing_time=time.time() - start_time,
-                thresholds_used=options.quality_thresholds
+                processed_at=datetime.now(),
+                file_size=0,
             )
     
     async def process_batch(
@@ -1168,13 +1256,30 @@ class DocumentService:
             # Find the file for this document ID
             file_path = self._find_document_file(doc_id)
             if not file_path:
+                # Build a minimal-but-valid result object for missing files
+                minimal_conv = ConversionResult(
+                    success=False,
+                    markdown_content="",
+                    conversion_score=0,
+                    conversion_feedback="Document file not found",
+                    word_count=0,
+                    char_count=0,
+                    processing_time=0.0,
+                    conversion_note="",
+                )
                 results.append(ProcessingResult(
                     document_id=doc_id,
                     filename=f"unknown_{doc_id}",
                     status=ProcessingStatus.FAILED,
                     success=False,
-                    message="Document file not found",
-                    thresholds_used=options.quality_thresholds
+                    error_message="Document file not found",
+                    original_path=None,
+                    conversion_result=minimal_conv,
+                    llm_evaluation=None,
+                    is_rag_ready=False,
+                    processing_time=0.0,
+                    processed_at=datetime.now(),
+                    file_size=0,
                 ))
                 continue
             
@@ -1280,15 +1385,18 @@ class DocumentService:
                     markdown_content=final_content,
                     conversion_score=score,
                     conversion_feedback=feedback,
-                    conversion_note="Content updated and re-evaluated."
+                    word_count=len(final_content.split()),
+                    char_count=len(final_content),
+                    processing_time=0.0,
+                    conversion_note="Content updated and re-evaluated.",
                 ),
                 llm_evaluation=llm_evaluation,
                 conversion_score=score,
-                pass_all_thresholds=passes_thresholds,
+                is_rag_ready=passes_thresholds,
                 vector_optimized=vector_optimized,
                 processing_time=0.0,  # Not a full process
-                processed_at=time.time(),
-                thresholds_used=options.quality_thresholds
+                processed_at=datetime.now(),
+                file_size=processed_file_path.stat().st_size if processed_file_path.exists() else 0,
             )
             
         except Exception as e:

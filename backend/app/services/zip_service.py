@@ -255,7 +255,8 @@ class ZipService:
         # Generate combined markdown header
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         successful_results = [r for r in results if r.success]
-        rag_ready_results = [r for r in successful_results if r.pass_all_thresholds]
+        rag_flag = lambda r: getattr(r, 'pass_all_thresholds', getattr(r, 'is_rag_ready', False))
+        rag_ready_results = [r for r in successful_results if rag_flag(r)]
         vector_optimized_results = [r for r in successful_results if r.vector_optimized]
         pass_rate = (len(rag_ready_results) / len(successful_results) * 100) if successful_results else 0
         
@@ -285,30 +286,30 @@ class ZipService:
                             if result:
                                 # Add section to combined markdown
                                 combined_sections.append(f"# {result.filename}")
-                                
+
                                 if result.document_summary:
                                     combined_sections.extend(["", f"*{result.document_summary}*"])
-                                
-                                status_emoji = "✅" if result.pass_all_thresholds else "⚠️"
+
+                                status_emoji = "✅" if rag_flag(result) else "⚠️"
                                 optimized_emoji = " 🎯" if result.vector_optimized else ""
-                                
+
                                 combined_sections.extend([
                                     "",
-                                    f"**Processing Status:** {status_emoji} {'RAG Ready' if result.pass_all_thresholds else 'Needs Improvement'}{optimized_emoji}",
-                                    f"**Conversion Score:** {result.conversion_score}/100"
+                                    f"**Processing Status:** {status_emoji} {'RAG Ready' if rag_flag(result) else 'Needs Improvement'}{optimized_emoji}",
+                                    f"**Conversion Score:** {result.conversion_score}/100",
                                 ])
-                                
+
                                 if result.llm_evaluation:
                                     scores = [
                                         f"Clarity: {result.llm_evaluation.clarity_score or 'N/A'}/10",
                                         f"Completeness: {result.llm_evaluation.completeness_score or 'N/A'}/10",
                                         f"Relevance: {result.llm_evaluation.relevance_score or 'N/A'}/10",
-                                        f"Markdown: {result.llm_evaluation.markdown_score or 'N/A'}/10"
+                                        f"Markdown: {result.llm_evaluation.markdown_score or 'N/A'}/10",
                                     ]
                                     combined_sections.append(f"**Quality Scores:** {', '.join(scores)}")
-                                
+
                                 combined_sections.extend(["", "---", ""])
-                                
+
                                 # Adjust markdown hierarchy for combined document
                                 adjusted_content = self._adjust_markdown_hierarchy(content)
                                 combined_sections.extend([adjusted_content, "", "", "---", ""])
@@ -515,7 +516,8 @@ class ZipService:
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         
         successful_results = [r for r in results if r.success]
-        rag_ready_results = [r for r in successful_results if r.pass_all_thresholds]
+        rag_flag = lambda r: getattr(r, 'pass_all_thresholds', getattr(r, 'is_rag_ready', False))
+        rag_ready_results = [r for r in successful_results if rag_flag(r)]
         vector_optimized_results = [r for r in successful_results if r.vector_optimized]
         pass_rate = (len(rag_ready_results) / len(successful_results) * 100) if successful_results else 0
         
@@ -541,7 +543,7 @@ class ZipService:
         
         # Add detailed results for each document
         for result in successful_results:
-            status = "RAG Ready ✅" if result.pass_all_thresholds else "Needs Improvement ⚠️"
+            status = "RAG Ready ✅" if rag_flag(result) else "Needs Improvement ⚠️"
             optimization = "Vector Optimized 🎯" if result.vector_optimized else "Standard Processing"
             
             summary_lines.extend([

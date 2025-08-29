@@ -202,7 +202,11 @@ export function TopNavigation({
             size="sm"
             title="Help & Documentation"
             aria-label="Help and documentation"
-            onClick={() => window.open('http://localhost:8000/docs', '_blank')}
+            onClick={() => {
+              const apiBase = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
+              const { API_PATH_VERSION } = require('@/lib/api');
+              window.open(`${apiBase}/api/${API_PATH_VERSION}/docs`, '_blank');
+            }}
             className="hidden md:flex"
           >
             <HelpCircle className="w-4 h-4" />

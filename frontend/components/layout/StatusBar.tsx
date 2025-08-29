@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react'
 import { Activity, Zap, HardDrive, Clock, Server, Wifi } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
-import { utils } from '@/lib/api'
+import { utils, API_PATH_VERSION } from '@/lib/api'
 
 interface SystemStatus {
   health: string
@@ -12,6 +12,7 @@ interface SystemStatus {
   isLoading: boolean
   supportedFormats: string[]
   maxFileSize: number
+  backendVersion?: string
 }
 
 interface StatusBarProps {
@@ -131,10 +132,16 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
           </span>
         </div>
         
-        {/* Version */}
-        <div className="flex items-center space-x-1">
-          <span className="text-gray-400">Curatore</span>
-          <span className="font-mono text-gray-500">v2.0.0</span>
+        {/* Versions */}
+        <div className="flex items-center space-x-2">
+          <div className="flex items-center space-x-1">
+            <span className="text-gray-400">Backend</span>
+            <span className="font-mono text-gray-500">{systemStatus.backendVersion || 'unknown'}</span>
+          </div>
+          <div className="flex items-center space-x-1">
+            <span className="text-gray-400">API</span>
+            <span className="font-mono text-gray-500">{API_PATH_VERSION.toUpperCase()}</span>
+          </div>
         </div>
       </div>
     </div>

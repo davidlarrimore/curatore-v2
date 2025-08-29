@@ -99,7 +99,7 @@ class Settings(BaseSettings):
     # ========================================================================
     
     cors_origins: List[str] = Field(
-        default=["http://localhost:3000"],
+        default=["http://localhost:3000", "http://127.0.0.1:3000"],
         description="List of allowed origins for CORS"
     )
     """
@@ -110,6 +110,15 @@ class Settings(BaseSettings):
     
     Environment Variable: CORS_ORIGINS (comma-separated list)
     Example: "https://app.example.com,https://admin.example.com"
+    """
+
+    cors_origin_regex: Optional[str] = Field(
+        default=r"^http://(localhost|127\.0\.0\.1)(:\\d+)?$",
+        description="Optional regex to match allowed origins"
+    )
+    """
+    Optional regex pattern to match allowed origins for development.
+    This complements cors_origins. If both are set, either match allows the request.
     """
     
     # ========================================================================
