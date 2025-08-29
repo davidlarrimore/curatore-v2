@@ -39,6 +39,26 @@ def set_active_job(document_id: str, job_id: str, ttl: Optional[int] = None) -> 
         return True
     return False
 
+def replace_active_job(document_id: str, job_id: str, ttl: Optional[int] = None) -> bool:
+    """Replace the existing active job lock value without releasing it.
+
+    Uses Redis XX semantics to only set the value if the key already exists,
+    updating the TTL. This is intended to transition a provisional lock (e.g.,
+    "PENDING") to the actual job id in a single atomic operation, avoiding the
+    delete-then-set race.
+    """
+    r = get_redis_client()
+    key = DOC_ACTIVE_KEY.format(doc_id=document_id)
+    ok = r.set(key, job_id, xx=True, ex=ttl)
+    if ok:
+        r.set(
+            DOC_LAST_KEY.format(doc_id=document_id),
+            job_id,
+            ex=max(ttl or 0, int(os.getenv("JOB_STATUS_TTL_SECONDS", "259200"))),
+        )
+        return True
+    return False
+
 
 def clear_active_job(document_id: str, job_id: Optional[str] = None):
     r = get_redis_client()

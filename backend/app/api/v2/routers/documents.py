@@ -24,6 +24,7 @@ from ....services.zip_service import zip_service
 from ....tasks import update_document_content_task
 from ....services.job_service import (
     set_active_job,
+    replace_active_job,
     get_active_job_for_document,
     record_job_status,
     append_job_log,
@@ -215,6 +216,7 @@ async def update_document_content(
 ):
     """Enqueue content update + re-evaluation as a background job."""
     ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
+    # Acquire provisional lock to block concurrent updates
     if not set_active_job(document_id, "PENDING", ttl):
         active_job = get_active_job_for_document(document_id)
         raise HTTPException(status_code=409, detail={
@@ -229,8 +231,11 @@ async def update_document_content(
         "improvement_prompt": request.improvement_prompt,
         "apply_vector_optimization": request.apply_vector_optimization,
     }
-    async_result = update_document_content_task.apply_async(args=[document_id, payload], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
-    set_active_job(document_id, async_result.id, ttl)
+    async_result = update_document_content_task.apply_async(
+        args=[document_id, payload], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
+    )
+    # Atomically replace provisional lock with the real job id
+    replace_active_job(document_id, async_result.id, ttl)
     record_job_status(async_result.id, {
         "job_id": async_result.id,
         "document_id": document_id,
