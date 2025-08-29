@@ -518,6 +518,30 @@ export function DownloadStage({
           </div>
         </div>
       </div>
+
+      {/* Fixed Action Button - Bottom Right with Processing Panel Awareness */}
+      {processingPanelState !== 'fullscreen' && (
+        <div className={`fixed right-6 z-40 transition-all duration-300 ${
+          processingPanelState === 'normal'
+            ? 'bottom-[424px]'
+            : processingPanelState === 'minimized'
+            ? 'bottom-[92px]'
+            : 'bottom-16'
+        }`}>
+          <button
+            type="button"
+            onClick={onRestart}
+            disabled={isAnyDownloading}
+            className={`px-6 py-3 rounded-full font-medium text-sm transition-all shadow-lg hover:shadow-xl ${
+              isAnyDownloading
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                : 'bg-blue-600 text-white hover:bg-blue-700 hover:-translate-y-1'
+            }`}
+          >
+            🔁 Start Over
+          </button>
+        </div>
+      )}
     </div>
   );
 }
