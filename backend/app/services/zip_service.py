@@ -36,6 +36,7 @@ from typing import List, Optional, Tuple
 from datetime import datetime
 
 from ..config import settings
+from .storage_service import storage_service
 from ..models import ProcessingResult
 
 
@@ -143,10 +144,14 @@ class ZipService:
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             # Add processed documents
             for doc_id in document_ids:
-                # Find the processed markdown file for this document
-                for file_path in self.processed_dir.glob(f"*_{doc_id}.md"):
+                # Prefer manifest path from storage; fallback to glob
+                manifest_path = storage_service.get_processed_path(doc_id) if hasattr(storage_service, 'get_processed_path') else None
+                candidate_paths = []
+                if manifest_path:
+                    candidate_paths.append(Path(manifest_path))
+                candidate_paths.extend(self.processed_dir.glob(f"*_{doc_id}.md"))
+                for file_path in candidate_paths:
                     if file_path.exists():
-                        # Use original filename without the ID prefix
                         original_name = file_path.name.split('_', 1)[-1] if '_' in file_path.name else file_path.name
                         zipf.write(file_path, f"processed_documents/{original_name}")
                         file_count += 1
@@ -276,7 +281,13 @@ class ZipService:
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             # Add individual processed documents
             for doc_id in document_ids:
-                for file_path in self.processed_dir.glob(f"*_{doc_id}.md"):
+                # Prefer manifest path from storage; fallback to glob
+                manifest_path = storage_service.get_processed_path(doc_id) if hasattr(storage_service, 'get_processed_path') else None
+                candidate_paths = []
+                if manifest_path:
+                    candidate_paths.append(Path(manifest_path))
+                candidate_paths.extend(self.processed_dir.glob(f"*_{doc_id}.md"))
+                for file_path in candidate_paths:
                     if file_path.exists():
                         # Read content for combined file
                         try:

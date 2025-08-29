@@ -92,6 +92,13 @@ curl -i -s localhost:8000/api/health | head -n 20
 open http://localhost:8000/docs
 open http://localhost:8000/docs/v1
 open http://localhost:8000/docs/v2
+
+# Queue health and summaries (v2)
+curl -s localhost:8000/api/v2/system/queues | jq
+# By batch id
+curl -s "localhost:8000/api/v2/system/queues/summary?batch_id=SOME_BATCH_ID" | jq
+# By explicit job ids
+curl -s "localhost:8000/api/v2/system/queues/summary?job_ids=jid1,jid2" | jq
 ```
 
 ### Dev server

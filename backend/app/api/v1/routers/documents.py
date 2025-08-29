@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List, Optional
 from pathlib import Path
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, Query
+from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -23,6 +23,16 @@ from ..models import (
 )
 from ....services.document_service import document_service
 from ....models import BatchProcessingResult
+from ....services.job_service import (
+    set_active_job,
+    get_active_job_for_document,
+    record_job_status,
+    append_job_log,
+)
+from ....celery_app import app as celery_app
+from ....tasks import process_document_task
+import os
+from datetime import datetime
 from ....services.storage_service import storage_service
 from ....services.zip_service import zip_service
 
@@ -76,75 +86,136 @@ async def upload_document(file: UploadFile = File(...)):
         message="File uploaded successfully"
     )
 
-@router.post("/documents/{document_id}/process", response_model=V1ProcessingResult, tags=["Processing"])
+@router.post("/documents/{document_id}/process", tags=["Processing"])
 async def process_document(
     document_id: str,
     options: Optional[V1ProcessingOptions] = None,
+    request: Request = None,
+    sync: bool = Query(False, description="Run synchronously (for tests only)"),
 ):
-    """Process a single document."""
-    domain_options: ProcessingOptions
-    if not options:
-        domain_options = ProcessingOptions()
-    else:
-        domain_options = options.to_domain()
-    
+    """Enqueue processing for a single document (Celery) or run sync when requested."""
+    # Validate file exists first
     file_path = document_service._find_document_file(document_id)
     if not file_path:
         raise HTTPException(status_code=404, detail="Document not found")
-    
-    result = await document_service.process_document(document_id, file_path, domain_options)
-    storage_service.save_processing_result(result)
-    return result
 
-@router.post("/documents/batch/{filename}/process", response_model=V1ProcessingResult, tags=["Processing"])
+    # Synchronous path (optional)
+    if sync and os.getenv("ALLOW_SYNC_PROCESS", "false").lower() in {"1", "true", "yes"}:
+        domain_options = options.to_domain() if options else ProcessingOptions()
+        result = await document_service.process_document(document_id, file_path, domain_options)
+        storage_service.save_processing_result(result)
+        return V1ProcessingResult.model_validate(result)
+
+    # Enqueue Celery task
+    opts = (options.model_dump() if options else {})
+    async_result = process_document_task.apply_async(args=[document_id, opts], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
+    # Acquire per-document lock with real job id; if it fails, revoke and return 409
+    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
+    if not set_active_job(document_id, async_result.id, ttl):
+        try:
+            celery_app.control.revoke(async_result.id, terminate=False)
+        except Exception:
+            pass
+        active_job = get_active_job_for_document(document_id)
+        raise HTTPException(status_code=409, detail={
+            "error": "Another job is already running for this document",
+            "active_job_id": active_job,
+            "status": "conflict"
+        })
+
+    # Record initial job status
+    record_job_status(async_result.id, {
+        "job_id": async_result.id,
+        "document_id": document_id,
+        "status": "PENDING",
+        "enqueued_at": datetime.utcnow().isoformat(),
+    })
+    append_job_log(async_result.id, "info", f"Queued: {document_id}")
+
+    return {
+        "job_id": async_result.id,
+        "document_id": document_id,
+        "status": "queued",
+        "enqueued_at": datetime.utcnow(),
+    }
+
+@router.post("/documents/batch/{filename}/process", tags=["Processing"])
 async def process_batch_file(
     filename: str,
     options: Optional[V1ProcessingOptions] = None,
 ):
-    """Process a single file from the batch_files directory."""
-    domain_options: ProcessingOptions
-    if not options:
-        domain_options = ProcessingOptions()
-    else:
-        domain_options = options.to_domain()
-    
+    """Enqueue processing for a single file from the batch_files directory."""
     batch_file_path = document_service.find_batch_file(filename)
     if not batch_file_path:
         raise HTTPException(status_code=404, detail="Batch file not found")
-    
-    document_id = f"batch_{batch_file_path.stem}"
-    
-    result = await document_service.process_document(document_id, batch_file_path, domain_options)
-    storage_service.save_processing_result(result)
-    return result
 
-@router.post("/documents/batch/process", response_model=V1BatchProcessingResult, tags=["Processing"])
+    document_id = f"batch_{batch_file_path.stem}"
+
+    opts = (options.model_dump() if options else {})
+    async_result = process_document_task.apply_async(args=[document_id, opts], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
+    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
+    if not set_active_job(document_id, async_result.id, ttl):
+        try:
+            celery_app.control.revoke(async_result.id, terminate=False)
+        except Exception:
+            pass
+        active_job = get_active_job_for_document(document_id)
+        raise HTTPException(status_code=409, detail={
+            "error": "Another job is already running for this document",
+            "active_job_id": active_job,
+            "status": "conflict"
+        })
+    record_job_status(async_result.id, {
+        "job_id": async_result.id,
+        "document_id": document_id,
+        "status": "PENDING",
+        "enqueued_at": datetime.utcnow().isoformat(),
+    })
+    append_job_log(async_result.id, "info", f"Queued: {document_id}")
+    return {
+        "job_id": async_result.id,
+        "document_id": document_id,
+        "status": "queued",
+        "enqueued_at": datetime.utcnow(),
+    }
+
+@router.post("/documents/batch/process", tags=["Processing"])
 async def process_batch(request: V1BatchProcessingRequest):
-    """Process multiple documents in batch."""
+    """Enqueue processing jobs for multiple documents in batch."""
     batch_id = str(uuid.uuid4())
-    start_time = time.time()
-    
-    domain_options = request.options.to_domain() if request.options else None
-    results = await document_service.process_batch(request.document_ids, domain_options)
-    
-    successful = len([r for r in results if r.success])
-    failed = len(results) - successful
-    rag_ready = len([r for r in results if getattr(r, 'is_rag_ready', getattr(r, 'pass_all_thresholds', False))])
-    
-    batch_result = V1BatchProcessingResult(
-        batch_id=batch_id,
-        total_files=len(results),
-        successful=successful,
-        failed=failed,
-        rag_ready=rag_ready,
-        results=results,
-        processing_time=time.time() - start_time,
-        started_at=datetime.fromtimestamp(start_time),
-        completed_at=datetime.now()
-    )
-    
-    storage_service.save_batch_result(batch_result)
-    return batch_result
+    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
+    enqueued = []
+    conflicts = []
+    for doc_id in request.document_ids:
+        file_path = document_service._find_document_file(doc_id)
+        if not file_path:
+            conflicts.append({"document_id": doc_id, "error": "Document not found"})
+            continue
+        opts = (request.options.model_dump() if request.options else {})
+        async_result = process_document_task.apply_async(args=[doc_id, opts], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
+        if not set_active_job(doc_id, async_result.id, ttl):
+            try:
+                celery_app.control.revoke(async_result.id, terminate=False)
+            except Exception:
+                pass
+            conflicts.append({"document_id": doc_id, "status": "conflict", "active_job_id": get_active_job_for_document(doc_id)})
+            continue
+        record_job_status(async_result.id, {
+            "job_id": async_result.id,
+            "document_id": doc_id,
+            "status": "PENDING",
+            "enqueued_at": datetime.utcnow().isoformat(),
+            "batch_id": batch_id,
+        })
+        append_job_log(async_result.id, "info", f"Queued: {doc_id}")
+        enqueued.append({"document_id": doc_id, "job_id": async_result.id, "status": "queued"})
+
+    return {
+        "batch_id": batch_id,
+        "jobs": enqueued,
+        "conflicts": conflicts,
+        "total": len(request.document_ids)
+    }
 
 @router.get("/documents/{document_id}/result", response_model=V1ProcessingResult, tags=["Results"])
 async def get_processing_result(document_id: str):
@@ -162,32 +233,47 @@ async def get_document_content(document_id: str):
         raise HTTPException(status_code=404, detail="Processed content not found")
     return {"content": content}
 
-@router.put("/documents/{document_id}/content", response_model=V1ProcessingResult, tags=["Results"])
+@router.put("/documents/{document_id}/content", tags=["Results"])
 async def update_document_content(
     document_id: str,
     request: DocumentEditRequest,
     options: Optional[V1ProcessingOptions] = None,
 ):
-    """Update document content with optional LLM improvements."""
-    domain_options: ProcessingOptions
-    if not options:
-        domain_options = ProcessingOptions()
-    else:
-        domain_options = options.to_domain()
-
-    result = await document_service.update_document_content(
-        document_id=document_id,
-        content=request.content,
-        options=domain_options,
-        improvement_prompt=request.improvement_prompt,
-        apply_vector_optimization=request.apply_vector_optimization
-    )
-    
-    if not result:
-        raise HTTPException(status_code=404, detail="Document not found or update failed")
-    
-    storage_service.save_processing_result(result)
-    return result
+    """Enqueue content update + re-evaluation as a background job."""
+    payload = {
+        "content": request.content,
+        "options": (options.model_dump() if options else {}),
+        "improvement_prompt": request.improvement_prompt,
+        "apply_vector_optimization": request.apply_vector_optimization,
+    }
+    from ....tasks import update_document_content_task
+    async_result = update_document_content_task.apply_async(args=[document_id, payload], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
+    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
+    if not set_active_job(document_id, async_result.id, ttl):
+        try:
+            celery_app.control.revoke(async_result.id, terminate=False)
+        except Exception:
+            pass
+        active_job = get_active_job_for_document(document_id)
+        raise HTTPException(status_code=409, detail={
+            "error": "Another job is already running for this document",
+            "active_job_id": active_job,
+            "status": "conflict"
+        })
+    record_job_status(async_result.id, {
+        "job_id": async_result.id,
+        "document_id": document_id,
+        "status": "PENDING",
+        "enqueued_at": datetime.utcnow().isoformat(),
+        "operation": "update_content",
+    })
+    append_job_log(async_result.id, "info", f"Queued content update: {document_id}")
+    return {
+        "job_id": async_result.id,
+        "document_id": document_id,
+        "status": "queued",
+        "enqueued_at": datetime.utcnow(),
+    }
 
 @router.get("/documents/{document_id}/download", tags=["Results"])
 async def download_document(document_id: str):

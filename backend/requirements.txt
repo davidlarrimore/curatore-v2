@@ -26,3 +26,7 @@ python-dotenv>=1.0.0
 
 # ZIP file creation
 zipfile38>=0.0.3
+
+# Queueing and Redis
+celery>=5.3
+redis>=5.0

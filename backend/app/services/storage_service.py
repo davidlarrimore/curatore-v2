@@ -20,6 +20,10 @@
 # ============================================================================
 
 from typing import Dict, Optional, List
+import json
+import os
+
+import redis
 from ..models import ProcessingResult, BatchProcessingResult
 
 
@@ -106,6 +110,15 @@ class InMemoryStorage:
             >>> storage_service.save_processing_result(result)
         """
         self.processing_results[result.document_id] = result
+        # Track processed file path if available for downstream downloads
+        try:
+            path = getattr(result, 'markdown_path', None)
+            if path:
+                if not hasattr(self, '_processed_paths'):
+                    self._processed_paths = {}
+                self._processed_paths[result.document_id] = path
+        except Exception:
+            pass
 
     def delete_processing_result(self, document_id: str) -> bool:
         """
@@ -124,8 +137,25 @@ class InMemoryStorage:
         """
         if document_id in self.processing_results:
             del self.processing_results[document_id]
+            if hasattr(self, '_processed_paths') and document_id in self._processed_paths:
+                try:
+                    del self._processed_paths[document_id]
+                except Exception:
+                    pass
             return True
         return False
+
+    def get_processed_path(self, document_id: str) -> Optional[str]:
+        try:
+            if hasattr(self, '_processed_paths'):
+                return self._processed_paths.get(document_id)
+            # Fallback: attempt to read from stored result
+            res = self.get_processing_result(document_id)
+            if res and getattr(res, 'markdown_path', None):
+                return res.markdown_path
+        except Exception:
+            pass
+        return None
 
     def get_batch_result(self, batch_id: str) -> Optional[BatchProcessingResult]:
         """
@@ -203,3 +233,107 @@ class InMemoryStorage:
 # Create a single global instance of the storage service
 # This ensures all parts of the application use the same storage instance
 storage_service = InMemoryStorage()
+
+
+# ----------------------------------------------------------------------------
+# Optional Redis-backed storage (used when Celery is enabled)
+# ----------------------------------------------------------------------------
+
+class RedisStorage(InMemoryStorage):
+    """
+    Redis-backed storage following the same interface as InMemoryStorage.
+    Stores serialized ProcessingResult and BatchProcessingResult for
+    cross-process access (API and Celery workers).
+    """
+
+    def __init__(self):
+        super().__init__()
+        url = os.getenv("STORAGE_REDIS_URL") or os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
+        self.r = redis.Redis.from_url(url)
+        self.ttl = int(os.getenv("JOB_STATUS_TTL_SECONDS", "259200"))
+
+    def _key_doc(self, doc_id: str) -> str:
+        return f"storage:doc:{doc_id}"
+
+    def _key_all_docs(self) -> str:
+        return "storage:docs:index"
+
+    def get_processing_result(self, document_id: str):  # type: ignore[override]
+        raw = self.r.get(self._key_doc(document_id))
+        if not raw:
+            return super().get_processing_result(document_id)
+        try:
+            from ..api.v1.models import V1ProcessingResult
+            data = json.loads(raw)
+            return V1ProcessingResult(**data)
+        except Exception:
+            return super().get_processing_result(document_id)
+
+    def get_all_processing_results(self):  # type: ignore[override]
+        # Attempt to read all indexed doc IDs and fetch each
+        try:
+            ids = self.r.smembers(self._key_all_docs())
+            results = []
+            for b in ids:
+                doc_id = b.decode()
+                res = self.get_processing_result(doc_id)
+                if res:
+                    results.append(res)
+            if results:
+                return results
+        except Exception:
+            pass
+        return super().get_all_processing_results()
+
+    def save_processing_result(self, result):  # type: ignore[override]
+        try:
+            from ..api.v1.models import V1ProcessingResult
+            payload = V1ProcessingResult.model_validate(result).model_dump()
+            self.r.set(self._key_doc(result.document_id), json.dumps(payload, default=str), ex=self.ttl)
+            self.r.sadd(self._key_all_docs(), result.document_id)
+            self.r.expire(self._key_all_docs(), self.ttl)
+            # Also persist processed file path for reliable downloads
+            path = payload.get('markdown_path') or getattr(result, 'markdown_path', None)
+            if path:
+                self.r.set(f"storage:docpath:{result.document_id}", path, ex=self.ttl)
+        except Exception:
+            pass
+        return super().save_processing_result(result)
+
+    def delete_processing_result(self, document_id: str) -> bool:  # type: ignore[override]
+        try:
+            self.r.delete(self._key_doc(document_id))
+            self.r.srem(self._key_all_docs(), document_id)
+            self.r.delete(f"storage:docpath:{document_id}")
+        except Exception:
+            pass
+        return super().delete_processing_result(document_id)
+
+    def get_processed_path(self, document_id: str) -> Optional[str]:  # type: ignore[override]
+        try:
+            val = self.r.get(f"storage:docpath:{document_id}")
+            if val:
+                return val.decode()
+        except Exception:
+            pass
+        return super().get_processed_path(document_id)
+
+    def clear_all(self):  # type: ignore[override]
+        try:
+            # Delete all stored doc results and index
+            cursor = 0
+            while True:
+                cursor, keys = self.r.scan(cursor=cursor, match="storage:doc:*", count=500)
+                if keys:
+                    self.r.delete(*keys)
+                if cursor == 0:
+                    break
+            self.r.delete(self._key_all_docs())
+        except Exception:
+            pass
+        return super().clear_all()
+
+
+# Swap storage backend if requested by env
+if os.getenv("STORAGE_BACKEND", "memory").lower() == "redis":
+    storage_service = RedisStorage()

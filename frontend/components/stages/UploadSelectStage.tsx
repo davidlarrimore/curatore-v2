@@ -867,10 +867,10 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
       {processingPanelState !== 'fullscreen' && (
         <div className={`fixed right-6 z-40 transition-all duration-300 ${
           processingPanelState === 'normal' 
-            ? 'bottom-96'  // Above normal processing panel: 320px panel + 40px status bar + margin = 384px  
+            ? 'bottom-[424px]'  // Above normal processing panel: 360px panel + 52px (status + gap) + 12px margin = 424px  
             : processingPanelState === 'minimized'
-            ? 'bottom-20'  // Above minimized panel: 48px panel + 40px status bar = 88px, use bottom-20 for margin
-            : 'bottom-12'  // Above status bar only: 40px status bar + small margin
+            ? 'bottom-[92px]'   // Above minimized panel: 40px panel + 40px (status) + 12px margin = 92px
+            : 'bottom-16'       // Above status bar only: 52px (status + gap) + 12px margin = 64px (bottom-16)
         }`}>
           <button
             type="button"

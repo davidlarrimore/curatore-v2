@@ -1,10 +1,10 @@
 // components/layout/StatusBar.tsx
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { Activity, Zap, HardDrive, Clock, Server, Wifi } from 'lucide-react'
 import { Badge } from '@/components/ui/Badge'
-import { utils, API_PATH_VERSION } from '@/lib/api'
+import { utils, API_PATH_VERSION, systemApi } from '@/lib/api'
 
 interface SystemStatus {
   health: string
@@ -21,8 +21,12 @@ interface StatusBarProps {
 }
 
 export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
+  const rootRef = useRef<HTMLDivElement | null>(null)
   const [currentTime, setCurrentTime] = useState<Date | null>(null)
   const [connectionCount, setConnectionCount] = useState(0)
+  const [runningCount, setRunningCount] = useState(0)
+  const [processedCount, setProcessedCount] = useState(0)
+  const [totalCount, setTotalCount] = useState(0)
   const [isClient, setIsClient] = useState(false)
 
   // Fix hydration issue by only showing time after client-side hydration
@@ -38,13 +42,51 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
     return () => clearInterval(timer)
   }, [])
 
-  // Simulate connection counter (in real app, this would come from your backend)
+  // Poll queue health to display number of jobs in the queue
   useEffect(() => {
-    const interval = setInterval(() => {
-      setConnectionCount(prev => Math.max(0, prev + Math.floor(Math.random() * 3) - 1))
-    }, 5000)
-
-    return () => clearInterval(interval)
+    let mounted = true
+    const poll = async () => {
+      try {
+        // Try to read active job group from localStorage and fetch group summary
+        let usedGroup = false;
+        try {
+          const raw = localStorage.getItem('curatore:active_jobs');
+          if (raw) {
+            const g = JSON.parse(raw);
+            if (g && Array.isArray(g.job_ids) && g.job_ids.length > 0) {
+              const s = await systemApi.getQueueSummaryByJobs(g.job_ids);
+              if (!mounted) return;
+              setConnectionCount(s.queued ?? 0);
+              setRunningCount(s.running ?? 0);
+              setProcessedCount(s.done ?? 0);
+              setTotalCount(s.total ?? 0);
+              usedGroup = true;
+            } else if (g && g.batch_id) {
+              const s = await systemApi.getQueueSummaryByBatch(g.batch_id);
+              if (!mounted) return;
+              setConnectionCount(s.queued ?? 0);
+              setRunningCount(s.running ?? 0);
+              setProcessedCount(s.done ?? 0);
+              setTotalCount(s.total ?? 0);
+              usedGroup = true;
+            }
+          }
+        } catch {}
+        if (!usedGroup) {
+          const q = await systemApi.getQueueHealth();
+          if (!mounted) return;
+          setConnectionCount(q?.pending ?? 0);
+          setRunningCount(q?.running ?? 0);
+          setProcessedCount(q?.processed ?? 0);
+          setTotalCount(q?.total ?? 0);
+        }
+      } catch {
+        // ignore transient errors
+      }
+    }
+    poll()
+    const interval = setInterval(poll, Number(process.env.NEXT_PUBLIC_JOB_POLL_INTERVAL_MS || 5000))
+    return () => { mounted = false; clearInterval(interval) }
   }, [])
 
   const formatTime = (date: Date) => {
@@ -65,8 +107,34 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
     return `${hours}h ${minutes}m`
   }
 
+  // Measure and expose status bar height as a CSS variable for precise panel positioning
+  useEffect(() => {
+    const el = rootRef.current
+    if (!el) return
+    const setVar = () => {
+      const rect = el.getBoundingClientRect()
+      const height = Math.ceil(rect.height)
+      const offset = Math.ceil(window.innerHeight - rect.top)
+      const cs = window.getComputedStyle(el)
+      const borderTop = Math.ceil(parseFloat(cs.borderTopWidth || '0') || 0)
+      const safeOffset = offset + borderTop + 2 // extra 2px buffer for sub-pixel rounding/shadow
+      document.documentElement.style.setProperty('--statusbar-height', `${height}px`)
+      document.documentElement.style.setProperty('--statusbar-offset', `${offset}px`)
+      document.documentElement.style.setProperty('--statusbar-safe-offset', `${safeOffset}px`)
+    }
+    setVar()
+    const onResize = () => setVar()
+    window.addEventListener('resize', onResize)
+    // Light polling in case dynamic content changes height without resize
+    const interval = setInterval(setVar, 1000)
+    return () => {
+      window.removeEventListener('resize', onResize)
+      clearInterval(interval)
+    }
+  }, [])
+
   return (
-    <div className={`bg-gray-50 border-t border-gray-200 px-4 py-2 flex items-center justify-between text-xs text-gray-600 transition-all duration-300 z-60 relative ${
+    <div ref={rootRef} className={`bg-gray-50 border-t border-gray-200 px-4 py-2 flex items-center justify-between text-xs text-gray-600 transition-all duration-300 z-60 relative ${
       // Adjust margin based on sidebar state - only on desktop
       `lg:ml-${sidebarCollapsed ? '16' : '64'}`
     }`}>
@@ -109,11 +177,17 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
           <span className="font-mono">{systemStatus.supportedFormats.length} types</span>
         </div>
 
-        {/* Active Connections (simulated) */}
+        {/* Active Jobs in Queue */}
         <div className="hidden lg:flex items-center space-x-1">
           <Wifi className="w-3 h-3" />
-          <span>Connections:</span>
+          <span>Job Queue:</span>
           <span className="font-mono">{connectionCount}</span>
+          <span className="mx-1">•</span>
+          <span>Running:</span>
+          <span className="font-mono">{runningCount}</span>
+          <span className="mx-1">•</span>
+          <span>Done:</span>
+          <span className="font-mono">{processedCount}/{totalCount}</span>
         </div>
       </div>
 

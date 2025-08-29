@@ -156,8 +156,8 @@ export default function ProcessingPage() {
         return state.processingComplete ? 'completed' : 
                state.isProcessing || state.currentStage === 'review' ? 'current' : 'pending'
       case 'download':
-        return state.processingComplete && state.currentStage === 'download' ? 'current' : 
-               state.processingComplete ? 'completed' : 'pending'
+        // Keep Export Results pending until user clicks Finish Review
+        return state.currentStage === 'download' ? 'current' : 'pending'
       default:
         return 'pending'
     }

@@ -78,18 +78,27 @@ A comprehensive document processing pipeline that converts documents to markdown
 ```
 backend/app/
 ├── services/                    # Core business logic services
-│   ├── document_service.py     # Document processing pipeline
-│   ├── llm_service.py          # LLM integration and evaluation
-│   ├── storage_service.py      # In-memory storage management
-│   └── zip_service.py          # Archive creation and export
-├── api/                        # API routing and endpoints
-│   └── routers/
-│       ├── documents.py        # Document processing endpoints
-│       └── system.py           # System health and configuration
-├── models.py                   # Pydantic data models
-├── config.py                   # Application configuration
-└── main.py                     # FastAPI application setup
+│   ├── document_service.py      # Document processing pipeline
+│   ├── llm_service.py           # LLM integration and evaluation
+│   ├── storage_service.py       # In-memory/Redis storage management
+│   └── zip_service.py           # Archive creation and export
+├── api/                         # API routing and endpoints (versioned)
+│   ├── v1/
+│   │   └── routers/
+│   │       ├── documents.py     # v1 document endpoints
+│   │       ├── jobs.py          # v1 job status endpoints
+│   │       └── system.py        # v1 system/config endpoints
+│   └── v2/
+│       └── routers/
+│           ├── documents.py     # v2 document endpoints
+│           ├── jobs.py          # v2 job status endpoints
+│           └── system.py        # v2 system/config + queue summary
+├── models.py                    # Pydantic data models
+├── config.py                    # Application configuration
+└── main.py                      # FastAPI app setup (mounts /api/v1, /api/v2, legacy /api)
 ```
+
+Prefer versioned paths like `/api/v2/*`. The legacy alias `/api/*` maps to v1 and returns deprecation headers.
 
 ---
 
@@ -105,7 +114,7 @@ backend/app/
 1. **Clone and Setup**:
    ```bash
    git clone <repository-url>
-   cd curatore
+   cd curatore-v2
    cp .env.example .env
    # Edit .env with your configuration (see Configuration section)
    ```
@@ -117,9 +126,11 @@ backend/app/
 
 3. **Access the Applications**:
    - **Frontend**: http://localhost:3000
-   - **Backend API**: http://localhost:8000  
-   - **API Documentation**: http://localhost:8000/docs
-   - **Health Check**: http://localhost:8000/api/health
+   - **Backend API**: http://localhost:8000
+   - **API Docs (all)**: http://localhost:8000/docs
+   - **API Docs (v1)**: http://localhost:8000/api/v1/docs
+   - **API Docs (v2)**: http://localhost:8000/api/v2/docs
+   - **Health Check (v2)**: http://localhost:8000/api/v2/health
 
 ### **⚙️ Manual Installation**
 
@@ -214,6 +225,37 @@ CORS_METHODS=["*"]
 CORS_HEADERS=["*"]
 ```
 
+### **Async Processing with Celery**
+
+Curatore processes documents asynchronously using Celery + Redis so requests return immediately and progress can be tracked per file.
+
+- Broker: `CELERY_BROKER_URL` (default `redis://redis:6379/0`)
+- Results: `CELERY_RESULT_BACKEND` (default `redis://redis:6379/1`)
+- Default queue: `CELERY_DEFAULT_QUEUE` (default `processing`)
+- Worker: auto-started via `docker-compose` as `curatore-worker`
+
+Recommended settings (override via env):
+
+- `CELERY_ACKS_LATE=true` — requeue if worker dies
+- `CELERY_PREFETCH_MULTIPLIER=1` — avoid task hoarding
+- `CELERY_MAX_TASKS_PER_CHILD=50` — bound memory growth
+- `CELERY_TASK_SOFT_TIME_LIMIT=600`, `CELERY_TASK_TIME_LIMIT=900`
+- `CELERY_RESULT_EXPIRES=259200` (3 days)
+- `JOB_LOCK_TTL_SECONDS=3600` — enforce single active job per document
+- `JOB_STATUS_TTL_SECONDS=259200` — retain job metadata
+- `ALLOW_SYNC_PROCESS=false` — set `true` only for tests (`?sync=true`)
+
+Job & queue endpoints (v2 preferred):
+
+- Enqueue document: `POST /api/v2/documents/{document_id}/process`
+  - Returns `{ job_id, document_id, status: 'queued', enqueued_at }`
+  - Returns `409` with `{ active_job_id }` if a job is already running for that document
+- Poll job: `GET /api/v2/jobs/{job_id}` → `PENDING|STARTED|SUCCESS|FAILURE` (+ `result` on success)
+- Last job for a document: `GET /api/v2/jobs/by-document/{document_id}`
+- Batch enqueue: `POST /api/v2/documents/batch/process` → `{ batch_id, jobs, conflicts }`
+- Queue health: `GET /api/v2/system/queues` → `{ enabled, broker, result_backend, queue, redis_ok, pending, workers, running, processed, total }`
+- Queue summary by batch or jobs: `GET /api/v2/system/queues/summary?batch_id=...` or `?job_ids=jid1,jid2`
+
 ### **LLM Endpoint Examples**
 
 #### **Local LLM (Ollama)**
@@ -271,40 +313,40 @@ OPENAI_VERIFY_SSL=false
      - Custom Selection: User-selected files with metadata
    - **Processing Reports**: Detailed analysis and optimization status
 
-### **🔌 API Usage**
+### **🔌 API Usage (v2)**
 
 Complete API documentation available at: **http://localhost:8000/docs**
 
 #### **Basic Document Operations**
 ```bash
 # Upload document
-curl -X POST "http://localhost:8000/api/documents/upload" \
+curl -X POST "http://localhost:8000/api/v2/documents/upload" \
   -F "file=@document.pdf"
 
 # Process document with auto-optimization
-curl -X POST "http://localhost:8000/api/documents/{id}/process" \
+curl -X POST "http://localhost:8000/api/v2/documents/{id}/process" \
   -H "Content-Type: application/json" \
   -d '{"auto_optimize": true}'
 
 # Get processing result
-curl "http://localhost:8000/api/documents/{id}/result"
+curl "http://localhost:8000/api/v2/documents/{id}/result"
 
 # Get processed content
-curl "http://localhost:8000/api/documents/{id}/content"
+curl "http://localhost:8000/api/v2/documents/{id}/content"
 ```
 
 #### **Download Operations**
 ```bash
 # Download individual processed document
-curl "http://localhost:8000/api/documents/{id}/download" \
+curl "http://localhost:8000/api/v2/documents/{id}/download" \
   -o processed_document.md
 
 # Download RAG-ready files as ZIP
-curl "http://localhost:8000/api/documents/download/rag-ready?zip_name=rag_files.zip" \
+curl "http://localhost:8000/api/v2/documents/download/rag-ready?zip_name=rag_files.zip" \
   -o rag_ready_files.zip
 
 # Bulk download with custom options
-curl -X POST "http://localhost:8000/api/documents/download/bulk" \
+curl -X POST "http://localhost:8000/api/v2/documents/download/bulk" \
   -H "Content-Type: application/json" \
   -d '{
     "document_ids": ["doc1", "doc2", "doc3"],
@@ -318,7 +360,7 @@ curl -X POST "http://localhost:8000/api/documents/download/bulk" \
 #### **Batch Processing**
 ```bash
 # Process multiple documents
-curl -X POST "http://localhost:8000/api/documents/batch/process" \
+curl -X POST "http://localhost:8000/api/v2/documents/batch/process" \
   -H "Content-Type: application/json" \
   -d '{
     "document_ids": ["doc1", "doc2", "doc3"],
@@ -335,28 +377,37 @@ curl -X POST "http://localhost:8000/api/documents/batch/process" \
   }'
 
 # Get batch processing status
-curl "http://localhost:8000/api/documents/batch/{batch_id}/status"
+curl "http://localhost:8000/api/v2/documents/batch/{batch_id}/status"
 
 # Get batch results
-curl "http://localhost:8000/api/documents/batch/{batch_id}/results"
+curl "http://localhost:8000/api/v2/documents/batch/{batch_id}/results"
 ```
 
 #### **System Monitoring**
 ```bash
 # Test LLM connection
-curl "http://localhost:8000/api/llm/status"
+curl "http://localhost:8000/api/v2/llm/status"
 
-# Check API health
-curl "http://localhost:8000/api/health"
+# Check API health (v2)
+curl "http://localhost:8000/api/v2/health"
 
 # Get supported file formats
-curl "http://localhost:8000/api/config/supported-formats"
+curl "http://localhost:8000/api/v2/config/supported-formats"
 
 # Get default configuration
-curl "http://localhost:8000/api/config/defaults"
+curl "http://localhost:8000/api/v2/config/defaults"
 
 # System reset (development only)
-curl -X POST "http://localhost:8000/api/system/reset"
+curl -X POST "http://localhost:8000/api/v2/system/reset"
+
+# Queue health (Celery/Redis)
+curl "http://localhost:8000/api/v2/system/queues"
+
+# Queue summary for a batch
+curl "http://localhost:8000/api/v2/system/queues/summary?batch_id=YOUR_BATCH_ID"
+
+# Queue summary for specific jobs
+curl "http://localhost:8000/api/v2/system/queues/summary?job_ids=jid1,jid2"
 ```
 
 ---
@@ -430,19 +481,23 @@ curatore-v2/
 │   ├── uploaded_files/          # User-uploaded documents
 │   ├── processed_files/         # Converted markdown files
 │   └── batch_files/             # Local files for batch processing
-├── frontend/                    # Next.js TypeScript frontend
+├── frontend/                    # Next.js TypeScript frontend (App Router)
 │   ├── package.json             # Dependencies and scripts
-│   ├── next.config.js           # Next.js configuration
-│   └── src/                     # Source code
+│   ├── next.config.mjs          # Next.js configuration
+│   ├── app/                     # App routes and layouts
+│   ├── components/              # UI components
+│   └── lib/                     # API client and helpers
 ├── backend/                     # FastAPI Python backend
 │   ├── requirements.txt         # Python dependencies
 │   ├── Dockerfile              # Backend container configuration
 │   └── app/                     # Application source
 │       ├── services/            # Core business logic (fully documented)
-│       ├── api/                 # REST API routes and endpoints
-│       ├── models.py           # Pydantic data models and validation
-│       ├── config.py           # Configuration management
-│       └── main.py             # FastAPI application entry point
+│       ├── api/                 # Versioned API routes and endpoints
+│       │   ├── v1/routers       # v1 endpoints
+│       │   └── v2/routers       # v2 endpoints (default)
+│       ├── models.py            # Pydantic data models and validation
+│       ├── config.py            # Configuration management
+│       └── main.py              # FastAPI application entry point
 ├── scripts/                     # Development and deployment scripts
 │   ├── dev-up.sh               # Start development environment
 │   ├── dev-down.sh             # Stop development environment
@@ -489,17 +544,17 @@ All backend services follow comprehensive documentation standards:
 
 ```bash
 # Test individual document processing
-curl -X POST "http://localhost:8000/api/documents/upload" \
+curl -X POST "http://localhost:8000/api/v2/documents/upload" \
   -F "file=@test_document.pdf"
 
 # Test LLM connectivity
-curl "http://localhost:8000/api/llm/status"
+curl "http://localhost:8000/api/v2/llm/status"
 
-# Health check
-curl "http://localhost:8000/api/health"
+# Health check (v2)
+curl "http://localhost:8000/api/v2/health"
 
 # Download test files
-curl "http://localhost:8000/api/documents/download/rag-ready" -o test_rag.zip
+curl "http://localhost:8000/api/v2/documents/download/rag-ready" -o test_rag.zip
 
 # View processing logs
 docker-compose logs -f backend | grep "Processing"
@@ -594,11 +649,27 @@ docker-compose logs -f backend | grep -E "(Processing|Error|Warning)"
 docker-compose exec backend ls -la /app/files/
 
 # Check LLM connectivity
-curl -v "http://localhost:8000/api/llm/status"
+curl -v "http://localhost:8000/api/v2/llm/status"
 
 # Validate configuration
-curl "http://localhost:8000/api/config/defaults"
+curl "http://localhost:8000/api/v2/config/defaults"
 ```
+
+---
+
+## 🧩 **Frontend Configuration**
+
+- `NEXT_PUBLIC_API_URL`: Base URL for the backend API (default `http://localhost:8000`).
+- `NEXT_PUBLIC_JOB_POLL_INTERVAL_MS`: Poll interval for job/queue updates in the UI (e.g., `2500`).
+- Frontend uses API path version `v2` by default (see `frontend/lib/api.ts`).
+
+---
+
+## 🧠 **Status Bar Insights**
+
+- Shows API health, LLM connection, max upload size, and supported formats.
+- Displays live queue metrics (queued, running, done, total) via `/api/v2/system/queues` and `/api/v2/system/queues/summary`.
+- Shows backend version and API path version.
 
 ---
 

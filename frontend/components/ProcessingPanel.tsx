@@ -1,9 +1,10 @@
 // components/ProcessingPanel.tsx
+
 'use client'
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { ProcessingResult, FileInfo, ProcessingOptions } from '@/types';
-import { processingApi, utils, fileApi } from '@/lib/api';
+import { processingApi, jobsApi, utils, fileApi, systemApi } from '@/lib/api';
 import toast from 'react-hot-toast';
 
 interface ProcessingLog {
@@ -43,6 +44,7 @@ export function ProcessingPanel({
   const [currentFile, setCurrentFile] = useState<string>('');
   const [results, setResults] = useState<ProcessingResult[]>([]);
   const [logs, setLogs] = useState<ProcessingLog[]>([]);
+  const logContainerRef = useRef<HTMLDivElement>(null);
   const [processingStartTime, setProcessingStartTime] = useState<number>(0);
   const [processingComplete, setProcessingComplete] = useState(false);
   // NEW: State for quick download actions
@@ -97,10 +99,24 @@ export function ProcessingPanel({
     }
   }, [panelState]);
 
-  const addLog = (level: ProcessingLog['level'], message: string) => {
-    const timestamp = new Date().toLocaleTimeString();
+  const scrollToBottom = () => {
+    try {
+      const el = logContainerRef.current;
+      if (el) {
+        el.scrollTop = el.scrollHeight;
+      }
+    } catch {}
+  };
+
+  const addLog = (level: ProcessingLog['level'], message: string, ts?: string) => {
+    const timestamp = ts ? new Date(ts).toLocaleTimeString() : new Date().toLocaleTimeString();
     const newLog: ProcessingLog = { timestamp, level, message };
-    setLogs(prev => [...prev.slice(-50), newLog]);
+    setLogs(prev => {
+      const next = [...prev.slice(-200), newLog];
+      // Defer scroll to after DOM update
+      setTimeout(scrollToBottom, 0);
+      return next;
+    });
   };
 
   const getLogIcon = (level: ProcessingLog['level']) => {
@@ -188,66 +204,213 @@ export function ProcessingPanel({
     setProcessingStartTime(Date.now());
     setProcessingComplete(false);
 
-    addLog('info', `Starting background processing of ${selectedFiles.length} files...`);
+    addLog('info', `Queueing ${selectedFiles.length} files for background processing...`);
     addLog('info', `Vector optimization: ${processingOptions.auto_optimize ? 'ON' : 'OFF'}`);
 
+    // Quick pre-flight: check backend health with short retries to provide a friendly UX when backend is restarting
+    const healthTimeoutMs = 2500;
+    const healthRetries = 3;
+    const sleep = (ms: number) => new Promise(res => setTimeout(res, ms));
+    const withTimeout = async <T,>(p: Promise<T>, ms: number) => {
+      return await Promise.race<T | never>([
+        p,
+        new Promise<never>((_, rej) => setTimeout(() => rej(new Error('Health check timeout')), ms))
+      ]);
+    };
     try {
-      const processedResults: ProcessingResult[] = [];
-
-      for (let i = 0; i < selectedFiles.length; i++) {
-        const file = selectedFiles[i];
-        setCurrentFile(file.filename);
-        setProgress((i / selectedFiles.length) * 100);
-
-        addLog('info', `Processing: ${file.filename}`);
-
+      let ok = false;
+      for (let i = 0; i < healthRetries; i++) {
         try {
-          const result = await processingApi.processDocument(file.document_id, {
-            auto_optimize: processingOptions.auto_optimize,
-            quality_thresholds: processingOptions.quality_thresholds
-          });
-
-          const conversionScore = result.conversion_score ?? 0;
-          const success = result.success && conversionScore > 0;
-          const passThresholds = result.pass_all_thresholds ?? false;
-
-          if (success) {
-            addLog('success', `✅ ${file.filename} processed successfully (${conversionScore}/100)`);
-            if (passThresholds) {
-              addLog('success', `🎯 ${file.filename} is RAG-ready`);
-            }
-          } else {
-            addLog('warning', `⚠️ ${file.filename} processed with issues (${conversionScore}/100)`);
+          if (i === 0) addLog('info', 'Probing backend health…');
+          await withTimeout(systemApi.getHealth(), healthTimeoutMs);
+          ok = true;
+          break;
+        } catch (e) {
+          if (i === 0) {
+            addLog('warning', 'Backend not responding yet. Retrying…');
+            toast.loading('Backend is starting… retrying', { id: 'health-retry' });
           }
-
-          processedResults.push(result);
-          updateResults([...processedResults]);
-
-        } catch (error) {
-          console.error(`Error processing ${file.filename}:`, error);
-          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-          addLog('error', `Error processing ${file.filename}: ${errorMessage}`);
-          
-          const failedResult: ProcessingResult = {
-            document_id: file.document_id,
-            filename: file.filename,
-            status: 'failed',
-            success: false,
-            message: errorMessage,
-            conversion_score: 0,
-            pass_all_thresholds: false,
-            vector_optimized: false
-          };
-          
-          processedResults.push(failedResult);
-          updateResults([...processedResults]);
+          await sleep(1000 * (i + 1));
         }
+      }
+      if (!ok) {
+        toast.error('Backend unavailable. Please try again shortly.', { id: 'health-retry' });
+        addLog('error', 'Backend unavailable. Aborting processing start.');
+        setIsProcessing(false);
+        return;
+      }
+      toast.dismiss('health-retry');
+      addLog('success', 'Backend healthy. Enqueueing jobs…');
+    } catch {
+      // Non-fatal: proceed, but inform user
+      addLog('warning', 'Proceeding without health confirmation.');
+    }
 
-        addLog('info', '─'.repeat(30));
+    // 1) Enqueue as a batch
+    const idToName: Record<string, string> = Object.fromEntries(selectedFiles.map(f => [f.document_id, f.filename]));
+    const docIds = selectedFiles.map(f => f.document_id);
+    let batchResp: any = null;
+    // job map is shared by both the batch path and the fallback path
+    const jobMap: Record<string, { job_id: string; filename: string }> = {};
+    // Track last-seen backend log index per job to avoid duplicate log entries
+    const logSeen: Record<string, number> = {};
+    try {
+      batchResp = await processingApi.processBatch({
+        document_ids: docIds,
+        options: processingOptions
+      } as any);
+    } catch (err: any) {
+      const status = err?.status;
+      addLog('error', `Failed to enqueue batch: ${err?.message || 'unknown error'}`);
+      // Fallback: if the batch endpoint is unavailable (e.g., 404), enqueue per-file
+      if (status === 404) {
+        addLog('info', 'Batch endpoint not found. Falling back to per-file enqueue…');
+        const fallbackJobMap: Record<string, { job_id: string; filename: string }> = {};
+        for (const f of selectedFiles) {
+          try {
+            const resp = await processingApi.enqueueDocument(f.document_id, {
+              auto_optimize: processingOptions.auto_optimize,
+              quality_thresholds: processingOptions.quality_thresholds
+            } as any);
+            fallbackJobMap[f.document_id] = { job_id: resp.job_id, filename: f.filename };
+          } catch (e: any) {
+            addLog('error', `Failed to enqueue ${f.filename}: ${e?.message || 'enqueue failed'}`);
+          }
+        }
+        // Replace job map and continue polling
+        const totalJobs = Object.keys(fallbackJobMap).length;
+        if (totalJobs === 0) {
+          setIsProcessing(false);
+          setProcessingComplete(true);
+          return;
+        }
+        // merge fallback map into jobMap for downstream polling logic
+        Object.assign(jobMap, fallbackJobMap);
+      } else {
+        toast.error('Failed to enqueue batch');
+        setIsProcessing(false);
+        return;
+      }
+    }
+
+    // If batch enqueue succeeded, populate job map and report conflicts
+    if (batchResp) {
+      const jobs = Array.isArray(batchResp?.jobs) ? batchResp.jobs : [];
+      const conflicts = Array.isArray(batchResp?.conflicts) ? batchResp.conflicts : [];
+      for (const j of jobs) {
+        if (j.document_id && j.job_id) {
+          jobMap[j.document_id] = { job_id: j.job_id, filename: idToName[j.document_id] || j.document_id };
+        }
+      }
+      if (conflicts.length > 0) {
+        for (const c of conflicts) {
+          const fname = idToName[c.document_id] || c.document_id;
+          addLog('warning', `⚠️ ${fname} already running (job ${(c.active_job_id || '').slice(0,8)}…)`);
+        }
+        toast(`Some files are already processing (${conflicts.length}). They will complete under existing jobs.`, { icon: 'ℹ️' });
+      }
+    }
+
+    const totalJobs = Object.keys(jobMap).length;
+    if (totalJobs === 0) {
+      setIsProcessing(false);
+      setProcessingComplete(true);
+      return;
+    }
+
+    // Persist active job group for status bar summary
+    try {
+      const group = { batch_id: batchResp?.batch_id || null, job_ids: Object.values(jobMap).map(j => j.job_id), ts: Date.now() };
+      localStorage.setItem('curatore:active_jobs', JSON.stringify(group));
+    } catch {}
+
+    // 2) Poll all jobs until done
+    // Process logs and statuses from backend only (avoid duplicate messages)
+    const processedResults: ProcessingResult[] = [];
+    const done: Record<string, boolean> = {};
+
+    const pollInterval = parseInt(process.env.NEXT_PUBLIC_JOB_POLL_INTERVAL_MS || '2500', 10);
+
+    const pollOnce = async () => {
+      let completed = 0;
+      for (const [docId, { job_id, filename }] of Object.entries(jobMap)) {
+        if (done[docId]) { completed++; continue; }
+        try {
+          const status = await jobsApi.getJob(job_id);
+          const st = (status.status || '').toUpperCase();
+          // Stream backend logs (if present)
+          const backendLogs = Array.isArray(status.logs) ? status.logs : [];
+          const seen = logSeen[job_id] || 0;
+          if (backendLogs.length > seen) {
+            for (let i = seen; i < backendLogs.length; i++) {
+              const entry = backendLogs[i];
+              const lvl = (entry.level || 'info') as ProcessingLog['level'];
+              const rawMsg = typeof entry.message === 'string' ? entry.message : JSON.stringify(entry.message);
+              // Prefix with filename to create a terminal-like rolling log: "<time> <filename> - <message>"
+              const msg = `${filename} - ${rawMsg}`;
+              addLog(lvl, msg, entry.ts);
+            }
+            logSeen[job_id] = backendLogs.length;
+          }
+          if (st === 'SUCCESS') {
+            const res = status.result as ProcessingResult;
+            processedResults.push(res);
+            updateResults([...processedResults]);
+            done[docId] = true;
+            completed++;
+          } else if (st === 'FAILURE') {
+            const failedResult: ProcessingResult = {
+              document_id: docId,
+              filename,
+              status: 'failed',
+              success: false,
+              message: status.error || 'Processing failed',
+              conversion_score: 0,
+              pass_all_thresholds: false,
+              vector_optimized: false
+            };
+            processedResults.push(failedResult);
+            updateResults([...processedResults]);
+            done[docId] = true;
+            completed++;
+          }
+        } catch (e) {
+          // Ignore transient poll errors
+        }
+      }
+      setProgress((completed / totalJobs) * 100);
+      return completed === totalJobs;
+    };
+
+    try {
+      // Loop with polling delay
+      // eslint-disable-next-line no-constant-condition
+      while (true) {
+        const allDone = await pollOnce();
+        if (allDone) break;
+        await new Promise(res => setTimeout(res, pollInterval));
       }
 
-      setProgress(100);
-      setCurrentFile('');
+      // Final sanity refresh: pull fresh results from API to ensure UI reflects final state
+      try {
+        const allIds = Object.keys(jobMap);
+        const fetched = await Promise.all(
+          allIds.map(async (id) => {
+            try {
+              return await processingApi.getProcessingResult(id);
+            } catch {
+              return null;
+            }
+          })
+        );
+        const byId: Record<string, ProcessingResult> = {};
+        for (const r of processedResults) byId[r.document_id] = r;
+        for (const r of fetched) if (r && r.document_id) byId[r.document_id] = r;
+        const merged = Object.values(byId);
+        updateResults(merged);
+        // replace local ref for summary
+        processedResults.length = 0; processedResults.push(...merged);
+      } catch {}
 
       const successful = processedResults.filter(r => r.success).length;
       const failed = processedResults.length - successful;
@@ -259,17 +422,13 @@ export function ProcessingPanel({
       addLog('info', `Total time: ${utils.formatDuration(processingTime)}`);
 
       setProcessingComplete(true);
+      try { localStorage.setItem('curatore:active_jobs', JSON.stringify({ batch_id: batchResp?.batch_id || null, job_ids: Object.values(jobMap).map(j => j.job_id), ts: Date.now(), done: true })); } catch {}
       onProcessingComplete(processedResults);
 
-      // Show completion toast with quick action
       toast.success(
         `Processing complete! ${ragReady} of ${successful} files are RAG-ready`,
-        { 
-          duration: 6000,
-          icon: '🎉'
-        }
+        { duration: 6000, icon: '🎉' }
       );
-
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       addLog('error', `Processing failed: ${errorMessage}`);
@@ -281,7 +440,8 @@ export function ProcessingPanel({
     }
   };
 
-  if (!isVisible) return null;
+  // Keep component mounted to continue background polling even when hidden
+  const visibilityClass = isVisible ? '' : 'hidden';
 
   const successful = results.filter(r => r.success).length;
   const failed = results.length - successful;
@@ -290,7 +450,7 @@ export function ProcessingPanel({
   // Panel positioning and size with proper z-index and sidebar awareness
   const getPanelClasses = () => {
     // Base classes with proper z-index
-    const baseClasses = "fixed bg-gray-900 border-t border-gray-700 shadow-2xl transition-all duration-300 ease-in-out z-20";
+    const baseClasses = "fixed bg-gray-900 border-t border-gray-700 shadow-2xl transition-all duration-300 ease-in-out z-20 flex flex-col";
     
     // Use CSS custom properties for sidebar width awareness
     const sidebarStyle = {
@@ -301,10 +461,11 @@ export function ProcessingPanel({
     switch (panelState) {
       case 'minimized':
         return {
-          className: `${baseClasses} h-12`,
+          className: `${baseClasses} h-10`,
           style: { 
             ...sidebarStyle,
-            bottom: '52px' // Above the 40px status bar + 12px gap
+            // Use safe offset to guarantee no overlap across DPR/zoom
+            bottom: 'var(--statusbar-safe-offset, calc(var(--statusbar-offset, var(--statusbar-height, 40px)) + 2px))'
           }
         };
       case 'fullscreen':
@@ -313,7 +474,7 @@ export function ProcessingPanel({
           style: { 
             ...sidebarStyle,
             top: '4rem', // Below top navigation
-            bottom: '52px' // Above the 40px status bar + 12px gap
+            bottom: 'var(--statusbar-offset, var(--statusbar-height, 40px))' // Align exactly above the status bar
           }
         };
       case 'normal':
@@ -323,17 +484,17 @@ export function ProcessingPanel({
           style: { 
             ...sidebarStyle,
             height: '360px', // Increased height for better content space
-            bottom: '52px' // Above the 40px status bar + 12px gap
+            bottom: 'var(--statusbar-offset, var(--statusbar-height, 40px))' // Align exactly above the status bar
           }
         };
     }
   };
 
   return (
-    <div className={getPanelClasses().className} style={getPanelClasses().style}>
+    <div className={`${visibilityClass} ${getPanelClasses().className}`} style={getPanelClasses().style}>
       {/* Header - Dark theme to match status bar but darker */}
       <div 
-        className="flex items-center justify-between p-3 border-b border-gray-600 bg-gray-800 cursor-pointer flex-shrink-0"
+        className="flex items-center justify-between py-2 px-3 border-b border-gray-600 bg-gray-800 cursor-pointer flex-shrink-0"
         onClick={() => setPanelState(panelState === 'minimized' ? 'normal' : 'minimized')}
       >
         <div className="flex items-center space-x-4">
@@ -440,7 +601,7 @@ export function ProcessingPanel({
 
       {/* Content (hidden when minimized) */}
       {panelState !== 'minimized' && (
-        <div className="flex-1 overflow-hidden">
+        <div className="flex-1 overflow-hidden min-h-0">
           <div className="h-full p-4">
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-full">
               {/* Progress and Stats - LEFT COLUMN */}
@@ -539,7 +700,7 @@ export function ProcessingPanel({
                       <p>Processing log will appear here...</p>
                     </div>
                   ) : (
-                    <div className="p-2 h-full overflow-y-auto scrollbar-thin scrollbar-thumb-green-400 scrollbar-track-gray-800">
+                    <div ref={logContainerRef} className="p-2 h-full overflow-y-auto scrollbar-thin scrollbar-thumb-green-400 scrollbar-track-gray-800">
                       {logs.map((log, index) => (
                         <div key={index} className="flex items-start space-x-2 mb-1 min-h-[1.2rem]">
                           <span className="text-gray-400 text-xs flex-shrink-0 w-20 font-mono">{log.timestamp}</span>
