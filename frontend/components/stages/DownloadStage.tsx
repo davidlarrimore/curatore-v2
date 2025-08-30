@@ -18,6 +18,7 @@ export function DownloadStage({
   processingPanelState = 'hidden'
 }: DownloadStageProps) {
   const [selectedFiles, setSelectedFiles] = useState<Set<string>>(new Set());
+  const [selectRagReadyOnly, setSelectRagReadyOnly] = useState<boolean>(false);
   const [isDownloading, setIsDownloading] = useState<string>('');
   const [isBulkDownloading, setIsBulkDownloading] = useState<boolean>(false);
   const [isCombinedDownloading, setIsCombinedDownloading] = useState<boolean>(false);
@@ -40,8 +41,21 @@ export function DownloadStage({
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       setSelectedFiles(new Set(successfulResults.map(r => r.document_id)));
+      // Selecting all cancels rag-ready-only selection
+      setSelectRagReadyOnly(false);
     } else {
       setSelectedFiles(new Set());
+    }
+  };
+
+  const handleSelectRagReady = (checked: boolean) => {
+    if (checked) {
+      const ragOnly = new Set(ragReadyResults.map(r => r.document_id));
+      setSelectedFiles(ragOnly);
+      setSelectRagReadyOnly(true);
+    } else {
+      setSelectedFiles(new Set());
+      setSelectRagReadyOnly(false);
     }
   };
 
@@ -214,13 +228,6 @@ export function DownloadStage({
 
   return (
     <div className="space-y-6 pb-24">
-      {/* Header */}
-      <div className="text-center">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">⬇️ Download Results</h2>
-        <p className="text-gray-600">
-          Download your processed documents and reports
-        </p>
-      </div>
 
       {/* Summary Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -262,6 +269,15 @@ export function DownloadStage({
                   className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
                 <span className="text-sm font-medium text-gray-700">Select All</span>
+              </label>
+              <label className="flex items-center space-x-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={selectRagReadyOnly}
+                  onChange={(e) => handleSelectRagReady(e.target.checked)}
+                  className="rounded border-gray-300 text-green-600 focus:ring-green-500"
+                />
+                <span className="text-sm font-medium text-gray-700">Select RAG Ready</span>
               </label>
             </div>
           </div>
@@ -469,25 +485,6 @@ export function DownloadStage({
                 )}
               </button>
 
-              {/* RAG-Ready Files */}
-              <button
-                type="button"
-                onClick={downloadRAGReadyFiles}
-                disabled={ragReadyResults.length === 0 || isRAGDownloading || isAnyDownloading}
-                className="w-full bg-purple-600 text-white px-4 py-2 rounded-lg hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center space-x-2 transition-colors"
-              >
-                {isRAGDownloading ? (
-                  <>
-                    <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                    <span>Preparing...</span>
-                  </>
-                ) : (
-                  <>
-                    <span>🎯</span>
-                    <span>RAG-Ready ({ragReadyResults.length})</span>
-                  </>
-                )}
-              </button>
 
               {/* Processing Summary */}
               <button
@@ -515,12 +512,36 @@ export function DownloadStage({
             <div className="space-y-2 text-xs text-blue-800">
               <div><strong>Selected:</strong> Custom file selection</div>
               <div><strong>Complete:</strong> All files + merged + summary</div>
-              <div><strong>RAG-Ready:</strong> Quality-filtered files</div>
+              {/* Removed RAG-Ready bulk option; use Select RAG Ready filter instead */}
               <div><strong>Summary:</strong> Processing report</div>
             </div>
           </div>
         </div>
       </div>
+
+      {/* Fixed Action Button - Bottom Right with Processing Panel Awareness */}
+      {processingPanelState !== 'fullscreen' && (
+        <div className={`fixed right-6 z-40 transition-all duration-300 ${
+          processingPanelState === 'normal'
+            ? 'bottom-[424px]'
+            : processingPanelState === 'minimized'
+            ? 'bottom-[92px]'
+            : 'bottom-16'
+        }`}>
+          <button
+            type="button"
+            onClick={onRestart}
+            disabled={isAnyDownloading}
+            className={`px-6 py-3 rounded-full font-medium text-sm transition-all shadow-lg hover:shadow-xl ${
+              isAnyDownloading
+                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                : 'bg-blue-600 text-white hover:bg-blue-700 hover:-translate-y-1'
+            }`}
+          >
+            🔁 Start Over
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -9,11 +9,10 @@ import {
   RotateCcw, 
   HelpCircle,
   Activity,
-  Zap,
-  AlertCircle
+  AlertCircle,
+  Github
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
-import { Badge } from '@/components/ui/Badge'
 import { systemApi } from '@/lib/api'
 import Image from 'next/image'
 import toast from 'react-hot-toast'
@@ -46,6 +45,7 @@ export function TopNavigation({
     setIsResetting(true)
     try {
       await systemApi.resetSystem()
+      try { localStorage.removeItem('curatore:active_jobs') } catch {}
       toast.success('System reset successfully!')
       setShowResetConfirm(false)
       // Refresh the page to reset all state
@@ -144,24 +144,6 @@ export function TopNavigation({
 
         {/* Right side controls */}
         <div className="flex items-center space-x-2">
-          {/* System status indicators - compact on smaller screens */}
-          <div className="hidden md:flex items-center space-x-2">
-            <Badge 
-              variant={systemStatus.health === 'healthy' ? 'success' : 'error'}
-              className="text-xs"
-            >
-              <Activity className="w-3 h-3 mr-1" />
-              <span className="hidden lg:inline">API</span>
-            </Badge>
-            <Badge 
-              variant={systemStatus.llmConnected ? 'success' : 'error'}
-              className="text-xs"
-            >
-              <Zap className="w-3 h-3 mr-1" />
-              <span className="hidden lg:inline">LLM</span>
-            </Badge>
-          </div>
-
           {/* Action buttons */}
           <Button
             variant="ghost"
@@ -210,6 +192,19 @@ export function TopNavigation({
             className="hidden md:flex"
           >
             <HelpCircle className="w-4 h-4" />
+          </Button>
+
+          {/* GitHub repository link */}
+          <Button
+            variant="ghost"
+            size="sm"
+            title="View on GitHub"
+            aria-label="View on GitHub"
+            onClick={() => {
+              window.open('https://github.com/davidlarrimore/curatore-v2', '_blank', 'noopener,noreferrer')
+            }}
+          >
+            <Github className="w-4 h-4" />
           </Button>
         </div>
       </header>

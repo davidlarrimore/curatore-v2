@@ -576,6 +576,10 @@ class DocumentService:
             >>>     print(f"Found file: {file_path}")
         """
         # Look for files that start with the document_id in upload directory
+        try:
+            print(f"🔎 Finding file for document_id='{document_id}'")
+        except Exception:
+            pass
         for file_path in self.upload_dir.glob(f"{document_id}_*.*"):
             if file_path.is_file():
                 return file_path
@@ -583,10 +587,23 @@ class DocumentService:
         # Look in batch files for batch_ prefixed IDs
         if document_id.startswith("batch_"):
             filename_stem = document_id.replace("batch_", "")
+            try:
+                pattern = f"{filename_stem}.*"
+                print(f"🔎 Searching batch_dir='{self.batch_dir}' pattern='{pattern}'")
+            except Exception:
+                pass
             for file_path in self.batch_dir.glob(f"{filename_stem}.*"):
                 if file_path.is_file() and file_path.suffix.lower() in self.SUPPORTED_EXTENSIONS:
+                    try:
+                        print(f"✅ Found batch file: {file_path}")
+                    except Exception:
+                        pass
                     return file_path
         
+        try:
+            print(f"❌ No file found for document_id='{document_id}'")
+        except Exception:
+            pass
         return None
     
     def _score_conversion(self, markdown_text: str, original_text: Optional[str] = None) -> Tuple[int, str]:

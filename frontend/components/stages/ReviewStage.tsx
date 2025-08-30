@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { ProcessingResult, QualityThresholds } from '@/types';
-import { contentApi } from '@/lib/api';
+import { contentApi, jobsApi } from '@/lib/api';
 
 interface ReviewStageProps {
   processingResults: ProcessingResult[];
@@ -68,14 +68,61 @@ export function ReviewStage({
     }
   };
 
+  const pollJobUntilDone = async (jobId: string) => {
+    const interval = parseInt(process.env.NEXT_PUBLIC_JOB_POLL_INTERVAL_MS || '2500', 10);
+    // eslint-disable-next-line no-constant-condition
+    while (true) {
+      try {
+        const status = await jobsApi.getJob(jobId);
+        const st = (status.status || '').toUpperCase();
+        if (st === 'SUCCESS') return status.result as ProcessingResult;
+        if (st === 'FAILURE') throw new Error(status.error || 'Update failed');
+      } catch (e) {
+        throw e as Error;
+      }
+      await new Promise(res => setTimeout(res, interval));
+    }
+  };
+
+  // Attempt to enqueue a content update. If a 409 occurs, wait for the active job
+  // on this document to finish, then retry once automatically.
+  const enqueueUpdateWithAutoRetry = async (
+    documentId: string,
+    content: string,
+    improvementPrompt?: string,
+    applyVectorOptimization: boolean = false
+  ): Promise<ProcessingResult> => {
+    try {
+      const resp = await contentApi.updateDocumentContent(documentId, content, improvementPrompt, applyVectorOptimization);
+      return await pollJobUntilDone(resp.job_id);
+    } catch (error: any) {
+      if (error?.status === 409) {
+        // Inform user and wait for current job to finish
+        toast('Another operation is running. Will retry when it completes…', { icon: '⏳' });
+        try {
+          const current = await jobsApi.getJobByDocument(documentId);
+          if (current?.job_id) {
+            await pollJobUntilDone(current.job_id);
+          }
+        } catch {
+          // ignore lookup errors; proceed to retry
+        }
+        // Retry enqueue once
+        const retry = await contentApi.updateDocumentContent(documentId, content, improvementPrompt, applyVectorOptimization);
+        return await pollJobUntilDone(retry.job_id);
+      }
+      throw error;
+    }
+  };
+
   const handleSaveAndRescore = async () => {
     if (!selectedResult) return;
 
     setIsEditing(true);
-    const loadingToast = toast.loading('Saving and re-scoring document...');
+    const loadingToast = toast.loading('Saving and re-scoring document (queued)...');
     
     try {
-      const updatedResult = await contentApi.updateDocumentContent(
+      const updatedResult = await enqueueUpdateWithAutoRetry(
         selectedResult.document_id,
         editedContent
       );
@@ -89,9 +136,13 @@ export function ReviewStage({
       
       toast.success('Document saved and re-scored successfully!', { id: loadingToast });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to save and re-score:', error);
-      toast.error('Failed to save and re-score document', { id: loadingToast });
+      if (error?.status === 409) {
+        toast.error('Another operation is already running for this document. Please retry after it completes.', { id: loadingToast });
+      } else {
+        toast.error('Failed to save and re-score document', { id: loadingToast });
+      }
     } finally {
       setIsEditing(false);
     }
@@ -101,10 +152,10 @@ export function ReviewStage({
     if (!selectedResult) return;
 
     setIsEditing(true);
-    const loadingToast = toast.loading('Applying vector optimization...');
+    const loadingToast = toast.loading('Applying vector optimization (queued)...');
     
     try {
-      const updatedResult = await contentApi.updateDocumentContent(
+      const updatedResult = await enqueueUpdateWithAutoRetry(
         selectedResult.document_id,
         editedContent,
         undefined,
@@ -124,9 +175,13 @@ export function ReviewStage({
         icon: '🎯'
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to apply vector optimization:', error);
-      toast.error('Failed to apply vector optimization', { id: loadingToast });
+      if (error?.status === 409) {
+        toast.error('Another operation is already running for this document. Please retry after it completes.', { id: loadingToast });
+      } else {
+        toast.error('Failed to apply vector optimization', { id: loadingToast });
+      }
     } finally {
       setIsEditing(false);
     }
@@ -136,10 +191,10 @@ export function ReviewStage({
     if (!selectedResult || !customPrompt.trim()) return;
 
     setIsEditing(true);
-    const loadingToast = toast.loading('Applying custom improvements...');
+    const loadingToast = toast.loading('Applying custom improvements (queued)...');
     
     try {
-      const updatedResult = await contentApi.updateDocumentContent(
+      const updatedResult = await enqueueUpdateWithAutoRetry(
         selectedResult.document_id,
         editedContent,
         customPrompt
@@ -158,9 +213,13 @@ export function ReviewStage({
         icon: '✨'
       });
 
-    } catch (error) {
+    } catch (error: any) {
       console.error('Failed to apply custom improvements:', error);
-      toast.error('Failed to apply custom improvements', { id: loadingToast });
+      if (error?.status === 409) {
+        toast.error('Another operation is already running for this document. Please retry after it completes.', { id: loadingToast });
+      } else {
+        toast.error('Failed to apply custom improvements', { id: loadingToast });
+      }
     } finally {
       setIsEditing(false);
     }
@@ -191,16 +250,6 @@ export function ReviewStage({
   if (processingResults.length === 0 && !isProcessingComplete) {
     return (
       <div className="space-y-6 pb-24">
-        {/* Header */}
-        <div className="text-center">
-          <h2 className="text-2xl font-bold text-gray-900 mb-2">📊 Review Results</h2>
-          <p className="text-gray-600">
-            {isProcessing 
-              ? 'Processing documents in the background. Results will appear here as they complete.'
-              : 'Waiting for documents to process...'
-            }
-          </p>
-        </div>
 
         {/* Processing Status */}
         <div className="bg-white rounded-lg border p-8">
@@ -243,13 +292,6 @@ export function ReviewStage({
   // Show results interface when we have at least one result
   return (
     <div className="space-y-6 pb-24">
-      {/* Streamlined Header */}
-      <div className="text-center">
-        <h2 className="text-2xl font-bold text-gray-900 mb-2">📊 Review Results</h2>
-        <p className="text-gray-600">
-          Review and improve your processed documents before finalizing
-        </p>
-      </div>
 
       {/* Summary Stats */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -560,7 +602,14 @@ export function ReviewStage({
                             disabled={isEditing}
                             className="flex items-center justify-center px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
-                            💾 Save & Re-Score
+                            {isEditing ? (
+                              <span className="flex items-center space-x-2">
+                                <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>
+                                <span>Queued…</span>
+                              </span>
+                            ) : (
+                              <>💾 Save & Re-Score</>
+                            )}
                           </button>
 
                           <button
@@ -569,7 +618,14 @@ export function ReviewStage({
                             disabled={isEditing || selectedResult.vector_optimized}
                             className="flex items-center justify-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
                           >
-                            🎯 Vector Optimize
+                            {isEditing ? (
+                              <span className="flex items-center space-x-2">
+                                <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>
+                                <span>Queued…</span>
+                              </span>
+                            ) : (
+                              <>🎯 Vector Optimize</>
+                            )}
                           </button>
 
                           <button
@@ -607,7 +663,14 @@ export function ReviewStage({
                                 disabled={isEditing || !customPrompt.trim()}
                                 className="w-full px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
                               >
-                                Apply Custom Improvements
+                                {isEditing ? (
+                                  <span className="flex items-center justify-center space-x-2">
+                                    <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>
+                                    <span>Queued…</span>
+                                  </span>
+                                ) : (
+                                  'Apply Custom Improvements'
+                                )}
                               </button>
                             </div>
                           </div>
@@ -637,7 +700,7 @@ export function ReviewStage({
           processingPanelState === 'normal' 
             ? 'bottom-[424px]'  // Above normal processing panel: 360px panel + 52px (status + gap) + 12px margin = 424px
             : processingPanelState === 'minimized'
-            ? 'bottom-[112px]'  // Above minimized panel: 48px panel + 52px (status + gap) + 12px margin = 112px
+            ? 'bottom-[92px]'   // Above minimized panel: 40px panel + 40px (status) + 12px margin = 92px
             : 'bottom-16'       // Above status bar only: 52px (status + gap) + 12px margin = 64px (bottom-16)
         }`}>
           <button

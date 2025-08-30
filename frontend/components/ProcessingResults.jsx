@@ -3,6 +3,8 @@
 
 import { useState } from 'react'
 
+import { API_PATH_VERSION } from '@/lib/api'
+
 export function ProcessingResults({ documents, onDelete, onRefresh, apiUrl, isLoading }) {
   const [selectedDoc, setSelectedDoc] = useState(null)
   const [showContent, setShowContent] = useState({})
@@ -25,7 +27,7 @@ export function ProcessingResults({ documents, onDelete, onRefresh, apiUrl, isLo
 
   const downloadDocument = async (documentId, filename) => {
     try {
-      const response = await fetch(`${apiUrl}/api/v1/documents/${documentId}/download`)
+      const response = await fetch(`${apiUrl}/api/${API_PATH_VERSION}/documents/${documentId}/download`)
       if (response.ok) {
         const blob = await response.blob()
         const url = window.URL.createObjectURL(blob)
@@ -49,7 +51,7 @@ export function ProcessingResults({ documents, onDelete, onRefresh, apiUrl, isLo
     }
 
     try {
-      const response = await fetch(`${apiUrl}/api/v1/documents/${documentId}/content`)
+      const response = await fetch(`${apiUrl}/api/${API_PATH_VERSION}/documents/${documentId}/content`)
       if (response.ok) {
         const data = await response.json()
         setShowContent(prev => ({ ...prev, [documentId]: data.content }))

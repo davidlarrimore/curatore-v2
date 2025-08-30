@@ -63,8 +63,9 @@ export default function ProcessingPage() {
       },
       ocr_settings: {
         enabled: true,
-        language: 'en',
-        confidence_threshold: 0.8
+        language: 'eng',
+        confidence_threshold: 0.8,
+        psm: 3
       },
       processing_settings: {
         chunk_size: 1000,
@@ -156,8 +157,8 @@ export default function ProcessingPage() {
         return state.processingComplete ? 'completed' : 
                state.isProcessing || state.currentStage === 'review' ? 'current' : 'pending'
       case 'download':
-        return state.processingComplete && state.currentStage === 'download' ? 'current' : 
-               state.processingComplete ? 'completed' : 'pending'
+        // Keep Export Results pending until user clicks Finish Review
+        return state.currentStage === 'download' ? 'current' : 'pending'
       default:
         return 'pending'
     }
@@ -347,6 +348,7 @@ export default function ProcessingPage() {
         onClose={() => setPanelVisible(false)}
         selectedFiles={state.selectedFiles}
         processingOptions={state.processingOptions}
+        sourceType={state.sourceType}
         onProcessingComplete={handleProcessingComplete}
         onResultUpdate={handleResultsUpdate}
         onError={(error) => {

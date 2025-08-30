@@ -11,7 +11,7 @@ export function HealthCheck({ apiUrl, health, llmConnected }) {
   const refreshLlmStatus = async () => {
     setIsRefreshing(true)
     try {
-      const response = await fetch(`${apiUrl}/api/v1/llm/status`)
+      const response = await fetch(`${apiUrl}/api/${API_PATH_VERSION}/llm/status`)
       const status = await response.json()
       setLlmStatus(status)
     } catch (error) {
@@ -130,20 +130,12 @@ export function HealthCheck({ apiUrl, health, llmConnected }) {
               📚 API Docs
             </a>
             <a
-              href={`${apiUrl}/api/v1/health`}
+              href={`${apiUrl}/api/${API_PATH_VERSION}/health`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex-1 text-center bg-gray-50 text-gray-700 px-3 py-2 rounded-lg text-sm hover:bg-gray-100 transition-colors"
             >
-              ❤️ Health v1
-            </a>
-            <a
-              href={`${apiUrl}/api/v2/health`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="flex-1 text-center bg-gray-50 text-gray-700 px-3 py-2 rounded-lg text-sm hover:bg-gray-100 transition-colors"
-            >
-              💙 Health v2
+              💙 Health
             </a>
           </div>
         </div>

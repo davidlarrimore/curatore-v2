@@ -223,11 +223,15 @@ async def startup_event() -> None:
         # The DocumentService handles directory creation and validation
         # This is called during service import/initialization
         
-        # Clear files and in-memory storage on startup (development behavior)
-        print("🧹 Cleaning up previous session data...")
-        document_service.clear_all_files()
-        storage_service.clear_all()
-        print("✅ File directories and in-memory storage cleared")
+        # Clear files and storage on startup only in explicit dev mode
+        clear_on_startup = bool(os.getenv("CLEAR_ON_STARTUP", "").lower() in {"1", "true", "yes"})
+        if settings.debug or clear_on_startup:
+            print("🧹 Cleaning up previous session data (debug/explicit)…")
+            document_service.clear_all_files()
+            storage_service.clear_all()
+            print("✅ File directories and storage cleared")
+        else:
+            print("↩️  Preserving existing files and storage (production mode)")
         
         # Log LLM service status
         from .services.llm_service import llm_service

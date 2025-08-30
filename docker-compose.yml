@@ -88,6 +88,22 @@ services:
       - BATCH_DIR=/app/files/batch_files                                   # Local batch processing files
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-52428800}                           # Max upload size (50MB default)
       
+      # Queue / Celery configuration
+      - USE_CELERY=${USE_CELERY:-true}
+      - STORAGE_BACKEND=${STORAGE_BACKEND:-redis}
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      - CELERY_DEFAULT_QUEUE=${CELERY_DEFAULT_QUEUE:-processing}
+      - CELERY_ACKS_LATE=${CELERY_ACKS_LATE:-true}
+      - CELERY_PREFETCH_MULTIPLIER=${CELERY_PREFETCH_MULTIPLIER:-1}
+      - CELERY_MAX_TASKS_PER_CHILD=${CELERY_MAX_TASKS_PER_CHILD:-50}
+      - CELERY_TASK_SOFT_TIME_LIMIT=${CELERY_TASK_SOFT_TIME_LIMIT:-600}
+      - CELERY_TASK_TIME_LIMIT=${CELERY_TASK_TIME_LIMIT:-900}
+      - CELERY_RESULT_EXPIRES=${CELERY_RESULT_EXPIRES:-259200}
+      - JOB_LOCK_TTL_SECONDS=${JOB_LOCK_TTL_SECONDS:-3600}
+      - JOB_STATUS_TTL_SECONDS=${JOB_STATUS_TTL_SECONDS:-259200}
+      - ALLOW_SYNC_PROCESS=${ALLOW_SYNC_PROCESS:-false}
+      
       # Quality Thresholds for RAG Readiness Assessment
       # Documents must meet ALL thresholds to be considered "RAG Ready"
       - DEFAULT_CONVERSION_THRESHOLD=${DEFAULT_CONVERSION_THRESHOLD:-70}    # Conversion quality (0-100)
@@ -95,6 +111,9 @@ services:
       - DEFAULT_COMPLETENESS_THRESHOLD=${DEFAULT_COMPLETENESS_THRESHOLD:-7} # Information completeness (1-10)
       - DEFAULT_RELEVANCE_THRESHOLD=${DEFAULT_RELEVANCE_THRESHOLD:-7}      # Content relevance (1-10)
       - DEFAULT_MARKDOWN_THRESHOLD=${DEFAULT_MARKDOWN_THRESHOLD:-7}        # Markdown quality (1-10)
+
+    depends_on:
+      - redis
     
     # --------------------------------------------------------------------------
     # Runtime Configuration
@@ -160,6 +179,55 @@ services:
     # --------------------------------------------------------------------------
     depends_on:
       - backend               # Ensure backend starts before frontend
+
+  # ==========================================================================
+  # REDIS - Broker and Result backend for Celery
+  # ==========================================================================
+  redis:
+    image: redis:7-alpine
+    container_name: curatore-redis
+    ports:
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
+
+  # ==========================================================================
+  # WORKER - Celery worker consuming processing tasks
+  # ==========================================================================
+  worker:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: curatore-worker
+    command: sh -c "celery -A app.celery_app worker -Q ${CELERY_DEFAULT_QUEUE:-processing} -l info --concurrency=${CELERY_CONCURRENCY:-2}"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      - CELERY_DEFAULT_QUEUE=${CELERY_DEFAULT_QUEUE:-processing}
+      - CELERY_ACKS_LATE=${CELERY_ACKS_LATE:-true}
+      - CELERY_PREFETCH_MULTIPLIER=${CELERY_PREFETCH_MULTIPLIER:-1}
+      - CELERY_MAX_TASKS_PER_CHILD=${CELERY_MAX_TASKS_PER_CHILD:-50}
+      - CELERY_TASK_SOFT_TIME_LIMIT=${CELERY_TASK_SOFT_TIME_LIMIT:-600}
+      - CELERY_TASK_TIME_LIMIT=${CELERY_TASK_TIME_LIMIT:-900}
+      - CELERY_RESULT_EXPIRES=${CELERY_RESULT_EXPIRES:-259200}
+      - JOB_LOCK_TTL_SECONDS=${JOB_LOCK_TTL_SECONDS:-3600}
+      - JOB_STATUS_TTL_SECONDS=${JOB_STATUS_TTL_SECONDS:-259200}
+      # Share file paths and LLM settings (workers use the pipeline too)
+      - FILES_ROOT=/app/files
+      - UPLOAD_DIR=/app/files/uploaded_files
+      - PROCESSED_DIR=/app/files/processed_files
+      - BATCH_DIR=/app/files/batch_files
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_VERIFY_SSL=${OPENAI_VERIFY_SSL:-true}
+      - OPENAI_TIMEOUT=${OPENAI_TIMEOUT:-60}
+      - OPENAI_MAX_RETRIES=${OPENAI_MAX_RETRIES:-3}
+    volumes:
+      - ./backend/app:/app/app
+      - ./files:/app/files
+    depends_on:
+      - redis
 
 # ==============================================================================
 # ADDITIONAL CONFIGURATION NOTES
