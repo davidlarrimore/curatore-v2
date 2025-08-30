@@ -90,6 +90,55 @@ async def upload_document(file: UploadFile = File(...)):
     )
 
 
+# Place the static batch enqueue route before dynamic routes to avoid path shadowing
+@router.get("/documents/batch", tags=["Documents"])
+async def list_batch_files():
+    """List all files in the batch_files directory for local processing."""
+    try:
+        files = document_service.list_batch_files()
+        return {"files": files, "count": len(files)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list batch files: {str(e)}")
+
+@router.post("/documents/batch/process", tags=["Processing"])
+async def process_batch(request: V2BatchEnqueueRequest):
+    """Enqueue multiple documents in batch (v2)."""
+    batch_id = str(uuid.uuid4())
+    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
+    enqueued = []
+    conflicts = []
+    for doc_id in request.document_ids:
+        file_path = document_service._find_document_file(doc_id)
+        if not file_path:
+            conflicts.append({"document_id": doc_id, "error": "Document not found"})
+            continue
+        opts = request.options or {}
+        async_result = process_document_task.apply_async(args=[doc_id, opts], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
+        if not set_active_job(doc_id, async_result.id, ttl):
+            try:
+                from ....celery_app import app as celery_app
+                celery_app.control.revoke(async_result.id, terminate=False)
+            except Exception:
+                pass
+            conflicts.append({"document_id": doc_id, "status": "conflict", "active_job_id": get_active_job_for_document(doc_id)})
+            continue
+        record_job_status(async_result.id, {
+            "job_id": async_result.id,
+            "document_id": doc_id,
+            "status": "PENDING",
+            "enqueued_at": datetime.utcnow().isoformat(),
+            "batch_id": batch_id,
+        })
+        append_job_log(async_result.id, "info", f"Queued: {doc_id}")
+        enqueued.append({"document_id": doc_id, "job_id": async_result.id, "status": "queued"})
+
+    return {
+        "batch_id": batch_id,
+        "jobs": enqueued,
+        "conflicts": conflicts,
+        "total": len(request.document_ids),
+    }
+
 @router.post("/documents/{document_id}/process", tags=["Processing"])
 async def process_document(document_id: str, options: Optional[dict] = None):
     """Enqueue processing for a single document (v2).
@@ -141,54 +190,7 @@ async def process_document(document_id: str, options: Optional[dict] = None):
     }
 
 
-# Place the static batch enqueue route before dynamic routes to avoid path shadowing
-@router.get("/documents/batch", tags=["Documents"])
-async def list_batch_files():
-    """List all files in the batch_files directory for local processing."""
-    try:
-        files = document_service.list_batch_files()
-        return {"files": files, "count": len(files)}
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list batch files: {str(e)}")
-
-@router.post("/documents/batch/process", tags=["Processing"])
-async def process_batch(request: V2BatchEnqueueRequest):
-    """Enqueue multiple documents in batch (v2)."""
-    batch_id = str(uuid.uuid4())
-    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
-    enqueued = []
-    conflicts = []
-    for doc_id in request.document_ids:
-        file_path = document_service._find_document_file(doc_id)
-        if not file_path:
-            conflicts.append({"document_id": doc_id, "error": "Document not found"})
-            continue
-        opts = request.options or {}
-        async_result = process_document_task.apply_async(args=[doc_id, opts], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
-        if not set_active_job(doc_id, async_result.id, ttl):
-            try:
-                from ....celery_app import app as celery_app
-                celery_app.control.revoke(async_result.id, terminate=False)
-            except Exception:
-                pass
-            conflicts.append({"document_id": doc_id, "status": "conflict", "active_job_id": get_active_job_for_document(doc_id)})
-            continue
-        record_job_status(async_result.id, {
-            "job_id": async_result.id,
-            "document_id": doc_id,
-            "status": "PENDING",
-            "enqueued_at": datetime.utcnow().isoformat(),
-            "batch_id": batch_id,
-        })
-        append_job_log(async_result.id, "info", f"Queued: {doc_id}")
-        enqueued.append({"document_id": doc_id, "job_id": async_result.id, "status": "queued"})
-
-    return {
-        "batch_id": batch_id,
-        "jobs": enqueued,
-        "conflicts": conflicts,
-        "total": len(request.document_ids),
-    }
+# (moved above to avoid shadowing by dynamic routes)
 
 
 

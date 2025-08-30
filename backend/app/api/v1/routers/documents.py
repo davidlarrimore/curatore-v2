@@ -86,6 +86,45 @@ async def upload_document(file: UploadFile = File(...)):
         message="File uploaded successfully"
     )
 
+# Ensure static batch routes are registered before dynamic '{document_id}' routes
+@router.post("/documents/batch/process", tags=["Processing"])
+async def process_batch(request: V1BatchProcessingRequest):
+    """Enqueue processing jobs for multiple documents in batch."""
+    batch_id = str(uuid.uuid4())
+    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
+    enqueued = []
+    conflicts = []
+    for doc_id in request.document_ids:
+        file_path = document_service._find_document_file(doc_id)
+        if not file_path:
+            conflicts.append({"document_id": doc_id, "error": "Document not found"})
+            continue
+        opts = (request.options.model_dump() if request.options else {})
+        async_result = process_document_task.apply_async(args=[doc_id, opts], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
+        if not set_active_job(doc_id, async_result.id, ttl):
+            try:
+                celery_app.control.revoke(async_result.id, terminate=False)
+            except Exception:
+                pass
+            conflicts.append({"document_id": doc_id, "status": "conflict", "active_job_id": get_active_job_for_document(doc_id)})
+            continue
+        record_job_status(async_result.id, {
+            "job_id": async_result.id,
+            "document_id": doc_id,
+            "status": "PENDING",
+            "enqueued_at": datetime.utcnow().isoformat(),
+            "batch_id": batch_id,
+        })
+        append_job_log(async_result.id, "info", f"Queued: {doc_id}")
+        enqueued.append({"document_id": doc_id, "job_id": async_result.id, "status": "queued"})
+
+    return {
+        "batch_id": batch_id,
+        "jobs": enqueued,
+        "conflicts": conflicts,
+        "total": len(request.document_ids)
+    }
+
 @router.post("/documents/{document_id}/process", tags=["Processing"])
 async def process_document(
     document_id: str,
@@ -179,43 +218,7 @@ async def process_batch_file(
         "enqueued_at": datetime.utcnow(),
     }
 
-@router.post("/documents/batch/process", tags=["Processing"])
-async def process_batch(request: V1BatchProcessingRequest):
-    """Enqueue processing jobs for multiple documents in batch."""
-    batch_id = str(uuid.uuid4())
-    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
-    enqueued = []
-    conflicts = []
-    for doc_id in request.document_ids:
-        file_path = document_service._find_document_file(doc_id)
-        if not file_path:
-            conflicts.append({"document_id": doc_id, "error": "Document not found"})
-            continue
-        opts = (request.options.model_dump() if request.options else {})
-        async_result = process_document_task.apply_async(args=[doc_id, opts], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
-        if not set_active_job(doc_id, async_result.id, ttl):
-            try:
-                celery_app.control.revoke(async_result.id, terminate=False)
-            except Exception:
-                pass
-            conflicts.append({"document_id": doc_id, "status": "conflict", "active_job_id": get_active_job_for_document(doc_id)})
-            continue
-        record_job_status(async_result.id, {
-            "job_id": async_result.id,
-            "document_id": doc_id,
-            "status": "PENDING",
-            "enqueued_at": datetime.utcnow().isoformat(),
-            "batch_id": batch_id,
-        })
-        append_job_log(async_result.id, "info", f"Queued: {doc_id}")
-        enqueued.append({"document_id": doc_id, "job_id": async_result.id, "status": "queued"})
-
-    return {
-        "batch_id": batch_id,
-        "jobs": enqueued,
-        "conflicts": conflicts,
-        "total": len(request.document_ids)
-    }
+# (moved above to avoid shadowing by dynamic routes)
 
 @router.get("/documents/{document_id}/result", response_model=V1ProcessingResult, tags=["Results"])
 async def get_processing_result(document_id: str):

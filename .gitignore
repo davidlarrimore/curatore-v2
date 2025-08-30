@@ -45,8 +45,8 @@ ENV/
 build/
 develop-eggs/
 dist/
-downloads/
-lib/
+backend/downloads/
+backend/lib/
 lib64/
 parts/
 sdist/
@@ -94,6 +94,6 @@ Icon?
 
 # Keep the directory structure but ignore contents
 !/files/uploaded_files/.gitkeep
-!/files/batch_files/.gitkeep  
+!/files/batch_files/.gitkeep
 !/files/processed_files/.gitkeep
 
