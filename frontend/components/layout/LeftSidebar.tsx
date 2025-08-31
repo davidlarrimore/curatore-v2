@@ -455,33 +455,7 @@ export function LeftSidebar({
                       </div>
                     </div>
 
-                    {/* OCR Language quick setting */}
-                    <div className="space-y-2">
-                      <label className="block text-xs font-medium text-gray-700">
-                        OCR Language
-                      </label>
-                      <select
-                        value={settingsData.ocrSettings.language}
-                        onChange={(e) => {
-                          const newValue = e.target.value
-                          setSettingsData(prev => ({
-                            ...prev,
-                            ocrSettings: {
-                              ...prev.ocrSettings,
-                              language: newValue
-                            }
-                          }))
-                          toast.success(`OCR language set to ${newValue}`)
-                        }}
-                        className="w-full px-2 py-1 border border-gray-300 rounded text-xs focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                      >
-                        <option value="eng">English</option>
-                        <option value="eng+spa">English + Spanish</option>
-                        <option value="fra">French</option>
-                        <option value="deu">German</option>
-                        <option value="chi_sim">Chinese (Simplified)</option>
-                      </select>
-                    </div>
+                    {/* OCR quick settings removed — backend auto-detects OCR now */}
 
                     <div className="flex space-x-2">
                       <Button
