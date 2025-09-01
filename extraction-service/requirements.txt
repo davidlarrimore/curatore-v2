@@ -1,0 +1,15 @@
+# FastAPI service
+fastapi>=0.110,<0.115
+uvicorn[standard]>=0.27,<0.31
+python-multipart>=0.0.9
+pydantic>=2.6,<3
+
+# File-type conversion + OCR
+markitdown>=0.0.1         # base package only; no [pdf] extras required
+pdfminer.six>=20231228     # text-layer extraction for PDFs (backend parity)
+pypdfium2>=4.30.0          # rasterize PDFs for OCR fallback
+pytesseract>=0.3.10
+Pillow>=10.0.0
+
+# Helpers
+filetype>=1.2.0
