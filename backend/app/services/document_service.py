@@ -65,8 +65,6 @@ from ..models import (
     ProcessingResult, ConversionResult, ProcessingStatus, LLMEvaluation,
     OCRSettings, QualityThresholds, ProcessingOptions
 )
-from .llm_service import llm_service
-from ..utils.text_utils import clean_llm_response
 
 
 class DocumentService:
@@ -1098,34 +1096,12 @@ class DocumentService:
             markdown_content = conversion_result.markdown_content
             print(f"✅ Conversion successful: {len(markdown_content)} characters")
             
-            # Step 2: Generate document summary
+            # Step 2: Summary generation disabled while LLM processing is off
             document_summary = None
-            if llm_service.is_available:
-                try:
-                    summary = await llm_service.summarize_document(markdown_content, filename)
-                    document_summary = clean_llm_response(summary)
-                    print(f"📝 Summary generated: {document_summary[:100]}...")
-                except Exception as e:
-                    print(f"⚠️ Summary generation failed: {e}")
-                    document_summary = f"Summary generation failed: {str(e)[:100]}..."
-            
-            # Step 3: Vector DB optimization (if enabled)
+
+            # Step 3: Vector DB optimization disabled while LLM processing is off
             vector_optimized = False
             optimization_note = ""
-            if options.vector_optimize and llm_service.is_available:
-                try:
-                    optimized_content = await llm_service.optimize_for_vector_db(markdown_content)
-                    if optimized_content and optimized_content.strip():
-                        markdown_content = clean_llm_response(optimized_content)
-                        vector_optimized = True
-                        optimization_note = "Vector DB optimized. "
-                        print("🎯 Vector optimization applied")
-                    else:
-                        optimization_note = "Vector optimization returned empty content. "
-                        print("⚠️ Vector optimization returned empty content")
-                except Exception as e:
-                    optimization_note = f"Optimization failed ({str(e)[:50]}...). "
-                    print(f"❌ Vector optimization failed: {e}")
             
             # Step 4: Save processed markdown
             output_path = self.processed_dir / f"{file_path.stem}_{document_id}.md"
@@ -1150,18 +1126,9 @@ class DocumentService:
             
             # Update conversion result with any optimization notes
             conversion_result.conversion_note = f"{optimization_note}{conversion_result.conversion_note}"
-            if vector_optimized:
-                # Re-score after optimization
-                conversion_result.conversion_score, conversion_result.conversion_feedback = self._score_conversion(markdown_content)
             
-            # Step 5: LLM evaluation
+            # Step 5: LLM evaluation disabled while LLM processing is off
             llm_evaluation = None
-            if llm_service.is_available:
-                try:
-                    llm_evaluation = await llm_service.evaluate_document(markdown_content)
-                    print("📊 LLM evaluation completed")
-                except Exception as e:
-                    print(f"⚠️ LLM evaluation failed for {filename}: {e}")
             
             # Step 6: Check quality thresholds
             passes_thresholds = self._meets_thresholds(
@@ -1316,9 +1283,9 @@ class DocumentService:
         """
         Update document content with optional LLM improvements and re-evaluation.
         
-        Allows updating processed document content with optional LLM-powered
-        improvements or vector optimization. The updated content is re-evaluated
-        and scored to provide fresh quality metrics.
+        Allows updating processed document content. LLM-based improvements and
+        vector optimization are currently disabled. The updated content is
+        re-scored to provide fresh quality metrics.
         
         Args:
             document_id (str): Document ID to update
@@ -1332,16 +1299,13 @@ class DocumentService:
         
         Update Process:
             1. Locates existing processed file
-            2. Applies improvements if requested (either custom prompt or vector optimization)
-            3. Saves updated content to file
-            4. Re-evaluates content quality
+            2. Saves updated content to file
+            3. Re-evaluates content quality
             5. Checks thresholds with new scores
             6. Returns updated ProcessingResult
         
         LLM Integration:
-            - Custom improvement prompts for specific editing instructions
-            - Vector optimization for RAG enhancement
-            - Automatic content cleaning and formatting
+            - Disabled for document editing and optimization
         
         Re-evaluation:
             - Fresh conversion scoring
@@ -1372,18 +1336,11 @@ class DocumentService:
 
             final_content = content
             vector_optimized = False
-            if improvement_prompt and llm_service.is_available:
-                final_content = await llm_service.improve_document(content, improvement_prompt)
-            elif apply_vector_optimization and llm_service.is_available:
-                final_content = await llm_service.optimize_for_vector_db(content)
-                vector_optimized = True
-            
-            final_content = clean_llm_response(final_content)
             processed_file_path.write_text(final_content, encoding="utf-8")
             
             # Re-evaluate
             score, feedback = self._score_conversion(final_content)
-            llm_evaluation = await llm_service.evaluate_document(final_content) if llm_service.is_available else None
+            llm_evaluation = None
             passes_thresholds = self._meets_thresholds(score, llm_evaluation, options.quality_thresholds)
             
             # Find original file to create a full result object

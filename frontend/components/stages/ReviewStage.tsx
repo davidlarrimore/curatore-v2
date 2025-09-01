@@ -19,6 +19,8 @@ interface ReviewStageProps {
 
 type TabType = 'quality' | 'editor';
 
+type ResultFilter = 'all' | 'failed_processing' | 'failed_quality' | 'passed'
+
 export function ReviewStage({
   processingResults,
   onResultsUpdate,
@@ -33,17 +35,93 @@ export function ReviewStage({
   const [activeTab, setActiveTab] = useState<TabType>('quality');
   const [documentContent, setDocumentContent] = useState<string>('');
   const [editedContent, setEditedContent] = useState<string>('');
-  const [customPrompt, setCustomPrompt] = useState<string>('Improve clarity, structure, and formatting. Add helpful headings and organize content better.');
-  const [showCustomPrompt, setShowCustomPrompt] = useState<boolean>(false);
+  // LLM-based custom improvements are disabled
   const [isLoading, setIsLoading] = useState<boolean>(false);
   const [isEditing, setIsEditing] = useState<boolean>(false);
+  const [resultFilter, setResultFilter] = useState<ResultFilter>('all');
+  // Processing log state for failed results
+  const [logLoading, setLogLoading] = useState<boolean>(false);
+  const [logError, setLogError] = useState<string>('');
+  const [processingLog, setProcessingLog] = useState<Array<{ timestamp?: string; level?: string; message?: string }>>([]);
+  const [jobMeta, setJobMeta] = useState<any>(null);
 
-  // Load document content when result is selected
-  useEffect(() => {
-    if (selectedResult && activeTab === 'editor') {
-      loadDocumentContent(selectedResult.document_id);
+  // Consistent timestamp formatter (time only) to match processing bar
+  const formatTimestamp = (raw: any): string => {
+    if (!raw) return ''
+    try {
+      let d: Date | null = null
+      if (typeof raw === 'number') {
+        d = new Date(raw > 1e12 ? raw : raw * 1000)
+      } else if (typeof raw === 'string') {
+        const trimmed = raw.trim()
+        const num = Number(trimmed)
+        if (!Number.isNaN(num) && trimmed.length >= 10 && trimmed.length <= 13) {
+          d = new Date(num > 1e12 ? num : num * 1000)
+        } else {
+          const parsed = new Date(trimmed)
+          if (!Number.isNaN(parsed.getTime())) d = parsed
+        }
+      }
+      if (!d || Number.isNaN(d.getTime())) return String(raw)
+      return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+    } catch {
+      return String(raw)
     }
+  }
+
+  // Load document content when result is selected and is editable
+  useEffect(() => {
+    if (!selectedResult || activeTab !== 'editor') return;
+    // Avoid fetching content for failed processing results
+    if (!selectedResult.success) {
+      setDocumentContent('');
+      setEditedContent('');
+      return;
+    }
+    loadDocumentContent(selectedResult.document_id);
   }, [selectedResult, activeTab]);
+
+  // Load processing log for failed results
+  useEffect(() => {
+    setProcessingLog([]);
+    setLogError('');
+    setJobMeta(null);
+    if (!selectedResult || selectedResult.success !== false) return;
+    const fetchLog = async () => {
+      setLogLoading(true);
+      try {
+        const byDoc: any = await jobsApi.getJobByDocument(selectedResult.document_id);
+        // Attempt to extract logs directly, if present
+        const logs = byDoc?.logs || byDoc?.log || byDoc?.events || [];
+        const normalized = Array.isArray(logs)
+          ? logs.map((l: any) => ({ timestamp: l.timestamp || l.ts || l.time, level: l.level || l.severity || 'info', message: l.message || l.msg || String(l) }))
+          : [];
+        if (normalized.length > 0) {
+          setProcessingLog(normalized);
+        } else if (byDoc?.job_id) {
+          // Fetch job details for logs
+          try {
+            const job = await jobsApi.getJob(byDoc.job_id);
+            const jlogs = job?.logs || job?.log || job?.events || [];
+            const n2 = Array.isArray(jlogs)
+              ? jlogs.map((l: any) => ({ timestamp: l.timestamp || l.ts || l.time, level: l.level || l.severity || 'info', message: l.message || l.msg || String(l) }))
+              : [];
+            if (n2.length > 0) setProcessingLog(n2);
+            setJobMeta(job);
+          } catch {}
+        }
+        setJobMeta((jm: any) => jm || byDoc);
+        if (normalized.length === 0 && !byDoc?.job_id) {
+          setLogError('No processing log available for this file.');
+        }
+      } catch (e: any) {
+        setLogError(e?.message || 'Failed to load processing log');
+      } finally {
+        setLogLoading(false);
+      }
+    };
+    fetchLog();
+  }, [selectedResult]);
 
   // Auto-select first result when processing completes OR when first result becomes available
   useEffect(() => {
@@ -89,11 +167,9 @@ export function ReviewStage({
   const enqueueUpdateWithAutoRetry = async (
     documentId: string,
     content: string,
-    improvementPrompt?: string,
-    applyVectorOptimization: boolean = false
   ): Promise<ProcessingResult> => {
     try {
-      const resp = await contentApi.updateDocumentContent(documentId, content, improvementPrompt, applyVectorOptimization);
+      const resp = await contentApi.updateDocumentContent(documentId, content);
       return await pollJobUntilDone(resp.job_id);
     } catch (error: any) {
       if (error?.status === 409) {
@@ -108,7 +184,7 @@ export function ReviewStage({
           // ignore lookup errors; proceed to retry
         }
         // Retry enqueue once
-        const retry = await contentApi.updateDocumentContent(documentId, content, improvementPrompt, applyVectorOptimization);
+        const retry = await contentApi.updateDocumentContent(documentId, content);
         return await pollJobUntilDone(retry.job_id);
       }
       throw error;
@@ -148,82 +224,7 @@ export function ReviewStage({
     }
   };
 
-  const handleVectorOptimize = async () => {
-    if (!selectedResult) return;
-
-    setIsEditing(true);
-    const loadingToast = toast.loading('Applying vector optimization (queued)...');
-    
-    try {
-      const updatedResult = await enqueueUpdateWithAutoRetry(
-        selectedResult.document_id,
-        editedContent,
-        undefined,
-        true // apply vector optimization
-      );
-
-      // Update the result in the list
-      const updatedResults = processingResults.map(r =>
-        r.document_id === selectedResult.document_id ? updatedResult : r
-      );
-      onResultsUpdate(updatedResults);
-      setSelectedResult(updatedResult);
-      setEditedContent(updatedResult.conversion_result?.markdown_content || editedContent);
-      
-      toast.success('Vector optimization applied successfully!', { 
-        id: loadingToast,
-        icon: '🎯'
-      });
-
-    } catch (error: any) {
-      console.error('Failed to apply vector optimization:', error);
-      if (error?.status === 409) {
-        toast.error('Another operation is already running for this document. Please retry after it completes.', { id: loadingToast });
-      } else {
-        toast.error('Failed to apply vector optimization', { id: loadingToast });
-      }
-    } finally {
-      setIsEditing(false);
-    }
-  };
-
-  const handleCustomImprovement = async () => {
-    if (!selectedResult || !customPrompt.trim()) return;
-
-    setIsEditing(true);
-    const loadingToast = toast.loading('Applying custom improvements (queued)...');
-    
-    try {
-      const updatedResult = await enqueueUpdateWithAutoRetry(
-        selectedResult.document_id,
-        editedContent,
-        customPrompt
-      );
-
-      // Update the result in the list
-      const updatedResults = processingResults.map(r =>
-        r.document_id === selectedResult.document_id ? updatedResult : r
-      );
-      onResultsUpdate(updatedResults);
-      setSelectedResult(updatedResult);
-      setEditedContent(updatedResult.conversion_result?.markdown_content || editedContent);
-      
-      toast.success('Custom improvements applied successfully!', { 
-        id: loadingToast,
-        icon: '✨'
-      });
-
-    } catch (error: any) {
-      console.error('Failed to apply custom improvements:', error);
-      if (error?.status === 409) {
-        toast.error('Another operation is already running for this document. Please retry after it completes.', { id: loadingToast });
-      } else {
-        toast.error('Failed to apply custom improvements', { id: loadingToast });
-      }
-    } finally {
-      setIsEditing(false);
-    }
-  };
+  // Vector optimization and custom LLM improvements are disabled
 
   const getQualityColor = (score: number, threshold: number) => {
     if (score >= 9) return 'text-green-600';
@@ -242,7 +243,63 @@ export function ReviewStage({
     return '🔴';
   };
 
+  // Helpers for messaging and applicability
+  const isMarkdownSource = (filename?: string) => {
+    if (!filename) return false;
+    const f = filename.toLowerCase();
+    return f.endsWith('.md') || f.endsWith('.markdown');
+  };
+  const hasConvertedMarkdown = (r: ProcessingResult | null) => {
+    if (!r) return false;
+    return Boolean((r as any).markdown_path || r.conversion_result?.markdown_content);
+  };
+  const getMarkdownAwareFeedback = (feedback?: string, filename?: string) => {
+    if (!feedback) return feedback;
+    const fb = feedback.trim();
+    // If backend reports that no markdown was produced, clarify outcome without implying a separate step ran now
+    if (/no markdown produced\.?/i.test(fb)) {
+      return 'No markdown available. The conversion step did not produce markdown content for this file.';
+    }
+    return feedback;
+  };
+
+  const isExtractionOnlyFailure = (r?: ProcessingResult | null) => {
+    if (!r) return false;
+    const nonMdSource = !isMarkdownSource(r.filename);
+    const hasMd = hasConvertedMarkdown(r);
+    const msg = (r.message || '').toLowerCase();
+    const suggestsNoMd = msg.includes('no markdown') || msg.includes('conversion failed');
+    return r.success === false && nonMdSource && !hasMd && suggestsNoMd;
+  };
+
+  const getUserFacingErrorMessage = (message?: string, filename?: string, result?: ProcessingResult) => {
+    if (!message) return message;
+    const hasMd = hasConvertedMarkdown(result || null);
+    const nonMdSource = !isMarkdownSource(filename);
+    const msg = message.trim();
+    const lower = msg.toLowerCase();
+    const mentionsNoMd = lower.includes('no markdown produced');
+    const mentionsConversionFailed = lower.startsWith('conversion failed');
+    if ((mentionsNoMd || mentionsConversionFailed) && nonMdSource && !hasMd) {
+      return 'Extraction failed: No content was extracted; conversion was not attempted.';
+    }
+    return message;
+  };
+
   const successfulResults = processingResults.filter(r => r.success);
+  const filteredResults = (() => {
+    switch (resultFilter) {
+      case 'failed_processing':
+        return processingResults.filter(r => !r.success);
+      case 'failed_quality':
+        return processingResults.filter(r => r.success && !r.pass_all_thresholds);
+      case 'passed':
+        return processingResults.filter(r => r.success && r.pass_all_thresholds);
+      case 'all':
+      default:
+        return processingResults;
+    }
+  })();
   const ragReadyCount = successfulResults.filter(r => r.pass_all_thresholds).length;
   const vectorOptimizedCount = successfulResults.filter(r => r.vector_optimized).length;
 
@@ -321,14 +378,49 @@ export function ReviewStage({
         <div className="lg:col-span-1">
           <div className="bg-white rounded-lg border p-6">
             <h3 className="text-lg font-medium mb-4">
-              📋 Results ({successfulResults.length}
-              {isProcessing && ` of ${selectedFiles.length}`})
+              📋 Results ({filteredResults.length} of {processingResults.length})
             </h3>
+
+            {/* Quick Filters */}
+            <div className="flex flex-wrap gap-2 mb-3">
+              <button
+                type="button"
+                onClick={() => setResultFilter('all')}
+                className={`px-2 py-1 rounded text-xs border ${resultFilter === 'all' ? 'bg-gray-800 text-white border-gray-800' : 'bg-gray-100 text-gray-700 border-gray-200 hover:bg-gray-200'}`}
+                title="Show all results"
+              >
+                All
+              </button>
+              <button
+                type="button"
+                onClick={() => setResultFilter('failed_processing')}
+                className={`px-2 py-1 rounded text-xs border ${resultFilter === 'failed_processing' ? 'bg-red-600 text-white border-red-600' : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'}`}
+                title="Failed to data extract"
+              >
+                Failed Processing
+              </button>
+              <button
+                type="button"
+                onClick={() => setResultFilter('failed_quality')}
+                className={`px-2 py-1 rounded text-xs border ${resultFilter === 'failed_quality' ? 'bg-yellow-600 text-white border-yellow-600' : 'bg-yellow-50 text-yellow-800 border-yellow-200 hover:bg-yellow-100'}`}
+                title="Passed processing, failed quality review"
+              >
+                Failed Quality Review
+              </button>
+              <button
+                type="button"
+                onClick={() => setResultFilter('passed')}
+                className={`px-2 py-1 rounded text-xs border ${resultFilter === 'passed' ? 'bg-green-600 text-white border-green-600' : 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'}`}
+                title="Passed processing and quality review"
+              >
+                Passed
+              </button>
+            </div>
             
             <div className="space-y-2 max-h-96 overflow-y-auto">
-              {successfulResults.map((result) => {
+              {filteredResults.map((result) => {
                 const isSelected = selectedResult?.document_id === result.document_id;
-                const qualityBadge = getQualityColor(result.conversion_score, qualityThresholds.conversion);
+                const qualityBadge = getQualityColor(result.conversion_score || 0, qualityThresholds.conversion);
                 const passBadge = getPassFailColor(result.pass_all_thresholds);
 
                 return (
@@ -347,18 +439,33 @@ export function ReviewStage({
                     </div>
                     
                     <div className="flex items-center justify-between text-xs">
-                      <span className={`px-2 py-1 rounded ${qualityBadge}`}>
-                        {result.conversion_score}%
-                      </span>
-                      <span className={`px-2 py-1 rounded ${passBadge}`}>
-                        {result.pass_all_thresholds ? 'PASS' : 'FAIL'}
-                      </span>
+                      {result.success ? (
+                        <>
+                          <span className={`px-2 py-1 rounded ${qualityBadge}`}>
+                            {result.conversion_score}%
+                          </span>
+                          <span className={`px-2 py-1 rounded ${passBadge}`}>
+                            {result.pass_all_thresholds ? 'PASS' : 'FAIL'}
+                          </span>
+                        </>
+                      ) : (
+                        <span className="px-2 py-1 rounded bg-red-100 text-red-800">
+                          PROCESS FAILED
+                        </span>
+                      )}
                     </div>
                     
                     {result.vector_optimized && (
                       <div className="mt-1">
                         <span className="text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded">
                           🎯 Optimized
+                        </span>
+                      </div>
+                    )}
+                    {isExtractionOnlyFailure(result) && (
+                      <div className="mt-1">
+                        <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">
+                          ⏭️ Conversion Skipped
                         </span>
                       </div>
                     )}
@@ -421,13 +528,17 @@ export function ReviewStage({
                   </button>
                   <button
                     type="button"
-                    onClick={() => setActiveTab('editor')}
+                    onClick={() => selectedResult?.success && setActiveTab('editor')}
+                    disabled={!selectedResult?.success}
+                    aria-disabled={!selectedResult?.success}
                     className={`flex-1 px-4 py-2 rounded-md transition-colors ${
-                      activeTab === 'editor'
-                        ? 'bg-white text-gray-900 shadow-sm'
-                        : 'text-gray-600 hover:text-gray-900'
+                      !selectedResult?.success
+                        ? 'text-gray-400 cursor-not-allowed'
+                        : activeTab === 'editor'
+                          ? 'bg-white text-gray-900 shadow-sm'
+                          : 'text-gray-600 hover:text-gray-900'
                     }`}
-                  >
+                     >
                     ✏️ Live Editor
                   </button>
                 </div>
@@ -441,7 +552,9 @@ export function ReviewStage({
                       <div className="bg-gray-50 p-4 rounded-lg">
                         <div className="text-2xl font-bold mb-2">{selectedResult.conversion_score}/100</div>
                         {selectedResult.conversion_result?.conversion_feedback && (
-                          <p className="text-gray-600">{selectedResult.conversion_result.conversion_feedback}</p>
+                          <p className="text-gray-600">
+                            {getMarkdownAwareFeedback(selectedResult.conversion_result.conversion_feedback, selectedResult.filename)}
+                          </p>
                         )}
                       </div>
                     </div>
@@ -496,20 +609,27 @@ export function ReviewStage({
                             )}
                           </div>
 
-                          <div className="space-y-3">
-                            <div className="flex items-center justify-between">
-                              <span className="text-sm font-medium">Markdown</span>
-                              <div className="flex items-center space-x-2">
-                                <span className={getQualityColor(selectedResult.llm_evaluation.markdown_score || 0, qualityThresholds.markdown)}>
-                                  {selectedResult.llm_evaluation.markdown_score || 'N/A'}/10
-                                </span>
-                                <span>{getScoreIcon(selectedResult.llm_evaluation.markdown_score || 0, qualityThresholds.markdown)}</span>
+                          {(isMarkdownSource(selectedResult.filename) || hasConvertedMarkdown(selectedResult)) ? (
+                            <div className="space-y-3">
+                              <div className="flex items-center justify-between">
+                                <span className="text-sm font-medium">Markdown</span>
+                                <div className="flex items-center space-x-2">
+                                  <span className={getQualityColor(selectedResult.llm_evaluation.markdown_score || 0, qualityThresholds.markdown)}>
+                                    {selectedResult.llm_evaluation.markdown_score || 'N/A'}/10
+                                  </span>
+                                  <span>{getScoreIcon(selectedResult.llm_evaluation.markdown_score || 0, qualityThresholds.markdown)}</span>
+                                </div>
                               </div>
+                              {selectedResult.llm_evaluation.markdown_feedback && (
+                                <p className="text-xs text-gray-600">{selectedResult.llm_evaluation.markdown_feedback}</p>
+                              )}
                             </div>
-                            {selectedResult.llm_evaluation.markdown_feedback && (
-                              <p className="text-xs text-gray-600">{selectedResult.llm_evaluation.markdown_feedback}</p>
-                            )}
-                          </div>
+                          ) : (
+                            <div className="space-y-1">
+                              <div className="text-sm font-medium text-gray-500">Markdown</div>
+                              <p className="text-xs text-gray-500">Evaluated after conversion. Not applicable at extraction stage for this file type.</p>
+                            </div>
+                          )}
                         </div>
 
                         {/* Overall Feedback */}
@@ -567,13 +687,116 @@ export function ReviewStage({
                         </div>
                       </div>
                     )}
+
+                    {/* Failure Details and Processing Log */}
+                    {!selectedResult.success && (
+                      <div className="space-y-4">
+                        <h4 className="font-medium mb-1">⚠️ Processing Failure Details</h4>
+                        <div className="bg-red-50 border border-red-200 rounded-lg p-4 text-sm">
+                          <div className="flex items-center justify-between">
+                            <span className="text-red-800 font-medium">Status:</span>
+                            <span className="text-red-900 font-mono">{selectedResult.status || 'failed'}</span>
+                          </div>
+                          <div className="flex items-center justify-between mt-1">
+                            <span className="text-red-800 font-medium">Markdown quality:</span>
+                            <span className="text-red-900 font-mono">Not applicable (no markdown available)</span>
+                          </div>
+                          {selectedResult.message && (
+                            <div className="mt-2">
+                              <div className="text-red-800 font-medium">Message</div>
+                              <div className="text-red-900 whitespace-pre-wrap">
+                                {getUserFacingErrorMessage(selectedResult.message, selectedResult.filename, selectedResult)}
+                              </div>
+                            </div>
+                          )}
+                          {isExtractionOnlyFailure(selectedResult) ? (
+                            <div className="mt-2">
+                              <div className="text-red-800 font-medium">Conversion</div>
+                              <div className="text-red-900">Not attempted due to extraction failure.</div>
+                            </div>
+                          ) : (
+                            <>
+                              {selectedResult.conversion_result?.conversion_feedback && (
+                                <div className="mt-2">
+                                  <div className="text-red-800 font-medium">Converter Feedback</div>
+                                  <div className="text-red-900 whitespace-pre-wrap">{getMarkdownAwareFeedback(selectedResult.conversion_result.conversion_feedback, selectedResult.filename)}</div>
+                                </div>
+                              )}
+                              {selectedResult.conversion_result?.conversion_note && (
+                                <div className="mt-2">
+                                  <div className="text-red-800 font-medium">Converter Notes</div>
+                                  <div className="text-red-900 whitespace-pre-wrap">{selectedResult.conversion_result.conversion_note}</div>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+
+                        <div>
+                          <h5 className="font-medium mb-2">🔎 What the system attempted</h5>
+                          <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm space-y-1">
+                            <div className="flex items-start justify-between">
+                              <span className="text-gray-600">Vector optimize attempted:</span>
+                              <span className="text-gray-900 font-mono">{selectedResult.vector_optimized ? 'yes' : 'no'}</span>
+                            </div>
+                            {jobMeta?.processor && (
+                              <div className="flex items-start justify-between">
+                                <span className="text-gray-600">Python framework:</span>
+                                <span className="text-gray-900 font-mono">{String(jobMeta.processor)}</span>
+                              </div>
+                            )}
+                            {jobMeta?.settings && (
+                              <div className="mt-1">
+                                <div className="text-gray-600">Settings used:</div>
+                                <pre className="mt-1 bg-white rounded border border-gray-200 p-2 text-xs overflow-x-auto">{JSON.stringify(jobMeta.settings, null, 2)}</pre>
+                              </div>
+                            )}
+                            {!jobMeta?.processor && !jobMeta?.settings && (
+                              <div className="text-gray-600">
+                                Detailed framework/settings were not provided by the API for this job.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+
+                        <div>
+                          <h5 className="font-medium mb-2">🧾 Processing Log</h5>
+                          {logLoading ? (
+                            <div className="flex items-center space-x-2 text-gray-600 text-sm">
+                              <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400"></div>
+                              <span>Loading log…</span>
+                            </div>
+                          ) : logError ? (
+                            <div className="text-sm text-gray-600">{logError}</div>
+                          ) : processingLog.length === 0 ? (
+                            <div className="text-sm text-gray-600">No log entries available.</div>
+                          ) : (
+                            <div className="processing-log bg-black text-gray-100 rounded-md p-3 max-h-64 overflow-y-auto overflow-x-hidden text-xs">
+                              {processingLog.map((e, i) => (
+                                <div key={i} className="log-entry py-0.5 flex items-start">
+                                  <span className="log-timestamp text-gray-400 mr-2 font-mono w-[120px] flex-shrink-0">{formatTimestamp(e.timestamp)}</span>
+                                  <span className={`mr-2 flex-shrink-0 ${e.level === 'error' ? 'text-red-400' : e.level === 'warning' ? 'text-yellow-300' : 'text-green-300'}`}>{(e.level || 'info').toUpperCase()}</span>
+                                  <span className="log-message text-gray-100 whitespace-pre-wrap break-words break-all">
+                                    {e.message}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 ) : (
-                  /* Live Editor Tab */
                   <div className="space-y-6">
+                    {/* Live Editor Tab */}
                     <h4 className="font-medium">✏️ Live Editor</h4>
                     
-                    {isLoading ? (
+                    {!selectedResult?.success ? (
+                      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md text-sm text-yellow-800">
+                        This document failed processing, so no editable content is available.
+                      </div>
+                    ) : isLoading ? (
                       <div className="flex items-center justify-center py-8">
                         <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
                         <span className="ml-2">Loading content...</span>
@@ -611,78 +834,20 @@ export function ReviewStage({
                               <>💾 Save & Re-Score</>
                             )}
                           </button>
-
-                          <button
-                            type="button"
-                            onClick={handleVectorOptimize}
-                            disabled={isEditing || selectedResult.vector_optimized}
-                            className="flex items-center justify-center px-4 py-2 bg-purple-600 text-white rounded-md hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            {isEditing ? (
-                              <span className="flex items-center space-x-2">
-                                <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>
-                                <span>Queued…</span>
-                              </span>
-                            ) : (
-                              <>🎯 Vector Optimize</>
-                            )}
-                          </button>
-
-                          <button
-                            type="button"
-                            onClick={() => setShowCustomPrompt(!showCustomPrompt)}
-                            disabled={isEditing}
-                            className="flex items-center justify-center px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                          >
-                            ✨ Custom Edit
-                          </button>
                         </div>
 
                         {/* Disabled state explanation */}
-                        {selectedResult.vector_optimized && (
-                          <div className="text-sm text-gray-600 bg-gray-50 p-3 rounded-lg">
-                            ℹ️ Vector optimization already applied during processing
-                          </div>
-                        )}
+                        {/* Vector optimization disabled */}
 
-                        {/* Custom LLM Edit Section */}
-                        {showCustomPrompt && (
-                          <div className="border-t pt-6">
-                            <h5 className="font-medium mb-3">🎨 Custom LLM Instructions</h5>
-                            <div className="space-y-4">
-                              <textarea
-                                value={customPrompt}
-                                onChange={(e) => setCustomPrompt(e.target.value)}
-                                rows={3}
-                                className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-                                placeholder="Enter instructions for the LLM to improve the document..."
-                              />
-                              <button
-                                type="button"
-                                onClick={handleCustomImprovement}
-                                disabled={isEditing || !customPrompt.trim()}
-                                className="w-full px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed"
-                              >
-                                {isEditing ? (
-                                  <span className="flex items-center justify-center space-x-2">
-                                    <span className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></span>
-                                    <span>Queued…</span>
-                                  </span>
-                                ) : (
-                                  'Apply Custom Improvements'
-                                )}
-                              </button>
-                            </div>
-                          </div>
-                        )}
+                        {/* Custom LLM improvements disabled */}
                       </>
                     )}
                   </div>
                 )}
               </div>
             ) : (
-              /* No Selection State */
               <div className="text-center py-12">
+                {/* No Selection State */}
                 <div className="text-6xl mb-4">👈</div>
                 <h3 className="text-lg font-medium text-gray-900 mb-2">Select a file to review</h3>
                 <p className="text-gray-600">

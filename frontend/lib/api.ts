@@ -211,14 +211,8 @@ export const contentApi = {
   async updateDocumentContent(
     documentId: string,
     content: string,
-    improvementPrompt?: string,
-    applyVectorOptimization?: boolean,
   ): Promise<{ job_id: string; document_id: string; status: string; enqueued_at?: string }> {
-    const body = {
-      content,
-      improvement_prompt: improvementPrompt,
-      apply_vector_optimization: applyVectorOptimization,
-    }
+    const body = { content }
     const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/content`), {
       method: 'PUT',
       headers: jsonHeaders,

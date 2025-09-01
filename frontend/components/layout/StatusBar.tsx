@@ -163,20 +163,6 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
           </Badge>
         </div>
 
-        {/* Storage Info */}
-        <div className="flex items-center space-x-1">
-          <HardDrive className="w-3 h-3" />
-          <span>Max Upload:</span>
-          <span className="font-mono">{utils.formatFileSize(systemStatus.maxFileSize)}</span>
-        </div>
-
-        {/* Supported Formats */}
-        <div className="hidden md:flex items-center space-x-1">
-          <Server className="w-3 h-3" />
-          <span>Formats:</span>
-          <span className="font-mono">{systemStatus.supportedFormats.length} types</span>
-        </div>
-
         {/* Active Jobs in Queue */}
         <div className="hidden lg:flex items-center space-x-1">
           <Wifi className="w-3 h-3" />
