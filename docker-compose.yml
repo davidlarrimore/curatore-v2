@@ -1,198 +1,57 @@
 # ============================================================================
-# Curatore v2 - Docker Compose Configuration
+# Curatore v2 - Docker Compose (dev)
 # ============================================================================
-# 
-# This Docker Compose file defines a multi-container development environment
-# for Curatore v2, a RAG document processing and optimization tool.
-#
-# Architecture:
-#   - Backend:  Python FastAPI application with document processing pipeline
-#   - Frontend: Next.js TypeScript React application with modern UI
-#   - Storage:  Volume-mounted file system for document persistence
-#
-# Usage:
-#   Development: docker-compose up --build
-#   Background:  docker-compose up -d
-#   Rebuild:     docker-compose build --no-cache
-#   Stop:        docker-compose down
-#   Cleanup:     docker-compose down -v --rmi local --remove-orphans
-#
-# Network: Both services communicate on the default Docker network
-# ============================================================================
-
 version: "3.9"
 
 services:
-  # ==========================================================================
-  # BACKEND SERVICE - FastAPI Python Application
-  # ==========================================================================
+  # --------------------------------------------------------------------------
+  # BACKEND: FastAPI app
+  # --------------------------------------------------------------------------
   backend:
-    # --------------------------------------------------------------------------
-    # Build Configuration
-    # --------------------------------------------------------------------------
     build:
-      context: ./backend              # Build context is the backend directory
-      dockerfile: Dockerfile          # Uses backend/Dockerfile for build instructions
-    
-    container_name: curatore-backend  # Fixed container name for easy reference
-    
-    # --------------------------------------------------------------------------
-    # Volume Mounts - File System Persistence & Development
-    # --------------------------------------------------------------------------
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: curatore-backend
     volumes:
-      # Development hot-reload: Mount Python source code only
-      # This mounts ONLY the app/ subdirectory to avoid conflicts with other mounts
+      # Hot-reload app code without stomping other layers
       - ./backend/app:/app/app
-      
-      # Document storage: Mount shared files directory from host root
-      # This provides persistent storage for uploaded, processed, and batch files
-      # Structure: /app/files/{uploaded_files,processed_files,batch_files}/
+      # Shared storage (authoritative on host)
       - ./files:/app/files
-    
-    # --------------------------------------------------------------------------
-    # Network Configuration
-    # --------------------------------------------------------------------------
-    ports:
-      - "8000:8000"                   # Expose FastAPI on localhost:8000
-    
-    # --------------------------------------------------------------------------
-    # Environment Variables - Application Configuration
-    # --------------------------------------------------------------------------
     environment:
-      # Python Configuration
-      - PYTHONUNBUFFERED=1            # Ensure Python output is not buffered
-      
-      # API Settings (loaded from .env file with defaults)
+      - PYTHONUNBUFFERED=1
       - DEBUG=${DEBUG:-false}
       - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000"]}
-      
-      # OpenAI/LLM Configuration
-      # These settings control the LLM integration for document evaluation and optimization
-      - OPENAI_API_KEY=${OPENAI_API_KEY}                                    # Required: Your OpenAI API key
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}                          # LLM model to use
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}      # API endpoint (supports local LLMs)
-      - OPENAI_VERIFY_SSL=${OPENAI_VERIFY_SSL:-true}                       # SSL verification (disable for local)
-      - OPENAI_TIMEOUT=${OPENAI_TIMEOUT:-60}                               # Request timeout in seconds
-      - OPENAI_MAX_RETRIES=${OPENAI_MAX_RETRIES:-3}                        # Max retry attempts
-      
-      # OCR Configuration
-      # Controls Tesseract OCR behavior for image and PDF processing
-      - OCR_LANG=${OCR_LANG:-eng}                                          # OCR language (eng, eng+spa, etc.)
-      - OCR_PSM=${OCR_PSM:-3}                                              # Page Segmentation Mode (0-13)
-      
-      # File Storage Paths (Absolute paths inside container)
-      # These paths must match the volume mount structure
-      - FILES_ROOT=/app/files                                              # Root directory for all files
-      - UPLOAD_DIR=/app/files/uploaded_files                               # User-uploaded documents
-      - PROCESSED_DIR=/app/files/processed_files                           # Converted markdown files
-      - BATCH_DIR=/app/files/batch_files                                   # Local batch processing files
-      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-52428800}                           # Max upload size (50MB default)
-      
-      # Queue / Celery configuration
-      - USE_CELERY=${USE_CELERY:-true}
-      - STORAGE_BACKEND=${STORAGE_BACKEND:-redis}
-      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
-      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
-      - CELERY_DEFAULT_QUEUE=${CELERY_DEFAULT_QUEUE:-processing}
-      - CELERY_ACKS_LATE=${CELERY_ACKS_LATE:-true}
-      - CELERY_PREFETCH_MULTIPLIER=${CELERY_PREFETCH_MULTIPLIER:-1}
-      - CELERY_MAX_TASKS_PER_CHILD=${CELERY_MAX_TASKS_PER_CHILD:-50}
-      - CELERY_TASK_SOFT_TIME_LIMIT=${CELERY_TASK_SOFT_TIME_LIMIT:-600}
-      - CELERY_TASK_TIME_LIMIT=${CELERY_TASK_TIME_LIMIT:-900}
-      - CELERY_RESULT_EXPIRES=${CELERY_RESULT_EXPIRES:-259200}
-      - JOB_LOCK_TTL_SECONDS=${JOB_LOCK_TTL_SECONDS:-3600}
-      - JOB_STATUS_TTL_SECONDS=${JOB_STATUS_TTL_SECONDS:-259200}
-      - ALLOW_SYNC_PROCESS=${ALLOW_SYNC_PROCESS:-false}
-      
-      # Quality Thresholds for RAG Readiness Assessment
-      # Documents must meet ALL thresholds to be considered "RAG Ready"
-      - DEFAULT_CONVERSION_THRESHOLD=${DEFAULT_CONVERSION_THRESHOLD:-70}    # Conversion quality (0-100)
-      - DEFAULT_CLARITY_THRESHOLD=${DEFAULT_CLARITY_THRESHOLD:-7}          # Content clarity (1-10)
-      - DEFAULT_COMPLETENESS_THRESHOLD=${DEFAULT_COMPLETENESS_THRESHOLD:-7} # Information completeness (1-10)
-      - DEFAULT_RELEVANCE_THRESHOLD=${DEFAULT_RELEVANCE_THRESHOLD:-7}      # Content relevance (1-10)
-      - DEFAULT_MARKDOWN_THRESHOLD=${DEFAULT_MARKDOWN_THRESHOLD:-7}        # Markdown quality (1-10)
-
+      # LLM
+      - OPENAI_API_KEY=${OPENAI_API_KEY}
+      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
+      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
+      - OPENAI_VERIFY_SSL=${OPENAI_VERIFY_SSL:-true}
+      - OPENAI_TIMEOUT=${OPENAI_TIMEOUT:-60}
+      - OPENAI_MAX_RETRIES=${OPENAI_MAX_RETRIES:-3}
+      # OCR
+      - OCR_LANG=${OCR_LANG:-eng}
+      - OCR_PSM=${OCR_PSM:-3}
+      # FILES (absolute in-container)
+      - FILES_ROOT=/app/files
+      - UPLOAD_DIR=/app/files/uploaded_files
+      - PROCESSED_DIR=/app/files/processed_files
+      - BATCH_DIR=/app/files/batch_files
+      - MAX_FILE_SIZE=${MAX_FILE_SIZE:-52428800}
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
     depends_on:
       - redis
-    
-    # --------------------------------------------------------------------------
-    # Runtime Configuration
-    # --------------------------------------------------------------------------
-    # Override default CMD to run with hot-reload for development
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-    
-    # --------------------------------------------------------------------------
-    # Health Check Configuration
-    # --------------------------------------------------------------------------
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/api/health"]     # Health check endpoint
-      interval: 30s          # Check every 30 seconds
-      timeout: 10s           # Timeout after 10 seconds
-      retries: 3             # Retry 3 times before marking unhealthy
-      start_period: 40s      # Wait 40 seconds before first check (allows app startup)
 
-  # ==========================================================================
-  # FRONTEND SERVICE - Next.js React Application
-  # ==========================================================================
-  frontend:
-    # --------------------------------------------------------------------------
-    # Build Configuration
-    # --------------------------------------------------------------------------
-    build:
-      context: ./frontend             # Build context is the frontend directory
-      dockerfile: Dockerfile          # Uses frontend/Dockerfile for build instructions
-    
-    container_name: curatore-frontend # Fixed container name for easy reference
-    
-    # --------------------------------------------------------------------------
-    # Volume Mounts - Development Hot-Reload
-    # --------------------------------------------------------------------------
-    volumes:
-      # Mount entire frontend directory for hot-reload during development
-      - ./frontend:/app
-      
-      # Anonymous volume to prevent node_modules from being overwritten by bind mount
-      # This preserves the container's node_modules while allowing source code changes
-      - /app/node_modules
-    
-    # --------------------------------------------------------------------------
-    # Network Configuration
-    # --------------------------------------------------------------------------
-    ports:
-      - "3000:3000"                   # Expose Next.js dev server on localhost:3000
-    
-    # --------------------------------------------------------------------------
-    # Environment Variables
-    # --------------------------------------------------------------------------
-    environment:
-      # Frontend API configuration - tells the frontend where to find the backend
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
-    
-    # --------------------------------------------------------------------------
-    # Runtime Configuration
-    # --------------------------------------------------------------------------
-    # Run Next.js in development mode with hot-reload
-    command: npm run dev
-    
-    # --------------------------------------------------------------------------
-    # Service Dependencies
-    # --------------------------------------------------------------------------
-    depends_on:
-      - backend               # Ensure backend starts before frontend
-
-  # ==========================================================================
-  # REDIS - Broker and Result backend for Celery
-  # ==========================================================================
-  redis:
-    image: redis:7-alpine
-    container_name: curatore-redis
-    ports:
-      - "6379:6379"
-    command: ["redis-server", "--save", "", "--appendonly", "no"]
-
-  # ==========================================================================
-  # WORKER - Celery worker consuming processing tasks
-  # ==========================================================================
+  # --------------------------------------------------------------------------
+  # WORKER: Celery worker
+  # --------------------------------------------------------------------------
   worker:
     build:
       context: ./backend
@@ -204,103 +63,42 @@ services:
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       - CELERY_DEFAULT_QUEUE=${CELERY_DEFAULT_QUEUE:-processing}
-      - CELERY_ACKS_LATE=${CELERY_ACKS_LATE:-true}
-      - CELERY_PREFETCH_MULTIPLIER=${CELERY_PREFETCH_MULTIPLIER:-1}
-      - CELERY_MAX_TASKS_PER_CHILD=${CELERY_MAX_TASKS_PER_CHILD:-50}
-      - CELERY_TASK_SOFT_TIME_LIMIT=${CELERY_TASK_SOFT_TIME_LIMIT:-600}
-      - CELERY_TASK_TIME_LIMIT=${CELERY_TASK_TIME_LIMIT:-900}
-      - CELERY_RESULT_EXPIRES=${CELERY_RESULT_EXPIRES:-259200}
-      - JOB_LOCK_TTL_SECONDS=${JOB_LOCK_TTL_SECONDS:-3600}
-      - JOB_STATUS_TTL_SECONDS=${JOB_STATUS_TTL_SECONDS:-259200}
-      # Share file paths and LLM settings (workers use the pipeline too)
+      # Share the same storage config
       - FILES_ROOT=/app/files
       - UPLOAD_DIR=/app/files/uploaded_files
       - PROCESSED_DIR=/app/files/processed_files
       - BATCH_DIR=/app/files/batch_files
-      - OPENAI_API_KEY=${OPENAI_API_KEY}
-      - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
-      - OPENAI_BASE_URL=${OPENAI_BASE_URL:-https://api.openai.com/v1}
-      - OPENAI_VERIFY_SSL=${OPENAI_VERIFY_SSL:-true}
-      - OPENAI_TIMEOUT=${OPENAI_TIMEOUT:-60}
-      - OPENAI_MAX_RETRIES=${OPENAI_MAX_RETRIES:-3}
     volumes:
       - ./backend/app:/app/app
       - ./files:/app/files
     depends_on:
       - redis
 
-
-
-  extraction-service:
-    build: ./extraction-service
-    container_name: curatore-extraction
-    env_file:
-      - .env
-    environment:
-      # FastAPI runs on 8010 in-container; host port configurable via env
-      - OCR_LANG=${OCR_LANG}
-      - OCR_PSM=${OCR_PSM}
-      - FILES_ROOT=${FILES_ROOT}
-      - UPLOAD_DIR=${UPLOAD_DIR}
-      - PROCESSED_DIR=${PROCESSED_DIR}
-      - BATCH_DIR=${BATCH_DIR}
-      - MAX_FILE_SIZE=${MAX_FILE_SIZE}
-      - DEBUG=${DEBUG:-false}
-      - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000"]}
-      - CORS_CREDENTIALS=${CORS_CREDENTIALS:-true}
-      - CORS_METHODS=${CORS_METHODS:-["*"]}
-      - CORS_HEADERS=${CORS_HEADERS:-["*"]}
-    volumes:
-      - ./files:/app/files
+  # --------------------------------------------------------------------------
+  # REDIS: Broker/result backend
+  # --------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: curatore-redis
     ports:
-      - "${EXTRACTION_SERVICE_PORT:-8010}:8010"
-    # Intentionally no depends_on to keep it independent from the backend
+      - "6379:6379"
+    command: ["redis-server", "--save", "", "--appendonly", "no"]
 
-
-
-# ==============================================================================
-# ADDITIONAL CONFIGURATION NOTES
-# ==============================================================================
-#
-# File Structure:
-# ├── files/                          # Shared storage (mounted to backend)
-# │   ├── uploaded_files/             # User uploads
-# │   ├── processed_files/            # Converted documents  
-# │   └── batch_files/                # Local files for processing
-# ├── backend/
-# │   └── app/                        # Python source (mounted for hot-reload)
-# └── frontend/                       # Next.js source (mounted for hot-reload)
-#
-# Port Mapping:
-# - Frontend (Next.js):     http://localhost:3000
-# - Backend API:            http://localhost:8000
-# - API Documentation:      http://localhost:8000/docs
-# - Health Check:           http://localhost:8000/api/health
-#
-# Development Features:
-# - Hot-reload for both frontend and backend
-# - Persistent file storage across container restarts
-# - Health monitoring for backend service
-# - Isolated node_modules to prevent conflicts
-#
-# Production Notes:
-# - For production, use docker-compose.prod.yml
-# - Remove --reload from uvicorn command
-# - Use next build && next start for frontend
-# - Consider using named volumes instead of bind mounts
-# - Add proper logging configuration
-# - Configure reverse proxy (nginx) for SSL termination
-#
-# Environment Configuration:
-# - Copy .env.example to .env and configure your settings
-# - Most settings have sensible defaults for development
-# - OPENAI_API_KEY is required for LLM features
-# - OCR settings control Tesseract behavior
-# - Quality thresholds determine RAG readiness criteria
-#
-# Troubleshooting:
-# - If ports are in use: docker-compose down && docker-compose up
-# - If volumes are corrupted: docker-compose down -v
-# - If builds fail: docker-compose build --no-cache
-# - For logs: docker-compose logs -f [service_name]
-# ==============================================================================
+  # --------------------------------------------------------------------------
+  # FRONTEND: Next.js app
+  # --------------------------------------------------------------------------
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: curatore-frontend
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    environment:
+      - NEXT_PUBLIC_API_URL=http://localhost:8000
+    command: npm run dev
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend

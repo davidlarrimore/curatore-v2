@@ -1,101 +1,37 @@
-# -------------------------
-# Node / Next.js
-# -------------------------
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-.pnpm-debug.log*
-.next/
-out/
-dist/
-.cache/
-*.tsbuildinfo
+# ============================================================================
+# Curatore v2 - Git Ignore
+# ============================================================================
 
-# Tailwind CSS build artifacts
-*.css.map
-
-# Local env
-.env
-.env.local
-.env.development.local
-.env.test.local
-.env.production.local
-
-# -------------------------
-# Python / FastAPI
-# -------------------------
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
 *.pyd
-*.so
-*.egg
 *.egg-info/
 .eggs/
-*.manifest
-*.spec
-*.lock
-.Python
-venv/
-env/
-.venv/
-ENV/
-build/
-develop-eggs/
-dist/
-backend/downloads/
-backend/lib/
-lib64/
-parts/
-sdist/
-var/
-pip-wheel-metadata/
-share/python-wheels/
-.python-version
+.env
 
-# -------------------------
-# Docker
-# -------------------------
-# Ignore all local volumes
-docker-compose.override.yml
-.docker/
-.docker-compose/
-*.pid
-*.log
-*.bak
+# Node
+node_modules/
+.next/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
 
-# -------------------------
-# macOS / System / Editors
-# -------------------------
+# OS
 .DS_Store
-.AppleDouble
-.LSOverride
 Thumbs.db
-ehthumbs.db
-Desktop.ini
-Icon?
-.idea/
-.vscode/
-*.swp
-*.swo
-*.swn
-*.swo
-*.~lock.*
 
-# -------------------------
-# Curatore v2 File Storage - FIXED: Single location
-# -------------------------
-# Only ignore files in the root-level files directory
+# Docker
+*.log
+
+# Project storage (keep structure, ignore contents)
+#/files is the authoritative storage root
 /files/uploaded_files/*
-/files/batch_files/*
 /files/processed_files/*
+/files/batch_files/*
 
-# Keep the directory structure but ignore contents
+# Keep directory markers
 !/files/uploaded_files/.gitkeep
-!/files/batch_files/.gitkeep
 !/files/processed_files/.gitkeep
-
-
-temp.sh
+!/files/batch_files/.gitkeep

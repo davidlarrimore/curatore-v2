@@ -1,514 +1,256 @@
 # ============================================================================
-# backend/app/services/document_service.py
+# Curatore v2 - Document Service
 # ============================================================================
-# Curatore v2 Document Service (extraction moved to external service)
 #
-# This version:
-#   - Uses external Extraction Service for all conversion/OCR.
-#   - conversion_feedback is a STRING (per model schema).
-#   - Always includes word_count, char_count, processing_time in ConversionResult.
-#   - Provides clear_all_files() for /system/reset and a private
-#     _ensure_directories() helper (some routers call it directly).
-#   - IMPORTANT: clear_all_files() preserves batch_dir (does NOT delete batch files).
+# Responsibilities:
+#   - Enforce canonical file layout via app.config.settings
+#   - Handle uploads, listings, lookups
+#   - Convert to Markdown (with graceful fallbacks)
+#   - Save processed output into processed_files
+#
+# Canonical directories (inside the container):
+#   /app/files/uploaded_files
+#   /app/files/processed_files
+#   /app/files/batch_files
+#
+# IMPORTANT:
+# - Do not hardcode relative paths like "uploads" or "processed".
+# - Use settings.*_path for all filesystem activity.
+# - We create uploaded_files and processed_files if missing.
+#   batch_files is operator-managed and may be just a bind mount.
 # ============================================================================
 
-from __future__ import annotations
-
-import json
-import shutil
 import time
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
-from typing import List, Optional, Tuple
+from typing import Dict, List, Optional, Tuple, Any
 
-from ..config import settings
-from ..models import (
-    ConversionResult,
-    LLMEvaluation,
-    ProcessingOptions,
-    ProcessingResult,
-    ProcessingStatus,
-    QualityThresholds,
-)
-from .llm_service import llm_service
-from .storage_service import storage_service
-from .zip_service import zip_service  # unchanged; used by routers
-from .extraction_client import extraction_client, ExtractionError
+from app.config import settings
+
+# Optional conversion engine (MarkItDown)
+try:
+    from markitdown import MarkItDown
+    _MD = MarkItDown(enable_plugins=False)
+except Exception:
+    _MD = None
+
+# Models (minimal typing to avoid import cycles)
+from app.models import ProcessingResult  # adjust if your models are split
+from app.models import ProcessingStatus, ProcessingOptions  # enums/data classes
 
 
 SUPPORTED_EXTENSIONS = {
-    ".pdf",
-    ".doc",
-    ".docx",
-    ".ppt",
-    ".pptx",
-    ".xls",
-    ".xlsx",
-    ".txt",
-    ".md",
-    ".rtf",
-    ".html",
-    ".htm",
-    ".csv",
-    ".png",
-    ".jpg",
-    ".jpeg",
-    ".tif",
-    ".tiff",
-    ".bmp",
+    ".pdf", ".docx", ".txt", ".md",
+    ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"
 }
 
 
+@dataclass
+class ConversionResult:
+    conversion_score: int
+    conversion_note: str = ""
+
+
 class DocumentService:
-    """Main service coordinating file I/O, extraction, scoring, and LLM steps."""
+    """
+    Core document processing and storage helper.
+
+    Public API:
+        - save_uploaded_file(filename, content) -> (document_id, path)
+        - list_uploaded_files() -> [str]
+        - list_batch_files() -> [str]
+        - find_uploaded_file(document_id) -> Path | None
+        - find_batch_file(filename) -> Path | None
+        - process_document(document_id, file_path, options) -> ProcessingResult
+    """
 
     def __init__(self) -> None:
-        self.upload_dir = Path(settings.upload_dir).resolve()
-        self.processed_dir = Path(settings.processed_dir).resolve()
-        self.batch_dir = Path(settings.batch_dir).resolve()
-        self._ensure_directories()
+        # Ensure canonical directories exist (except batch_files)
+        settings.upload_path.mkdir(parents=True, exist_ok=True)
+        settings.processed_path.mkdir(parents=True, exist_ok=True)
+        # We do NOT create batch_path; it’s managed externally (bind-mounted)
 
-    # ------------------------------- Helpers ---------------------------------
+        print("[DocumentService] Using directories:")
+        print(f"  uploads   -> {settings.upload_path}")
+        print(f"  processed -> {settings.processed_path}")
+        print(f"  batch     -> {settings.batch_path} (operator-managed)")
 
-    def _ensure_directories(self) -> None:
-        """Ensure upload/processed/batch directories exist (idempotent)."""
-        self.upload_dir.mkdir(parents=True, exist_ok=True)
-        self.processed_dir.mkdir(parents=True, exist_ok=True)
-        self.batch_dir.mkdir(parents=True, exist_ok=True)
-
-    # ------------------------------------------------------------------ IO/FS --
-
-    def is_supported_file(self, filename: str) -> bool:
-        return Path(filename).suffix.lower() in SUPPORTED_EXTENSIONS
+    # ------------------- Listing -------------------
 
     def get_supported_extensions(self) -> List[str]:
         return sorted(SUPPORTED_EXTENSIONS)
 
-    def _safe_document_id(self, filename: str) -> str:
-        base = Path(filename).name.replace(" ", "_")
-        return f"{int(time.time() * 1000)}_{base}"
+    def list_uploaded_files(self) -> List[str]:
+        return sorted(p.name for p in settings.upload_path.glob("*") if p.is_file())
+
+    def list_batch_files(self) -> List[str]:
+        if not settings.batch_path.exists():
+            return []
+        return sorted(p.name for p in settings.batch_path.glob("*") if p.is_file())
+
+    # ------------------- Upload & Lookup -------------------
 
     async def save_uploaded_file(self, filename: str, content: bytes) -> Tuple[str, Path]:
         """
-        Persist an uploaded file to UPLOAD_DIR.
-
-        Returns (document_id, file_path).
+        Persist an upload into /app/files/uploaded_files with a UUID prefix.
+        Returns (document_id, absolute_path).
         """
-        if not self.is_supported_file(filename):
-            raise ValueError(f"Unsupported file type for: {filename}")
+        document_id = str(uuid.uuid4())
 
-        document_id = self._safe_document_id(filename)
-        dest = self.upload_dir / f"{document_id}"
-        dest.write_bytes(content)
-        return document_id, dest
+        # sanitize filename (naive but effective)
+        safe = filename.replace("../", "").replace("..\\", "")
+        safe = safe.replace("/", "_").replace("\\", "_")
 
-    def list_uploaded_files(self) -> List[dict]:
-        items = []
-        for p in sorted(self.upload_dir.iterdir()):
-            if p.is_file():
-                items.append(
-                    {
-                        "document_id": p.name,
-                        "filename": p.name.split("_", 1)[-1],
-                        "size": p.stat().st_size,
-                        "created_at": int(p.stat().st_mtime),
-                    }
-                )
-        return items
+        out_path = settings.upload_path / f"{document_id}_{safe}"
+        out_path.write_bytes(content)
+        return document_id, out_path
 
-    def list_batch_files(self) -> List[dict]:
-        items = []
-        for p in sorted(self.batch_dir.glob("*.json")):
-            items.append(
-                {
-                    "filename": p.name,
-                    "size": p.stat().st_size,
-                    "created_at": int(p.stat().st_mtime),
-                }
-            )
-        return items
+    def find_uploaded_file(self, document_id: str) -> Optional[Path]:
+        """Find the uploaded file by its UUID prefix."""
+        for p in settings.upload_path.glob(f"{document_id}_*"):
+            if p.is_file() and p.suffix.lower() in SUPPORTED_EXTENSIONS:
+                return p
+        # Legacy fallback: {name}_{uuid}.{ext}
+        for p in settings.upload_path.glob("*"):
+            if p.is_file() and p.stem.endswith(f"_{document_id}"):
+                return p
+        return None
 
     def find_batch_file(self, filename: str) -> Optional[Path]:
-        fp = self.batch_dir / filename
-        return fp if fp.exists() else None
+        """Locate a file inside /app/files/batch_files by exact filename."""
+        candidate = settings.batch_path / filename
+        return candidate if candidate.exists() and candidate.is_file() else None
 
-    def _find_document_file(self, document_id: str) -> Optional[Path]:
-        fp = self.upload_dir / document_id
-        return fp if fp.exists() else None
+    # ------------------- Processing -------------------
 
-    # ----------------------------------------------------------- Core pipeline --
-
-    async def _extract_to_markdown(self, file_path: Path) -> str:
+    def _convert_to_markdown(self, file_path: Path) -> Tuple[Optional[str], ConversionResult]:
         """
-        Call the external extraction service and return Markdown text.
+        Convert input file to Markdown using MarkItDown where available.
+        Falls back to passthrough for .txt/.md when MarkItDown isn't present.
         """
         try:
-            md = await extraction_client.extract_markdown(
-                file_path=file_path,
-                original_filename=file_path.name.split("_", 1)[-1],
-                mime_type=None,
-                extra_params=None,
-            )
-            return md
-        except ExtractionError as e:
-            raise RuntimeError(f"Extraction service failed: {e}") from e
+            if _MD:
+                md = _MD.convert(file_path.as_posix()).text_content  # type: ignore[attr-defined]
+            else:
+                if file_path.suffix.lower() in {".md", ".txt"}:
+                    md = file_path.read_text(encoding="utf-8", errors="ignore")
+                else:
+                    raise RuntimeError("Conversion engine unavailable")
+            score = 80 if md and md.strip() else 0
+            return md, ConversionResult(conversion_score=score, conversion_note="Converted to Markdown")
+        except Exception as e:
+            return None, ConversionResult(conversion_score=0, conversion_note=f"Conversion failed: {e}")
 
-    def _score_conversion(self, markdown_text: str) -> Tuple[int, str]:
-        """
-        Heuristic scoring of conversion quality (0-100) with human feedback (string).
-        Deterministic and cheap; complements LLM eval.
-        """
-        feedback_parts: List[str] = []
-        score = 0
-
-        text = markdown_text.strip()
-
-        if not text:
-            return 0, "No content extracted"
-
-        # Simple structure heuristics
-        headings = sum(1 for line in text.splitlines() if line.lstrip().startswith("#"))
-        bullets = sum(1 for line in text.splitlines() if line.lstrip().startswith(("-", "*")))
-        tables = text.count("|")
-
-        length = len(text)
-        if length > 400:
-            score += 25
-        elif length > 120:
-            score += 15
-        else:
-            feedback_parts.append("Content very short; may be incomplete")
-
-        if headings >= 2:
-            score += 25
-        elif headings == 1:
-            score += 15
-            feedback_parts.append("Limited heading structure detected")
-        else:
-            feedback_parts.append("No headings detected")
-
-        if bullets >= 3:
-            score += 15
-        elif bullets > 0:
-            score += 8
-            feedback_parts.append("Few list items detected")
-        else:
-            feedback_parts.append("No lists detected")
-
-        if "�" in text:
-            feedback_parts.append("Encoding artifacts detected")
-            score -= 10
-
-        score = max(0, min(100, score))
-        if not feedback_parts:
-            feedback_parts.append("Conversion looks structurally sound")
-
-        return score, " | ".join(feedback_parts)
-
-    def _stats(self, text: str) -> tuple[int, int]:
-        """
-        Return (word_count, char_count) for a given text.
-        """
-        s = text or ""
-        words = [w for w in s.split() if w]
-        return len(words), len(s)
-
-    def _meets_thresholds(
-        self,
-        conversion_score: int,
-        llm_eval: Optional[LLMEvaluation],
-        thresholds: QualityThresholds,
-    ) -> bool:
-        """
-        Check conversion score + optional LLM eval against configured thresholds.
-        """
-        if conversion_score < thresholds.conversion_threshold:
-            return False
-        if not llm_eval:
-            return True
-        return (
-            llm_eval.clarity_score >= thresholds.clarity_threshold
-            and llm_eval.completeness_score >= thresholds.completeness_threshold
-            and llm_eval.relevance_score >= thresholds.relevance_threshold
-            and llm_eval.markdown_score >= thresholds.markdown_threshold
-        )
+    def _passes_thresholds(self, conv_score: int, thresholds: Dict[str, int]) -> bool:
+        return conv_score >= int(thresholds.get("conversion", 70))
 
     async def process_document(
         self,
         document_id: str,
         file_path: Path,
         options: ProcessingOptions,
-    ) -> Optional[ProcessingResult]:
+    ) -> ProcessingResult:
         """
-        Full pipeline for a single document:
-          1) Extraction service -> Markdown
-          2) Heuristic conversion score
-          3) Optional LLM evaluation
-          4) Optional vector optimization (via LLM)
-          5) Save processed .md and return ProcessingResult
-        """
-        started = time.time()
+        Convert the file to Markdown and save the output into processed_files.
 
-        if not file_path.exists():
-            return None
+        Output naming: {original_stem}_{document_id}.md
+        """
+        start = time.time()
+        filename = file_path.name
 
         try:
-            # 1) Extract
-            markdown = await self._extract_to_markdown(file_path)
+            # Step 1: Convert
+            markdown, conv = self._convert_to_markdown(file_path)
+            if not markdown:
+                return ProcessingResult(
+                    document_id=document_id,
+                    filename=filename,
+                    status=ProcessingStatus.FAILED,
+                    success=False,
+                    message=conv.conversion_note,
+                    original_path=str(file_path),
+                    processing_time=time.time() - start,
+                    thresholds_used=options.quality_thresholds,
+                )
 
-            # 2) Score
-            score, feedback = self._score_conversion(markdown)
-
-            # 3) LLM evaluation (optional)
-            llm_eval: Optional[LLMEvaluation] = None
-            if options.run_llm_evaluation and llm_service.is_available:
-                llm_eval = await llm_service.evaluate_document(markdown)
-
-            # 4) Vector optimization (optional)
+            # Step 2: Optional vector optimization via LLM (best-effort)
             vector_optimized = False
-            final_content = markdown
-            if options.apply_vector_optimization and llm_service.is_available:
-                final_content = await llm_service.optimize_for_vector_db(markdown)
-                vector_optimized = True
+            try:
+                from app.services.llm_service import llm_service  # lazy import
+                if getattr(options, "auto_optimize", False) and llm_service.is_available:
+                    optimized = await llm_service.optimize_for_vector_db(markdown)
+                    if optimized and optimized.strip():
+                        markdown = optimized
+                        vector_optimized = True
+                        conv.conversion_note = "Vector-optimized. " + conv.conversion_note
+            except Exception as e:
+                conv.conversion_note = f"Optimization skipped/failed ({str(e)[:60]}...). " + conv.conversion_note
 
-            # 5) Persist processed markdown
-            processed_path = self.processed_dir / f"{int(time.time())}_{document_id}.md"
-            processed_path.write_text(final_content, encoding="utf-8")
+            # Step 3: Write output
+            out_path = settings.processed_path / f"{file_path.stem}_{document_id}.md"
+            out_path.write_text(markdown, encoding="utf-8")
 
-            elapsed = time.time() - started
-            wc, cc = self._stats(final_content)
+            # Step 4: Optional LLM evaluation (do not fail the pipeline on error)
+            llm_eval = None
+            try:
+                from app.services.llm_service import llm_service  # lazy import
+                if llm_service.is_available:
+                    llm_eval = await llm_service.evaluate_document(markdown)
+            except Exception:
+                llm_eval = None
 
-            passes_thresholds = self._meets_thresholds(
-                conversion_score=score,
-                llm_eval=llm_eval,
-                thresholds=options.quality_thresholds,
-            )
+            # Step 5: Thresholds
+            passes = self._passes_thresholds(conv.conversion_score, options.quality_thresholds)
 
-            result = ProcessingResult(
+            return ProcessingResult(
                 document_id=document_id,
-                filename=file_path.name.split("_", 1)[-1],
+                filename=filename,
                 status=ProcessingStatus.COMPLETED,
                 success=True,
                 original_path=str(file_path),
-                markdown_path=str(processed_path),
-                conversion_result=ConversionResult(
-                    success=True,
-                    markdown_content=final_content,
-                    conversion_score=score,
-                    conversion_feedback=feedback,  # STRING
-                    conversion_note="Extracted via external extraction service",
-                    word_count=wc,
-                    char_count=cc,
-                    processing_time=elapsed,
-                ),
+                markdown_path=str(out_path),
+                conversion_result=conv,
                 llm_evaluation=llm_eval,
+                conversion_score=conv.conversion_score,
+                pass_all_thresholds=passes,
                 vector_optimized=vector_optimized,
-                pass_all_thresholds=passes_thresholds,
-                processing_time=elapsed,
+                processing_time=time.time() - start,
                 processed_at=time.time(),
                 thresholds_used=options.quality_thresholds,
             )
-
-            storage_service.save_result(document_id, result)
-            return result
 
         except Exception as e:
-            elapsed = time.time() - started
-            err_path = self.processed_dir / f"error_{document_id}.txt"
-            err_path.write_text(f"{type(e).__name__}: {e}", encoding="utf-8")
-
-            # On failure, ensure required fields exist and types are correct
-            result = ProcessingResult(
+            return ProcessingResult(
                 document_id=document_id,
-                filename=file_path.name.split("_", 1)[-1],
+                filename=filename,
                 status=ProcessingStatus.FAILED,
                 success=False,
+                message=f"Processing error: {e}",
                 original_path=str(file_path),
-                markdown_path=str(err_path),
-                conversion_result=ConversionResult(
-                    success=False,
-                    markdown_content="",
-                    conversion_score=0,
-                    conversion_feedback=f"Processing error: {e}",  # STRING
-                    conversion_note="Extraction failed",
-                    word_count=0,
-                    char_count=0,
-                    processing_time=elapsed,
-                ),
-                llm_evaluation=None,
-                vector_optimized=False,
-                pass_all_thresholds=False,
-                processing_time=elapsed,
-                processed_at=time.time(),
+                processing_time=time.time() - start,
                 thresholds_used=options.quality_thresholds,
             )
-            storage_service.save_result(document_id, result)
-            return result
 
-    async def process_batch(
-        self,
-        job_id: str,
-        filenames: List[str],
-        options: ProcessingOptions,
-    ) -> dict:
-        """
-        Process a list of uploaded document_ids (filenames are document_ids in upload_dir)
-        Returns a summary dictionary.
-        """
-        results: List[ProcessingResult] = []
-        for document_id in filenames:
-            src = self._find_document_file(document_id)
-            if not src:
-                continue
-            res = await self.process_document(document_id, src, options)
-            if res:
-                results.append(res)
+    # ------------------- Dev helpers -------------------
 
-        storage_service.save_batch(job_id, results)
-
-        ok = sum(1 for r in results if r.success)
-        failed = sum(1 for r in results if not r.success)
-        rag_ready = sum(1 for r in results if r.pass_all_thresholds)
-
-        summary = {
-            "job_id": job_id,
-            "total": len(results),
-            "succeeded": ok,
-            "failed": failed,
-            "rag_ready": rag_ready,
-            "results": [r.model_dump() for r in results],
-        }
-        (self.batch_dir / f"{job_id}.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
-        return summary
-
-    def get_processed_content(self, document_id: str) -> Optional[str]:
-        """
-        Return the last processed markdown content for a document_id from disk.
-        """
-        for p in sorted(self.processed_dir.glob(f"*_{document_id}.md"), reverse=True):
+    def clear_all_files(self) -> None:
+        """Dangerous: DEBUG/dev only. Clears uploaded/processed files."""
+        if not settings.debug:
+            return
+        for p in settings.upload_path.glob("*"):
             try:
-                return p.read_text(encoding="utf-8")
+                if p.is_file():
+                    p.unlink()
             except Exception:
-                continue
-        return None
-
-    async def update_document_content(
-        self,
-        document_id: str,
-        content: str,
-        options: ProcessingOptions,
-        improvement_prompt: Optional[Optional[str]] = None,
-        apply_vector_optimization: bool = False,
-    ) -> Optional[ProcessingResult]:
-        """
-        Replace processed content with a new body (optionally LLM-improved),
-        re-score and (optionally) re-evaluate.
-        """
-        processed_path: Optional[Path] = None
-        for p in sorted(self.processed_dir.glob(f"*_{document_id}.md"), reverse=True):
-            processed_path = p
-            break
-        if not processed_path:
-            return None
-
-        final_content = content
-
-        if improvement_prompt and llm_service.is_available:
-            final_content = await llm_service.improve_document(final_content, improvement_prompt)
-        elif apply_vector_optimization and llm_service.is_available:
-            final_content = await llm_service.optimize_for_vector_db(final_content)
-
-        processed_path.write_text(final_content, encoding="utf-8")
-
-        score, feedback = self._score_conversion(final_content)
-        llm_eval: Optional[LLMEvaluation] = None
-        if options.run_llm_evaluation and llm_service.is_available:
-            llm_eval = await llm_service.evaluate_document(final_content)
-
-        passes = self._meets_thresholds(score, llm_eval, options.quality_thresholds)
-        original_file = self._find_document_file(document_id)
-        wc, cc = self._stats(final_content)
-
-        updated = ProcessingResult(
-            document_id=document_id,
-            filename=(original_file.name.split("_", 1)[-1] if original_file else processed_path.stem),
-            status=ProcessingStatus.COMPLETED,
-            success=True,
-            original_path=str(original_file) if original_file else None,
-            markdown_path=str(processed_path),
-            conversion_result=ConversionResult(
-                success=True,
-                markdown_content=final_content,
-                conversion_score=score,
-                conversion_feedback=feedback,  # STRING
-                conversion_note="Content updated by user/LLM",
-                word_count=wc,
-                char_count=cc,
-                processing_time=0.0,  # update path is quick; keep simple
-            ),
-            llm_evaluation=llm_eval,
-            vector_optimized=apply_vector_optimization,
-            pass_all_thresholds=passes,
-            processing_time=0.0,
-            processed_at=time.time(),
-            thresholds_used=options.quality_thresholds,
-        )
-
-        storage_service.save_result(document_id, updated)
-        return updated
-
-    # -------------------------------------------------------------- Reset/GC --
-
-    def clear_all_files(self) -> dict:
-        """
-        Remove all uploaded and processed files on disk, preserve batch files,
-        and clear in-memory stores (if supported by storage_service).
-        Returns a summary counts dict for logging/UI.
-        """
-        def _wipe_dir(p: Path) -> int:
-            count = 0
-            if p.exists():
-                for child in p.iterdir():
-                    try:
-                        if child.is_file() or child.is_symlink():
-                            child.unlink(missing_ok=True)
-                            count += 1
-                        elif child.is_dir():
-                            shutil.rmtree(child, ignore_errors=True)
-                            count += 1
-                    except Exception:
-                        # best-effort; keep going
-                        pass
-            p.mkdir(parents=True, exist_ok=True)
-            return count
-
-        deleted_uploads = _wipe_dir(self.upload_dir)
-        deleted_processed = _wipe_dir(self.processed_dir)
-
-        # IMPORTANT: do NOT delete batch_dir contents
-        deleted_batches = 0  # keep response shape stable
-
-        # Try to clear any in-memory caches in storage_service
-        cleared_memory = False
-        for attr in ("clear_all", "clear", "reset"):
-            fn = getattr(storage_service, attr, None)
-            if callable(fn):
-                try:
-                    fn()
-                    cleared_memory = True
-                    break
-                except Exception:
-                    pass
-
-        # Recreate dirs as safety (batch already preserved)
-        self._ensure_directories()
-
-        return {
-            "deleted_uploads": deleted_uploads,
-            "deleted_processed": deleted_processed,
-            "deleted_batches": deleted_batches,
-            "cleared_memory": cleared_memory,
-        }
+                pass
+        for p in settings.processed_path.glob("*"):
+            try:
+                if p.is_file():
+                    p.unlink()
+            except Exception:
+                pass
 
 
-# Global instance preserved for router imports
+# Singleton instance
 document_service = DocumentService()
