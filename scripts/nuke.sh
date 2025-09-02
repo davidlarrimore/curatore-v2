@@ -6,7 +6,7 @@
 #  1) Confirms destructive reset (use --yes to skip prompt).
 #  2) Verifies Docker/Compose availability.
 #  3) Stops & removes containers, volumes, and orphans.
-#  4) Cleans local caches (Python/Node) and project artifacts.
+#  4) Cleans local caches (Python/Node), virtualenvs, and project artifacts.
 #  5) Resets ./files content but preserves directory structure & .gitkeep.
 #  6) Optionally prunes dangling images (--prune-images).
 #  7) Re-creates storage structure (setup-directories.sh).
@@ -94,6 +94,12 @@ echo "🧽 Cleaning local caches and artifacts..."
 # Python caches
 find "${REPO_ROOT}" -type d -name "__pycache__" -prune -exec rm -rf {} + || true
 find "${REPO_ROOT}" -type d -name ".pytest_cache" -prune -exec rm -rf {} + || true
+# Python virtual environments
+rm -rf "${REPO_ROOT}/.venv" || true
+rm -rf "${REPO_ROOT}/backend/.venv" || true
+rm -rf "${REPO_ROOT}/extraction-service/.venv" || true
+# Catch any others nested in submodules/packages
+find "${REPO_ROOT}" -type d -name ".venv" -prune -exec rm -rf {} + || true
 # Node caches
 rm -rf "${REPO_ROOT}/frontend/node_modules" || true
 rm -rf "${REPO_ROOT}/frontend/.next" || true

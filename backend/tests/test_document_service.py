@@ -7,8 +7,8 @@ from pathlib import Path
 from unittest.mock import patch, Mock
 from datetime import datetime
 
-from backend.app.services.document_service import DocumentService
-from backend.app.models import FileInfo
+from app.services.document_service import DocumentService
+from app.models import FileInfo
 
 
 class TestDocumentServiceFileListFix:
@@ -23,7 +23,7 @@ class TestDocumentServiceFileListFix:
     @pytest.fixture
     def document_service(self, temp_dir):
         """Create a document service instance with temporary directories."""
-        with patch('backend.app.services.document_service.settings') as mock_settings:
+        with patch('app.services.document_service.settings') as mock_settings:
             # Mock settings to use our temporary directory
             mock_settings.files_root = str(temp_dir)
             mock_settings.upload_dir = "uploaded_files"

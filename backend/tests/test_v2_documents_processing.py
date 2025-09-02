@@ -10,7 +10,7 @@ from datetime import datetime
 from app.main import app
 from app.services.document_service import document_service
 from app.services.storage_service import storage_service
-from app.core.models import ProcessingResult, ConversionResult, LLMEvaluationResult
+from app.models import ProcessingResult, ConversionResult, LLMEvaluation as LLMEvaluationResult
 
 
 class TestV2DocumentsProcessingEndpoint:
@@ -103,10 +103,13 @@ class TestV2DocumentsProcessingEndpoint:
         response = client.post(
             "/api/v2/documents/test-doc-123/process",
             json={
-                "auto_optimize": True,
+                # ProcessingOptions fields (domain model)
+                "auto_improve": True,
+                "vector_optimize": True,
                 "quality_thresholds": {
-                    "conversion": 75,
-                    "clarity": 7
+                    # QualityThresholds fields (domain model)
+                    "conversion_quality": 75,
+                    "clarity_score": 7
                 }
             }
         )
@@ -131,7 +134,7 @@ class TestV2DocumentsProcessingEndpoint:
         """Test processing request for nonexistent document."""
         # Setup: no file found in either location
         mock_doc_service.find_uploaded_file.return_value = None
-        mock_doc_service.find_batch_file.return_value = None
+        mock_doc_service.find_batch_file_by_document_id.return_value = None
         
         response = client.post("/api/v2/documents/nonexistent/process")
         
@@ -212,7 +215,7 @@ class TestV2DocumentsProcessingEndpoint:
         """Test that processing finds file in batch_files directory when not in uploads."""
         # Setup: not in uploads, but in batch_files
         mock_doc_service.find_uploaded_file.return_value = None
-        mock_doc_service.find_batch_file.return_value = mock_document_file
+        mock_doc_service.find_batch_file_by_document_id.return_value = mock_document_file
         
         with patch('app.api.v2.routers.documents.process_document_task') as mock_task, \
              patch('app.api.v2.routers.documents.set_active_job', return_value=True), \
@@ -251,18 +254,21 @@ class TestV2DocumentsProcessingEndpoint:
             
             # Test with complex processing options
             processing_options = {
-                "auto_optimize": True,
+                # Match app.models.ProcessingOptions
+                "auto_improve": True,
+                "vector_optimize": True,
                 "quality_thresholds": {
-                    "conversion": 80,
-                    "clarity": 8,
-                    "completeness": 7,
-                    "relevance": 8,
-                    "markdown": 9
+                    "conversion_quality": 80,
+                    "clarity_score": 8,
+                    "completeness_score": 7,
+                    "relevance_score": 8,
+                    "markdown_quality": 9
                 },
                 "ocr_settings": {
-                    "language": "en",
+                    "language": "eng",
                     "psm": 6
                 },
+                # Router accepts options; extra testing field is ignored in domain model
                 "llm_prompt_override": "Custom analysis prompt"
             }
             
@@ -280,8 +286,10 @@ class TestV2DocumentsProcessingEndpoint:
             # Check that document_id and options were passed correctly
             assert call_args[1]['args'][0] == "test-options"  # document_id
             passed_options = call_args[1]['args'][1]  # options dict
-            assert passed_options["auto_optimize"] is True
-            assert passed_options["quality_thresholds"]["conversion"] == 80
+            assert passed_options["auto_improve"] is True
+            assert passed_options["vector_optimize"] is True
+            assert passed_options["quality_thresholds"]["conversion_quality"] == 80
+            # Extra field is forwarded as part of options dict
             assert passed_options["llm_prompt_override"] == "Custom analysis prompt"
 
 

@@ -240,16 +240,17 @@ async def process_document(
     # Enqueue Celery task
     opts = (options.model_dump() if options else {})
     async_result = process_document_task.apply_async(
-        args=[document_id, opts],
+        kwargs={
+            "document_id": document_id,
+            "options": opts,
+            # Optional direct path to avoid re-resolve in worker
+            "file_path": str(file_path)
+        },
         queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
     )
     
     # Acquire per-document lock with real job id; if it fails, revoke and return 409
-    ttl_raw = os.getenv("JOB_LOCK_TTL_SECONDS", "3600")
-    try:
-        ttl = int(ttl_raw)
-    except Exception:
-        ttl = 3600
+    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
     if not set_active_job(document_id, async_result.id, ttl):
         try:
             from ....celery_app import celery_app
