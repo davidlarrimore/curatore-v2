@@ -3,7 +3,7 @@
 
 /*
   Notes:
-  - Targets API v1 paths by default. Adjust `API_PATH_VERSION` to switch.
+  - Targets API v2 paths by default. Adjust `API_PATH_VERSION` to switch.
   - Reads backend base from `NEXT_PUBLIC_API_URL` with a sensible default.
   - Wraps fetch with minimal error handling and exposes typed-ish helpers.
 */
@@ -104,6 +104,11 @@ export const fileApi = {
   async downloadDocument(documentId: string): Promise<Blob> {
     const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/download`))
     return handleBlob(res)
+  },
+
+  async deleteDocument(documentId: string): Promise<{ success: boolean; message?: string }> {
+    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}`), { method: 'DELETE' })
+    return handleJson(res)
   },
 
   async downloadBulkDocuments(
@@ -212,26 +217,31 @@ export const contentApi = {
     documentId: string,
     content: string,
   ): Promise<{ job_id: string; document_id: string; status: string; enqueued_at?: string }> {
-    const body = { content }
     const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/content`), {
       method: 'PUT',
       headers: jsonHeaders,
-      body: JSON.stringify(body),
+      body: JSON.stringify({ content }),
     })
     return handleJson(res)
   },
 }
 
-// -------------------- Utilities --------------------
+// -------------------- Utility Functions --------------------
 export const utils = {
-  generateTimestamp(): string {
-    const d = new Date()
-    const pad = (n: number, l = 2) => n.toString().padStart(l, '0')
-    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
-  },
+  /**
+   * Map v2 API response to frontend ProcessingResult type
+   */
+  mapV2ResultToFrontend: mapV2ResultToFrontend,
 
-  downloadBlob(blob: Blob, filename: string) {
-    if (typeof window === 'undefined') return
+  /**
+   * Map frontend options to v2 API format
+   */
+  mapOptionsToV2: mapOptionsToV2,
+
+  /**
+   * Create a download link for a blob and trigger download
+   */
+  downloadBlob(blob: Blob, filename: string): void {
     const url = URL.createObjectURL(blob)
     const a = document.createElement('a')
     a.href = url
@@ -242,6 +252,75 @@ export const utils = {
     URL.revokeObjectURL(url)
   },
 
+  /**
+   * Format file size for display
+   */
+  formatFileSize(bytes: number): string {
+    if (bytes === 0) return '0 Bytes'
+    const k = 1024
+    const sizes = ['Bytes', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(k))
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i]
+  },
+
+  /**
+   * Format processing time for display
+   */
+  formatProcessingTime(seconds: number): string {
+    if (seconds < 60) return `${seconds.toFixed(1)}s`
+    const minutes = Math.floor(seconds / 60)
+    const remainingSeconds = seconds % 60
+    return `${minutes}m ${remainingSeconds.toFixed(1)}s`
+  },
+
+  /**
+   * Get score color based on threshold
+   */
+  getScoreColor(score: number, threshold: number): string {
+    if (score >= threshold) return 'text-green-600'
+    if (score >= threshold * 0.8) return 'text-yellow-600'
+    return 'text-red-600'
+  },
+
+  /**
+   * Format score with appropriate precision
+   */
+  formatScore(score: number, isPercentage: boolean = false): string {
+    if (isPercentage) return `${score.toFixed(1)}%`
+    return score.toFixed(1)
+  },
+
+  /**
+   * Calculate statistics from processing results
+   */
+  calculateStats(results: ProcessingResult[]) {
+    const total = results.length
+    const successful = results.filter(r => r.success).length
+    const failed = total - successful
+    const ragReady = results.filter(r => r.pass_all_thresholds).length
+    const optimized = results.filter(r => r.vector_optimized).length
+    
+    return { 
+      total, 
+      successful, 
+      failed, 
+      ragReady, 
+      optimized 
+    }
+  },
+
+  /**
+   * Generate timestamp string for filenames
+   */
+  generateTimestamp(): string {
+    const d = new Date()
+    const pad = (n: number, l = 2) => n.toString().padStart(l, '0')
+    return `${d.getFullYear()}${pad(d.getMonth() + 1)}${pad(d.getDate())}_${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}`
+  },
+
+  /**
+   * Format duration in human readable format
+   */
   formatDuration(seconds: number): string {
     if (!seconds && seconds !== 0) return '0s'
     const s = Math.floor(seconds % 60)
@@ -250,38 +329,18 @@ export const utils = {
     const pad = (n: number) => n.toString().padStart(2, '0')
     return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`
   },
-
-  formatFileSize(bytes: number): string {
-    if (!Number.isFinite(bytes) || bytes < 0) return '0 B'
-    if (bytes < 1024) return `${bytes} B`
-    const units = ['KB', 'MB', 'GB', 'TB']
-    let size = bytes / 1024
-    let unitIndex = 0
-    while (size >= 1024 && unitIndex < units.length - 1) {
-      size /= 1024
-      unitIndex++
-    }
-    return `${size.toFixed(1)} ${units[unitIndex]}`
-  },
-
-  calculateStats(results: ProcessingResult[]) {
-    const total = results.length
-    const successful = results.filter(r => r.success).length
-    const failed = total - successful
-    const ragReady = results.filter(r => r.pass_all_thresholds).length
-    const optimized = results.filter(r => r.vector_optimized).length
-    return { total, successful, failed, ragReady, optimized }
-  },
 }
 
-// Note: default export placed after all const exports to avoid TDZ issues
-
-// -------------------- Internal helpers --------------------
+/**
+ * Map v2 API response to frontend ProcessingResult format
+ * Handles backward compatibility and field mapping
+ */
 function mapV2ResultToFrontend(raw: any): ProcessingResult {
-  // Preserve all fields and add compatibility aliases the app expects
-  const conversion_score = raw.conversion_score ?? raw.conversion_result?.conversion_score ?? 0
+  // Safely extract conversion score with fallback logic
+  const conversion_score = raw.conversion_result?.conversion_score ?? 0
   const pass_all_thresholds = raw.pass_all_thresholds ?? raw.is_rag_ready ?? false
   const vector_optimized = raw.vector_optimized ?? false
+
   return {
     // Required core fields
     document_id: raw.document_id,
@@ -303,11 +362,16 @@ function mapV2ResultToFrontend(raw: any): ProcessingResult {
   } as ProcessingResult
 }
 
+/**
+ * Map frontend options to v2 API format
+ * Handles field name changes and structure updates
+ */
 function mapOptionsToV2(options: any): any {
   const v2: any = {
     auto_improve: options?.auto_optimize ?? true,
     vector_optimize: options?.auto_optimize ?? true,
   }
+
   const qt = options?.quality_thresholds
   if (qt) {
     v2.quality_thresholds = {
@@ -318,6 +382,7 @@ function mapOptionsToV2(options: any): any {
       markdown_quality: Math.round(qt.markdown_quality ?? qt.markdown ?? qt.markdown_threshold ?? 7),
     }
   }
+
   return v2
 }
 
@@ -334,6 +399,7 @@ export const jobsApi = {
   },
 }
 
+// Default export with all API modules
 export default {
   API_BASE_URL,
   API_PATH_VERSION,
