@@ -91,6 +91,8 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
   const [dragActive, setDragActive] = useState(false);
   // State to toggle the visibility of advanced processing settings.
   const [showAdvancedSettings, setShowAdvancedSettings] = useState(false);
+  // State to track initial loading
+  const [isInitialLoading, setIsInitialLoading] = useState(true);
   // Ref for the hidden file input element to trigger it programmatically.
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -98,13 +100,30 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
    * Effect to load the appropriate file list when the `sourceType` changes.
    */
   useEffect(() => {
-    if (sourceType === 'upload') {
-      loadUploadedFiles();
-    } else {
-      loadBatchFiles();
-    }
-  }, [sourceType]); // Dependencies are intentionally minimal for this effect.
+    const loadFiles = async () => {
+      setIsInitialLoading(true);
+      if (sourceType === 'upload') {
+        await loadUploadedFiles();
+      } else {
+        await loadBatchFiles();
+      }
+      setIsInitialLoading(false);
+    };
+    
+    loadFiles();
+  }, [sourceType]);
 
+  // Load both file types on component mount
+  useEffect(() => {
+    const loadAllFiles = async () => {
+      await Promise.all([
+        loadUploadedFiles(),
+        loadBatchFiles()
+      ]);
+    };
+    
+    loadAllFiles();
+  }, []);
   /**
    * Fetches the list of already uploaded files from the API and updates the state.
    */
@@ -823,7 +842,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                 ? 'bg-white bg-opacity-20 text-white' 
                 : 'bg-gray-200 text-gray-600'
             }`}>
-              {batchFiles.length}
+              {isInitialLoading && sourceType === 'local' ? '...' : batchFiles.length}
             </span>
           </button>
           <button
@@ -842,7 +861,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                 ? 'bg-white bg-opacity-20 text-white' 
                 : 'bg-gray-200 text-gray-600'
             }`}>
-              {uploadedFiles.length}
+              {isInitialLoading && sourceType === 'upload' ? '...' : uploadedFiles.length}
             </span>
           </button>
         </div>
