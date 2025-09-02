@@ -262,20 +262,26 @@ export default function ProcessingPage() {
     }
   }
 
-  // System reset
-  const handleReset = () => {
-    setState(prev => ({
-      ...prev,
-      selectedFiles: [],
-      processingResults: [],
-      processingComplete: false,
-      isProcessing: false,
-      currentStage: 'upload',
-      resetCounter: prev.resetCounter + 1
-    }))
-    setPanelVisible(false)
-    setProcessingPanelState('hidden')
-    toast.success('System reset successfully')
+  // System reset: clear server-side runtime files and reset UI state
+  const handleReset = async () => {
+    try {
+      await systemApi.resetSystem()
+      setState(prev => ({
+        ...prev,
+        selectedFiles: [],
+        processingResults: [],
+        processingComplete: false,
+        isProcessing: false,
+        currentStage: 'upload',
+        resetCounter: prev.resetCounter + 1
+      }))
+      setPanelVisible(false)
+      setProcessingPanelState('hidden')
+      toast.success('System reset successfully')
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Reset failed'
+      toast.error(`Failed to reset system: ${message}`)
+    }
   }
 
   const stats = utils.calculateStats(state.processingResults)

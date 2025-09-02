@@ -1,35 +1,39 @@
-# backend/Dockerfile
+# ============================================================================
+# Curatore v2 - Backend/Worker Dockerfile
+# Build context: ./backend
+# ----------------------------------------------------------------------------
+# NOTE:
+# - Because the build context is ./backend (see docker-compose.yml),
+#   all COPY paths must be relative to ./backend, e.g.:
+#     COPY requirements.txt /app/requirements.txt
+#     COPY app /app/app
+# ============================================================================
+
 FROM python:3.11-slim
 
-# Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1 \
-    PIP_NO_CACHE_DIR=1
-
-# Install system dependencies including Tesseract OCR
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    build-essential \
-    tesseract-ocr \
-    tesseract-ocr-eng \
-    curl \
-    && rm -rf /var/lib/apt/lists/*
+    PYTHONUNBUFFERED=1
 
 WORKDIR /app
 
-# Copy requirements and install Python dependencies
-COPY requirements.txt ./
-RUN pip install --upgrade pip && pip install --no-cache-dir -r requirements.txt
+# System deps (add/remove as needed for OCR/PDF/image support)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    curl \
+    ghostscript \
+    poppler-utils \
+    tesseract-ocr \
+ && rm -rf /var/lib/apt/lists/*
 
-# Copy application code
-COPY app ./app
+# Python deps
+COPY requirements.txt /app/requirements.txt
+RUN pip install --no-cache-dir -r /app/requirements.txt
 
-# REMOVED: Don't create directories here, they will be mounted from host
-# The files directory will be volume-mounted from the host
+# App source (relative to build context ./backend)
+COPY app /app/app
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=5s --retries=3 \
-  CMD curl -fsS http://localhost:8000/api/health || exit 1
+# NOTE: do NOT create /app/files here; it's supplied by bind mount (./files -> /app/files)
 
 EXPOSE 8000
 
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Default entrypoint is set by compose (uvicorn for backend, celery for worker)

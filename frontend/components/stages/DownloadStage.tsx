@@ -1,14 +1,16 @@
 // components/stages/DownloadStage.tsx
+
 'use client'
 
 import { useState } from 'react';
+import { Loader2 } from 'lucide-react';
 import { ProcessingResult } from '@/types';
 import { fileApi, utils } from '@/lib/api';
 import toast from 'react-hot-toast';
 
 interface DownloadStageProps {
   processingResults: ProcessingResult[];
-  onRestart: () => void;
+  onRestart: () => void | Promise<void>;
   processingPanelState?: 'hidden' | 'minimized' | 'normal' | 'fullscreen';
 }
 
@@ -23,6 +25,7 @@ export function DownloadStage({
   const [isBulkDownloading, setIsBulkDownloading] = useState<boolean>(false);
   const [isCombinedDownloading, setIsCombinedDownloading] = useState<boolean>(false);
   const [isRAGDownloading, setIsRAGDownloading] = useState<boolean>(false);
+  const [isRestarting, setIsRestarting] = useState<boolean>(false);
 
   const successfulResults = processingResults.filter(r => r.success);
   const ragReadyResults = successfulResults.filter(r => r.pass_all_thresholds);
@@ -225,6 +228,18 @@ export function DownloadStage({
   const allSelected = successfulResults.length > 0 && selectedFiles.size === successfulResults.length;
   const someSelected = selectedFiles.size > 0;
   const isAnyDownloading = isBulkDownloading || isCombinedDownloading || isRAGDownloading;
+
+  const handleRestartClick = async () => {
+    if (isRestarting) return;
+    setIsRestarting(true);
+    try {
+      await Promise.resolve(onRestart());
+    } catch (e) {
+      // Error handled upstream via toasts; just ensure button re-enables if component remains mounted
+    } finally {
+      setIsRestarting(false);
+    }
+  };
 
   return (
     <div className="space-y-6 pb-24">
@@ -530,15 +545,22 @@ export function DownloadStage({
         }`}>
           <button
             type="button"
-            onClick={onRestart}
-            disabled={isAnyDownloading}
-            className={`px-6 py-3 rounded-full font-medium text-sm transition-all shadow-lg hover:shadow-xl ${
-              isAnyDownloading
+            onClick={handleRestartClick}
+            disabled={isAnyDownloading || isRestarting}
+            className={`px-6 py-3 rounded-full font-medium text-sm transition-all shadow-lg hover:shadow-xl flex items-center ${
+              isAnyDownloading || isRestarting
                 ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
                 : 'bg-blue-600 text-white hover:bg-blue-700 hover:-translate-y-1'
             }`}
           >
-            🔁 Start Over
+            {isRestarting ? (
+              <>
+                <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                Resetting...
+              </>
+            ) : (
+              <>🔁 Start Over</>
+            )}
           </button>
         </div>
       )}

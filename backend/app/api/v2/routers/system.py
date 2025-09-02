@@ -10,8 +10,8 @@ from ..models import HealthStatus, LLMConnectionStatus
 from ....services.llm_service import llm_service
 from ....services.document_service import document_service
 from ....services.storage_service import storage_service
-from ....services.job_service import clear_all_jobs_and_locks
-from ....services.job_service import get_redis_client
+from ....services.zip_service import zip_service
+from ....services.job_service import clear_all_jobs_and_locks, get_redis_client
 from ....celery_app import app as celery_app
 
 router = APIRouter()
@@ -37,45 +37,73 @@ async def get_llm_status():
     return await llm_service.test_connection()
 
 
+@router.get("/extractor/status", tags=["System"])
+async def get_extractor_status():
+    """Report extraction service connectivity/status."""
+    try:
+        status = await document_service.extractor_health()
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Extractor status check failed: {str(e)}")
+
+
 @router.post("/system/reset", tags=["System"])
 async def reset_system():
     """Reset the entire system - cancel jobs, clear files and data."""
     try:
+        # Best-effort: cancel running and queued Celery tasks
         revoked = 0
         purged = 0
         try:
             insp = celery_app.control.inspect(timeout=1.0)
+
             active = insp.active() or {}
             for tasks in active.values():
                 for t in tasks or []:
-                    tid = (t.get('id') if isinstance(t, dict) else None) or getattr(t, 'id', None)
+                    tid = (t.get("id") if isinstance(t, dict) else None) or getattr(t, "id", None)
                     if tid:
                         celery_app.control.revoke(tid, terminate=True)
                         revoked += 1
+
             reserved = insp.reserved() or {}
             for tasks in reserved.values():
                 for t in tasks or []:
-                    tid = (t.get('id') if isinstance(t, dict) else None) or getattr(t, 'id', None)
+                    tid = (t.get("id") if isinstance(t, dict) else None) or getattr(t, "id", None)
                     if tid:
                         celery_app.control.revoke(tid, terminate=False)
                         revoked += 1
+
             scheduled = insp.scheduled() or {}
             for tasks in scheduled.values():
                 for t in tasks or []:
                     tid = None
                     if isinstance(t, dict):
-                        tid = (t.get('request') or {}).get('id') or t.get('id')
+                        tid = (t.get("request") or {}).get("id") or t.get("id")
                     if tid:
                         celery_app.control.revoke(tid, terminate=False)
                         revoked += 1
+
             purged = celery_app.control.purge() or 0
         except Exception:
+            # If Celery/Redis isn't up, keep going with file/redis cleanup
             pass
 
-        document_service.clear_all_files()
+        # Clear temp ZIPs, runtime files (uploaded + processed) and storage; keep batch files
+        try:
+            zip_deleted = zip_service.cleanup_all_temp_archives()
+        except Exception:
+            zip_deleted = 0
+        document_service.clear_runtime_files()
         storage_service.clear_all()
-        jobs_cleared = clear_all_jobs_and_locks()
-        document_service._ensure_directories()
+
+        # Clear job status keys and locks in Redis
+        try:
+            jobs_cleared = clear_all_jobs_and_locks()
+        except Exception:
+            jobs_cleared = {"jobs": 0, "active_locks": 0, "last_job_keys": 0}
+
+        # Recreate directory structure (public method per Option B)
+        document_service.ensure_directories()
 
         return {
             "success": True,
@@ -83,6 +111,7 @@ async def reset_system():
             "timestamp": datetime.now(),
             "queue": {"revoked": revoked, "purged": purged},
             "jobs_cleared": jobs_cleared,
+            "temp_zips_deleted": zip_deleted,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Reset failed: {str(e)}")
@@ -147,6 +176,7 @@ async def queue_health() -> Dict[str, Any]:
         "total": 0,
     }
 
+    # Redis queue stats (best-effort)
     try:
         r = get_redis_client()
         info["redis_ok"] = bool(r.ping())
@@ -158,6 +188,7 @@ async def queue_health() -> Dict[str, Any]:
             except Exception:
                 continue
         info["pending"] = total
+
         # Derive running/completed by scanning job:* status payloads
         try:
             cursor = 0
@@ -187,6 +218,7 @@ async def queue_health() -> Dict[str, Any]:
     except Exception:
         pass
 
+    # Celery worker stats (best-effort)
     try:
         insp = celery_app.control.inspect(timeout=1.0)
         p = insp.ping() or {}
@@ -198,6 +230,7 @@ async def queue_health() -> Dict[str, Any]:
             pass
     except Exception:
         pass
+
     info["total"] = int(info.get("processed", 0)) + int(info.get("running", 0)) + int(info.get("pending", 0))
     return info
 
@@ -205,7 +238,7 @@ async def queue_health() -> Dict[str, Any]:
 @router.get("/system/queues/summary", tags=["System"])
 async def queue_summary(
     batch_id: Optional[str] = Query(None),
-    job_ids: Optional[str] = Query(None, description="Comma-separated job IDs")
+    job_ids: Optional[str] = Query(None, description="Comma-separated job IDs"),
 ) -> Dict[str, Any]:
     """Summarize status for a requested set of jobs.
 
@@ -220,7 +253,7 @@ async def queue_summary(
     target_job_ids: List[str] = []
 
     if job_ids:
-        target_job_ids = [j.strip() for j in job_ids.split(',') if j.strip()]
+        target_job_ids = [j.strip() for j in job_ids.split(",") if j.strip()]
     else:
         # Collect jobs by batch_id
         cursor = 0

@@ -29,6 +29,7 @@ Version: 2.0.0
 """
 
 from datetime import datetime
+from pathlib import Path
 from enum import Enum
 from typing import Dict, List, Optional, Union, Any
 
@@ -84,84 +85,87 @@ class OCRSettings(BaseModel):
     Used when processing image files (PNG, JPG, etc.) to extract text content.
     
     Attributes:
-        language: ISO 639-3 language code(s) for OCR recognition
-        psm: Page Segmentation Mode for Tesseract OCR engine
+        language: OCR language code (default: 'eng')
+        psm: Page Segmentation Mode for Tesseract (1-13)
+        confidence_threshold: Minimum confidence score (0.0-1.0)
         
     Example:
-        ocr_settings = OCRSettings(language="eng+spa", psm=6)
+        ocr = OCRSettings(
+            language='eng',
+            psm=3,
+            confidence_threshold=0.8
+        )
     """
     language: str = Field(
         default="eng",
-        description="Language code(s) for OCR. Multiple languages: 'eng+spa'"
+        description="OCR language code (e.g., 'eng', 'fra', 'deu')"
     )
     psm: int = Field(
         default=3,
-        ge=0,
+        ge=1,
         le=13,
-        description="Page Segmentation Mode (0-13). 3=auto, 6=uniform block"
+        description="Page Segmentation Mode for Tesseract OCR"
     )
-    
-    @validator('language')
-    def validate_language(cls, v):
-        """Validate language code format."""
-        if not v or not isinstance(v, str):
-            raise ValueError("Language must be a non-empty string")
-        # Basic validation for language code format
-        if not all(c.isalpha() or c == '+' for c in v):
-            raise ValueError("Language code must contain only letters and '+' separator")
-        return v.lower()
+    confidence_threshold: float = Field(
+        default=0.8,
+        ge=0.0,
+        le=1.0,
+        description="Minimum confidence score for OCR results"
+    )
 
 
 class QualityThresholds(BaseModel):
     """
-    Configuration model for quality assessment thresholds.
+    Configuration model for document quality assessment thresholds.
     
-    Defines minimum scores required for documents to be considered
-    "RAG Ready" and suitable for production use.
+    Defines minimum acceptable scores for various quality metrics.
+    Documents must meet all thresholds to be considered "RAG ready".
     
     Attributes:
-        conversion_quality: Minimum conversion score (0-100)
-        clarity_score: Minimum LLM clarity evaluation (1-10)
-        completeness_score: Minimum LLM completeness evaluation (1-10)
-        relevance_score: Minimum LLM relevance evaluation (1-10)
+        conversion_quality: Minimum conversion score (0-100%)
+        clarity_score: Minimum clarity score (1-10)
+        completeness_score: Minimum completeness score (1-10)
+        relevance_score: Minimum relevance score (1-10)
         markdown_quality: Minimum markdown formatting score (1-10)
         
     Example:
         thresholds = QualityThresholds(
-            conversion_quality=80,
-            clarity_score=8,
-            completeness_score=7
+            conversion_quality=75,
+            clarity_score=7,
+            completeness_score=8,
+            relevance_score=6,
+            markdown_quality=7
         )
     """
     conversion_quality: int = Field(
         default=70,
         ge=0,
         le=100,
-        description="Minimum conversion quality score (0-100)"
+        description="Minimum conversion quality percentage"
     )
     clarity_score: int = Field(
         default=7,
         ge=1,
         le=10,
-        description="Minimum clarity evaluation score (1-10)"
+        description="Minimum clarity score (1-10 scale)"
     )
     completeness_score: int = Field(
         default=7,
         ge=1,
         le=10,
-        description="Minimum completeness evaluation score (1-10)"
+        description="Minimum completeness score (1-10 scale)"
     )
     relevance_score: int = Field(
         default=7,
         ge=1,
         le=10,
-        description="Minimum relevance evaluation score (1-10)"
+        description="Minimum relevance score (1-10 scale)"
     )
     markdown_quality: int = Field(
         default=7,
         ge=1,
         le=10,
-        description="Minimum markdown quality score (1-10)"
+        description="Minimum markdown quality score (1-10 scale)"
     )
 
 
@@ -169,43 +173,38 @@ class ProcessingOptions(BaseModel):
     """
     Configuration model for document processing options.
     
-    Allows customization of the document processing pipeline including
-    quality thresholds, OCR settings, and optimization preferences.
+    Contains all settings that control how documents are processed,
+    including quality thresholds, OCR settings, and optimization flags.
     
     Attributes:
-        auto_improve: Whether to automatically improve documents with LLM
-        vector_optimize: Whether to optimize for vector database storage
-        ocr_settings: OCR configuration for image processing
+        auto_improve: Enable automatic content improvement
+        vector_optimize: Optimize content for vector databases
         quality_thresholds: Quality assessment thresholds
-        custom_prompt: Custom improvement prompt for LLM enhancement
+        ocr_settings: OCR configuration for image processing
         
     Example:
         options = ProcessingOptions(
             auto_improve=True,
             vector_optimize=True,
-            custom_prompt="Focus on technical accuracy"
+            quality_thresholds=QualityThresholds(),
+            ocr_settings=OCRSettings()
         )
     """
     auto_improve: bool = Field(
         default=True,
-        description="Automatically improve documents using LLM"
+        description="Enable automatic content improvement using LLM"
     )
     vector_optimize: bool = Field(
         default=True,
-        description="Optimize document structure for vector databases"
-    )
-    ocr_settings: Optional[OCRSettings] = Field(
-        default=None,
-        description="OCR configuration for image processing"
+        description="Optimize content structure for vector databases"
     )
     quality_thresholds: Optional[QualityThresholds] = Field(
-        default=None,
-        description="Custom quality thresholds for assessment"
+        default_factory=QualityThresholds,
+        description="Quality assessment thresholds"
     )
-    custom_prompt: Optional[str] = Field(
-        default=None,
-        max_length=1000,
-        description="Custom improvement prompt for LLM enhancement"
+    ocr_settings: Optional[OCRSettings] = Field(
+        default_factory=OCRSettings,
+        description="OCR configuration for image processing"
     )
 
 
@@ -217,27 +216,37 @@ class ConversionResult(BaseModel):
     """
     Result model for document conversion operations.
     
-    Contains the converted markdown content and quality metrics
-    from the document conversion process.
+    Contains information about the conversion process including
+    success status, quality scores, and feedback messages.
     
     Attributes:
-        markdown_content: The converted markdown text
-        conversion_score: Quality score for the conversion (0-100)
-        conversion_feedback: Detailed feedback on conversion quality
-        word_count: Number of words in the converted content
-        char_count: Number of characters in the converted content
+        success: Whether conversion completed successfully
+        markdown_content: Converted markdown content (optional)
+        conversion_score: Quality score for conversion (0-100)
+        conversion_feedback: Human-readable conversion feedback (optional)
+        conversion_note: Additional notes about the conversion process (optional)
+        content_coverage: Fraction of source content captured (0.0-1.0)
+        structure_preservation: Fraction of structure preserved (0.0-1.0)
+        readability_score: Readability score normalized to 0.0-1.0
+        total_characters: Total characters in original/extracted source
+        extracted_characters: Characters extracted into markdown
+        processing_time: Time spent in conversion step (sec)
+        conversion_notes: List of conversion notes/messages
         
     Example:
         result = ConversionResult(
-            markdown_content="# Document Title\\n\\nContent...",
+            success=True,
             conversion_score=85,
-            conversion_feedback="Good structure preservation"
+            conversion_feedback="Successfully converted PDF to markdown",
+            conversion_note="Good text extraction quality"
         )
     """
     success: bool = Field(
-        description="Whether conversion produced usable content"
+        default=True,
+        description="Whether the conversion completed successfully"
     )
-    markdown_content: str = Field(
+    markdown_content: Optional[str] = Field(
+        default=None,
         description="Converted markdown content"
     )
     conversion_score: int = Field(
@@ -245,24 +254,51 @@ class ConversionResult(BaseModel):
         le=100,
         description="Conversion quality score (0-100)"
     )
-    conversion_feedback: str = Field(
-        description="Detailed feedback on conversion quality"
+    conversion_feedback: Optional[str] = Field(
+        default=None,
+        description="Human-readable feedback about conversion quality"
     )
-    word_count: int = Field(
+    conversion_note: Optional[str] = Field(
+        default=None,
+        description="Additional notes about the conversion process"
+    )
+    # Extended metrics used by services and tests
+    content_coverage: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of source content captured (0.0-1.0)"
+    )
+    structure_preservation: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of structure preserved (0.0-1.0)"
+    )
+    readability_score: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Readability score normalized to 0.0-1.0"
+    )
+    total_characters: Optional[int] = Field(
+        default=None,
         ge=0,
-        description="Number of words in converted content"
+        description="Total characters in original/extracted source"
     )
-    char_count: int = Field(
+    extracted_characters: Optional[int] = Field(
+        default=None,
         ge=0,
-        description="Number of characters in converted content"
+        description="Characters extracted into markdown"
     )
-    processing_time: float = Field(
-        ge=0,
-        description="Time taken for conversion in seconds"
+    processing_time: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Time spent in conversion step (seconds)"
     )
-    conversion_note: str = Field(
-        default="",
-        description="Notes about conversion method or fallbacks used"
+    conversion_notes: Optional[List[str]] = Field(
+        default=None,
+        description="List of conversion notes/messages"
     )
 
 
@@ -270,80 +306,94 @@ class LLMEvaluation(BaseModel):
     """
     Result model for LLM-based document evaluation.
     
-    Contains scores and feedback from LLM analysis of document quality,
-    including assessments of clarity, completeness, relevance, and formatting.
+    Contains detailed scores and feedback from language model evaluation
+    of document quality across multiple dimensions.
     
     Attributes:
-        clarity_score: Document clarity and readability (1-10)
-        clarity_feedback: Detailed feedback on clarity
-        completeness_score: Information completeness (1-10)
-        completeness_feedback: Detailed feedback on completeness
-        relevance_score: Content relevance and focus (1-10)
-        relevance_feedback: Detailed feedback on relevance
-        markdown_score: Markdown formatting quality (1-10)
-        markdown_feedback: Detailed feedback on formatting
-        overall_feedback: General improvement suggestions
-        pass_recommendation: Whether document passes quality standards
-        evaluation_time: Time taken for evaluation in seconds
+        clarity_score: Document clarity score (1-10)
+        clarity_feedback: Feedback on document clarity
+        completeness_score: Content completeness score (1-10)
+        completeness_feedback: Feedback on content completeness
+        relevance_score: Content relevance score (1-10)
+        relevance_feedback: Feedback on content relevance
+        markdown_score: Markdown quality score (1-10)
+        markdown_feedback: Feedback on markdown formatting
+        overall_feedback: Overall evaluation summary
+        pass_recommendation: Recommendation (Pass/Fail)
         
     Example:
         evaluation = LLMEvaluation(
             clarity_score=8,
-            clarity_feedback="Well-structured with clear headings",
+            clarity_feedback="Well-structured and easy to follow",
             completeness_score=7,
-            pass_recommendation="Pass"
+            completeness_feedback="Most key points covered",
+            overall_feedback="Good quality document suitable for RAG"
         )
     """
-    clarity_score: int = Field(
+    clarity_score: Optional[int] = Field(
+        default=None,
         ge=1,
         le=10,
-        description="Document clarity and readability score (1-10)"
+        description="Document clarity and readability score"
     )
-    clarity_feedback: str = Field(
+    clarity_feedback: Optional[str] = Field(
+        default=None,
         description="Detailed feedback on document clarity"
     )
-    completeness_score: int = Field(
+    completeness_score: Optional[int] = Field(
+        default=None,
         ge=1,
         le=10,
-        description="Information completeness score (1-10)"
+        description="Content completeness score"
     )
-    completeness_feedback: str = Field(
-        description="Detailed feedback on information completeness"
+    completeness_feedback: Optional[str] = Field(
+        default=None,
+        description="Detailed feedback on content completeness"
     )
-    relevance_score: int = Field(
+    relevance_score: Optional[int] = Field(
+        default=None,
         ge=1,
         le=10,
-        description="Content relevance and focus score (1-10)"
+        description="Content relevance score"
     )
-    relevance_feedback: str = Field(
+    relevance_feedback: Optional[str] = Field(
+        default=None,
         description="Detailed feedback on content relevance"
     )
-    markdown_score: int = Field(
+    markdown_score: Optional[int] = Field(
+        default=None,
         ge=1,
         le=10,
-        description="Markdown formatting quality score (1-10)"
+        description="Markdown formatting quality score"
     )
-    markdown_feedback: str = Field(
-        description="Detailed feedback on markdown formatting"
+    markdown_feedback: Optional[str] = Field(
+        default=None,
+        description="Detailed feedback on markdown quality"
     )
-    overall_feedback: str = Field(
-        description="General improvement suggestions and summary"
+    overall_feedback: Optional[str] = Field(
+        default=None,
+        description="Overall evaluation summary"
     )
-    pass_recommendation: str = Field(
-        description="Whether document passes quality standards (Pass/Fail)"
+    pass_recommendation: Optional[str] = Field(
+        default=None,
+        description="Overall recommendation (Pass/Fail)"
     )
-    evaluation_time: float = Field(
-        default=0.0,
-        ge=0,
-        description="Time taken for LLM evaluation in seconds"
+    processing_time: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Time spent in LLM evaluation (seconds)"
     )
-    
+    token_usage: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="Token usage statistics (e.g., {'prompt': 100, 'completion': 50})"
+    )
+
     @validator('pass_recommendation')
     def validate_pass_recommendation(cls, v):
-        """Validate pass recommendation format."""
-        if v.lower() not in ['pass', 'fail']:
+        """Validate that pass_recommendation is either Pass or Fail."""
+        if v is not None and v.lower() not in ['pass', 'fail']:
             raise ValueError("pass_recommendation must be 'Pass' or 'Fail'")
-        return v.title()  # Normalize to 'Pass' or 'Fail'
+        return v.title() if v else v  # Normalize to 'Pass' or 'Fail'
 
 
 class ProcessingResult(BaseModel):
@@ -364,6 +414,10 @@ class ProcessingResult(BaseModel):
         processed_at: Timestamp of processing completion
         file_size: Size of processed markdown file in bytes
         summary: Brief document summary (optional)
+        original_path: Local filesystem path to the original file (optional)
+        markdown_path: Local filesystem path to the processed markdown (optional)
+        vector_optimized: Whether vector optimization was applied
+        processing_metadata: Arbitrary processing metadata map
         
     Example:
         result = ProcessingResult(
@@ -380,6 +434,7 @@ class ProcessingResult(BaseModel):
         description="Original filename of the processed document"
     )
     status: ProcessingStatus = Field(
+        default=ProcessingStatus.COMPLETED,
         description="Current processing status"
     )
     conversion_result: ConversionResult = Field(
@@ -393,6 +448,7 @@ class ProcessingResult(BaseModel):
         description="Whether document meets RAG quality thresholds"
     )
     processing_time: float = Field(
+        default=0.0,
         ge=0,
         description="Total processing time in seconds"
     )
@@ -401,6 +457,7 @@ class ProcessingResult(BaseModel):
         description="Timestamp of processing completion"
     )
     file_size: int = Field(
+        default=0,
         ge=0,
         description="Size of processed markdown file in bytes"
     )
@@ -411,6 +468,23 @@ class ProcessingResult(BaseModel):
     error_message: Optional[str] = Field(
         default=None,
         description="Error message if processing failed"
+    )
+    # Paths and metadata used by services and routers
+    original_path: Optional[Path] = Field(
+        default=None,
+        description="Filesystem path to original file"
+    )
+    markdown_path: Optional[Path] = Field(
+        default=None,
+        description="Filesystem path to processed markdown file"
+    )
+    vector_optimized: bool = Field(
+        default=False,
+        description="Whether vector optimization was applied"
+    )
+    processing_metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Arbitrary processing metadata"
     )
 
 
@@ -499,77 +573,24 @@ class BatchProcessingRequest(BaseModel):
     consistent processing options.
     
     Attributes:
-        file_paths: List of file paths to process
-        processing_options: Configuration for batch processing
-        parallel_processing: Whether to process files in parallel
+        document_ids: List of document IDs to process
+        options: Processing options to apply to all documents
         
     Example:
         request = BatchProcessingRequest(
-            file_paths=["doc1.pdf", "doc2.docx"],
-            parallel_processing=True
-        )
-    """
-    file_paths: List[str] = Field(
-        min_items=1,
-        description="List of file paths to process"
-    )
-    processing_options: Optional[ProcessingOptions] = Field(
-        default=None,
-        description="Configuration for batch processing"
-    )
-    parallel_processing: bool = Field(
-        default=True,
-        description="Whether to process files in parallel"
-    )
-
-
-class BulkDownloadRequest(BaseModel):
-    """
-    Request model for bulk download operations.
-    
-    Used to download multiple documents as ZIP archives with
-    various formatting and filtering options.
-    
-    Attributes:
-        document_ids: List of document IDs to include in download
-        download_type: Type of bulk download to create
-        include_summary: Whether to include processing summary
-        include_combined: Whether to include combined markdown file
-        custom_filename: Custom filename for the ZIP archive
-        
-    Example:
-        request = BulkDownloadRequest(
             document_ids=["doc1", "doc2", "doc3"],
-            download_type=DownloadType.RAG_READY,
-            include_summary=True
+            options=ProcessingOptions(auto_improve=True)
         )
     """
     document_ids: List[str] = Field(
         min_items=1,
-        description="List of document IDs to include"
+        description="List of document IDs to process in batch"
     )
-    download_type: DownloadType = Field(
-        default=DownloadType.INDIVIDUAL,
-        description="Type of bulk download to create"
-    )
-    include_summary: bool = Field(
-        default=True,
-        description="Whether to include processing summary"
-    )
-    include_combined: bool = Field(
-        default=False,
-        description="Whether to include combined markdown file"
-    )
-    custom_filename: Optional[str] = Field(
-        default=None,
-        max_length=100,
-        description="Custom filename for ZIP archive"
+    options: Optional[ProcessingOptions] = Field(
+        default_factory=ProcessingOptions,
+        description="Processing options to apply to all documents"
     )
 
-
-# ============================================================================
-# RESPONSE MODELS
-# ============================================================================
 
 class BatchProcessingResult(BaseModel):
     """
@@ -636,6 +657,130 @@ class BatchProcessingResult(BaseModel):
         return v
 
 
+class BulkDownloadRequest(BaseModel):
+    """
+    Request model for bulk document download operations.
+    
+    Used to create ZIP archives of processed documents with various
+    export options and filtering criteria.
+    
+    Attributes:
+        document_ids: List of document IDs to include in download
+        download_type: Type of archive to create
+        include_summary: Whether to include processing summary
+        include_combined: Whether to include combined markdown
+        custom_filename: Custom filename for the archive
+        
+    Example:
+        request = BulkDownloadRequest(
+            document_ids=["doc1", "doc2", "doc3"],
+            download_type=DownloadType.COMBINED,
+            include_summary=True,
+            custom_filename="my_documents.zip"
+        )
+    """
+    document_ids: List[str] = Field(
+        min_items=1,
+        description="List of document IDs to include in download"
+    )
+    download_type: DownloadType = Field(
+        default=DownloadType.INDIVIDUAL,
+        description="Type of archive to create"
+    )
+    include_summary: bool = Field(
+        default=True,
+        description="Whether to include processing summary report"
+    )
+    include_combined: bool = Field(
+        default=False,
+        description="Whether to include combined markdown document"
+    )
+    custom_filename: Optional[str] = Field(
+        default=None,
+        max_length=255,
+        description="Custom filename for the archive"
+    )
+
+
+# ============================================================================
+# FILE METADATA MODELS
+# ============================================================================
+
+class FileInfo(BaseModel):
+    """
+    Model representing file metadata information.
+    
+    Used for listing files with complete metadata including document IDs,
+    file sizes, timestamps, and paths.
+    
+    Attributes:
+        document_id: Unique identifier for the file (UUID for uploaded, filename for batch)
+        filename: Original filename of the file
+        original_filename: Original filename (same as filename for most cases)
+        file_size: Size of the file in bytes
+        upload_time: Timestamp when file was uploaded/created (Unix timestamp)
+        file_path: Relative path to the file
+        
+    Example:
+        file_info = FileInfo(
+            document_id="550e8400-e29b-41d4-a716-446655440000",
+            filename="report.pdf",
+            original_filename="report.pdf",
+            file_size=1048576,
+            upload_time=1640995200,
+            file_path="uploaded_files/550e8400-e29b-41d4-a716-446655440000_report.pdf"
+        )
+    """
+    document_id: str = Field(
+        description="Unique identifier for the file"
+    )
+    filename: str = Field(
+        description="Original filename of the file"
+    )
+    original_filename: str = Field(
+        description="Original filename (same as filename for most cases)"
+    )
+    file_size: int = Field(
+        ge=0,
+        description="Size of the file in bytes"
+    )
+    upload_time: int = Field(
+        description="Timestamp when file was uploaded/created (Unix timestamp)"
+    )
+    file_path: str = Field(
+        description="Relative path to the file"
+    )
+
+
+class FileListResponse(BaseModel):
+    """
+    Response model for file listing operations.
+    
+    Returns a list of FileInfo objects with metadata and count.
+    
+    Attributes:
+        files: List of FileInfo objects with complete metadata
+        count: Total number of files returned
+        
+    Example:
+        response = FileListResponse(
+            files=[file1, file2, file3],
+            count=3
+        )
+    """
+    files: List[FileInfo] = Field(
+        description="List of FileInfo objects with complete metadata"
+    )
+    count: int = Field(
+        ge=0,
+        description="Total number of files returned"
+    )
+
+
+# ============================================================================
+# ARCHIVE AND DOWNLOAD MODELS
+# ============================================================================
+
 class ZipArchiveInfo(BaseModel):
     """
     Information model for ZIP archive downloads.
@@ -645,17 +790,18 @@ class ZipArchiveInfo(BaseModel):
     
     Attributes:
         filename: Name of the generated ZIP file
-        file_count: Number of files included in the archive
-        total_size: Total size of the ZIP archive in bytes
+        file_count: Number of files in the archive
+        total_size: Total size of the archive in bytes
         created_at: Timestamp when archive was created
-        expires_at: Timestamp when archive expires (optional)
-        download_url: URL for downloading the archive (optional)
+        download_url: URL for downloading the archive
         
     Example:
-        archive_info = ZipArchiveInfo(
-            filename="curatore_export_20240827_143022.zip",
+        archive = ZipArchiveInfo(
+            filename="processed_documents.zip",
             file_count=5,
-            total_size=2048576
+            total_size=2048576,
+            created_at=datetime.now(),
+            download_url="/download/temp_archive.zip"
         )
     """
     filename: str = Field(
@@ -663,85 +809,81 @@ class ZipArchiveInfo(BaseModel):
     )
     file_count: int = Field(
         ge=0,
-        description="Number of files included in archive"
+        description="Number of files included in the archive"
     )
     total_size: int = Field(
         ge=0,
-        description="Total size of ZIP archive in bytes"
+        description="Total size of the archive in bytes"
     )
     created_at: datetime = Field(
-        default_factory=datetime.now,
         description="Timestamp when archive was created"
     )
-    expires_at: Optional[datetime] = Field(
-        default=None,
-        description="Timestamp when archive expires"
-    )
-    download_url: Optional[str] = Field(
-        default=None,
-        description="URL for downloading the archive"
+    download_url: str = Field(
+        description="Temporary URL for downloading the archive"
     )
 
 
 # ============================================================================
-# SYSTEM MODELS
+# SYSTEM HEALTH AND STATUS MODELS
 # ============================================================================
 
 class LLMConnectionStatus(BaseModel):
     """
-    Status model for LLM service connection.
+    Status model for LLM (Language Model) service connectivity.
     
-    Provides information about the current state of the LLM service
-    connection including connectivity, configuration, and performance.
+    Provides information about the connection to external LLM services
+    including health status, configuration, and error details.
     
     Attributes:
-        connected: Whether LLM service is available
-        endpoint: LLM API endpoint being used
-        model: Model name being used for operations
+        connected: Whether connection to LLM service is active
+        endpoint: LLM service endpoint URL
+        model: Model identifier being used
+        error: Error message if connection failed (optional)
+        response_time: Average response time in seconds (optional)
         ssl_verify: Whether SSL verification is enabled
         timeout: Request timeout in seconds
-        error: Error message if connection failed (optional)
-        response_time: Last response time in seconds (optional)
         
     Example:
         status = LLMConnectionStatus(
             connected=True,
             endpoint="https://api.openai.com/v1",
-            model="gpt-4o-mini",
+            model="gpt-3.5-turbo",
+            response_time=1.2,
             ssl_verify=True,
-            timeout=60.0
+            timeout=30
         )
     """
     connected: bool = Field(
-        description="Whether LLM service is available"
+        description="Whether LLM service connection is active"
     )
     endpoint: str = Field(
-        description="LLM API endpoint being used"
+        description="LLM service endpoint URL"
     )
     model: str = Field(
-        description="Model name being used for operations"
-    )
-    ssl_verify: bool = Field(
-        description="Whether SSL verification is enabled"
-    )
-    timeout: float = Field(
-        ge=0,
-        description="Request timeout in seconds"
+        description="LLM model identifier"
     )
     error: Optional[str] = Field(
         default=None,
         description="Error message if connection failed"
     )
-    response_time: Optional[float] = Field(
+    response: Optional[str] = Field(
         default=None,
-        ge=0,
-        description="Last response time in seconds"
+        description="Last successful response from LLM service"
+    )
+    ssl_verify: bool = Field(
+        default=True,
+        description="Whether SSL certificate verification is enabled"
+    )
+    timeout: int = Field(
+        default=30,
+        ge=1,
+        description="Request timeout in seconds"
     )
 
 
 class HealthStatus(BaseModel):
     """
-    Overall system health status model.
+    Comprehensive system health status model.
     
     Provides comprehensive information about the health and status
     of all system components.

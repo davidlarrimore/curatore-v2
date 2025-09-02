@@ -6,6 +6,7 @@ map to internal domain models, allowing the frontend's v1 payload shape.
 """
 
 from typing import Optional, List
+from pathlib import Path
 from datetime import datetime
 from pydantic import BaseModel, Field
 from pydantic import AliasChoices
@@ -117,14 +118,21 @@ class V1ProcessingResult(BaseModel):
             # When v is a domain ProcessingResult instance
             if hasattr(v, "conversion_result"):
                 cr = getattr(v, "conversion_result", None)
+                # Coerce Path fields to strings for v1 API shape
+                original_path = getattr(v, "original_path", None)
+                if isinstance(original_path, Path):
+                    original_path = str(original_path)
+                markdown_path = getattr(v, "markdown_path", None)
+                if isinstance(markdown_path, Path):
+                    markdown_path = str(markdown_path)
                 return {
                     "document_id": getattr(v, "document_id", None),
                     "filename": getattr(v, "filename", None),
                     "status": getattr(v, "status", None),
                     "success": getattr(v, "success", True if getattr(v, "status", None) == ProcessingStatus.COMPLETED else False),
                     "message": getattr(v, "message", getattr(v, "error_message", None)),
-                    "original_path": getattr(v, "original_path", None),
-                    "markdown_path": getattr(v, "markdown_path", None),
+                    "original_path": original_path,
+                    "markdown_path": markdown_path,
                     "conversion_result": cr,
                     "llm_evaluation": getattr(v, "llm_evaluation", None),
                     "document_summary": getattr(v, "document_summary", None),

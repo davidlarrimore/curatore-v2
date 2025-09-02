@@ -9,6 +9,7 @@ from ..models import HealthStatus, LLMConnectionStatus
 from ....services.llm_service import llm_service
 from ....services.document_service import document_service
 from ....services.storage_service import storage_service
+from ....services.zip_service import zip_service
 from ....services.job_service import get_redis_client
 from ....celery_app import app as celery_app
 
@@ -31,6 +32,15 @@ async def health_check():
 async def get_llm_status():
     """Get LLM connection status."""
     return await llm_service.test_connection()
+
+@router.get("/extractor/status", tags=["System"])
+async def get_extractor_status():
+    """Report extraction service connectivity/status (backend -> extractor)."""
+    try:
+        status = await document_service.extractor_health()
+        return status
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Extractor status check failed: {str(e)}")
 
 @router.post("/system/reset", tags=["System"])
 async def reset_system():
@@ -68,8 +78,12 @@ async def reset_system():
         except Exception:
             pass
 
-        # Clear files and storage
-        document_service.clear_all_files()
+        # Clear temp ZIPs, runtime files (uploaded + processed) and storage; keep batch files
+        try:
+            zip_deleted = zip_service.cleanup_all_temp_archives()
+        except Exception:
+            zip_deleted = 0
+        document_service.clear_runtime_files()
         storage_service.clear_all()
 
         # Clear job status keys and locks in Redis
@@ -87,6 +101,7 @@ async def reset_system():
             "timestamp": datetime.now(),
             "queue": {"revoked": revoked, "purged": purged},
             "jobs_cleared": jobs_cleared,
+            "temp_zips_deleted": zip_deleted,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Reset failed: {str(e)}")
