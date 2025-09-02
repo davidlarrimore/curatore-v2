@@ -35,6 +35,9 @@ from datetime import datetime
 
 router = APIRouter()
 
+# Import celery app at module level so tests can patch it easily
+from ....celery_app import app as celery_app
+
 
 class V2BatchEnqueueRequest(BaseModel):
     document_ids: List[str]
@@ -160,7 +163,6 @@ async def process_batch(request: V2BatchEnqueueRequest):
                 ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
                 if not set_active_job(document_id, async_result.id, ttl):
                     try:
-                        from ....celery_app import celery_app
                         celery_app.control.revoke(async_result.id, terminate=False)
                     except Exception:
                         pass
@@ -212,7 +214,7 @@ async def process_batch(request: V2BatchEnqueueRequest):
 @router.post("/documents/{document_id}/process", tags=["Processing"])
 async def process_document(
     document_id: str,
-    options: Optional[ProcessingOptions] = None,
+    options: Optional[dict] = None,
     request: Request = None,
     sync: bool = Query(False, description="Run synchronously (for tests only)"),
 ):
@@ -232,28 +234,30 @@ async def process_document(
     # Synchronous path (optional for testing)
     if sync and os.getenv("ALLOW_SYNC_PROCESS", "false").lower() in {"1", "true", "yes"}:
         from ....models import ProcessingOptions as DomainProcessingOptions
-        domain_options = options if options else DomainProcessingOptions()
+        domain_options = DomainProcessingOptions(**(options or {}))
         result = await document_service.process_document(document_id, file_path, domain_options)
         storage_service.save_processing_result(result)
         return ProcessingResult.model_validate(result)
 
     # Enqueue Celery task
-    opts = (options.model_dump() if options else {})
-    async_result = process_document_task.apply_async(
-        kwargs={
-            "document_id": document_id,
-            "options": opts,
-            # Optional direct path to avoid re-resolve in worker
-            "file_path": str(file_path)
-        },
-        queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
-    )
+    opts = options or {}
+    try:
+        async_result = process_document_task.apply_async(
+            args=[document_id, opts],
+            queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
+        )
+    except Exception as e:
+        # Normalize to HTTP 500 so tests don't need to rely on TestClient exception behavior
+        raise HTTPException(status_code=500, detail=str(e))
     
     # Acquire per-document lock with real job id; if it fails, revoke and return 409
-    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
+    ttl_raw = os.getenv("JOB_LOCK_TTL_SECONDS", "3600")
+    try:
+        ttl = int(ttl_raw)
+    except Exception:
+        ttl = 3600
     if not set_active_job(document_id, async_result.id, ttl):
         try:
-            from ....celery_app import celery_app
             celery_app.control.revoke(async_result.id, terminate=False)
         except Exception:
             pass

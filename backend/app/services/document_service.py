@@ -158,19 +158,25 @@ class DocumentService:
             return results
 
         for entry in sorted(base_dir.iterdir(), key=lambda p: p.name.lower()):
-            if not entry.is_file():
-                continue
-
-            ext = entry.suffix.lower()
-            if self._supported_extensions and ext and ext not in self._supported_extensions:
-                continue
-
             try:
+                # Guard even is_file() since it can stat() under the hood
+                if not entry.is_file():
+                    continue
+
+                ext = entry.suffix.lower()
+                if self._supported_extensions and ext and ext not in self._supported_extensions:
+                    continue
+
                 stat = entry.stat()
                 # Attempt to parse name as "<document_id>_<original>"
                 parts = entry.name.split("_", 1)
-                document_id = parts[0] if len(parts) == 2 else ""
-                original_filename = parts[1] if len(parts) == 2 else entry.name
+                # Only treat as a document_id if the prefix looks like a real id (e.g., uuid or token >= 6 chars)
+                if len(parts) == 2 and len(parts[0]) >= 6:
+                    document_id = parts[0]
+                    original_filename = parts[1]
+                else:
+                    document_id = ""
+                    original_filename = entry.name
 
                 # Ensure a stable unique document_id for batch files
                 if not document_id and kind == "batch":
@@ -178,17 +184,17 @@ class DocumentService:
                     # This is supported throughout the codebase (lookups accept filename)
                     document_id = original_filename
 
-                # FIXED: Convert datetime to Unix timestamp as integer (not ISO string)
+                # Convert datetime to Unix timestamp as integer (not ISO string)
                 upload_time_timestamp = int(stat.st_mtime)
                 
-                # FIXED: Include both filename and original_filename fields as required
+                # Include both filename and original_filename fields as required
                 results.append({
                     # Required fields for FileInfo model
                     "document_id": document_id,
-                    "filename": original_filename,  # FIXED: Added missing filename field
+                    "filename": original_filename,
                     "original_filename": original_filename,
                     "file_size": int(stat.st_size),
-                    "upload_time": upload_time_timestamp,  # FIXED: Now returns int timestamp instead of ISO string
+                    "upload_time": upload_time_timestamp,
                     "file_path": str(entry.relative_to(base_dir)),
                 })
             except Exception as e:

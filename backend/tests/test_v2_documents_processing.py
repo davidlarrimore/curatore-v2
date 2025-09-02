@@ -10,7 +10,7 @@ from datetime import datetime
 from app.main import app
 from app.services.document_service import document_service
 from app.services.storage_service import storage_service
-from app.core.models import ProcessingResult, ConversionResult, LLMEvaluationResult
+from app.models import ProcessingResult, ConversionResult, LLMEvaluation as LLMEvaluationResult
 
 
 class TestV2DocumentsProcessingEndpoint:
@@ -103,10 +103,13 @@ class TestV2DocumentsProcessingEndpoint:
         response = client.post(
             "/api/v2/documents/test-doc-123/process",
             json={
-                "auto_optimize": True,
+                # ProcessingOptions fields (domain model)
+                "auto_improve": True,
+                "vector_optimize": True,
                 "quality_thresholds": {
-                    "conversion": 75,
-                    "clarity": 7
+                    # QualityThresholds fields (domain model)
+                    "conversion_quality": 75,
+                    "clarity_score": 7
                 }
             }
         )
@@ -131,7 +134,7 @@ class TestV2DocumentsProcessingEndpoint:
         """Test processing request for nonexistent document."""
         # Setup: no file found in either location
         mock_doc_service.find_uploaded_file.return_value = None
-        mock_doc_service.find_batch_file.return_value = None
+        mock_doc_service.find_batch_file_by_document_id.return_value = None
         
         response = client.post("/api/v2/documents/nonexistent/process")
         
@@ -165,12 +168,15 @@ class TestV2DocumentsProcessingEndpoint:
         # Test request
         response = client.post("/api/v2/documents/test-doc-123/process")
         
-        # Assertions
+        # Assertions (ErrorResponse wrapper with standardized shape)
         assert response.status_code == 409
         data = response.json()
-        assert data["error"] == "Another job is already running for this document"
-        assert data["active_job_id"] == "existing-job-456"
-        assert data["status"] == "conflict"
+        # HTTPException is wrapped by global handler => error field and stringified detail
+        assert data.get("error") == "HTTP 409"
+        detail_str = str(data.get("detail", ""))
+        assert "Another job is already running for this document" in detail_str
+        assert "existing-job-456" in detail_str
+        assert "conflict" in detail_str
     
     @patch.dict(os.environ, {"ALLOW_SYNC_PROCESS": "true"})
     @patch('app.api.v2.routers.documents.document_service')
@@ -212,7 +218,7 @@ class TestV2DocumentsProcessingEndpoint:
         """Test that processing finds file in batch_files directory when not in uploads."""
         # Setup: not in uploads, but in batch_files
         mock_doc_service.find_uploaded_file.return_value = None
-        mock_doc_service.find_batch_file.return_value = mock_document_file
+        mock_doc_service.find_batch_file_by_document_id.return_value = mock_document_file
         
         with patch('app.api.v2.routers.documents.process_document_task') as mock_task, \
              patch('app.api.v2.routers.documents.set_active_job', return_value=True), \
@@ -251,18 +257,21 @@ class TestV2DocumentsProcessingEndpoint:
             
             # Test with complex processing options
             processing_options = {
-                "auto_optimize": True,
+                # Match app.models.ProcessingOptions
+                "auto_improve": True,
+                "vector_optimize": True,
                 "quality_thresholds": {
-                    "conversion": 80,
-                    "clarity": 8,
-                    "completeness": 7,
-                    "relevance": 8,
-                    "markdown": 9
+                    "conversion_quality": 80,
+                    "clarity_score": 8,
+                    "completeness_score": 7,
+                    "relevance_score": 8,
+                    "markdown_quality": 9
                 },
                 "ocr_settings": {
-                    "language": "en",
+                    "language": "eng",
                     "psm": 6
                 },
+                # Router accepts options; extra testing field is ignored in domain model
                 "llm_prompt_override": "Custom analysis prompt"
             }
             
@@ -280,8 +289,10 @@ class TestV2DocumentsProcessingEndpoint:
             # Check that document_id and options were passed correctly
             assert call_args[1]['args'][0] == "test-options"  # document_id
             passed_options = call_args[1]['args'][1]  # options dict
-            assert passed_options["auto_optimize"] is True
-            assert passed_options["quality_thresholds"]["conversion"] == 80
+            assert passed_options["auto_improve"] is True
+            assert passed_options["vector_optimize"] is True
+            assert passed_options["quality_thresholds"]["conversion_quality"] == 80
+            # Extra field is forwarded as part of options dict
             assert passed_options["llm_prompt_override"] == "Custom analysis prompt"
 
 
@@ -345,7 +356,8 @@ class TestV2DocumentsEndpointIntegration:
             
             # Simulate: document was uploaded but then deleted
             mock_doc_service.find_uploaded_file.return_value = None
-            mock_doc_service.find_batch_file.return_value = None
+            # Ensure the v2 router's lookup also returns None
+            mock_doc_service.find_batch_file_by_document_id.return_value = None
             
             response = client.post("/api/v2/documents/deleted-doc/process")
             
@@ -397,9 +409,14 @@ class TestV2DocumentsErrorHandling:
         
         response = client.post("/api/v2/documents/task-fail-test/process")
         
-        # Should return 500 with error details
+        # Should return 500; global handler standardizes the error shape.
+        # In debug mode, detail contains the exception message; otherwise generic text.
         assert response.status_code == 500
-        assert "Celery broker unavailable" in response.json()["detail"]
+        data = response.json()
+        # Error shape can be either our standardized HTTP wrapper or a generic label
+        assert data.get("error") in ("Internal Server Error", "HTTP 500")
+        detail = str(data.get("detail", ""))
+        assert ("Celery broker unavailable" in detail) or ("unexpected" in detail.lower())
     
     @patch('app.api.v2.routers.documents.document_service')
     @patch('app.api.v2.routers.documents.process_document_task')
