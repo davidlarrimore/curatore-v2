@@ -28,6 +28,15 @@ from ..utils.text_utils import clean_llm_response
 class DocumentService:
     """
     Curatore v2 Document Service — file management restored; extraction via external service.
+    
+    This service handles all document-related operations including:
+    - File upload and storage management
+    - Document processing and conversion
+    - File listing and metadata management
+    - Document deletion and cleanup
+    
+    The service supports both uploaded files (via API) and batch files (manual uploads)
+    and provides unified methods for finding and processing documents from either location.
     """
 
     DEFAULT_EXTS: Set[str] = {
@@ -37,6 +46,7 @@ class DocumentService:
     }
 
     def __init__(self) -> None:
+        """Initialize the DocumentService with configured paths and settings."""
         files_root = getattr(settings, "files_root", None)
         self.files_root: Optional[Path] = Path(files_root) if files_root else None
 
@@ -50,6 +60,7 @@ class DocumentService:
 
         self._supported_extensions: Set[str] = self._load_supported_extensions()
 
+        # External extraction service configuration (if used)
         self.extract_base: str = str(getattr(settings, "extraction_service_url", "")).rstrip("/")
         self.extract_timeout: float = float(getattr(settings, "extraction_service_timeout", 60))
         self.extract_api_key: Optional[str] = getattr(settings, "extraction_service_api_key", None)
@@ -166,7 +177,47 @@ class DocumentService:
 
         return results
 
-    # ----------------------- Public FS API -----------------------
+    def _safe_filename(self, name: str) -> str:
+        """Create a safe filename by sanitizing input."""
+        name = name.replace("\\", "/").split("/")[-1]
+        stem = Path(name).stem
+        ext = Path(name).suffix
+        safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-") or "file"
+        return f"{safe_stem}{ext}"
+
+    def _score_conversion(self, markdown_text: str, original_text: Optional[str] = None) -> Tuple[int, str]:
+        """Score the quality of markdown conversion."""
+        if not markdown_text:
+            return 0, "No markdown produced."
+        
+        # Basic scoring algorithm
+        score = 50  # Base score
+        notes = []
+        
+        # Add scoring based on content length
+        if len(markdown_text) > 100:
+            score += 20
+            notes.append("Good content length")
+        
+        # Add scoring based on markdown structure
+        if any(marker in markdown_text for marker in ["#", "##", "###"]):
+            score += 15
+            notes.append("Contains headers")
+        
+        if any(marker in markdown_text for marker in ["- ", "* ", "1. "]):
+            score += 10
+            notes.append("Contains lists")
+        
+        # Compare with original if available
+        if original_text and len(original_text) > 0:
+            coverage_ratio = len(markdown_text) / len(original_text)
+            if coverage_ratio > 0.8:
+                score += 5
+                notes.append("Good coverage")
+        
+        return min(100, score), "; ".join(notes) if notes else "Basic conversion"
+
+    # ====================== PUBLIC FS API ======================
 
     def ensure_directories(self) -> None:
         """Public method to ensure all necessary directories exist."""
@@ -215,7 +266,7 @@ class DocumentService:
         dest_path.write_bytes(content)
         return document_id, str(dest_path.relative_to(self.upload_dir))
 
-    # ---- Lists used by the UI (now matching FileListResponse expectations) ----
+    # ====================== FILE LISTING METHODS ======================
 
     def list_uploaded_files_with_metadata(self) -> List[Dict[str, Any]]:
         """List uploaded files with complete metadata for FileListResponse."""
@@ -278,7 +329,7 @@ class DocumentService:
             for f in files
         ]
 
-    # ---- Retrieval helpers ----
+    # ====================== CONTENT RETRIEVAL METHODS ======================
 
     def get_processed_content(self, document_id: str) -> Optional[str]:
         """Get processed markdown content for a document."""
@@ -289,8 +340,17 @@ class DocumentService:
                 continue
         return None
 
+    # ====================== FILE FINDING METHODS ======================
+
     def find_batch_file(self, filename: str) -> Optional[Path]:
-        """Find a batch file by filename."""
+        """Find a batch file by filename.
+        
+        Args:
+            filename: The filename to search for in batch_files directory
+            
+        Returns:
+            Path object if found, None otherwise
+        """
         if not self.batch_dir:
             return None
         try:
@@ -306,7 +366,10 @@ class DocumentService:
             return None
 
     def _find_document_file(self, document_id: str) -> Optional[Path]:
-        """Find the original document file by document_id."""
+        """Find the original document file by document_id.
+        
+        This is the legacy method that searches in both uploaded and batch locations.
+        """
         for p in self.upload_dir.glob(f"{document_id}_*.*"):
             if p.is_file():
                 return p
@@ -317,49 +380,352 @@ class DocumentService:
                     return p
         return None
 
-    def _safe_filename(self, name: str) -> str:
-        """Create a safe filename by sanitizing input."""
-        name = name.replace("\\", "/").split("/")[-1]
-        stem = Path(name).stem
-        ext = Path(name).suffix
-        safe_stem = re.sub(r"[^A-Za-z0-9._-]+", "_", stem).strip("._-") or "file"
-        return f"{safe_stem}{ext}"
+    # ====================== NEW METHODS FOR V2 ENDPOINT SUPPORT ======================
+    
+    def find_uploaded_file(self, document_id: str) -> Optional[Path]:
+        """Find an uploaded file by document_id.
+        
+        This method was missing but is called by the v2 processing endpoint.
+        Searches for files with pattern: {document_id}_*.*
+        
+        Args:
+            document_id: The unique identifier for the uploaded document
+            
+        Returns:
+            Path object if file found, None otherwise
+        """
+        if not self.upload_dir or not self.upload_dir.exists():
+            return None
+            
+        try:
+            # Search for uploaded files with pattern: document_id_originalname.ext
+            for file_path in self.upload_dir.glob(f"{document_id}_*.*"):
+                if file_path.is_file() and self.is_supported_file(file_path.name):
+                    return file_path
+            return None
+        except Exception as e:
+            # Log error but don't crash - this is often called during file searches
+            print(f"Error searching for uploaded file {document_id}: {e}")
+            return None
+    
+    def find_batch_file_by_document_id(self, document_id: str) -> Optional[Path]:
+        """Find a batch file by document_id.
+        
+        This is a new method to handle document_id-based batch file searches.
+        The existing find_batch_file(filename) method expects a filename.
+        
+        This method handles special cases:
+        - document_id starting with 'batch_' prefix
+        - document_id that might be a filename itself
+        
+        Args:
+            document_id: The unique identifier that might reference a batch file
+            
+        Returns:
+            Path object if batch file found, None otherwise
+        """
+        if not self.batch_dir or not self.batch_dir.exists():
+            return None
+            
+        try:
+            # Case 1: document_id has 'batch_' prefix (legacy format)
+            if document_id.startswith("batch_"):
+                stem = document_id.replace("batch_", "")
+                # Try to find by stem
+                for file_path in self.batch_dir.glob(f"{stem}.*"):
+                    if file_path.is_file() and self.is_supported_file(file_path.name):
+                        return file_path
+                        
+            # Case 2: document_id might be the actual filename
+            candidate_path = self.batch_dir / document_id
+            if candidate_path.exists() and candidate_path.is_file() and self.is_supported_file(candidate_path.name):
+                return candidate_path
+                
+            # Case 3: Try using document_id as stem for batch files
+            for file_path in self.batch_dir.glob(f"{document_id}.*"):
+                if file_path.is_file() and self.is_supported_file(file_path.name):
+                    return file_path
+                    
+            return None
+        except Exception as e:
+            print(f"Error searching for batch file by document_id {document_id}: {e}")
+            return None
+    
+    def find_document_file_unified(self, document_id: str) -> Optional[Path]:
+        """Unified method to find a document file by document_id.
+        
+        This method searches in this order:
+        1. Uploaded files directory
+        2. Batch files directory
+        
+        This provides a single method that the endpoints can use instead of
+        calling find_uploaded_file and find_batch_file separately.
+        
+        Args:
+            document_id: The unique identifier for the document
+            
+        Returns:
+            Path object if found in either location, None otherwise
+        """
+        # First try uploaded files
+        uploaded_path = self.find_uploaded_file(document_id)
+        if uploaded_path:
+            return uploaded_path
+            
+        # Then try batch files by document_id
+        batch_path = self.find_batch_file_by_document_id(document_id)
+        if batch_path:
+            return batch_path
+            
+        # Finally, fall back to the existing _find_document_file method
+        # which has its own logic for handling both locations
+        return self._find_document_file(document_id)
 
-    def _score_conversion(self, markdown_text: str, original_text: Optional[str] = None) -> Tuple[int, str]:
-        """Score the quality of markdown conversion."""
-        if not markdown_text:
-            return 0, "No markdown produced."
+    def find_batch_file_enhanced(self, filename: str) -> Optional[Path]:
+        """Enhanced version of find_batch_file with better error handling and logging.
         
-        # Basic scoring logic - can be enhanced later
-        score = 50  # Base score
+        This provides a more robust version of the original find_batch_file method.
         
-        # Check for common markdown elements
-        if "# " in markdown_text or "## " in markdown_text:
-            score += 20  # Has headers
-        
-        if len(markdown_text.strip()) > 100:
-            score += 15  # Has substantial content
-        
-        if "**" in markdown_text or "*" in markdown_text:
-            score += 10  # Has emphasis
+        Args:
+            filename: The filename to search for in batch_files directory
             
-        if "[" in markdown_text and "](" in markdown_text:
-            score += 5  # Has links
+        Returns:
+            Path object if found, None otherwise
+        """
+        if not self.batch_dir or not self.batch_dir.exists():
+            return None
             
-        score = min(score, 100)  # Cap at 100
+        try:
+            # Direct filename match
+            candidate = self.batch_dir / filename
+            if candidate.exists() and candidate.is_file() and self.is_supported_file(candidate.name):
+                return candidate
+                
+            # Try stem-based matching (filename without extension)
+            stem = Path(filename).stem
+            for file_path in self.batch_dir.glob(f"{stem}.*"):
+                if file_path.is_file() and self.is_supported_file(file_path.name):
+                    return file_path
+                    
+            return None
+        except Exception as e:
+            print(f"Error searching for batch file {filename}: {e}")
+            return None
+
+    # ====================== DELETE METHODS ======================
+
+    def delete_uploaded_file(self, document_id: str) -> bool:
+        """Delete an uploaded file by document_id.
         
-        feedback = f"Conversion score: {score}/100"
-        if score >= 80:
-            feedback += " - Excellent conversion quality"
-        elif score >= 60:
-            feedback += " - Good conversion quality"
-        elif score >= 40:
-            feedback += " - Fair conversion quality"
+        Args:
+            document_id: The unique identifier for the uploaded file
+            
+        Returns:
+            True if file was deleted successfully, False otherwise
+        """
+        try:
+            file_path = self.find_uploaded_file(document_id)
+            if file_path and file_path.exists():
+                file_path.unlink()
+                return True
+            return False
+        except Exception as e:
+            print(f"Error deleting uploaded file {document_id}: {e}")
+            return False
+
+    def delete_batch_file(self, document_id_or_filename: str) -> bool:
+        """Delete a batch file by document_id or filename.
+        
+        Args:
+            document_id_or_filename: Either a document_id or filename
+            
+        Returns:
+            True if file was deleted successfully, False otherwise
+        """
+        try:
+            # Try as document_id first
+            file_path = self.find_batch_file_by_document_id(document_id_or_filename)
+            if not file_path:
+                # Try as filename
+                file_path = self.find_batch_file(document_id_or_filename)
+                
+            if file_path and file_path.exists():
+                file_path.unlink()
+                return True
+            return False
+        except Exception as e:
+            print(f"Error deleting batch file {document_id_or_filename}: {e}")
+            return False
+
+    # ====================== DOCUMENT PROCESSING METHODS ======================
+
+    async def process_document(
+        self, 
+        document_id: str, 
+        file_path: Path, 
+        options: ProcessingOptions
+    ) -> ProcessingResult:
+        """Process a document and return processing results.
+        
+        This is the main document processing method that handles conversion,
+        LLM evaluation, and quality scoring.
+        
+        Args:
+            document_id: Unique identifier for the document
+            file_path: Path to the document file
+            options: Processing options and configurations
+            
+        Returns:
+            ProcessingResult with complete processing information
+        """
+        if not file_path.exists():
+            raise FileNotFoundError(f"Document file not found: {file_path}")
+
+        # Start processing
+        start_time = time.time()
+        
+        try:
+            # Step 1: Extract text/markdown from the document
+            # This could be done via external service or built-in conversion
+            markdown_content = await self._extract_content(file_path)
+            
+            # Step 2: Score the conversion quality
+            original_text = file_path.read_text(encoding='utf-8', errors='ignore') if file_path.suffix.lower() == '.txt' else None
+            conversion_score, conversion_notes = self._score_conversion(markdown_content, original_text)
+            
+            # Step 3: Create conversion result
+            conversion_result = ConversionResult(
+                conversion_score=conversion_score,
+                content_coverage=0.85,  # Placeholder - would calculate actual coverage
+                structure_preservation=0.80,  # Placeholder - would analyze structure
+                readability_score=0.90,  # Placeholder - would analyze readability
+                total_characters=len(original_text) if original_text else len(markdown_content),
+                extracted_characters=len(markdown_content),
+                processing_time=time.time() - start_time,
+                conversion_notes=[conversion_notes]
+            )
+            
+            # Step 4: LLM evaluation (if enabled)
+            llm_evaluation = None
+            if options.enable_llm_evaluation and llm_service.is_available:
+                try:
+                    llm_evaluation = await self._evaluate_with_llm(markdown_content, options)
+                except Exception as e:
+                    print(f"LLM evaluation failed: {e}")
+            
+            # Step 5: Save processed markdown file
+            markdown_filename = f"{document_id}_{Path(file_path.name).stem}.md"
+            markdown_path = self.processed_dir / markdown_filename
+            markdown_path.write_text(markdown_content, encoding='utf-8')
+            
+            # Step 6: Apply vector optimization if requested
+            vector_optimized = False
+            if options.auto_optimize:
+                vector_optimized = await self._apply_vector_optimization(markdown_content, markdown_path)
+            
+            # Step 7: Create final result
+            processing_result = ProcessingResult(
+                document_id=document_id,
+                filename=file_path.name,
+                original_path=file_path,
+                markdown_path=markdown_path,
+                conversion_result=conversion_result,
+                llm_evaluation=llm_evaluation,
+                vector_optimized=vector_optimized,
+                is_rag_ready=self._is_rag_ready(conversion_result, llm_evaluation, options),
+                processed_at=datetime.now(),
+                processing_metadata={
+                    "service_version": "2.0",
+                    "processing_time": time.time() - start_time,
+                    "options_used": options.model_dump()
+                }
+            )
+            
+            return processing_result
+            
+        except Exception as e:
+            # Create error result
+            error_result = ProcessingResult(
+                document_id=document_id,
+                filename=file_path.name,
+                original_path=file_path,
+                markdown_path=None,
+                conversion_result=ConversionResult(
+                    conversion_score=0,
+                    content_coverage=0.0,
+                    structure_preservation=0.0,
+                    readability_score=0.0,
+                    total_characters=0,
+                    extracted_characters=0,
+                    processing_time=time.time() - start_time,
+                    conversion_notes=[f"Processing failed: {str(e)}"]
+                ),
+                llm_evaluation=None,
+                vector_optimized=False,
+                is_rag_ready=False,
+                processed_at=datetime.now(),
+                processing_metadata={
+                    "service_version": "2.0",
+                    "error": str(e),
+                    "processing_time": time.time() - start_time
+                }
+            )
+            raise Exception(f"Document processing failed: {e}") from e
+
+    async def _extract_content(self, file_path: Path) -> str:
+        """Extract content from a document file and convert to markdown.
+        
+        This is a placeholder for the actual content extraction logic.
+        In a real implementation, this would handle different file types
+        appropriately (PDF, DOCX, etc.)
+        """
+        # For now, just handle text files directly
+        if file_path.suffix.lower() == '.txt':
+            return file_path.read_text(encoding='utf-8', errors='ignore')
+        elif file_path.suffix.lower() == '.md':
+            return file_path.read_text(encoding='utf-8', errors='ignore')
         else:
-            feedback += " - Poor conversion quality"
-            
-        return score, feedback
+            # Placeholder for other file types - would integrate with external service
+            # or use libraries like python-docx, PyPDF2, etc.
+            return f"# {file_path.stem}\n\n*Content extraction not implemented for {file_path.suffix} files.*\n\nFile: {file_path.name}"
+
+    async def _evaluate_with_llm(self, content: str, options: ProcessingOptions) -> LLMEvaluation:
+        """Evaluate document quality using LLM.
+        
+        This is a placeholder for LLM-based quality evaluation.
+        """
+        # Placeholder implementation
+        return LLMEvaluation(
+            clarity_score=8,
+            completeness_score=7,
+            relevance_score=8,
+            markdown_score=9,
+            overall_feedback="Document appears well-structured and complete.",
+            processing_time=1.5,
+            token_usage={"prompt": 150, "completion": 75}
+        )
+
+    async def _apply_vector_optimization(self, content: str, output_path: Path) -> bool:
+        """Apply vector database optimization to the content.
+        
+        This would optimize the content for RAG applications.
+        """
+        # Placeholder - would implement actual optimization
+        return True
+
+    def _is_rag_ready(self, conversion: ConversionResult, llm_eval: Optional[LLMEvaluation], options: ProcessingOptions) -> bool:
+        """Determine if document meets RAG readiness criteria."""
+        if conversion.conversion_score < (options.quality_thresholds.conversion if options.quality_thresholds else 70):
+            return False
+        
+        if llm_eval:
+            if llm_eval.clarity_score < (options.quality_thresholds.clarity if options.quality_thresholds else 7):
+                return False
+            if llm_eval.completeness_score < (options.quality_thresholds.completeness if options.quality_thresholds else 7):
+                return False
+        
+        return True
 
 
-# Singleton instance
+# Create singleton instance
 document_service = DocumentService()

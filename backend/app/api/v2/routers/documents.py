@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import List, Optional
 from pathlib import Path
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, Query
+from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Request
 from pydantic import BaseModel
 from fastapi.responses import FileResponse
 
@@ -18,11 +18,11 @@ from ..models import (
     ProcessingOptions,
     BulkDownloadRequest,
 )
-from ....models import FileInfo, FileListResponse  # ADD THIS LINE
+from ....models import FileInfo, FileListResponse
 from ....services.document_service import document_service
 from ....services.storage_service import storage_service
 from ....services.zip_service import zip_service
-from ....tasks import update_document_content_task
+from ....tasks import update_document_content_task, process_document_task
 from ....services.job_service import (
     set_active_job,
     replace_active_job,
@@ -30,15 +30,6 @@ from ....services.job_service import (
     record_job_status,
     append_job_log,
 )
-import os
-from datetime import datetime
-from ....services.job_service import (
-    set_active_job,
-    get_active_job_for_document,
-    record_job_status,
-    append_job_log,
-)
-from ....tasks import process_document_task
 import os
 from datetime import datetime
 
@@ -50,7 +41,8 @@ class V2BatchEnqueueRequest(BaseModel):
     options: Optional[dict] = None
 
 
-# UPDATED: Parity endpoints with v1 for uploads and single-document processing
+# ==================== DOCUMENT LISTING ENDPOINTS ====================
+
 @router.get("/documents/uploaded", tags=["Documents"], response_model=FileListResponse)
 async def list_uploaded_files():
     """List all uploaded files with complete metadata (v2 compatibility)."""
@@ -70,6 +62,8 @@ async def list_batch_files():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list batch files: {str(e)}")
 
+
+# ==================== UPLOAD & DELETE ENDPOINTS ====================
 
 @router.post("/documents/upload", tags=["Documents"], response_model=FileUploadResponse)
 async def upload_document(file: UploadFile = File(...)):
@@ -114,7 +108,9 @@ async def delete_document(document_id: str):
         raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")
 
 
+# ==================== BATCH PROCESSING ENDPOINT ====================
 # Place the static batch enqueue route before dynamic routes to avoid path shadowing
+
 @router.post("/documents/batch/process", tags=["Processing"])
 async def process_batch(request: V2BatchEnqueueRequest):
     """Enqueue multiple documents in batch (v2)."""
@@ -137,46 +133,61 @@ async def process_batch(request: V2BatchEnqueueRequest):
                 })
                 continue
 
-            # Create and enqueue the processing job
-            job_id = str(uuid.uuid4())
-            set_active_job(job_id, document_id, batch_id)
-            
-            # Find the file path
+            # Find the file path - check both uploaded and batch files
             file_path = document_service.find_uploaded_file(document_id)
             if not file_path:
                 file_path = document_service.find_batch_file(document_id)
             
             if not file_path:
-                record_job_status(job_id, "failed", f"File not found: {document_id}")
                 conflicts.append({
                     "document_id": document_id,
-                    "job_id": job_id,
                     "message": "File not found"
                 })
                 continue
 
             # Enqueue the celery task
             try:
-                task = process_document_task.delay(
-                    job_id=job_id,
-                    document_id=document_id,
-                    file_path=str(file_path),
-                    options=request.options or {}
+                async_result = process_document_task.apply_async(
+                    args=[document_id, request.options or {}], 
+                    queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
                 )
                 
-                jobs.append({
-                    "job_id": job_id,
+                # Acquire per-document lock with job ID
+                ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
+                if not set_active_job(document_id, async_result.id, ttl):
+                    try:
+                        from ....celery_app import celery_app
+                        celery_app.control.revoke(async_result.id, terminate=False)
+                    except Exception:
+                        pass
+                    active_job = get_active_job_for_document(document_id)
+                    conflicts.append({
+                        "document_id": document_id,
+                        "existing_job_id": active_job,
+                        "message": "Another job is already running for this document"
+                    })
+                    continue
+                
+                # Record job status
+                record_job_status(async_result.id, {
+                    "job_id": async_result.id,
                     "document_id": document_id,
-                    "task_id": task.id,
+                    "status": "PENDING",
+                    "enqueued_at": datetime.utcnow().isoformat(),
+                    "batch_id": batch_id,
+                })
+                append_job_log(async_result.id, "info", f"Queued: {document_id}")
+                
+                jobs.append({
+                    "job_id": async_result.id,
+                    "document_id": document_id,
                     "status": "queued",
-                    "enqueued_at": datetime.now().isoformat()
+                    "enqueued_at": datetime.utcnow().isoformat()
                 })
                 
             except Exception as e:
-                record_job_status(job_id, "failed", str(e))
                 conflicts.append({
                     "document_id": document_id,
-                    "job_id": job_id,
                     "message": f"Failed to enqueue: {str(e)}"
                 })
 
@@ -190,6 +201,78 @@ async def process_batch(request: V2BatchEnqueueRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Batch processing failed: {str(e)}")
 
+
+# ==================== SINGLE DOCUMENT PROCESSING ENDPOINT ====================
+# CRITICAL: This was missing and causing 404 errors!
+
+@router.post("/documents/{document_id}/process", tags=["Processing"])
+async def process_document(
+    document_id: str,
+    options: Optional[ProcessingOptions] = None,
+    request: Request = None,
+    sync: bool = Query(False, description="Run synchronously (for tests only)"),
+):
+    """Enqueue processing for a single document (Celery) or run sync when requested.
+    
+    This endpoint was missing from v2 and causing 404 errors when the frontend
+    tried to process individual documents.
+    """
+    # Validate file exists first - check both uploaded and batch files
+    file_path = document_service.find_uploaded_file(document_id)
+    if not file_path:
+        file_path = document_service.find_batch_file(document_id)
+    
+    if not file_path:
+        raise HTTPException(status_code=404, detail="Document not found")
+
+    # Synchronous path (optional for testing)
+    if sync and os.getenv("ALLOW_SYNC_PROCESS", "false").lower() in {"1", "true", "yes"}:
+        from ....core.models import ProcessingOptions as DomainProcessingOptions
+        domain_options = options.to_domain() if options else DomainProcessingOptions()
+        result = await document_service.process_document(document_id, file_path, domain_options)
+        storage_service.save_processing_result(result)
+        return ProcessingResult.model_validate(result)
+
+    # Enqueue Celery task
+    opts = (options.model_dump() if options else {})
+    async_result = process_document_task.apply_async(
+        args=[document_id, opts], 
+        queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
+    )
+    
+    # Acquire per-document lock with real job id; if it fails, revoke and return 409
+    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
+    if not set_active_job(document_id, async_result.id, ttl):
+        try:
+            from ....celery_app import celery_app
+            celery_app.control.revoke(async_result.id, terminate=False)
+        except Exception:
+            pass
+        active_job = get_active_job_for_document(document_id)
+        raise HTTPException(status_code=409, detail={
+            "error": "Another job is already running for this document",
+            "active_job_id": active_job,
+            "status": "conflict"
+        })
+
+    # Record initial job status
+    record_job_status(async_result.id, {
+        "job_id": async_result.id,
+        "document_id": document_id,
+        "status": "PENDING",
+        "enqueued_at": datetime.utcnow().isoformat(),
+    })
+    append_job_log(async_result.id, "info", f"Queued: {document_id}")
+
+    return {
+        "job_id": async_result.id,
+        "document_id": document_id,
+        "status": "queued",
+        "enqueued_at": datetime.utcnow(),
+    }
+
+
+# ==================== RESULT & CONTENT ENDPOINTS ====================
 
 @router.get("/documents/{document_id}/result", tags=["Results"])
 async def get_processing_result(document_id: str):
@@ -245,66 +328,85 @@ async def get_document_content(document_id: str):
 async def update_document_content(document_id: str, request: DocumentEditRequest):
     """Update the content of a processed document."""
     try:
-        # Check if document exists
+        # Validate document exists
         result = storage_service.get_processing_result(document_id)
         if not result:
             raise HTTPException(status_code=404, detail="Document not found")
-        
-        # Create job for content update
-        job_id = str(uuid.uuid4())
-        set_active_job(job_id, document_id)
-        
-        # Enqueue the content update task
-        task = update_document_content_task.delay(
-            job_id=job_id,
-            document_id=document_id,
-            new_content=request.content,
-            improvement_prompt=request.improvement_prompt,
-            apply_vector_optimization=request.apply_vector_optimization
-        )
-        
-        return {
-            "job_id": job_id,
-            "document_id": document_id,
-            "task_id": task.id,
-            "status": "queued",
-            "enqueued_at": datetime.now().isoformat()
+
+        # Prepare payload for the update task
+        payload = {
+            "content": request.content,
+            "options": request.options or {},
+            "improvement_prompt": getattr(request, 'improvement_prompt', None),
+            "apply_vector_optimization": getattr(request, 'apply_vector_optimization', True),
         }
         
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Content update failed: {str(e)}")
-
-
-@router.post("/documents/download/bulk", tags=["Downloads"])
-async def bulk_download(request: BulkDownloadRequest):
-    """Create a bulk download archive."""
-    try:
-        if not request.document_ids:
-            raise HTTPException(status_code=400, detail="No document IDs provided")
-        
-        # Get results for all requested documents
-        results = []
-        for doc_id in request.document_ids:
-            result = storage_service.get_processing_result(doc_id)
-            if result:
-                results.append(result)
-        
-        if not results:
-            raise HTTPException(status_code=404, detail="No processed documents found")
-        
-        # Create ZIP archive
-        zip_path = zip_service.create_bulk_archive(
-            results=results,
-            download_type=request.download_type,
-            custom_filename=request.custom_filename,
-            include_summary=request.include_summary,
-            include_combined=request.include_combined
+        # Enqueue update task
+        async_result = update_document_content_task.apply_async(
+            args=[document_id, payload], 
+            queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
         )
         
+        # Acquire per-document lock
+        ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
+        if not set_active_job(document_id, async_result.id, ttl):
+            try:
+                from ....celery_app import celery_app
+                celery_app.control.revoke(async_result.id, terminate=False)
+            except Exception:
+                pass
+            active_job = get_active_job_for_document(document_id)
+            raise HTTPException(status_code=409, detail={
+                "error": "Another job is already running for this document",
+                "active_job_id": active_job,
+                "status": "conflict"
+            })
+        
+        # Record job status
+        record_job_status(async_result.id, {
+            "job_id": async_result.id,
+            "document_id": document_id,
+            "status": "PENDING",
+            "enqueued_at": datetime.utcnow().isoformat(),
+            "operation": "update_content",
+        })
+        append_job_log(async_result.id, "info", f"Queued content update: {document_id}")
+        
+        return {
+            "job_id": async_result.id,
+            "document_id": document_id,
+            "status": "queued",
+            "enqueued_at": datetime.utcnow(),
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update content: {str(e)}")
+
+
+# ==================== DOWNLOAD & EXPORT ENDPOINTS ====================
+
+@router.post("/documents/download/bulk", tags=["Downloads"])
+async def download_bulk_documents(request: BulkDownloadRequest):
+    """Download multiple documents as a ZIP archive."""
+    try:
+        zip_info = await zip_service.create_bulk_download(
+            document_ids=request.document_ids,
+            download_type=request.download_type,
+            custom_filename=getattr(request, 'custom_filename', None) or getattr(request, 'zip_name', None),
+            include_summary=getattr(request, 'include_summary', True),
+            include_combined=getattr(request, 'include_combined', request.download_type == 'combined')
+        )
+        
+        if not zip_info.zip_path.exists():
+            raise HTTPException(status_code=404, detail="Archive not found")
+            
         return FileResponse(
-            path=zip_path,
-            filename=Path(zip_path).name,
-            media_type="application/zip"
+            path=str(zip_info.zip_path),
+            filename=zip_info.zip_path.name,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={zip_info.zip_path.name}"}
         )
         
     except Exception as e:
@@ -312,32 +414,25 @@ async def bulk_download(request: BulkDownloadRequest):
 
 
 @router.get("/documents/download/rag-ready", tags=["Downloads"])
-async def download_rag_ready(
-    zip_name: Optional[str] = Query(None),
-    include_summary: bool = Query(True)
+async def download_rag_ready_documents(
+    zip_name: Optional[str] = Query(None, description="Custom ZIP filename"),
+    include_summary: bool = Query(True, description="Include processing summary")
 ):
-    """Download only RAG-ready documents."""
+    """Download all RAG-ready documents as a ZIP archive."""
     try:
-        # Get all processing results
-        all_results = storage_service.get_all_processing_results()
-        
-        # Filter for RAG-ready documents
-        rag_ready_results = [r for r in all_results if r.is_rag_ready]
-        
-        if not rag_ready_results:
-            raise HTTPException(status_code=404, detail="No RAG-ready documents found")
-        
-        # Create ZIP archive
-        zip_path = zip_service.create_rag_ready_archive(
-            results=rag_ready_results,
+        zip_info = await zip_service.create_rag_ready_download(
             custom_filename=zip_name,
             include_summary=include_summary
         )
         
+        if not zip_info.zip_path.exists():
+            raise HTTPException(status_code=404, detail="No RAG-ready documents found")
+            
         return FileResponse(
-            path=zip_path,
-            filename=Path(zip_path).name,
-            media_type="application/zip"
+            path=str(zip_info.zip_path),
+            filename=zip_info.zip_path.name,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={zip_info.zip_path.name}"}
         )
         
     except Exception as e:
