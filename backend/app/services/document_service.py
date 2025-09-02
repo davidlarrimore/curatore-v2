@@ -101,6 +101,21 @@ class DocumentService:
         if self.batch_dir is not None:
             self.batch_dir.mkdir(parents=True, exist_ok=True)
 
+    async def extractor_health(self) -> Dict[str, Any]:
+        """Check connectivity to the extraction service (best-effort)."""
+        base = getattr(self, 'extract_base', '')
+        if not base:
+            return {"connected": False, "endpoint": None, "error": "not_configured"}
+        url = f"{base}/api/v1/system/health"
+        try:
+            async with httpx.AsyncClient(timeout=5.0, verify=getattr(settings, 'extraction_service_verify_ssl', True)) as client:
+                resp = await client.get(url)
+                ok = resp.status_code == 200
+                data = resp.json() if ok else {"status_code": resp.status_code}
+                return {"connected": ok, "endpoint": url, "response": data}
+        except Exception as e:
+            return {"connected": False, "endpoint": url, "error": str(e)}
+
     def _safe_clear_dir(self, directory: Path) -> int:
         """Safely clear all files from a directory and return count of deleted files."""
         deleted = 0
@@ -156,6 +171,12 @@ class DocumentService:
                 parts = entry.name.split("_", 1)
                 document_id = parts[0] if len(parts) == 2 else ""
                 original_filename = parts[1] if len(parts) == 2 else entry.name
+
+                # Ensure a stable unique document_id for batch files
+                if not document_id and kind == "batch":
+                    # Use the filename as the document_id for batch items
+                    # This is supported throughout the codebase (lookups accept filename)
+                    document_id = original_filename
 
                 # FIXED: Convert datetime to Unix timestamp as integer (not ISO string)
                 upload_time_timestamp = int(stat.st_mtime)
@@ -236,6 +257,27 @@ class DocumentService:
             count = self._safe_clear_dir(dir_path)
             deleted[key] += count
         deleted["total"] = deleted["uploaded"] + deleted["processed"] + deleted.get("batch", 0)
+        self._ensure_directories()
+        return deleted
+
+    def clear_runtime_files(self) -> Dict[str, int]:
+        """
+        Clear only runtime-generated files: uploaded and processed.
+
+        This intentionally leaves any files in the batch directory untouched
+        so that locally curated batch files remain available between runs or
+        when using the "Start Over" action in the UI.
+        """
+        deleted = {"uploaded": 0, "processed": 0, "total": 0}
+        for dir_path, key in (
+            (self.upload_dir, "uploaded"),
+            (self.processed_dir, "processed"),
+        ):
+            if not dir_path:
+                continue
+            count = self._safe_clear_dir(dir_path)
+            deleted[key] += count
+        deleted["total"] = deleted["uploaded"] + deleted["processed"]
         self._ensure_directories()
         return deleted
 
@@ -332,12 +374,27 @@ class DocumentService:
     # ====================== CONTENT RETRIEVAL METHODS ======================
 
     def get_processed_content(self, document_id: str) -> Optional[str]:
-        """Get processed markdown content for a document."""
-        for file_path in self.processed_dir.glob(f"*_{document_id}.md"):
+        """Get processed markdown content for a document.
+
+        Files are named as: {document_id}_{original_stem}.md
+        """
+        pattern = f"{document_id}_*.md"
+        for file_path in self.processed_dir.glob(pattern):
             try:
                 return file_path.read_text(encoding="utf-8")
             except Exception:
                 continue
+        return None
+
+    def get_processed_markdown_path(self, document_id: str) -> Optional[Path]:
+        """Find the processed markdown file path by document_id."""
+        try:
+            pattern = f"{document_id}_*.md"
+            for file_path in self.processed_dir.glob(pattern):
+                if file_path.is_file():
+                    return file_path
+        except Exception:
+            pass
         return None
 
     # ====================== FILE FINDING METHODS ======================
@@ -428,23 +485,39 @@ class DocumentService:
             return None
             
         try:
+            # Normalize incoming identifier
+            doc_id = (document_id or "").strip().strip("/\\")
+            # If a path-like value is passed, use the basename
+            if "/" in doc_id or "\\" in doc_id:
+                doc_id = doc_id.replace("\\", "/").split("/")[-1]
             # Case 1: document_id has 'batch_' prefix (legacy format)
-            if document_id.startswith("batch_"):
-                stem = document_id.replace("batch_", "")
+            if doc_id.startswith("batch_"):
+                stem = doc_id.replace("batch_", "")
                 # Try to find by stem
                 for file_path in self.batch_dir.glob(f"{stem}.*"):
                     if file_path.is_file() and self.is_supported_file(file_path.name):
                         return file_path
                         
             # Case 2: document_id might be the actual filename
-            candidate_path = self.batch_dir / document_id
+            candidate_path = self.batch_dir / doc_id
             if candidate_path.exists() and candidate_path.is_file() and self.is_supported_file(candidate_path.name):
                 return candidate_path
                 
             # Case 3: Try using document_id as stem for batch files
-            for file_path in self.batch_dir.glob(f"{document_id}.*"):
+            for file_path in self.batch_dir.glob(f"{doc_id}.*"):
                 if file_path.is_file() and self.is_supported_file(file_path.name):
                     return file_path
+
+            # Case 4: Case-insensitive fallback match on filenames (best-effort)
+            target_lower = doc_id.lower()
+            for file_path in self.batch_dir.iterdir():
+                try:
+                    if file_path.is_file() and self.is_supported_file(file_path.name):
+                        name = file_path.name
+                        if name.lower() == target_lower or name.split(".")[0].lower() == target_lower:
+                            return file_path
+                except Exception:
+                    continue
                     
             return None
         except Exception as e:
@@ -605,9 +678,9 @@ class DocumentService:
                 conversion_notes=[conversion_notes]
             )
             
-            # Step 4: LLM evaluation (if enabled)
+            # Step 4: LLM evaluation (gate on LLM availability and auto_improve intent)
             llm_evaluation = None
-            if options.enable_llm_evaluation and llm_service.is_available:
+            if llm_service.is_available and getattr(options, 'auto_improve', True):
                 try:
                     llm_evaluation = await self._evaluate_with_llm(markdown_content, options)
                 except Exception as e:
@@ -620,7 +693,7 @@ class DocumentService:
             
             # Step 6: Apply vector optimization if requested
             vector_optimized = False
-            if options.auto_optimize:
+            if getattr(options, 'vector_optimize', False):
                 vector_optimized = await self._apply_vector_optimization(markdown_content, markdown_path)
             
             # Step 7: Create final result
@@ -674,20 +747,38 @@ class DocumentService:
 
     async def _extract_content(self, file_path: Path) -> str:
         """Extract content from a document file and convert to markdown.
-        
-        This is a placeholder for the actual content extraction logic.
-        In a real implementation, this would handle different file types
-        appropriately (PDF, DOCX, etc.)
+
+        Behavior:
+          - .txt/.md: return file content
+          - Others: if extraction service is configured, call it; else placeholder
         """
-        # For now, just handle text files directly
-        if file_path.suffix.lower() == '.txt':
+        suffix = file_path.suffix.lower()
+        if suffix in {'.txt', '.md', '.csv'}:
             return file_path.read_text(encoding='utf-8', errors='ignore')
-        elif file_path.suffix.lower() == '.md':
-            return file_path.read_text(encoding='utf-8', errors='ignore')
-        else:
-            # Placeholder for other file types - would integrate with external service
-            # or use libraries like python-docx, PyPDF2, etc.
-            return f"# {file_path.stem}\n\n*Content extraction not implemented for {file_path.suffix} files.*\n\nFile: {file_path.name}"
+
+        # Try external extraction service when configured
+        if getattr(self, 'extract_base', None):
+            try:
+                url = f"{self.extract_base.rstrip('/')}/api/v1/extract"
+                headers = {"Accept": "application/json"}
+                if getattr(self, 'extract_api_key', None):
+                    headers["Authorization"] = f"Bearer {self.extract_api_key}"
+
+                # Use streaming file upload via httpx
+                async with httpx.AsyncClient(timeout=self.extract_timeout, verify=getattr(settings, 'extraction_service_verify_ssl', True)) as client:
+                    files = {"file": (file_path.name, file_path.open('rb'), None)}
+                    resp = await client.post(url, headers=headers, files=files)
+                    resp.raise_for_status()
+                    data = resp.json()
+                    # Prefer v1 extractor response shape
+                    md = data.get('content_markdown') or data.get('markdown') or ''
+                    if isinstance(md, str) and md.strip():
+                        return md
+            except Exception as e:
+                print(f"Extraction service failed for {file_path.name}: {e}")
+
+        # Fallback placeholder when no extractor is configured or it failed
+        return f"# {file_path.stem}\n\n*Content extraction not implemented for {file_path.suffix} files.*\n\nFile: {file_path.name}"
 
     async def _evaluate_with_llm(self, content: str, options: ProcessingOptions) -> LLMEvaluation:
         """Evaluate document quality using LLM.
@@ -715,13 +806,24 @@ class DocumentService:
 
     def _is_rag_ready(self, conversion: ConversionResult, llm_eval: Optional[LLMEvaluation], options: ProcessingOptions) -> bool:
         """Determine if document meets RAG readiness criteria."""
-        if conversion.conversion_score < (options.quality_thresholds.conversion if options.quality_thresholds else 70):
+        # Use domain QualityThresholds field names
+        conv_thresh = 70
+        if getattr(options, 'quality_thresholds', None) and getattr(options.quality_thresholds, 'conversion_quality', None) is not None:
+            conv_thresh = options.quality_thresholds.conversion_quality
+        if conversion.conversion_score < conv_thresh:
             return False
         
         if llm_eval:
-            if llm_eval.clarity_score < (options.quality_thresholds.clarity if options.quality_thresholds else 7):
+            clarity_thresh = 7
+            comp_thresh = 7
+            if getattr(options, 'quality_thresholds', None):
+                if getattr(options.quality_thresholds, 'clarity_score', None) is not None:
+                    clarity_thresh = options.quality_thresholds.clarity_score
+                if getattr(options.quality_thresholds, 'completeness_score', None) is not None:
+                    comp_thresh = options.quality_thresholds.completeness_score
+            if (llm_eval.clarity_score or 0) < clarity_thresh:
                 return False
-            if llm_eval.completeness_score < (options.quality_thresholds.completeness if options.quality_thresholds else 7):
+            if (llm_eval.completeness_score or 0) < comp_thresh:
                 return False
         
         return True

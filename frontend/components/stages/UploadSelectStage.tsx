@@ -307,10 +307,11 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
    * @param checked - The new checked state.
    */
   const handleFileToggle = (file: FileInfo, checked: boolean) => {
+    const keyOf = (f: FileInfo) => f.document_id || f.file_path || f.filename;
     if (checked) {
       onSelectedFilesChange([...selectedFiles, file]);
     } else {
-      onSelectedFilesChange(selectedFiles.filter(f => f.document_id !== file.document_id));
+      onSelectedFilesChange(selectedFiles.filter(f => keyOf(f) !== keyOf(file)));
     }
   };
 
@@ -320,12 +321,13 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
    * @param checked - The new checked state for all files.
    */
   const handleSelectAll = (files: FileInfo[], checked: boolean) => {
+    const keyOf = (f: FileInfo) => f.document_id || f.file_path || f.filename;
     if (checked) {
-      const newFiles = files.filter(f => !selectedFiles.some(sf => sf.document_id === f.document_id));
+      const newFiles = files.filter(f => !selectedFiles.some(sf => keyOf(sf) === keyOf(f)));
       onSelectedFilesChange([...selectedFiles, ...newFiles]);
     } else {
-      const fileIds = files.map(f => f.document_id);
-      onSelectedFilesChange(selectedFiles.filter(f => !fileIds.includes(f.document_id)));
+      const fileIds = files.map(f => keyOf(f));
+      onSelectedFilesChange(selectedFiles.filter(f => !fileIds.includes(keyOf(f))));
     }
   };
 
@@ -403,8 +405,9 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
    * @returns A JSX element representing the file list.
    */
   const renderFileList = (files: FileInfo[], title: string): JSX.Element => {
+    const keyOf = (f: FileInfo) => f.document_id || f.file_path || f.filename;
     const allSelected = files.length > 0 && files.every(f => 
-      selectedFiles.some(sf => sf.document_id === f.document_id)
+      selectedFiles.some(sf => keyOf(sf) === keyOf(f))
     );
 
     return (
@@ -497,13 +500,13 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
             {/* Table Body */}
             <div className="divide-y divide-gray-200">
               {files.map((file) => {
-                const isSelected = selectedFiles.some(sf => sf.document_id === file.document_id);
+                const isSelected = selectedFiles.some(sf => keyOf(sf) === keyOf(file));
                 const fileTypeInfo = getFileTypeInfo(file.filename);
                 const IconComponent = fileTypeInfo.icon;
                 const estimatedTokens = estimateTokens(file.file_size);
 
                 return (
-                  <div key={file.document_id} className={`px-6 py-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50' : ''}`}>
+                  <div key={keyOf(file)} className={`px-6 py-3 hover:bg-gray-50 transition-colors ${isSelected ? 'bg-blue-50' : ''}`}>
                     <div className="grid grid-cols-12 gap-4 items-center text-sm">
                       {/* Checkbox */}
                       <div className="col-span-1">

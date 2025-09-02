@@ -75,6 +75,16 @@ class Settings(BaseSettings):
     max_file_size: int = Field(default=50 * 1024 * 1024, description="Max upload size in bytes")
 
     # =========================================================================
+    # EXTRACTION SERVICE (optional external microservice)
+    # =========================================================================
+    # If provided, backend will POST files to this service for text/markdown extraction.
+    # Example: http://localhost:8010
+    extraction_service_url: Optional[str] = Field(default=None, description="Base URL for extraction service")
+    extraction_service_timeout: float = Field(default=60.0, description="Timeout (s) for extraction requests")
+    extraction_service_api_key: Optional[str] = Field(default=None, description="Bearer token for extraction service")
+    extraction_service_verify_ssl: bool = Field(default=True, description="Verify SSL for extraction service calls")
+
+    # =========================================================================
     # QUALITY ASSESSMENT DEFAULTS
     # =========================================================================
     default_conversion_threshold: int = Field(default=70, description="0–100")

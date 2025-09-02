@@ -37,6 +37,10 @@ services:
       - PROCESSED_DIR=/app/files/processed_files
       - BATCH_DIR=/app/files/batch_files
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-52428800}
+      # Extraction service (optional; when enabled backend will call it for PDFs/DOCX, etc.)
+      - EXTRACTION_SERVICE_URL=${EXTRACTION_SERVICE_URL:-http://extraction:8010}
+      - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-60}
+      - EXTRACTION_SERVICE_VERIFY_SSL=${EXTRACTION_SERVICE_VERIFY_SSL:-true}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
@@ -68,6 +72,10 @@ services:
       - UPLOAD_DIR=/app/files/uploaded_files
       - PROCESSED_DIR=/app/files/processed_files
       - BATCH_DIR=/app/files/batch_files
+      # Extraction service (match backend)
+      - EXTRACTION_SERVICE_URL=${EXTRACTION_SERVICE_URL:-http://extraction:8010}
+      - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-60}
+      - EXTRACTION_SERVICE_VERIFY_SSL=${EXTRACTION_SERVICE_VERIFY_SSL:-true}
     volumes:
       - ./backend/app:/app/app
       - ./files:/app/files
@@ -102,3 +110,18 @@ services:
       - "3000:3000"
     depends_on:
       - backend
+
+  # --------------------------------------------------------------------------
+  # EXTRACTION: Document extraction microservice (optional but recommended)
+  # --------------------------------------------------------------------------
+  extraction:
+    build:
+      context: ./extraction-service
+      dockerfile: Dockerfile
+    container_name: curatore-extraction
+    ports:
+      - "8010:8010"
+    environment:
+      - CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
+      - OCR_LANG=${OCR_LANG:-eng}
+      - OCR_PSM=${OCR_PSM:-3}

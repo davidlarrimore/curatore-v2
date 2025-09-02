@@ -1,5 +1,9 @@
 import os
 import logging
+import subprocess
+import tempfile
+import shutil
+from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
 
 from markitdown import MarkItDown
@@ -25,7 +29,7 @@ __all__ = [
 # Supported file extensions we advertise via /system/supported-formats.
 # NOTE: PDFs are handled by pdfminer/ocr (not MarkItDown) to match backend behavior.
 SUPPORTED_EXTS = {
-    ".pdf", ".docx", ".pptx", ".xlsx",
+    ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".csv",
     ".txt", ".md",
     ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff",
 }
@@ -110,6 +114,44 @@ def markitdown_convert(path: str) -> str:
     return getattr(out, "markdown", "") or getattr(out, "text", "") or ""
 
 
+def libreoffice_convert(src_path: str, target: str) -> Optional[str]:
+    """Convert office legacy formats using LibreOffice headless.
+
+    target examples: 'docx', 'xlsx', 'pptx', 'pdf'
+    Returns absolute path to converted file or None if conversion fails.
+    """
+    try:
+        src = Path(src_path)
+        if not src.exists():
+            return None
+        with tempfile.TemporaryDirectory(prefix="extract_conv_") as tmpdir:
+            cmd = [
+                "soffice", "--headless", "--convert-to", target,
+                "--outdir", tmpdir, str(src)
+            ]
+            proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+            if proc.returncode != 0:
+                logger.warning("LibreOffice convert failed rc=%s: %s", proc.returncode, proc.stderr.decode(errors="ignore"))
+                return None
+            # Find output file (same stem, new extension)
+            out = Path(tmpdir) / (src.stem + "." + target)
+            if out.exists():
+                # Move to stable location alongside source
+                final = src.with_suffix("." + target)
+                try:
+                    shutil.move(str(out), str(final))
+                except Exception:
+                    return str(out)
+                return str(final)
+            # Some conversions may add extra suffixes; fallback to first file in tmpdir
+            for p in Path(tmpdir).glob("*"):
+                if p.is_file():
+                    return str(p)
+    except Exception as e:
+        logger.warning("LibreOffice convert exception: %s", e, exc_info=True)
+    return None
+
+
 def _tuple(
     content_md: str,
     method: str,
@@ -191,15 +233,54 @@ def extract_markdown(
             )
             return _tuple(ocr_md, method, True, page_count)
 
-        # -------- Office/Text via MarkItDown --------
-        if ext in {".docx", ".pptx", ".xlsx", ".txt", ".md"}:
+        # -------- CSV/plain text --------
+        if ext in {".txt", ".md", ".csv"}:
+            try:
+                with open(path, "r", encoding="utf-8", errors="ignore") as f:
+                    content = f.read()
+                return _tuple(content, "text", False, page_count)
+            except Exception as e:
+                logger.warning("text read failed: %s", e)
+                return _tuple("", "error", False, None)
+
+        # -------- Office/Text via MarkItDown (with PDF fallback if weak) --------
+        if ext in {".docx", ".pptx", ".xlsx"}:
             md_text = markitdown_convert(path)
             if md_text and len(md_text.strip()) >= settings.MIN_TEXT_CHARS_FOR_NO_OCR:
                 logger.info("extract_markdown: markitdown success for %s; chars=%s", ext, len(md_text))
                 return _tuple(md_text, "markitdown", False, page_count)
-
-            logger.info("extract_markdown: markitdown weak/empty for %s; chars=%s", ext, len(md_text))
+            # Fallback: convert to PDF then run PDF extraction chain (text-layer or OCR)
+            pdf_path = libreoffice_convert(path, "pdf")
+            if pdf_path and os.path.exists(pdf_path):
+                # Try pdfminer first; if gibberish, OCR internally decides
+                from pdfminer.high_level import extract_text as pdf_extract_text  # type: ignore
+                try:
+                    text_layer = pdf_extract_text(str(pdf_path)) or ""
+                except Exception:
+                    text_layer = ""
+                if text_layer.strip():
+                    logger.info("fallback: docx/xlsx/pptx->pdf->pdfminer; chars=%s", len(text_layer))
+                    return _tuple(text_layer, "pdfminer", False, None)
+                ocr_md, page_count = ocr_pdf_path(pdf_path, settings.OCR_LANG, settings.OCR_PSM)
+                logger.info("fallback: docx/xlsx/pptx->pdf->ocr; chars=%s", len(ocr_md))
+                return _tuple(ocr_md, "ocr", True, page_count)
+            # Return whatever markitdown yielded (may be empty) as last resort
             return _tuple(md_text, "markitdown", False, page_count)
+
+        # -------- Legacy Office via LibreOffice -> modern -> MarkItDown --------
+        if ext in {".doc", ".xls", ".ppt"}:
+            target = {".doc": "docx", ".xls": "xlsx", ".ppt": "pptx"}[ext]
+            conv_path = libreoffice_convert(path, target)
+            if conv_path:
+                md_text = markitdown_convert(conv_path)
+                if md_text:
+                    logger.info("extract_markdown: libreoffice+markitdown success for %s -> %s; chars=%s", ext, target, len(md_text))
+                    return _tuple(md_text, f"libreoffice+markitdown", False, page_count)
+            # Fallback: convert to PDF then OCR
+            pdf_path = libreoffice_convert(path, "pdf")
+            if pdf_path and os.path.exists(pdf_path):
+                ocr_md, page_count = ocr_pdf_path(pdf_path, settings.OCR_LANG, settings.OCR_PSM)
+                return _tuple(ocr_md, "libreoffice+ocr", True, page_count)
 
         # -------- Images (OCR) --------
         if ext in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}:

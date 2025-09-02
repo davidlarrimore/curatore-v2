@@ -37,7 +37,7 @@ from datetime import datetime
 
 from ..config import settings
 from .storage_service import storage_service
-from ..models import ProcessingResult
+from ..models import ProcessingResult, DownloadType
 
 
 class ZipService:
@@ -149,7 +149,8 @@ class ZipService:
                 candidate_paths = []
                 if manifest_path:
                     candidate_paths.append(Path(manifest_path))
-                candidate_paths.extend(self.processed_dir.glob(f"*_{doc_id}.md"))
+                # Files are saved as: {document_id}_{original_stem}.md
+                candidate_paths.extend(self.processed_dir.glob(f"{doc_id}_*.md"))
                 for file_path in candidate_paths:
                     if file_path.exists():
                         original_name = file_path.name.split('_', 1)[-1] if '_' in file_path.name else file_path.name
@@ -286,18 +287,26 @@ class ZipService:
                 candidate_paths = []
                 if manifest_path:
                     candidate_paths.append(Path(manifest_path))
-                candidate_paths.extend(self.processed_dir.glob(f"*_{doc_id}.md"))
+                # Files are saved as: {document_id}_{original_stem}.md
+                candidate_paths.extend(self.processed_dir.glob(f"{doc_id}_*.md"))
                 for file_path in candidate_paths:
                     if file_path.exists():
                         # Read content for combined file
                         try:
                             content = file_path.read_text(encoding="utf-8")
                             result = next((r for r in results if r.document_id == doc_id), None)
-                            
-                            if result:
-                                # Add section to combined markdown
-                                combined_sections.append(f"# {result.filename}")
 
+                            # Add section header using result metadata when available
+                            section_title = None
+                            if result and getattr(result, 'filename', None):
+                                section_title = result.filename
+                            else:
+                                # Use original filename from path as fallback
+                                section_title = file_path.name.split('_', 1)[-1] if '_' in file_path.name else file_path.name
+                            combined_sections.append(f"# {section_title}")
+
+                            # Optional metadata when result is available
+                            if result:
                                 if result.document_summary:
                                     combined_sections.extend(["", f"*{result.document_summary}*"])
 
@@ -319,11 +328,11 @@ class ZipService:
                                     ]
                                     combined_sections.append(f"**Quality Scores:** {', '.join(scores)}")
 
-                                combined_sections.extend(["", "---", ""])
+                            combined_sections.extend(["", "---", ""])
 
-                                # Adjust markdown hierarchy for combined document
-                                adjusted_content = self._adjust_markdown_hierarchy(content)
-                                combined_sections.extend([adjusted_content, "", "", "---", ""])
+                            # Adjust markdown hierarchy for combined document
+                            adjusted_content = self._adjust_markdown_hierarchy(content)
+                            combined_sections.extend([adjusted_content, "", "", "---", ""])
                         
                         except Exception as e:
                             print(f"Error reading {file_path}: {e}")
@@ -639,6 +648,104 @@ class ZipService:
         except Exception as e:
             print(f"Error cleaning up ZIP file {zip_path}: {e}")
         return False
+
+    def cleanup_all_temp_archives(self) -> int:
+        """
+        Remove Curatore-generated ZIP files from the system temporary directory.
+
+        Targets only known naming patterns used by this service/frontend to
+        avoid deleting unrelated files.
+
+        Returns:
+            int: Number of ZIP files deleted.
+        """
+        temp_dir = Path(tempfile.gettempdir())
+        patterns = [
+            "curatore_export_*.zip",
+            "curatore_combined_export_*.zip",
+            "curatore_rag_ready_export*.zip",
+            "curatore_selected_*.zip",
+            "curatore_complete_*.zip",
+        ]
+        deleted = 0
+        for pat in patterns:
+            for p in temp_dir.glob(pat):
+                try:
+                    if p.is_file():
+                        p.unlink()
+                        deleted += 1
+                except Exception:
+                    continue
+        return deleted
+
+    # -------------------- v2 async helpers --------------------
+    class ZipInfo:
+        def __init__(self, zip_path: Path, file_count: int):
+            self.zip_path = zip_path
+            self.file_count = file_count
+
+    async def create_bulk_download(
+        self,
+        document_ids: List[str],
+        download_type: DownloadType,
+        custom_filename: Optional[str] = None,
+        include_summary: bool = True,
+        include_combined: bool = False,
+    ) -> "ZipService.ZipInfo":
+        """
+        v2-compatible bulk download helper that returns a ZipInfo with a Path.
+
+        Supports 'individual', 'combined', and 'rag_ready' download types.
+        """
+        if not document_ids:
+            raise ValueError("No document IDs provided")
+
+        # Gather processing results for provided IDs
+        results: List[ProcessingResult] = []
+        for doc_id in document_ids:
+            r = storage_service.get_processing_result(doc_id)
+            if r and r.success:
+                results.append(r)
+
+        # Results may be empty when workers run in a different process.
+        # We still allow archive creation using filesystem fallbacks.
+
+        # Filter IDs based on type
+        def is_rag_ready(r: ProcessingResult) -> bool:
+            return bool(getattr(r, "is_rag_ready", getattr(r, "pass_all_thresholds", False)))
+
+        if str(download_type) in {getattr(DownloadType, 'RAG_READY', 'rag_ready'), 'rag_ready'}:
+            filtered_ids = [r.document_id for r in results if is_rag_ready(r)]
+            if not filtered_ids:
+                raise ValueError("No RAG-ready documents found")
+        else:
+            filtered_ids = [r.document_id for r in results] if results else list(document_ids)
+
+        # Create archive (do not require results; filesystem fallback works)
+        if str(download_type) in {getattr(DownloadType, 'COMBINED', 'combined'), 'combined'} or include_combined:
+            zip_path_str, count = self.create_combined_markdown_zip(filtered_ids, results, custom_filename)
+        else:
+            zip_path_str, count = self.create_zip_archive(filtered_ids, custom_filename, include_summary)
+
+        zip_path = Path(zip_path_str)
+        return ZipService.ZipInfo(zip_path=zip_path, file_count=count)
+
+    async def create_rag_ready_download(
+        self,
+        custom_filename: Optional[str] = None,
+        include_summary: bool = True,
+    ) -> "ZipService.ZipInfo":
+        """
+        v2-compatible helper to build an archive of all RAG-ready documents.
+        """
+        all_results: List[ProcessingResult] = list(storage_service.get_all_processing_results() or [])
+        rag_ready = [r for r in all_results if r.success and getattr(r, "is_rag_ready", getattr(r, "pass_all_thresholds", False))]
+        if not rag_ready:
+            raise ValueError("No RAG-ready documents found")
+
+        ids = [r.document_id for r in rag_ready]
+        zip_path_str, count = self.create_zip_archive(ids, custom_filename or "curatore_rag_ready_export.zip", include_summary)
+        return ZipService.ZipInfo(zip_path=Path(zip_path_str), file_count=count)
 
 
 # ============================================================================

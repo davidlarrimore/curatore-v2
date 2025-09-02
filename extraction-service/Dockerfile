@@ -6,6 +6,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 # System deps: Tesseract for OCR
 RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr tesseract-ocr-eng \
+    libreoffice \
+    fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

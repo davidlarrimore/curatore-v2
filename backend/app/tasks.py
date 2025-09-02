@@ -3,7 +3,7 @@ Celery tasks wrapping the existing document processing pipeline.
 """
 import asyncio
 from datetime import datetime
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from celery import shared_task, Task
 
@@ -48,7 +48,7 @@ class BaseTask(Task):
 
 
 @shared_task(bind=True, base=BaseTask, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
-def process_document_task(self, document_id: str, options: Dict[str, Any]) -> Dict[str, Any]:
+def process_document_task(self, document_id: str, options: Dict[str, Any], file_path: Optional[str] = None) -> Dict[str, Any]:
     # Mark started
     record_job_status(self.request.id, {
         "job_id": self.request.id,
@@ -62,16 +62,28 @@ def process_document_task(self, document_id: str, options: Dict[str, Any]) -> Di
     from .api.v1.models import V1ProcessingOptions, V1ProcessingResult
     domain_options = V1ProcessingOptions(**(options or {})).to_domain()
 
-    # Locate file - service handles finding by document_id
-    file_path = document_service._find_document_file(document_id)
-    if not file_path:
+    # Locate file using provided path first, else unified resolver
+    resolved_path = None
+    try:
+        if file_path:
+            from pathlib import Path
+            p = Path(file_path)
+            if p.exists():
+                resolved_path = p
+    except Exception:
+        resolved_path = None
+
+    if not resolved_path:
+        resolved_path = document_service.find_document_file_unified(document_id)
+
+    if not resolved_path:
         append_job_log(self.request.id, "error", "Document file not found")
         raise RuntimeError("Document file not found")
 
     # Run the existing async pipeline
     try:
         append_job_log(self.request.id, "info", "Conversion started")
-        result = asyncio.run(document_service.process_document(document_id, file_path, domain_options))
+        result = asyncio.run(document_service.process_document(document_id, resolved_path, domain_options))
         if result and getattr(result, 'conversion_result', None):
             append_job_log(self.request.id, "success", f"Conversion complete (score {result.conversion_result.conversion_score}/100)")
         if getattr(result, 'vector_optimized', False):

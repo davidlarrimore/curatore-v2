@@ -29,6 +29,7 @@ Version: 2.0.0
 """
 
 from datetime import datetime
+from pathlib import Path
 from enum import Enum
 from typing import Dict, List, Optional, Union, Any
 
@@ -222,8 +223,15 @@ class ConversionResult(BaseModel):
         success: Whether conversion completed successfully
         markdown_content: Converted markdown content (optional)
         conversion_score: Quality score for conversion (0-100)
-        conversion_feedback: Human-readable conversion feedback
-        conversion_note: Additional notes about the conversion process
+        conversion_feedback: Human-readable conversion feedback (optional)
+        conversion_note: Additional notes about the conversion process (optional)
+        content_coverage: Fraction of source content captured (0.0-1.0)
+        structure_preservation: Fraction of structure preserved (0.0-1.0)
+        readability_score: Readability score normalized to 0.0-1.0
+        total_characters: Total characters in original/extracted source
+        extracted_characters: Characters extracted into markdown
+        processing_time: Time spent in conversion step (sec)
+        conversion_notes: List of conversion notes/messages
         
     Example:
         result = ConversionResult(
@@ -234,6 +242,7 @@ class ConversionResult(BaseModel):
         )
     """
     success: bool = Field(
+        default=True,
         description="Whether the conversion completed successfully"
     )
     markdown_content: Optional[str] = Field(
@@ -245,11 +254,51 @@ class ConversionResult(BaseModel):
         le=100,
         description="Conversion quality score (0-100)"
     )
-    conversion_feedback: str = Field(
+    conversion_feedback: Optional[str] = Field(
+        default=None,
         description="Human-readable feedback about conversion quality"
     )
-    conversion_note: str = Field(
+    conversion_note: Optional[str] = Field(
+        default=None,
         description="Additional notes about the conversion process"
+    )
+    # Extended metrics used by services and tests
+    content_coverage: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of source content captured (0.0-1.0)"
+    )
+    structure_preservation: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Fraction of structure preserved (0.0-1.0)"
+    )
+    readability_score: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=1.0,
+        description="Readability score normalized to 0.0-1.0"
+    )
+    total_characters: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Total characters in original/extracted source"
+    )
+    extracted_characters: Optional[int] = Field(
+        default=None,
+        ge=0,
+        description="Characters extracted into markdown"
+    )
+    processing_time: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Time spent in conversion step (seconds)"
+    )
+    conversion_notes: Optional[List[str]] = Field(
+        default=None,
+        description="List of conversion notes/messages"
     )
 
 
@@ -329,6 +378,15 @@ class LLMEvaluation(BaseModel):
         default=None,
         description="Overall recommendation (Pass/Fail)"
     )
+    processing_time: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        description="Time spent in LLM evaluation (seconds)"
+    )
+    token_usage: Optional[Dict[str, int]] = Field(
+        default=None,
+        description="Token usage statistics (e.g., {'prompt': 100, 'completion': 50})"
+    )
 
     @validator('pass_recommendation')
     def validate_pass_recommendation(cls, v):
@@ -356,6 +414,10 @@ class ProcessingResult(BaseModel):
         processed_at: Timestamp of processing completion
         file_size: Size of processed markdown file in bytes
         summary: Brief document summary (optional)
+        original_path: Local filesystem path to the original file (optional)
+        markdown_path: Local filesystem path to the processed markdown (optional)
+        vector_optimized: Whether vector optimization was applied
+        processing_metadata: Arbitrary processing metadata map
         
     Example:
         result = ProcessingResult(
@@ -372,6 +434,7 @@ class ProcessingResult(BaseModel):
         description="Original filename of the processed document"
     )
     status: ProcessingStatus = Field(
+        default=ProcessingStatus.COMPLETED,
         description="Current processing status"
     )
     conversion_result: ConversionResult = Field(
@@ -385,6 +448,7 @@ class ProcessingResult(BaseModel):
         description="Whether document meets RAG quality thresholds"
     )
     processing_time: float = Field(
+        default=0.0,
         ge=0,
         description="Total processing time in seconds"
     )
@@ -393,6 +457,7 @@ class ProcessingResult(BaseModel):
         description="Timestamp of processing completion"
     )
     file_size: int = Field(
+        default=0,
         ge=0,
         description="Size of processed markdown file in bytes"
     )
@@ -403,6 +468,23 @@ class ProcessingResult(BaseModel):
     error_message: Optional[str] = Field(
         default=None,
         description="Error message if processing failed"
+    )
+    # Paths and metadata used by services and routers
+    original_path: Optional[Path] = Field(
+        default=None,
+        description="Filesystem path to original file"
+    )
+    markdown_path: Optional[Path] = Field(
+        default=None,
+        description="Filesystem path to processed markdown file"
+    )
+    vector_optimized: bool = Field(
+        default=False,
+        description="Whether vector optimization was applied"
+    )
+    processing_metadata: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Arbitrary processing metadata"
     )
 
 

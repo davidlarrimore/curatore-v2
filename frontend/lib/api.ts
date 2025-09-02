@@ -80,6 +80,25 @@ export const systemApi = {
     const res = await fetch(apiUrl('/system/reset'), { method: 'POST' })
     return handleJson(res)
   },
+
+  async getQueueHealth(): Promise<{ pending: number; running: number; processed: number; total: number } & Record<string, any>> {
+    const res = await fetch(apiUrl('/system/queues'), { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  async getQueueSummaryByJobs(jobIds: string[]): Promise<{ queued: number; running: number; done: number; total: number } & Record<string, any>> {
+    const url = new URL(apiUrl('/system/queues/summary'))
+    url.searchParams.set('job_ids', jobIds.join(','))
+    const res = await fetch(url.toString(), { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  async getQueueSummaryByBatch(batchId: string): Promise<{ queued: number; running: number; done: number; total: number } & Record<string, any>> {
+    const url = new URL(apiUrl('/system/queues/summary'))
+    url.searchParams.set('batch_id', batchId)
+    const res = await fetch(url.toString(), { cache: 'no-store' })
+    return handleJson(res)
+  },
 }
 
 // -------------------- File API --------------------

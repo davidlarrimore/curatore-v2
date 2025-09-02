@@ -136,7 +136,7 @@ async def process_batch(request: V2BatchEnqueueRequest):
             # Find the file path - check both uploaded and batch files
             file_path = document_service.find_uploaded_file(document_id)
             if not file_path:
-                file_path = document_service.find_batch_file(document_id)
+                file_path = document_service.find_batch_file_by_document_id(document_id)
             
             if not file_path:
                 conflicts.append({
@@ -148,7 +148,11 @@ async def process_batch(request: V2BatchEnqueueRequest):
             # Enqueue the celery task
             try:
                 async_result = process_document_task.apply_async(
-                    args=[document_id, request.options or {}], 
+                    kwargs={
+                        "document_id": document_id,
+                        "options": request.options or {},
+                        "file_path": str(file_path)
+                    },
                     queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
                 )
                 
@@ -220,15 +224,15 @@ async def process_document(
     # Validate file exists first - check both uploaded and batch files
     file_path = document_service.find_uploaded_file(document_id)
     if not file_path:
-        file_path = document_service.find_batch_file(document_id)
+        file_path = document_service.find_batch_file_by_document_id(document_id)
     
     if not file_path:
         raise HTTPException(status_code=404, detail="Document not found")
 
     # Synchronous path (optional for testing)
     if sync and os.getenv("ALLOW_SYNC_PROCESS", "false").lower() in {"1", "true", "yes"}:
-        from ....core.models import ProcessingOptions as DomainProcessingOptions
-        domain_options = options.to_domain() if options else DomainProcessingOptions()
+        from ....models import ProcessingOptions as DomainProcessingOptions
+        domain_options = options if options else DomainProcessingOptions()
         result = await document_service.process_document(document_id, file_path, domain_options)
         storage_service.save_processing_result(result)
         return ProcessingResult.model_validate(result)
@@ -236,7 +240,12 @@ async def process_document(
     # Enqueue Celery task
     opts = (options.model_dump() if options else {})
     async_result = process_document_task.apply_async(
-        args=[document_id, opts], 
+        kwargs={
+            "document_id": document_id,
+            "options": opts,
+            # Optional direct path to avoid re-resolve in worker
+            "file_path": str(file_path)
+        },
         queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
     )
     
@@ -291,15 +300,28 @@ async def download_document(document_id: str):
     """Download a processed document."""
     try:
         result = storage_service.get_processing_result(document_id)
-        if not result:
-            raise HTTPException(status_code=404, detail="Document not found")
-        
-        if not result.markdown_path or not Path(result.markdown_path).exists():
+        path: Optional[Path] = None
+        if result and getattr(result, 'markdown_path', None):
+            path = Path(result.markdown_path)
+        if not path or not path.exists():
+            # Fallback to filesystem lookup (worker saved file, backend memory lacks result)
+            path = document_service.get_processed_markdown_path(document_id)
+        if not path or not path.exists():
             raise HTTPException(status_code=404, detail="Processed file not found")
-        
+
+        # Determine a sensible download filename
+        download_name = None
+        try:
+            if result and getattr(result, 'filename', None):
+                download_name = f"{Path(result.filename).stem}.md"
+            else:
+                download_name = Path(path.name).name
+        except Exception:
+            download_name = Path(path.name).name
+
         return FileResponse(
-            path=result.markdown_path,
-            filename=f"{Path(result.filename).stem}.md",
+            path=str(path),
+            filename=download_name,
             media_type="text/markdown"
         )
     except Exception as e:
@@ -310,14 +332,17 @@ async def download_document(document_id: str):
 async def get_document_content(document_id: str):
     """Get the content of a processed document."""
     try:
+        # Try storage first, then filesystem fallback
         result = storage_service.get_processing_result(document_id)
-        if not result:
-            raise HTTPException(status_code=404, detail="Document not found")
-        
-        if not result.markdown_path or not Path(result.markdown_path).exists():
+        path: Optional[Path] = None
+        if result and getattr(result, 'markdown_path', None):
+            path = Path(result.markdown_path)
+        if not path or not path.exists():
+            path = document_service.get_processed_markdown_path(document_id)
+        if not path or not path.exists():
             raise HTTPException(status_code=404, detail="Processed content not found")
-        
-        content = Path(result.markdown_path).read_text(encoding='utf-8')
+
+        content = path.read_text(encoding='utf-8')
         return {"content": content}
         
     except Exception as e:

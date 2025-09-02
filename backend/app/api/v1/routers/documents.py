@@ -100,7 +100,14 @@ async def process_batch(request: V1BatchProcessingRequest):
             conflicts.append({"document_id": doc_id, "error": "Document not found"})
             continue
         opts = (request.options.model_dump() if request.options else {})
-        async_result = process_document_task.apply_async(args=[doc_id, opts], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
+        async_result = process_document_task.apply_async(
+            kwargs={
+                "document_id": doc_id,
+                "options": opts,
+                "file_path": str(file_path)
+            },
+            queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
+        )
         if not set_active_job(doc_id, async_result.id, ttl):
             try:
                 celery_app.control.revoke(async_result.id, terminate=False)
@@ -147,7 +154,14 @@ async def process_document(
 
     # Enqueue Celery task
     opts = (options.model_dump() if options else {})
-    async_result = process_document_task.apply_async(args=[document_id, opts], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
+    async_result = process_document_task.apply_async(
+        kwargs={
+            "document_id": document_id,
+            "options": opts,
+            "file_path": str(file_path)
+        },
+        queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
+    )
     # Acquire per-document lock with real job id; if it fails, revoke and return 409
     ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
     if not set_active_job(document_id, async_result.id, ttl):
@@ -191,7 +205,14 @@ async def process_batch_file(
     document_id = f"batch_{batch_file_path.stem}"
 
     opts = (options.model_dump() if options else {})
-    async_result = process_document_task.apply_async(args=[document_id, opts], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
+    async_result = process_document_task.apply_async(
+        kwargs={
+            "document_id": document_id,
+            "options": opts,
+            "file_path": str(batch_file_path)
+        },
+        queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
+    )
     ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
     if not set_active_job(document_id, async_result.id, ttl):
         try:
