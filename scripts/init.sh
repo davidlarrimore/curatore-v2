@@ -83,8 +83,8 @@ if compgen -G "${REPO_ROOT}/scripts/*.sh" > /dev/null; then
 fi
 
 # --- Ensure canonical directory structure exists (host-level)
-if [[ -x "${REPO_ROOT}/scripts/setup-directories.sh" ]]; then
-  "${REPO_ROOT}/scripts/setup-directories.sh"
+if [[ -x "${REPO_ROOT}/scripts/setup_directories.sh" ]]; then
+  "${REPO_ROOT}/scripts/setup_directories.sh"
 else
   echo "ℹ️  setup-directories.sh not found; creating minimal structure directly..."
   mkdir -p "${REPO_ROOT}/files/uploaded_files" \

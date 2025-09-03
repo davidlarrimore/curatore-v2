@@ -6,7 +6,7 @@ A comprehensive document processing pipeline that converts documents to markdown
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115.0-green)](https://fastapi.tiangolo.com/)
 [![Next.js](https://img.shields.io/badge/Next.js-15.5.0-blue)](https://nextjs.org/)
-[![Python](https://img.shields.io/badge/Python-3.11+-blue)](https://python.org/)
+[![Python](https://img.shields.io/badge/Python-3.12+-blue)](https://python.org/)
 [![Docker](https://img.shields.io/badge/Docker-Ready-blue)](https://docker.com/)
 
 ---
@@ -107,7 +107,7 @@ Prefer versioned paths like `/api/v2/*`. The legacy alias `/api/*` maps to v1 an
 ### **Prerequisites**
 
 - **Docker Desktop** (recommended) - [Download](https://www.docker.com/products/docker-desktop)
-- **OR Manual Setup**: Node.js 18+ and Python 3.11+
+- **OR Manual Setup**: Node.js 18+ and Python 3.12+
 
 ### **🐳 Using Docker (Recommended)**
 

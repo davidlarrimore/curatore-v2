@@ -1,0 +1,34 @@
+name: Extraction-Service Tests
+
+on:
+  push:
+    branches:
+      - main
+      - 'release/**'
+    tags:
+      - 'v*.*.*'
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+      cancel-in-progress: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Run extraction-service test script (Docker)
+        env:
+          # Prefer Docker to ensure Tesseract + LibreOffice without local installs
+          USE_DOCKER: "1"
+          # Make logs deterministic per run attempt
+          REPORT_DIR: ${{ github.workspace }}/logs/test_reports/${{ github.run_id }}_${{ github.run_attempt }}/extraction-service
+          # Reduce fallback to LibreOffice by accepting small MarkItDown output
+          MIN_TEXT_CHARS_FOR_NO_OCR: "1"
+          PYTHONWARNINGS: ignore::DeprecationWarning
+        run: bash extraction-service/scripts/run_tests.sh

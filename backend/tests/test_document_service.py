@@ -237,10 +237,10 @@ class TestDocumentServiceFileListFix:
         
         # Mock stat to raise an exception for the bad file
         original_stat = Path.stat
-        def mock_stat(self):
+        def mock_stat(self, *args, **kwargs):
             if self.name == "bad456_file.pdf":
                 raise OSError("Simulated file access error")
-            return original_stat(self)
+            return original_stat(self, *args, **kwargs)
         
         with patch.object(Path, 'stat', mock_stat):
             result = document_service._list_files_for_api(upload_dir, "uploaded")

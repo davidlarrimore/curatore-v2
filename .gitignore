@@ -41,3 +41,7 @@ logs/
 !/files/uploaded_files/.gitkeep
 !/files/processed_files/.gitkeep
 !/files/batch_files/.gitkeep
+
+
+.pytest_cache/
+extraction-service/test_documents/*
