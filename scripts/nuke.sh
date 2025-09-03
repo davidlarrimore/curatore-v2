@@ -128,8 +128,8 @@ if [[ -f "${GUARD_FILE}" ]]; then
 fi
 
 # --- Recreate directory structure
-if [[ -x "${REPO_ROOT}/scripts/setup-directories.sh" ]]; then
-  "${REPO_ROOT}/scripts/setup-directories.sh"
+if [[ -x "${REPO_ROOT}/scripts/setup_directories.sh" ]]; then
+  "${REPO_ROOT}/scripts/setup_directories.sh"
 else
   mkdir -p "${REPO_ROOT}/files/uploaded_files" \
            "${REPO_ROOT}/files/processed_files" \

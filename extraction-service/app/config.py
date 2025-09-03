@@ -27,6 +27,8 @@ class Settings(BaseModel):
     OCR_PSM: str = Field(default=os.getenv("OCR_PSM", "3"))
 
     # Behavior
-    MIN_TEXT_CHARS_FOR_NO_OCR: int = 300  # if markitdown yields too little text, try OCR
+    # If markitdown yields too little text, try OCR (or LibreOffice->PDF->pdfminer/OCR).
+    # Make this tunable via env for tests and constrained environments.
+    MIN_TEXT_CHARS_FOR_NO_OCR: int = Field(default=int(os.getenv("MIN_TEXT_CHARS_FOR_NO_OCR", "300")))
 
 settings = Settings()
