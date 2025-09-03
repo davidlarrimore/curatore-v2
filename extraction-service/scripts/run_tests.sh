@@ -56,15 +56,15 @@ print_pytest_summary() {
   local passed=0 failed=0 skipped=0 total=0
   if [ -f "$log_file" ]; then
     local line
-    line=$(grep -E "[0-9]+ (passed|failed|skipped)" "$log_file" | tail -n 1 || true)
+    line=$(grep -E "[0-9]+ (passed|failed|skipped|error|errors)" "$log_file" | tail -n 1 || true)
     if [ -n "$line" ]; then
       local v
-      v=$(echo "$line" | grep -Eo '[0-9]+ passed' | awk '{print $1}' | tail -n1)
-      [ -n "$v" ] && passed=$v
-      v=$(echo "$line" | grep -Eo '[0-9]+ failed' | awk '{print $1}' | tail -n1)
-      [ -n "$v" ] && failed=$v
-      v=$(echo "$line" | grep -Eo '[0-9]+ skipped' | awk '{print $1}' | tail -n1)
-      [ -n "$v" ] && skipped=$v
+      v=$(echo "$line" | grep -Eo '[0-9]+ passed' | awk '{print $1}' | tail -n1 || true)
+      [ -n "${v:-}" ] && passed=$v
+      v=$(echo "$line" | grep -Eo '[0-9]+ failed' | awk '{print $1}' | tail -n1 || true)
+      [ -n "${v:-}" ] && failed=$v
+      v=$(echo "$line" | grep -Eo '[0-9]+ skipped' | awk '{print $1}' | tail -n1 || true)
+      [ -n "${v:-}" ] && skipped=$v
     fi
   fi
   total=$((passed + failed + skipped))
