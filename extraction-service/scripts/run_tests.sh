@@ -168,14 +168,14 @@ run_local() {
   "$venv/bin/python" -m pip install -U pytest >>"$setup_log" 2>&1 || true
   "$venv/bin/python" -m pytest --version >>"$setup_log" 2>&1 || true
 
-  # Run tests
+  # Run tests (capture exit code without tripping set -e)
   log_note "Running extraction-service tests (pytest) …"
+  local code=0
   (
     cd "$SVC_DIR" && \
     MIN_TEXT_CHARS_FOR_NO_OCR="${MIN_TEXT_CHARS_FOR_NO_OCR:-1}" \
     PYTHONPATH="${SVC_DIR}${PYTHONPATH:+:$PYTHONPATH}" "$venv/bin/python" -m pytest -q
-  ) >"$test_log" 2>&1
-  local code=$?
+  ) >"$test_log" 2>&1 || code=$?
   print_pytest_summary "$test_log" "$test_log"
   if [[ $code -eq 0 ]]; then
     log_note "[PASS] extraction-service"
