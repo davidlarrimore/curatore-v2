@@ -225,6 +225,57 @@ CORS_METHODS=["*"]
 CORS_HEADERS=["*"]
 ```
 
+### **Docling Extraction Engine**
+
+Curatore supports two extraction engines:
+
+- Default extraction-service (internal microservice)
+- Docling Serve (external image/document converter) — recommended for rich PDFs and Office docs
+
+Set the extractor via `CONTENT_EXTRACTOR`:
+
+```bash
+# Use the default internal extraction-service
+CONTENT_EXTRACTOR=default
+
+# Or enable Docling
+CONTENT_EXTRACTOR=docling
+
+# Docling connection
+DOCLING_SERVICE_URL=http://docling:5001
+DOCLING_TIMEOUT=60
+DOCLING_VERIFY_SSL=true
+```
+
+Docker Compose already wires a `docling` service if you set the image/tag and port in your environment. See `docker-compose.yml` keys `DOCLING_IMAGE`, `DOCLING_TAG`, `DOCLING_PORT`, and `DOCLING_CONTAINER_NAME`.
+
+Behavior when `CONTENT_EXTRACTOR=docling`:
+
+- Backend and Worker POST to `DOCLING_SERVICE_URL + /v1/convert/file` with the uploaded file.
+- If Docling fails, Curatore automatically falls back to the internal extraction-service (if configured).
+
+Docling request options sent by Curatore:
+
+- Output format: `output_format=markdown`
+- Image handling: prefers placeholders, sent with multiple keys to support API variants:
+  - `image_export_mode=placeholder`
+  - `imageExportMode=PLACEHOLDER`
+  - `images=placeholder`
+- Annotations: `include_annotations=true`
+
+Notes on compatibility:
+
+- Options are sent as both query params and form fields (strings only) to satisfy differing Docling builds and encoders.
+- If images still appear as embedded, ensure your Docling build honors `image_export_mode` or `imageExportMode`. Some versions only support one of these.
+
+Troubleshooting Docling:
+
+- Logs show which extractor ran and any Docling status/errors. Check `curatore-worker` logs.
+- Common issues:
+  - “Invalid type for value. Expected primitive type”: update to latest Curatore; options are now sent as primitives.
+  - Images embedded instead of placeholders: confirm Docling version and try setting only one key via a reverse proxy rule, e.g. force `image_export_mode=placeholder`.
+  - Endpoint mismatch: Curatore uses `POST /v1/convert/file`. If your Docling exposes a different endpoint, set `document_service.docling_extract_path` accordingly in code.
+
 ### **Async Processing with Celery**
 
 Curatore processes documents asynchronously using Celery + Redis so requests return immediately and progress can be tracked per file.

@@ -2,6 +2,7 @@
 Celery tasks wrapping the existing document processing pipeline.
 """
 import asyncio
+import logging
 from datetime import datetime
 from typing import Any, Dict, Optional
 
@@ -58,6 +59,36 @@ def process_document_task(self, document_id: str, options: Dict[str, Any], file_
     })
 
     append_job_log(self.request.id, "info", f"Job started for document '{document_id}'")
+    logger = logging.getLogger("curatore.api")
+    # Log which extraction engine will be used
+    try:
+        engine = (document_service.extractor_engine or "default").lower()
+        if engine == "docling" and getattr(document_service, "docling_base", None):
+            base = getattr(document_service, "docling_base", "").rstrip("/")
+            path = "/v1/convert/file"
+            timeout = getattr(document_service, "docling_timeout", 60)
+            append_job_log(self.request.id, "info", f"Extractor: Docling at {base}{path} (timeout {timeout}s)")
+            try:
+                logger.info("Extractor selected: Docling %s%s (timeout %ss)", base, path, timeout)
+            except Exception:
+                pass
+        elif engine in {"default", "extraction", "auto", "legacy"} and getattr(document_service, "extract_base", None):
+            base = getattr(document_service, "extract_base", "")
+            timeout = getattr(document_service, "extract_timeout", 60)
+            append_job_log(self.request.id, "info", f"Extractor: Default extraction-service at {base} (timeout {timeout}s)")
+            try:
+                logger.info("Extractor selected: extraction-service %s (timeout %ss)", base, timeout)
+            except Exception:
+                pass
+        else:
+            append_job_log(self.request.id, "info", "Extractor: none (using local/fallback behavior)")
+            try:
+                logger.info("Extractor selected: none (local/fallback)")
+            except Exception:
+                pass
+    except Exception:
+        # Non-fatal; continue processing
+        pass
     # Prepare domain options from incoming API shape
     from .api.v1.models import V1ProcessingOptions, V1ProcessingResult
     domain_options = V1ProcessingOptions(**(options or {})).to_domain()
@@ -84,6 +115,29 @@ def process_document_task(self, document_id: str, options: Dict[str, Any], file_
     try:
         append_job_log(self.request.id, "info", "Conversion started")
         result = asyncio.run(document_service.process_document(document_id, resolved_path, domain_options))
+        # Post-extraction confirmation log: which extractor actually produced content
+        try:
+            meta = getattr(result, 'processing_metadata', {}) or {}
+            ex = meta.get('extractor') if isinstance(meta, dict) else None
+            if isinstance(ex, dict) and ex:
+                eng = ex.get('engine') or ex.get('requested_engine') or 'unknown'
+                url = ex.get('url') or ''
+                fb = ex.get('fallback')
+                ok = ex.get('ok')
+                msg = f"Extractor used: {eng}{' (fallback)' if fb else ''}{' - ' + url if url else ''} ({'ok' if ok else 'failed'})"
+                append_job_log(self.request.id, "info", msg)
+                # Docling-specific status/error reporting for Processing Panel visibility
+                if eng == 'docling':
+                    status_txt = ex.get('status')
+                    errors_list = ex.get('errors') or []
+                    ptime = ex.get('processing_time')
+                    if status_txt:
+                        append_job_log(self.request.id, "info", f"Docling status: {status_txt}{f', time: {ptime:.2f}s' if isinstance(ptime, (int, float)) else ''}")
+                    if isinstance(errors_list, list) and errors_list:
+                        first_err = errors_list[0]
+                        append_job_log(self.request.id, "warning", f"Docling reported {len(errors_list)} error(s); first: {first_err}")
+        except Exception:
+            pass
         if result and getattr(result, 'conversion_result', None):
             append_job_log(self.request.id, "success", f"Conversion complete (score {result.conversion_result.conversion_score}/100)")
         if getattr(result, 'vector_optimized', False):

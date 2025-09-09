@@ -41,6 +41,13 @@ services:
       - EXTRACTION_SERVICE_URL=${EXTRACTION_SERVICE_URL:-http://extraction:8010}
       - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-60}
       - EXTRACTION_SERVICE_VERIFY_SSL=${EXTRACTION_SERVICE_VERIFY_SSL:-true}
+      # Content extractor switch: default | docling | none
+      - CONTENT_EXTRACTOR=${CONTENT_EXTRACTOR:-default}
+      # Docling configuration (when CONTENT_EXTRACTOR=docling)
+      - DOCLING_SERVICE_URL=${DOCLING_SERVICE_URL:-http://docling:5001}
+      # Docling extract path is fixed per API (/v1/extract)
+      - DOCLING_TIMEOUT=${DOCLING_TIMEOUT:-60}
+      - DOCLING_VERIFY_SSL=${DOCLING_VERIFY_SSL:-true}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
@@ -76,6 +83,12 @@ services:
       - EXTRACTION_SERVICE_URL=${EXTRACTION_SERVICE_URL:-http://extraction:8010}
       - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-60}
       - EXTRACTION_SERVICE_VERIFY_SSL=${EXTRACTION_SERVICE_VERIFY_SSL:-true}
+      # Content extractor switch and Docling (match backend)
+      - CONTENT_EXTRACTOR=${CONTENT_EXTRACTOR:-default}
+      - DOCLING_SERVICE_URL=${DOCLING_SERVICE_URL:-http://docling:5001}
+      # Docling extract path is fixed per API (/v1/extract)
+      - DOCLING_TIMEOUT=${DOCLING_TIMEOUT:-60}
+      - DOCLING_VERIFY_SSL=${DOCLING_VERIFY_SSL:-true}
     volumes:
       - ./backend/app:/app/app
       - ./files:/app/files
@@ -125,3 +138,20 @@ services:
       - CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
       - OCR_LANG=${OCR_LANG:-eng}
       - OCR_PSM=${OCR_PSM:-3}
+
+
+  # --------------------------------------------------------------------------
+  # DOCLING: As a second Extraction Engine option
+  # --------------------------------------------------------------------------
+  docling:
+    image: ${DOCLING_IMAGE}:${DOCLING_TAG}
+    container_name: ${DOCLING_CONTAINER_NAME}
+    restart: unless-stopped
+    ports:
+      - "${DOCLING_PORT}:5001"
+    environment:
+      DOCLING_SERVE_ENABLE_UI: ${DOCLING_SERVE_ENABLE_UI:-"1"}
+      DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "1"
+      DOCLING_SERVE_ARTIFACTS_PATH: ""
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
