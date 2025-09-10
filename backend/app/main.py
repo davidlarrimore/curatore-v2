@@ -52,7 +52,6 @@ from pydantic import ValidationError
 from .config import settings
 from .models import ErrorResponse
 from .api.v1 import api_router as v1_router
-from .api.v2 import api_router as v2_router
 from .services.document_service import document_service
 from .services.storage_service import storage_service
 
@@ -99,8 +98,8 @@ def _setup_logging() -> logging.Logger:
     ch = logging.StreamHandler()
     fh.setFormatter(fmt)
     ch.setFormatter(fmt)
-    # Console at INFO; file at DEBUG in debug mode, INFO otherwise
-    ch.setLevel(logging.INFO)
+    # Console/file levels: DEBUG when in debug mode, otherwise INFO
+    ch.setLevel(logging.DEBUG if settings.debug else logging.INFO)
     fh.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
     class ReqIdFilter(logging.Filter):
@@ -396,10 +395,7 @@ app.include_router(
 )
 
 # Future version scaffold (currently mirrors v1)
-app.include_router(
-    v2_router,
-    prefix="/api/v2",
-)
+# Removed v2 router; consolidating on v1
 
 # Backward-compatible alias for existing clients/tests hitting /api/*
 # This mirrors v1 and should be removed in a future major release.
@@ -434,7 +430,7 @@ def _build_tag_description(base: str, version_label: str) -> str:
         "Results": "Accessing, editing, and downloading processing results.",
         "Legacy": "Legacy compatibility endpoints.",
     }.get(base, f"Endpoints for {base}.")
-    suffix = "API v1" if version_label == "v1" else ("API v2" if version_label == "v2" else "API v1 (legacy alias)")
+    suffix = "API v1" if version_label == "v1" else "API v1 (legacy alias)"
     return f"{base_desc} {suffix}."
 
 
@@ -458,8 +454,6 @@ def custom_openapi():
         # Determine version label from path
         if path.startswith("/api/v1/"):
             version_label = "v1"
-        elif path.startswith("/api/v2/"):
-            version_label = "v2"
         elif path.startswith("/api/"):
             version_label = "v1 (legacy)"
         else:
@@ -479,27 +473,20 @@ def custom_openapi():
                 # Normalize base tag capitalization
                 base = t.title()
                 # Prefix with version for clarity
-                vprefix = "v1: " if version_label.startswith("v1") and version_label != "v1 (legacy)" else (
-                    "v2: " if version_label == "v2" else "v1 (legacy): "
-                )
+                vprefix = "v1: " if version_label == "v1" else "v1 (legacy): "
                 name = f"{vprefix}{base}"
                 new_tags.append(name)
                 # Record tag metadata
                 if name not in seen_tags:
-                    # version id for description builder: 'v1', 'v2', or 'v1 (legacy)'
-                    if vprefix.startswith("v1: "):
-                        version_id = "v1"
-                    elif vprefix.startswith("v2: "):
-                        version_id = "v2"
-                    else:
-                        version_id = "v1 (legacy)"
+                    # version id for description builder: 'v1' or 'v1 (legacy)'
+                    version_id = "v1" if vprefix.startswith("v1: ") else "v1 (legacy)"
                     desc = _build_tag_description(base, version_id)
                     seen_tags[name] = desc
                     tag_meta[(version_id, base)] = (name, desc)
             operation["tags"] = new_tags
 
     # Inject descriptive tag metadata with deterministic ordering
-    versions_order = ["v1", "v2", "v1 (legacy)"]
+    versions_order = ["v1", "v1 (legacy)"]
     bases_order = ["System", "Documents", "Processing", "Results", "Configuration", "Legacy", "General"]
     ordered = []
     for v in versions_order:
@@ -549,10 +536,6 @@ async def openapi_v1():
     return JSONResponse(build_version_openapi("v1"))
 
 
-@app.get("/openapi-v2.json", include_in_schema=False)
-async def openapi_v2():
-    return JSONResponse(build_version_openapi("v2"))
-
 
 @app.get("/docs/v1", include_in_schema=False)
 async def docs_v1():
@@ -562,12 +545,6 @@ async def docs_v1():
     )
 
 
-@app.get("/docs/v2", include_in_schema=False)
-async def docs_v2():
-    return get_swagger_ui_html(
-        openapi_url="/openapi-v2.json",
-        title=f"{settings.api_title} — API V2 Docs",
-    )
 
 # Also expose versioned Swagger UI under the API prefixes for convenience
 @app.get("/api/v1/docs", include_in_schema=False)
@@ -578,12 +555,6 @@ async def api_v1_docs():
     )
 
 
-@app.get("/api/v2/docs", include_in_schema=False)
-async def api_v2_docs():
-    return get_swagger_ui_html(
-        openapi_url="/openapi-v2.json",
-        title=f"{settings.api_title} — API V2 Docs",
-    )
 
 # ============================================================================
 # ROOT ENDPOINT
@@ -606,11 +577,9 @@ async def root() -> Dict[str, Any]:
         "health_check": "/api/v1/health",
         "docs": {
             "v1": "/api/v1/docs",
-            "v2": "/api/v2/docs",
         },
         "health": {
             "v1": "/api/v1/health",
-            "v2": "/api/v2/health",
         },
         "timestamp": datetime.now()
     }

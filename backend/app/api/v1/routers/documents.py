@@ -21,6 +21,7 @@ from ..models import (
     V1ProcessingResult,
     V1BatchProcessingResult,
 )
+from ....models import FileListResponse
 from ....services.document_service import document_service
 from ....models import BatchProcessingResult
 from ....services.job_service import (
@@ -39,21 +40,21 @@ from ....services.zip_service import zip_service
 router = APIRouter()
 
 
-@router.get("/documents/uploaded", tags=["Documents"])
+@router.get("/documents/uploaded", tags=["Documents"], response_model=FileListResponse)
 async def list_uploaded_files():
-    """List all uploaded files."""
+    """List all uploaded files with complete metadata (v2 parity)."""
     try:
-        files = document_service.list_uploaded_files()
-        return {"files": files, "count": len(files)}
+        files = document_service.list_uploaded_files_with_metadata()
+        return FileListResponse(files=files, count=len(files))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
 
-@router.get("/documents/batch", tags=["Documents"])
+@router.get("/documents/batch", tags=["Documents"], response_model=FileListResponse)
 async def list_batch_files():
-    """List all files in the batch_files directory for local processing."""
+    """List all files in the batch_files directory with complete metadata (v2 parity)."""
     try:
-        files = document_service.list_batch_files()
-        return {"files": files, "count": len(files)}
+        files = document_service.list_batch_files_with_metadata()
+        return FileListResponse(files=files, count=len(files))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to list batch files: {str(e)}")
 
@@ -95,7 +96,7 @@ async def process_batch(request: V1BatchProcessingRequest):
     enqueued = []
     conflicts = []
     for doc_id in request.document_ids:
-        file_path = document_service._find_document_file(doc_id)
+        file_path = document_service.find_document_file_unified(doc_id)
         if not file_path:
             conflicts.append({"document_id": doc_id, "error": "Document not found"})
             continue
@@ -140,9 +141,24 @@ async def process_document(
     sync: bool = Query(False, description="Run synchronously (for tests only)"),
 ):
     """Enqueue processing for a single document (Celery) or run sync when requested."""
-    # Validate file exists first
-    file_path = document_service._find_document_file(document_id)
+    # Validate file exists first (check uploaded and batch locations)
+    file_path = document_service.find_document_file_unified(document_id)
     if not file_path:
+        try:
+            # Emit detailed debug info to API logs to help diagnose path issues
+            from ....main import api_logger
+            extra = {"request_id": getattr(getattr(request, 'state', object()), 'request_id', '-')}
+            upload_dir = str(getattr(document_service, 'upload_dir', ''))
+            batch_dir = str(getattr(document_service, 'batch_dir', ''))
+            api_logger.warning(
+                f"process_document: Document not found id=%s upload_dir=%s batch_dir=%s",
+                document_id,
+                upload_dir,
+                batch_dir,
+                extra=extra,
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=404, detail="Document not found")
 
     # Synchronous path (optional)
@@ -251,11 +267,24 @@ async def get_processing_result(document_id: str):
 
 @router.get("/documents/{document_id}/content", tags=["Results"])
 async def get_document_content(document_id: str):
-    """Get processed markdown content for a document."""
-    content = document_service.get_processed_content(document_id)
-    if content is None:
-        raise HTTPException(status_code=404, detail="Processed content not found")
-    return {"content": content}
+    """Get the content of a processed document (with storage and filesystem fallback)."""
+    try:
+        # Try storage first, then filesystem fallback
+        result = storage_service.get_processing_result(document_id)
+        path: Optional[Path] = None
+        if result and getattr(result, 'markdown_path', None):
+            path = Path(result.markdown_path)
+        if not path or not path.exists():
+            path = document_service.get_processed_markdown_path(document_id)
+        if not path or not path.exists():
+            raise HTTPException(status_code=404, detail="Processed content not found")
+
+        content = path.read_text(encoding='utf-8')
+        return {"content": content}
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get content: {str(e)}")
 
 @router.put("/documents/{document_id}/content", tags=["Results"])
 async def update_document_content(
@@ -301,101 +330,89 @@ async def update_document_content(
 
 @router.get("/documents/{document_id}/download", tags=["Results"])
 async def download_document(document_id: str):
-    """Download processed document."""
-    for file_path in Path(settings.processed_dir).glob(f"*_{document_id}.md"):
-        if file_path.exists():
-            return FileResponse(
-                path=str(file_path),
-                filename=f"{file_path.stem}.md",
-                media_type="text/markdown"
-            )
-    raise HTTPException(status_code=404, detail="Processed document not found")
-
-@router.post("/documents/download/bulk", tags=["Results"])
-async def download_bulk_documents(request: BulkDownloadRequest):
-    """Download multiple documents as a ZIP archive."""
-    if not request.document_ids:
-        raise HTTPException(status_code=400, detail="No document IDs provided")
-    
-    # Get processing results for metadata
-    results = []
-    for doc_id in request.document_ids:
-        result = storage_service.get_processing_result(doc_id)
-        if result and result.success:
-            results.append(result)
-    
-    if not results:
-        raise HTTPException(status_code=404, detail="No processed documents found for the provided IDs")
-    
+    """Download a processed document (with storage and filesystem fallback)."""
     try:
-        # Filter document IDs based on download type
-        if request.download_type == "rag_ready":
-            filtered_ids = [r.document_id for r in results if getattr(r, 'is_rag_ready', getattr(r, 'pass_all_thresholds', False))]
-            if not filtered_ids:
-                raise HTTPException(status_code=404, detail="No RAG-ready documents found")
-        else:
-            filtered_ids = [r.document_id for r in results]
-        
-        # Create ZIP archive based on type
-        if request.download_type == "combined":
-            zip_path, file_count = zip_service.create_combined_markdown_zip(
-                filtered_ids, 
-                results, 
-                request.zip_name
-            )
-        else:
-            zip_path, file_count = zip_service.create_zip_archive(
-                filtered_ids, 
-                request.zip_name,
-                request.include_summary
-            )
-        
-        if file_count == 0:
-            raise HTTPException(status_code=404, detail="No files found to archive")
-        
-        # Return the ZIP file
-        return FileResponse(
-            path=zip_path,
-            filename=Path(zip_path).name,
-            media_type="application/zip",
-            background=lambda: zip_service.cleanup_zip_file(zip_path)  # Clean up after download
-        )
-    
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create archive: {str(e)}")
+        result = storage_service.get_processing_result(document_id)
+        path: Optional[Path] = None
+        if result and getattr(result, 'markdown_path', None):
+            path = Path(result.markdown_path)
+        if not path or not path.exists():
+            # Fallback to filesystem lookup (worker saved file, backend memory lacks result)
+            path = document_service.get_processed_markdown_path(document_id)
+        if not path or not path.exists():
+            raise HTTPException(status_code=404, detail="Processed file not found")
 
-@router.get("/documents/download/rag-ready", tags=["Results"])
+        # Determine a sensible download filename
+        download_name = None
+        try:
+            if result and getattr(result, 'filename', None):
+                download_name = f"{Path(result.filename).stem}.md"
+            else:
+                download_name = Path(path.name).name
+        except Exception:
+            download_name = Path(path.name).name
+
+        return FileResponse(
+            path=str(path),
+            filename=download_name,
+            media_type="text/markdown"
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+
+@router.post("/documents/download/bulk", tags=["Downloads"])
+async def download_bulk_documents(request: BulkDownloadRequest):
+    """Download multiple documents as a ZIP archive (v2 parity)."""
+    try:
+        zip_info = await zip_service.create_bulk_download(
+            document_ids=request.document_ids,
+            download_type=request.download_type,
+            custom_filename=getattr(request, 'custom_filename', None) or getattr(request, 'zip_name', None),
+            include_summary=getattr(request, 'include_summary', True),
+            include_combined=getattr(request, 'include_combined', request.download_type == 'combined')
+        )
+
+        if not zip_info.zip_path.exists():
+            raise HTTPException(status_code=404, detail="Archive not found")
+
+        return FileResponse(
+            path=str(zip_info.zip_path),
+            filename=zip_info.zip_path.name,
+            media_type="application/zip",
+            headers={"Content-Disposition": f"attachment; filename={zip_info.zip_path.name}"}
+        )
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Bulk download failed: {str(e)}")
+
+@router.get("/documents/download/rag-ready", tags=["Downloads"])
 async def download_rag_ready_documents(
-    zip_name: Optional[str] = Query(None, description="Custom name for the ZIP file"),
+    zip_name: Optional[str] = Query(None, description="Custom ZIP filename"),
     include_summary: bool = Query(True, description="Include processing summary")
 ):
-    """Download all RAG-ready documents as a ZIP archive."""
-    all_results = storage_service.get_all_processing_results()
-    rag_ready_results = [r for r in all_results if r.success and getattr(r, 'is_rag_ready', getattr(r, 'pass_all_thresholds', False))]
-    
-    if not rag_ready_results:
-        raise HTTPException(status_code=404, detail="No RAG-ready documents found")
-    
+    """Download all RAG-ready documents as a ZIP archive (v2 parity)."""
     try:
-        rag_ready_ids = [r.document_id for r in rag_ready_results]
-        zip_path, file_count = zip_service.create_zip_archive(
-            rag_ready_ids,
-            zip_name or "curatore_rag_ready_export.zip",
-            include_summary
+        zip_info = await zip_service.create_rag_ready_download(
+            custom_filename=zip_name,
+            include_summary=include_summary
         )
-        
-        if file_count == 0:
-            raise HTTPException(status_code=404, detail="No RAG-ready files found to archive")
-        
+
+        if not zip_info.zip_path.exists():
+            raise HTTPException(status_code=404, detail="No RAG-ready documents found")
+
         return FileResponse(
-            path=zip_path,
-            filename=Path(zip_path).name,
+            path=str(zip_info.zip_path),
+            filename=zip_info.zip_path.name,
             media_type="application/zip",
-            background=lambda: zip_service.cleanup_zip_file(zip_path)
+            headers={"Content-Disposition": f"attachment; filename={zip_info.zip_path.name}"}
         )
-    
+    except HTTPException:
+        raise
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to create RAG-ready archive: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"RAG-ready download failed: {str(e)}")
 
 @router.get("/batch/{batch_id}/result", response_model=V1BatchProcessingResult, tags=["Results"])
 async def get_batch_result(batch_id: str):
@@ -414,16 +431,16 @@ async def list_processed_documents():
 async def delete_document(document_id: str):
     """Delete a document and its processing results."""
     storage_service.delete_processing_result(document_id)
-    
+
     upload_dir = Path(settings.upload_dir)
     processed_dir = Path(settings.processed_dir)
-    
+
     for file_path in upload_dir.glob(f"{document_id}_*"):
         if file_path.exists():
             file_path.unlink()
-    
+
     for file_path in processed_dir.glob(f"*_{document_id}.md"):
         if file_path.exists():
             file_path.unlink()
-    
-    return {"message": "Document deleted successfully"}
+
+    return {"success": True, "message": "Document deleted successfully"}
