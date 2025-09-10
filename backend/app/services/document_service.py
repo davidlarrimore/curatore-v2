@@ -120,12 +120,59 @@ class DocumentService:
         return norm or set(self.DEFAULT_EXTS)
 
     def _normalize_under_root(self) -> None:
-        """Normalize all directory paths under the files root if configured."""
+        """Normalize directory paths under the configured files root, with local fallback.
+
+        Behavior:
+        - If `files_root` is set and exists, map relative paths under it.
+        - If `files_root` is set but does not exist (common in local dev without Docker),
+          fall back to using a project-local `files/` directory while preserving subpaths
+          (e.g., `/app/files/uploaded_files` → `./files/uploaded_files`).
+        - If `files_root` is not set, leave any relative paths as-is.
+        """
         if not self.files_root:
             return
 
+        root = self.files_root
+        root_exists = root.exists()
+        if not root_exists:
+            # Local dev fallback: use ./files as the effective root
+            local_root = Path.cwd() / "files"
+
+            def rebase_abs(p: Path) -> Path:
+                try:
+                    # Only rebase when path starts with the (missing) files_root
+                    p_str = str(p)
+                    root_str = str(root)
+                    if p_str.startswith(root_str.rstrip("/")):
+                        rel = Path(p_str[len(root_str.rstrip("/")) :].lstrip("/"))
+                        return local_root / rel
+                except Exception:
+                    pass
+                return p
+
+            # Rebase absolute paths like /app/files/... to ./files/...
+            if self.upload_dir.is_absolute():
+                self.upload_dir = rebase_abs(self.upload_dir)
+            else:
+                self.upload_dir = local_root / self.upload_dir
+
+            if self.processed_dir.is_absolute():
+                self.processed_dir = rebase_abs(self.processed_dir)
+            else:
+                self.processed_dir = local_root / self.processed_dir
+
+            if self.batch_dir is not None:
+                if self.batch_dir.is_absolute():
+                    self.batch_dir = rebase_abs(self.batch_dir)
+                else:
+                    self.batch_dir = local_root / self.batch_dir
+            # Update files_root to the local root to keep subsequent logic consistent
+            self.files_root = local_root
+            return
+
+        # Normal mapping: honor files_root for relative paths
         def under_root(p: Path) -> Path:
-            return p if p.is_absolute() else (self.files_root / p)
+            return p if p.is_absolute() else (root / p)
 
         self.upload_dir = under_root(self.upload_dir)
         self.processed_dir = under_root(self.processed_dir)

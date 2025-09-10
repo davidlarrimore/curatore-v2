@@ -1,8 +1,8 @@
-# Curatore v2 🚀
+# Curatore 🚀
 
-> **RAG-Ready Document Processing & Optimization Platform**
+RAG‑ready document processing and optimization platform.
 
-A comprehensive document processing pipeline that converts documents to markdown, evaluates quality using LLM-powered analysis, and optimizes content for Retrieval-Augmented Generation (RAG) applications.
+Curatore converts documents to Markdown, evaluates quality with an LLM, and optionally optimizes structure for vector databases. It ships as a FastAPI backend and a Next.js frontend with a single, stable API at `/api/v1`.
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115.0-green)](https://fastapi.tiangolo.com/)
 [![Next.js](https://img.shields.io/badge/Next.js-15.5.0-blue)](https://nextjs.org/)
@@ -77,28 +77,23 @@ A comprehensive document processing pipeline that converts documents to markdown
 ### **API Structure**
 ```
 backend/app/
-├── services/                    # Core business logic services
-│   ├── document_service.py      # Document processing pipeline
+├── services/
+│   ├── document_service.py      # Processing pipeline
 │   ├── llm_service.py           # LLM integration and evaluation
-│   ├── storage_service.py       # In-memory/Redis storage management
-│   └── zip_service.py           # Archive creation and export
-├── api/                         # API routing and endpoints (versioned)
-│   ├── v1/
-│   │   └── routers/
-│   │       ├── documents.py     # v1 document endpoints
-│   │       ├── jobs.py          # v1 job status endpoints
-│   │       └── system.py        # v1 system/config endpoints
-│   └── v2/
+│   ├── storage_service.py       # In‑memory result store
+│   └── zip_service.py           # Archive creation/export
+├── api/
+│   └── v1/
 │       └── routers/
-│           ├── documents.py     # v2 document endpoints
-│           ├── jobs.py          # v2 job status endpoints
-│           └── system.py        # v2 system/config + queue summary
-├── models.py                    # Pydantic data models
-├── config.py                    # Application configuration
-└── main.py                      # FastAPI app setup (mounts /api/v1, /api/v2, legacy /api)
+│           ├── documents.py     # Documents + processing
+│           ├── jobs.py          # Job status
+│           └── system.py        # Health/config/queues
+├── models.py                    # Pydantic models
+├── config.py                    # Settings
+└── main.py                      # FastAPI app (mounts /api/v1 and legacy /api)
 ```
 
-Prefer versioned paths like `/api/v2/*`. The legacy alias `/api/*` maps to v1 and returns deprecation headers.
+Use explicit versioned paths like `/api/v1/*`. The legacy alias `/api/*` maps to v1 and returns deprecation headers.
 
 ---
 
@@ -114,7 +109,7 @@ Prefer versioned paths like `/api/v2/*`. The legacy alias `/api/*` maps to v1 an
 1. **Clone and Setup**:
    ```bash
    git clone <repository-url>
-   cd curatore-v2
+   cd curatore
    cp .env.example .env
    # Edit .env with your configuration (see Configuration section)
    ```
@@ -128,9 +123,8 @@ Prefer versioned paths like `/api/v2/*`. The legacy alias `/api/*` maps to v1 an
    - **Frontend**: http://localhost:3000
    - **Backend API**: http://localhost:8000
    - **API Docs (all)**: http://localhost:8000/docs
-   - **API Docs (v1)**: http://localhost:8000/api/v1/docs
-   - **API Docs (v2)**: http://localhost:8000/api/v2/docs
-   - **Health Check (v2)**: http://localhost:8000/api/v2/health
+   - **API Docs**: http://localhost:8000/api/v1/docs
+   - **Health Check**: http://localhost:8000/api/v1/health
 
 ### **⚙️ Manual Installation**
 
@@ -214,7 +208,7 @@ DEFAULT_MARKDOWN_THRESHOLD=7
 # ============================================================================
 
 # FastAPI settings
-API_TITLE="Curatore v2 API"
+API_TITLE="Curatore API"
 API_VERSION="2.0.0"
 DEBUG=true
 
@@ -296,16 +290,16 @@ Recommended settings (override via env):
 - `JOB_STATUS_TTL_SECONDS=259200` — retain job metadata
 - `ALLOW_SYNC_PROCESS=false` — set `true` only for tests (`?sync=true`)
 
-Job & queue endpoints (v2 preferred):
+Job & queue endpoints (v1):
 
-- Enqueue document: `POST /api/v2/documents/{document_id}/process`
+- Enqueue document: `POST /api/v1/documents/{document_id}/process`
   - Returns `{ job_id, document_id, status: 'queued', enqueued_at }`
   - Returns `409` with `{ active_job_id }` if a job is already running for that document
-- Poll job: `GET /api/v2/jobs/{job_id}` → `PENDING|STARTED|SUCCESS|FAILURE` (+ `result` on success)
-- Last job for a document: `GET /api/v2/jobs/by-document/{document_id}`
-- Batch enqueue: `POST /api/v2/documents/batch/process` → `{ batch_id, jobs, conflicts }`
-- Queue health: `GET /api/v2/system/queues` → `{ enabled, broker, result_backend, queue, redis_ok, pending, workers, running, processed, total }`
-- Queue summary by batch or jobs: `GET /api/v2/system/queues/summary?batch_id=...` or `?job_ids=jid1,jid2`
+- Poll job: `GET /api/v1/jobs/{job_id}` → `PENDING|STARTED|SUCCESS|FAILURE` (+ `result` on success)
+- Last job for a document: `GET /api/v1/jobs/by-document/{document_id}`
+- Batch enqueue: `POST /api/v1/documents/batch/process` → `{ batch_id, jobs, conflicts }`
+- Queue health: `GET /api/v1/system/queues` → `{ enabled, broker, result_backend, queue, redis_ok, pending, workers, running, processed, total }`
+- Queue summary by batch or jobs: `GET /api/v1/system/queues/summary?batch_id=...` or `?job_ids=jid1,jid2`
 
 ### **LLM Endpoint Examples**
 
@@ -364,40 +358,40 @@ OPENAI_VERIFY_SSL=false
      - Custom Selection: User-selected files with metadata
    - **Processing Reports**: Detailed analysis and optimization status
 
-### **🔌 API Usage (v2)**
+### **🔌 API Usage (v1)**
 
 Complete API documentation available at: **http://localhost:8000/docs**
 
 #### **Basic Document Operations**
 ```bash
 # Upload document
-curl -X POST "http://localhost:8000/api/v2/documents/upload" \
+curl -X POST "http://localhost:8000/api/v1/documents/upload" \
   -F "file=@document.pdf"
 
 # Process document with auto-optimization
-curl -X POST "http://localhost:8000/api/v2/documents/{id}/process" \
+curl -X POST "http://localhost:8000/api/v1/documents/{id}/process" \
   -H "Content-Type: application/json" \
   -d '{"auto_optimize": true}'
 
 # Get processing result
-curl "http://localhost:8000/api/v2/documents/{id}/result"
+curl "http://localhost:8000/api/v1/documents/{id}/result"
 
 # Get processed content
-curl "http://localhost:8000/api/v2/documents/{id}/content"
+curl "http://localhost:8000/api/v1/documents/{id}/content"
 ```
 
 #### **Download Operations**
 ```bash
 # Download individual processed document
-curl "http://localhost:8000/api/v2/documents/{id}/download" \
+curl "http://localhost:8000/api/v1/documents/{id}/download" \
   -o processed_document.md
 
 # Download RAG-ready files as ZIP
-curl "http://localhost:8000/api/v2/documents/download/rag-ready?zip_name=rag_files.zip" \
+curl "http://localhost:8000/api/v1/documents/download/rag-ready?zip_name=rag_files.zip" \
   -o rag_ready_files.zip
 
 # Bulk download with custom options
-curl -X POST "http://localhost:8000/api/v2/documents/download/bulk" \
+curl -X POST "http://localhost:8000/api/v1/documents/download/bulk" \
   -H "Content-Type: application/json" \
   -d '{
     "document_ids": ["doc1", "doc2", "doc3"],
@@ -411,7 +405,7 @@ curl -X POST "http://localhost:8000/api/v2/documents/download/bulk" \
 #### **Batch Processing**
 ```bash
 # Process multiple documents
-curl -X POST "http://localhost:8000/api/v2/documents/batch/process" \
+curl -X POST "http://localhost:8000/api/v1/documents/batch/process" \
   -H "Content-Type: application/json" \
   -d '{
     "document_ids": ["doc1", "doc2", "doc3"],
@@ -428,37 +422,37 @@ curl -X POST "http://localhost:8000/api/v2/documents/batch/process" \
   }'
 
 # Get batch processing status
-curl "http://localhost:8000/api/v2/documents/batch/{batch_id}/status"
+curl "http://localhost:8000/api/v1/documents/batch/{batch_id}/status"
 
 # Get batch results
-curl "http://localhost:8000/api/v2/documents/batch/{batch_id}/results"
+curl "http://localhost:8000/api/v1/documents/batch/{batch_id}/results"
 ```
 
 #### **System Monitoring**
 ```bash
 # Test LLM connection
-curl "http://localhost:8000/api/v2/llm/status"
+curl "http://localhost:8000/api/v1/llm/status"
 
-# Check API health (v2)
-curl "http://localhost:8000/api/v2/health"
+# Check API health
+curl "http://localhost:8000/api/v1/health"
 
 # Get supported file formats
-curl "http://localhost:8000/api/v2/config/supported-formats"
+curl "http://localhost:8000/api/v1/config/supported-formats"
 
 # Get default configuration
-curl "http://localhost:8000/api/v2/config/defaults"
+curl "http://localhost:8000/api/v1/config/defaults"
 
 # System reset (development only)
-curl -X POST "http://localhost:8000/api/v2/system/reset"
+curl -X POST "http://localhost:8000/api/v1/system/reset"
 
 # Queue health (Celery/Redis)
-curl "http://localhost:8000/api/v2/system/queues"
+curl "http://localhost:8000/api/v1/system/queues"
 
 # Queue summary for a batch
-curl "http://localhost:8000/api/v2/system/queues/summary?batch_id=YOUR_BATCH_ID"
+curl "http://localhost:8000/api/v1/system/queues/summary?batch_id=YOUR_BATCH_ID"
 
 # Queue summary for specific jobs
-curl "http://localhost:8000/api/v2/system/queues/summary?job_ids=jid1,jid2"
+curl "http://localhost:8000/api/v1/system/queues/summary?job_ids=jid1,jid2"
 ```
 
 ---
@@ -527,7 +521,7 @@ curatore_combined_export_20250827_143022.zip
 
 ### **Project Structure**
 ```
-curatore-v2/
+curatore/
 ├── files/                       # File storage (Docker volume mount)
 │   ├── uploaded_files/          # User-uploaded documents
 │   ├── processed_files/         # Converted markdown files
@@ -544,8 +538,7 @@ curatore-v2/
 │   └── app/                     # Application source
 │       ├── services/            # Core business logic (fully documented)
 │       ├── api/                 # Versioned API routes and endpoints
-│       │   ├── v1/routers       # v1 endpoints
-│       │   └── v2/routers       # v2 endpoints (default)
+│       │   └── v1/routers       # v1 endpoints
 │       ├── models.py            # Pydantic data models and validation
 │       ├── config.py            # Configuration management
 │       └── main.py              # FastAPI application entry point
@@ -599,17 +592,17 @@ All backend services follow comprehensive documentation standards:
 
 ```bash
 # Test individual document processing
-curl -X POST "http://localhost:8000/api/v2/documents/upload" \
+curl -X POST "http://localhost:8000/api/v1/documents/upload" \
   -F "file=@test_document.pdf"
 
 # Test LLM connectivity
-curl "http://localhost:8000/api/v2/llm/status"
+curl "http://localhost:8000/api/v1/llm/status"
 
-# Health check (v2)
-curl "http://localhost:8000/api/v2/health"
+# Health check
+curl "http://localhost:8000/api/v1/health"
 
 # Download test files
-curl "http://localhost:8000/api/v2/documents/download/rag-ready" -o test_rag.zip
+curl "http://localhost:8000/api/v1/documents/download/rag-ready" -o test_rag.zip
 
 # View processing logs
 docker-compose logs -f backend | grep "Processing"
@@ -704,10 +697,10 @@ docker-compose logs -f backend | grep -E "(Processing|Error|Warning)"
 docker-compose exec backend ls -la /app/files/
 
 # Check LLM connectivity
-curl -v "http://localhost:8000/api/v2/llm/status"
+curl -v "http://localhost:8000/api/v1/llm/status"
 
 # Validate configuration
-curl "http://localhost:8000/api/v2/config/defaults"
+curl "http://localhost:8000/api/v1/config/defaults"
 ```
 
 ---
@@ -716,14 +709,14 @@ curl "http://localhost:8000/api/v2/config/defaults"
 
 - `NEXT_PUBLIC_API_URL`: Base URL for the backend API (default `http://localhost:8000`).
 - `NEXT_PUBLIC_JOB_POLL_INTERVAL_MS`: Poll interval for job/queue updates in the UI (e.g., `2500`).
-- Frontend uses API path version `v2` by default (see `frontend/lib/api.ts`).
+- Frontend uses API path version `v1` by default (see `frontend/lib/api.ts`).
 
 ---
 
 ## 🧠 **Status Bar Insights**
 
 - Shows API health, LLM connection, max upload size, and supported formats.
-- Displays live queue metrics (queued, running, done, total) via `/api/v2/system/queues` and `/api/v2/system/queues/summary`.
+- Displays live queue metrics (queued, running, done, total) via `/api/v1/system/queues` and `/api/v1/system/queues/summary`.
 - Shows backend version and API path version.
 
 ---

@@ -1,8 +1,9 @@
 # backend/app/api/v1/routers/system.py
 from datetime import datetime
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional, List
+import json
 
 from ....config import settings
 from ..models import HealthStatus, LLMConnectionStatus
@@ -223,3 +224,73 @@ async def queue_health() -> Dict[str, Any]:
     # Total = completed + running + pending
     info["total"] = int(info.get("processed", 0)) + int(info.get("running", 0)) + int(info.get("pending", 0))
     return info
+
+
+@router.get("/system/queues/summary", tags=["System"])
+async def queue_summary(
+    batch_id: Optional[str] = Query(None),
+    job_ids: Optional[str] = Query(None, description="Comma-separated job IDs"),
+) -> Dict[str, Any]:
+    """Summarize status for a requested set of jobs (parity with v2).
+
+    - If `batch_id` is provided, inspects all jobs with that batch_id.
+    - Else if `job_ids` is provided, inspects that explicit list.
+    - Otherwise returns 400.
+    """
+    if not batch_id and not job_ids:
+        raise HTTPException(status_code=400, detail="batch_id or job_ids required")
+
+    r = get_redis_client()
+    target_job_ids: List[str] = []
+
+    if job_ids:
+        target_job_ids = [j.strip() for j in job_ids.split(",") if j.strip()]
+    else:
+        # Collect jobs by batch_id
+        cursor = 0
+        while True:
+            cursor, keys = r.scan(cursor=cursor, match="job:*", count=500)
+            for k in keys or []:
+                try:
+                    raw = r.get(k)
+                    if not raw:
+                        continue
+                    data = json.loads(raw)
+                    if data.get("batch_id") == batch_id and data.get("job_id"):
+                        target_job_ids.append(str(data.get("job_id")))
+                except Exception:
+                    continue
+            if cursor == 0:
+                break
+
+    requested = len(target_job_ids)
+    running = 0
+    done = 0
+    started_ids = set()
+    completed_ids = set()
+
+    for jid in target_job_ids:
+        try:
+            raw = r.get(f"job:{jid}")
+            if not raw:
+                continue
+            data = json.loads(raw)
+            status = str(data.get("status", "")).upper()
+            if status == "STARTED":
+                running += 1
+                started_ids.add(jid)
+            elif status in ("SUCCESS", "FAILURE"):
+                done += 1
+                completed_ids.add(jid)
+        except Exception:
+            continue
+
+    queued = max(requested - running - done, 0)
+    return {
+        "batch_id": batch_id,
+        "requested": requested,
+        "queued": queued,
+        "running": running,
+        "done": done,
+        "total": requested,
+    }

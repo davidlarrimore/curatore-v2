@@ -3,7 +3,7 @@
 
 /*
   Notes:
-  - Targets API v2 paths by default. Adjust `API_PATH_VERSION` to switch.
+  - Targets API v1 paths by default. Adjust `API_PATH_VERSION` to switch.
   - Reads backend base from `NEXT_PUBLIC_API_URL` with a sensible default.
   - Wraps fetch with minimal error handling and exposes typed-ish helpers.
 */
@@ -15,7 +15,7 @@ import type {
 } from '@/types'
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-export const API_PATH_VERSION = 'v2' as const
+export const API_PATH_VERSION = 'v1' as const
 
 const jsonHeaders: HeadersInit = { 'Content-Type': 'application/json' }
 
@@ -136,8 +136,8 @@ export const fileApi = {
     zipName?: string,
     includeSummary: boolean = true,
   ): Promise<Blob> {
-    // Align with v2 BulkDownloadRequest while keeping backward compatibility
-    // v2 model: { document_ids, download_type, include_summary, include_combined, custom_filename }
+    // Align with BulkDownloadRequest while keeping backward compatibility
+    // Model: { document_ids, download_type, include_summary, include_combined, custom_filename }
     // Some routers still reference `zip_name`, so send both.
     const body: Record<string, any> = {
       document_ids: documentIds,
@@ -171,7 +171,7 @@ export const processingApi = {
     options: { auto_optimize?: boolean; quality_thresholds?: any } = {},
   ): Promise<{ job_id: string; document_id: string; status: string; enqueued_at?: string }>
   {
-    const payload = mapOptionsToV2(options)
+    const payload = mapOptionsToV1(options)
     const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/process`), {
       method: 'POST',
       headers: jsonHeaders,
@@ -184,7 +184,7 @@ export const processingApi = {
   {
     const payload = {
       document_ids: request.document_ids,
-      options: request.options ? mapOptionsToV2(request.options) : undefined,
+      options: request.options ? mapOptionsToV1(request.options) : undefined,
     }
     const res = await fetch(apiUrl('/documents/batch/process'), {
       method: 'POST',
@@ -197,22 +197,22 @@ export const processingApi = {
   async getProcessingResult(documentId: string): Promise<ProcessingResult> {
     const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/result`), { cache: 'no-store' })
     const raw = await handleJson<any>(res)
-    return mapV2ResultToFrontend(raw)
+    return mapV1ResultToFrontend(raw)
   },
 
   async processDocument(
     documentId: string,
     options: { auto_optimize?: boolean; quality_thresholds?: any },
   ): Promise<ProcessingResult> {
-    const v2Options = mapOptionsToV2(options)
+    const v1Options = mapOptionsToV1(options)
 
     const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/process`), {
       method: 'POST',
       headers: jsonHeaders,
-      body: JSON.stringify(v2Options),
+      body: JSON.stringify(v1Options),
     })
     const raw = await handleJson<any>(res)
-    return mapV2ResultToFrontend(raw)
+    return mapV1ResultToFrontend(raw)
   },
 
   // Optional helper (not currently used): export results in a simple JSON blob
@@ -248,14 +248,14 @@ export const contentApi = {
 // -------------------- Utility Functions --------------------
 export const utils = {
   /**
-   * Map v2 API response to frontend ProcessingResult type
+   * Map v1 API response to frontend ProcessingResult type
    */
-  mapV2ResultToFrontend: mapV2ResultToFrontend,
+  mapV1ResultToFrontend: mapV1ResultToFrontend,
 
   /**
-   * Map frontend options to v2 API format
+   * Map frontend options to v1 API format
    */
-  mapOptionsToV2: mapOptionsToV2,
+  mapOptionsToV1: mapOptionsToV1,
 
   /**
    * Create a download link for a blob and trigger download
@@ -351,10 +351,10 @@ export const utils = {
 }
 
 /**
- * Map v2 API response to frontend ProcessingResult format
+ * Map v1 API response to frontend ProcessingResult format
  * Handles backward compatibility and field mapping
  */
-function mapV2ResultToFrontend(raw: any): ProcessingResult {
+function mapV1ResultToFrontend(raw: any): ProcessingResult {
   // Safely extract conversion score with fallback logic
   const conversion_score = raw.conversion_result?.conversion_score ?? 0
   const pass_all_thresholds = raw.pass_all_thresholds ?? raw.is_rag_ready ?? false
@@ -382,27 +382,26 @@ function mapV2ResultToFrontend(raw: any): ProcessingResult {
 }
 
 /**
- * Map frontend options to v2 API format
- * Handles field name changes and structure updates
+ * Map frontend options to v1 API format
+ * Aligns with backend V1ProcessingOptions: { auto_optimize, quality_thresholds: { conversion, clarity, completeness, relevance, markdown } }
  */
-function mapOptionsToV2(options: any): any {
-  const v2: any = {
-    auto_improve: options?.auto_optimize ?? true,
-    vector_optimize: options?.auto_optimize ?? true,
+function mapOptionsToV1(options: any): any {
+  const v1: any = {
+    auto_optimize: options?.auto_optimize ?? true,
   }
 
   const qt = options?.quality_thresholds
   if (qt) {
-    v2.quality_thresholds = {
-      conversion_quality: Math.round(qt.conversion_quality ?? qt.conversion ?? qt.conversion_threshold ?? 70),
-      clarity_score: Math.round(qt.clarity_score ?? qt.clarity ?? qt.clarity_threshold ?? 7),
-      completeness_score: Math.round(qt.completeness_score ?? qt.completeness ?? qt.completeness_threshold ?? 7),
-      relevance_score: Math.round(qt.relevance_score ?? qt.relevance ?? qt.relevance_threshold ?? 7),
-      markdown_quality: Math.round(qt.markdown_quality ?? qt.markdown ?? qt.markdown_threshold ?? 7),
+    v1.quality_thresholds = {
+      conversion: Math.round(qt.conversion ?? qt.conversion_quality ?? qt.conversion_threshold ?? 70),
+      clarity: Math.round(qt.clarity ?? qt.clarity_score ?? qt.clarity_threshold ?? 7),
+      completeness: Math.round(qt.completeness ?? qt.completeness_score ?? qt.completeness_threshold ?? 7),
+      relevance: Math.round(qt.relevance ?? qt.relevance_score ?? qt.relevance_threshold ?? 7),
+      markdown: Math.round(qt.markdown ?? qt.markdown_quality ?? qt.markdown_threshold ?? 7),
     }
   }
 
-  return v2
+  return v1
 }
 
 // -------------------- Jobs API --------------------
