@@ -6,15 +6,10 @@ import shutil
 from pathlib import Path
 from typing import Tuple, Optional, Dict, Any
 
-from markitdown import MarkItDown
-# Guard import of internal exception across versions
-try:
-    from markitdown._exceptions import FileConversionException  # type: ignore
-except Exception:  # pragma: no cover
-    class FileConversionException(Exception):
-        pass
+# Optional MarkItDown import is deferred to function scope to avoid hard dependency at import-time
+class FileConversionException(Exception):
+    pass
 
-from .ocr import ocr_image_bytes, ocr_pdf_path
 from ..config import settings
 
 logger = logging.getLogger(__name__)
@@ -97,9 +92,21 @@ def markitdown_convert(path: str) -> str:
     Hardened to never raise upstream: returns "" on conversion failures or missing extras.
     """
     try:
+        # Import lazily so environments without markitdown can still run other code/tests
+        try:
+            from markitdown import MarkItDown  # type: ignore
+        except ModuleNotFoundError:
+            logger.info("MarkItDown not installed; skipping conversion")
+            return ""
+        # Internal exception is optional across versions; wrap generic exceptions below
+        try:
+            from markitdown._exceptions import FileConversionException as _FCE  # type: ignore
+        except Exception:  # pragma: no cover
+            _FCE = FileConversionException
+
         md = MarkItDown()
         out = md.convert(path)
-    except FileConversionException as e:
+    except _FCE as e:  # type: ignore[name-defined]
         logger.info("MarkItDown conversion failed (handled): %s", e)
         return ""
     except Exception as e:
@@ -198,6 +205,8 @@ def extract_markdown(
 
         # -------- PDF chain (backend parity: pdfminer -> OCR) --------
         if ext == ".pdf":
+            # Lazy import OCR utilities to avoid hard deps during import/tests
+            from .ocr import ocr_pdf_path  # type: ignore
             # Lazy import pdfminer so a missing dep never breaks app startup
             try:
                 from pdfminer.high_level import extract_text as pdf_extract_text  # type: ignore
@@ -284,6 +293,7 @@ def extract_markdown(
 
         # -------- Images (OCR) --------
         if ext in {".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff"}:
+            from .ocr import ocr_image_bytes  # type: ignore
             with open(path, "rb") as f:
                 img_ocr = ocr_image_bytes(f.read(), ocr_lang, ocr_psm)
             logger.info("extract_markdown: OCR for image; chars=%s", len(img_ocr))

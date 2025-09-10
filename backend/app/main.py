@@ -212,6 +212,14 @@ async def startup_event() -> None:
     print(f"   UPLOAD_DIR: {settings.upload_dir}")
     print(f"   PROCESSED_DIR: {settings.processed_dir}")
     print(f"   BATCH_DIR: {settings.batch_dir}")
+    # Extraction engine summary
+    try:
+        print("🔧 Extraction Engine Configuration:")
+        print(f"   CONTENT_EXTRACTOR: {settings.content_extractor}")
+        print(f"   EXTRACTION_SERVICE_URL: {settings.extraction_service_url}")
+        print(f"   DOCLING_SERVICE_URL: {getattr(settings, 'docling_service_url', None)}")
+    except Exception:
+        pass
     
     # Validate that the main files directory exists (should be Docker volume)
     files_root = Path(settings.files_root)
@@ -223,11 +231,18 @@ async def startup_event() -> None:
         # The DocumentService handles directory creation and validation
         # This is called during service import/initialization
         
-        # Clear files and storage on startup only in explicit dev mode
+        # Clear files and storage on startup in debug or when explicitly requested
+        # Preserve batch files by default; only clear batch when CLEAR_BATCH_ON_STARTUP is set.
         clear_on_startup = bool(os.getenv("CLEAR_ON_STARTUP", "").lower() in {"1", "true", "yes"})
+        clear_batch = bool(os.getenv("CLEAR_BATCH_ON_STARTUP", "").lower() in {"1", "true", "yes"})
         if settings.debug or clear_on_startup:
             print("🧹 Cleaning up previous session data (debug/explicit)…")
-            document_service.clear_all_files()
+            if clear_batch:
+                print("   - Clearing uploads, processed, and batch files (CLEAR_BATCH_ON_STARTUP)")
+                document_service.clear_all_files()
+            else:
+                print("   - Clearing uploads and processed files only (preserving batch_files)")
+                document_service.clear_runtime_files()
             storage_service.clear_all()
             print("✅ File directories and storage cleared")
         else:

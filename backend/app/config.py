@@ -85,6 +85,16 @@ class Settings(BaseSettings):
     extraction_service_verify_ssl: bool = Field(default=True, description="Verify SSL for extraction service calls")
 
     # =========================================================================
+    # CONTENT EXTRACTOR SWITCH (default | docling | none)
+    # =========================================================================
+    content_extractor: str = Field(default="default", description="Which extractor to use: default | docling | none")
+
+    # Docling-specific configuration
+    docling_service_url: Optional[str] = Field(default=None, description="Base URL for Docling service")
+    docling_timeout: float = Field(default=60.0, description="Timeout (s) for Docling requests")
+    docling_verify_ssl: bool = Field(default=True, description="Verify SSL for Docling service calls")
+
+    # =========================================================================
     # QUALITY ASSESSMENT DEFAULTS
     # =========================================================================
     default_conversion_threshold: int = Field(default=70, description="0–100")

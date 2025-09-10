@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import re
+import json
+import logging
 import uuid
 import shutil
 from pathlib import Path
@@ -27,16 +29,27 @@ from ..utils.text_utils import clean_llm_response
 
 class DocumentService:
     """
-    Curatore v2 Document Service — file management restored; extraction via external service.
-    
-    This service handles all document-related operations including:
-    - File upload and storage management
-    - Document processing and conversion
-    - File listing and metadata management
-    - Document deletion and cleanup
-    
-    The service supports both uploaded files (via API) and batch files (manual uploads)
-    and provides unified methods for finding and processing documents from either location.
+    DocumentService is the core orchestrator for Curatore's document lifecycle.
+
+    Responsibilities:
+    - File management: upload, list, find, delete, and clear runtime artifacts.
+    - Extraction: convert various input formats to Markdown (via Docling or the
+      default extraction microservice), with automatic fallbacks and rich logging.
+    - Processing: score conversion quality, optionally run LLM evaluation, and
+      persist results for RAG readiness checks and downloads.
+
+    Programming logic overview:
+    1) File orchestration
+       - Uploaded files are saved under a UUID-prefixed filename to avoid collisions.
+       - Batch files live in a separate directory and are discoverable by name.
+    2) Extraction dispatch
+       - _extract_content() chooses an extractor based on `CONTENT_EXTRACTOR`.
+         It calls _extract_via_docling() or _extract_via_extraction_service(),
+         and sets `_last_extraction_info` for downstream reporting.
+    3) Processing pipeline
+       - process_document() invokes extraction, computes conversion metrics,
+         optionally evaluates with an LLM, writes Markdown to `processed_dir`,
+         and returns a ProcessingResult (also saved by Celery tasks).
     """
 
     DEFAULT_EXTS: Set[str] = {
@@ -46,7 +59,14 @@ class DocumentService:
     }
 
     def __init__(self) -> None:
-        """Initialize the DocumentService with configured paths and settings."""
+        """Initialize the service with configured paths and extractor settings.
+
+        Sets up storage directories (upload, processed, batch) under an optional
+        files_root, loads supported extensions, and reads extractor configuration
+        for the Docling and default extraction-service clients. Also prepares a
+        logger and a per-request diagnostic map (`_last_extraction_info`).
+        """
+        self._logger = logging.getLogger("curatore.api")
         files_root = getattr(settings, "files_root", None)
         self.files_root: Optional[Path] = Path(files_root) if files_root else None
 
@@ -60,10 +80,30 @@ class DocumentService:
 
         self._supported_extensions: Set[str] = self._load_supported_extensions()
 
-        # External extraction service configuration (if used)
+        # Extractor selection and service configuration
+        self.extractor_engine: str = getattr(settings, "content_extractor", "default").strip().lower()
+
+        # Existing custom extraction service (legacy/default)
         self.extract_base: str = str(getattr(settings, "extraction_service_url", "")).rstrip("/")
         self.extract_timeout: float = float(getattr(settings, "extraction_service_timeout", 60))
         self.extract_api_key: Optional[str] = getattr(settings, "extraction_service_api_key", None)
+
+        # Docling service (alternative extractor)
+        self.docling_base: str = str(getattr(settings, "docling_service_url", "")).rstrip("/")
+        # Docling extract endpoint is fixed per API spec: POST /v1/convert/file
+        self.docling_extract_path: str = "/v1/convert/file"
+        self.docling_timeout: float = float(getattr(settings, "docling_timeout", 60))
+        # Last extraction info for observability
+        self._last_extraction_info: Dict[str, Any] = {}
+        try:
+            self._logger.debug(
+                "Extractor config: engine=%s, extraction_service_url=%s, docling_service_url=%s",
+                self.extractor_engine,
+                self.extract_base or "",
+                self.docling_base or "",
+            )
+        except Exception:
+            pass
 
     def _load_supported_extensions(self) -> Set[str]:
         """Load supported file extensions from settings or use defaults."""
@@ -102,19 +142,70 @@ class DocumentService:
             self.batch_dir.mkdir(parents=True, exist_ok=True)
 
     async def extractor_health(self) -> Dict[str, Any]:
-        """Check connectivity to the extraction service (best-effort)."""
-        base = getattr(self, 'extract_base', '')
-        if not base:
-            return {"connected": False, "endpoint": None, "error": "not_configured"}
-        url = f"{base}/api/v1/system/health"
+        """Check connectivity to the configured extraction engine (best-effort).
+
+        Returns a lightweight status object containing:
+          { engine, connected, endpoint, response|error }
+        For Docling, probes /health with fallbacks to /v1/health or /healthz.
+        For the default extraction-service, probes /api/v1/system/health.
+        """
+        engine = getattr(self, "extractor_engine", "default")
         try:
-            async with httpx.AsyncClient(timeout=5.0, verify=getattr(settings, 'extraction_service_verify_ssl', True)) as client:
-                resp = await client.get(url)
-                ok = resp.status_code == 200
-                data = resp.json() if ok else {"status_code": resp.status_code}
-                return {"connected": ok, "endpoint": url, "response": data}
+            if engine == "docling":
+                base = getattr(self, "docling_base", "")
+                if not base:
+                    return {"engine": engine, "connected": False, "endpoint": None, "error": "not_configured"}
+                # Docling commonly exposes /health; attempt /health then fallback to /v1/health or /healthz
+                url = f"{base}/health"
+                try:
+                    async with httpx.AsyncClient(timeout=5.0, verify=getattr(settings, 'docling_verify_ssl', True)) as client:
+                        resp = await client.get(url)
+                        if resp.status_code >= 400:
+                            # Try alternate health paths
+                            alt = f"{base}/v1/health"
+                            resp = await client.get(alt)
+                            if resp.status_code >= 400:
+                                alt = f"{base}/healthz"
+                                resp = await client.get(alt)
+                                url = alt
+                        ok = resp.status_code == 200
+                        data: Any
+                        try:
+                            data = resp.json()
+                        except Exception:
+                            data = {"status_code": resp.status_code}
+                        result = {"engine": engine, "connected": ok, "endpoint": url, "response": data}
+                        try:
+                            self._logger.debug("Docling health: %s", result)
+                        except Exception:
+                            pass
+                        return result
+                except Exception as e:
+                    err = {"engine": engine, "connected": False, "endpoint": url, "error": str(e)}
+                    try:
+                        self._logger.warning("Docling health check failed: %s", e)
+                    except Exception:
+                        pass
+                    return err
+
+            # Default/legacy extraction service check (only for expected engine values)
+            if engine in {"default", "extraction", "auto", "legacy"}:
+                base = getattr(self, 'extract_base', '')
+                if not base:
+                    return {"engine": engine, "connected": False, "endpoint": None, "error": "not_configured"}
+                url = f"{base}/api/v1/system/health"
+                async with httpx.AsyncClient(timeout=5.0, verify=getattr(settings, 'extraction_service_verify_ssl', True)) as client:
+                    resp = await client.get(url)
+                    ok = resp.status_code == 200
+                    data = resp.json() if ok else {"status_code": resp.status_code}
+                    result = {"engine": engine, "connected": ok, "endpoint": url, "response": data}
+                    try:
+                        self._logger.debug("Extraction-service health: %s", result)
+                    except Exception:
+                        pass
+                    return result
         except Exception as e:
-            return {"connected": False, "endpoint": url, "error": str(e)}
+            return {"engine": engine, "connected": False, "endpoint": None, "error": str(e)}
 
     def _safe_clear_dir(self, directory: Path) -> int:
         """Safely clear all files from a directory and return count of deleted files."""
@@ -644,18 +735,25 @@ class DocumentService:
         file_path: Path, 
         options: ProcessingOptions
     ) -> ProcessingResult:
-        """Process a document and return processing results.
-        
-        This is the main document processing method that handles conversion,
-        LLM evaluation, and quality scoring.
-        
+        """Process a document end-to-end and return a ProcessingResult.
+
+        Steps:
+          1) Extract to Markdown via configured extractor(s).
+          2) Score conversion quality using simple heuristics.
+          3) Optionally evaluate with an LLM (if available and enabled).
+          4) Persist Markdown to `processed_dir` and build the result object.
+
         Args:
-            document_id: Unique identifier for the document
-            file_path: Path to the document file
-            options: Processing options and configurations
-            
+            document_id: Stable identifier for the document being processed.
+            file_path: Absolute path to the source file.
+            options: Domain ProcessingOptions controlling thresholds, OCR hints,
+                     and whether to apply vector optimization and LLM analysis.
+
         Returns:
-            ProcessingResult with complete processing information
+            ProcessingResult containing:
+              - conversion_result (scores and notes)
+              - llm_evaluation (optional)
+              - markdown_path and metadata (includes extractor diagnostics)
         """
         if not file_path.exists():
             raise FileNotFoundError(f"Document file not found: {file_path}")
@@ -716,7 +814,8 @@ class DocumentService:
                 processing_metadata={
                     "service_version": "2.0",
                     "processing_time": time.time() - start_time,
-                    "options_used": options.model_dump()
+                    "options_used": options.model_dump(),
+                    "extractor": getattr(self, "_last_extraction_info", {})
                 }
             )
             
@@ -746,44 +845,234 @@ class DocumentService:
                 processing_metadata={
                     "service_version": "2.0",
                     "error": str(e),
-                    "processing_time": time.time() - start_time
+                    "processing_time": time.time() - start_time,
+                    "extractor": getattr(self, "_last_extraction_info", {})
                 }
             )
             raise Exception(f"Document processing failed: {e}") from e
 
+    async def _extract_via_docling(self, file_path: Path) -> Optional[str]:
+        """Extract content via Docling.
+
+        High-level: Sends a multipart upload to Docling Serve's
+        `POST /v1/convert/file` endpoint and requests Markdown output.
+        It first uploads the file under the field name `files` (Docling's
+        documented parameter); if the server responds that it expected `file`,
+        it retries automatically. Additional options are provided to improve
+        quality (image placeholders and OCR annotations).
+
+        Args:
+            file_path: Absolute path to the source document on disk.
+
+        Returns:
+            Markdown string on success; None if the Docling call fails or
+            returns an empty body.
+
+        Side effects:
+            - Populates `self._last_extraction_info` with diagnostic info
+              including engine, URL, status/errors, options, and outcome.
+            - Emits structured logs for success/failure and response details.
+        """
+        if not getattr(self, 'docling_base', None):
+            return None
+        base = self.docling_base.rstrip('/')
+        url = f"{base}{self.docling_extract_path if getattr(self, 'docling_extract_path', None) else '/v1/convert/file'}"
+        try:
+            self._logger.info("Using Docling extractor: %s", url)
+        except Exception:
+            pass
+        import mimetypes
+        headers = {"Accept": "application/json"}
+        try:
+            async with httpx.AsyncClient(timeout=self.docling_timeout, verify=getattr(settings, 'docling_verify_ssl', True)) as client:
+                # Docling Serve expects conversion options as query parameters (primitives only).
+                # Ensure images are represented as placeholders and OCR annotations are included.
+                params = {
+                    "output_format": "markdown",
+                    "image_export_mode": "placeholder",
+                    "include_annotations": "true",        # ensures text appears at image positions
+                    # Important toggles to prevent base64 embedding:
+                    "generate_picture_images": "false",
+                    "include_images": "false",
+                }
+                mime = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+
+                async def _post_with(field_name: str) -> httpx.Response:
+                    with file_path.open('rb') as f:
+                        files = [(field_name, (file_path.name, f, mime))]
+                        # Only send file via multipart; options go in query parameters per API spec.
+                        return await client.post(url, headers=headers, files=files, data=params)
+
+                resp = await _post_with('files')
+                if resp.status_code == 422:
+                    # retry with 'file' if server asked for it
+                    try:
+                        body = resp.json() or {}
+                        needs_file = any(
+                            any(str(x).lower() == 'file' for x in (d.get('loc') or []))
+                            for d in (body.get('detail') or [])
+                        )
+                    except Exception:
+                        needs_file = False
+                    if needs_file:
+                        resp = await _post_with('file')
+                resp.raise_for_status()
+
+                ctype = (resp.headers.get('content-type') or '').lower()
+                if 'application/json' in ctype:
+                    payload = resp.json()
+                    doc = payload.get('document') if isinstance(payload, dict) else None
+                    status_text = payload.get('status') if isinstance(payload, dict) else None
+                    errors_list = payload.get('errors') if isinstance(payload, dict) else None
+                    proc_time = payload.get('processing_time') if isinstance(payload, dict) else None
+                    if isinstance(doc, dict):
+                        md_val = doc.get('md_content')
+                        if isinstance(md_val, str) and md_val.strip():
+                            self._last_extraction_info = {
+                                "engine": "docling",
+                                "url": url,
+                                "ok": True,
+                                "status": status_text,
+                                "errors": errors_list if isinstance(errors_list, list) else [],
+                                "processing_time": proc_time,
+                                "options": {"output_format": "markdown", "image_export_mode": "placeholder", "include_annotations": True},
+                            }
+                            return md_val
+                        txt_val = doc.get('text_content')
+                        if isinstance(txt_val, str) and txt_val.strip():
+                            self._last_extraction_info = {
+                                "engine": "docling",
+                                "url": url,
+                                "ok": True,
+                                "status": status_text,
+                                "errors": errors_list if isinstance(errors_list, list) else [],
+                                "processing_time": proc_time,
+                                "note": "md_content missing; used text_content",
+                                "options": {"output_format": "markdown", "image_export_mode": "placeholder", "include_annotations": True},
+                            }
+                            return txt_val
+                text = resp.text
+                if text and text.strip():
+                    self._last_extraction_info = {"engine": "docling", "url": url, "ok": True, "status": None, "errors": [], "options": {"output_format": "markdown", "image_export_mode": "placeholder", "include_annotations": True}}
+                    return text
+        except Exception as e:
+            try:
+                if 'resp' in locals() and hasattr(resp, 'text'):
+                    self._logger.warning("Docling extraction failed for %s: %s | body: %s", file_path.name, e, (resp.text[:500] or '').replace('\n',' '))
+                else:
+                    self._logger.warning("Docling extraction failed for %s: %s", file_path.name, e)
+            except Exception:
+                pass
+            self._last_extraction_info = {"engine": "docling", "url": url, "ok": False}
+            return None
+
+    async def _extract_via_extraction_service(self, file_path: Path, fallback_from_docling: bool = False) -> Optional[str]:
+        """Extract content via the default extraction-service.
+
+        High-level: Streams a multipart upload to the internal extraction
+        microservice (`/api/v1/extract`) and parses its JSON or text response.
+
+        Args:
+            file_path: Absolute path to the source document on disk.
+            fallback_from_docling: True when this invocation is a fallback
+                after a Docling attempt failed; recorded in diagnostics.
+
+        Returns:
+            Markdown string on success; None if the service call fails or
+            does not return usable content.
+
+        Side effects:
+            - Populates `self._last_extraction_info` with engine, URL, ok flag,
+              and whether this was a fallback call.
+            - Logs request target and warnings on error.
+        """
+        if not getattr(self, 'extract_base', None):
+            return None
+        url = f"{self.extract_base.rstrip('/')}/api/v1/extract"
+        try:
+            if fallback_from_docling:
+                self._logger.info("Falling back to extraction-service: %s", url)
+            else:
+                self._logger.info("Using extraction-service: %s", url)
+        except Exception:
+            pass
+        headers = {"Accept": "application/json"}
+        if getattr(self, 'extract_api_key', None):
+            headers["Authorization"] = f"Bearer {self.extract_api_key}"
+        try:
+            async with httpx.AsyncClient(timeout=self.extract_timeout, verify=getattr(settings, 'extraction_service_verify_ssl', True)) as client:
+                files = {"file": (file_path.name, file_path.open('rb'), None)}
+                resp = await client.post(url, headers=headers, files=files)
+                resp.raise_for_status()
+                ctype = (resp.headers.get('content-type') or '').lower()
+                if 'application/json' in ctype:
+                    data = resp.json()
+                    md = data.get('content_markdown') or data.get('markdown') or ''
+                    if isinstance(md, str) and md.strip():
+                        self._last_extraction_info = {"engine": "extraction", "url": url, "ok": True, "fallback": fallback_from_docling}
+                        return md
+                text = resp.text
+                if text and text.strip():
+                    self._last_extraction_info = {"engine": "extraction", "url": url, "ok": True, "fallback": fallback_from_docling}
+                    return text
+        except Exception as e:
+            try:
+                self._logger.warning("Extraction-service failed for %s: %s", file_path.name, e)
+            except Exception:
+                pass
+        return None
+
     async def _extract_content(self, file_path: Path) -> str:
-        """Extract content from a document file and convert to markdown.
+        """Dispatch content extraction for a given file.
 
         Behavior:
-          - .txt/.md: return file content
-          - Others: if extraction service is configured, call it; else placeholder
+          - For `.txt`, `.md`, or `.csv` files, reads the file as UTF-8.
+          - Otherwise, routes to the configured extractor:
+              - `CONTENT_EXTRACTOR=docling`: try Docling first; on failure,
+                fall back to the default extraction-service when available.
+              - `CONTENT_EXTRACTOR=default` (or legacy values): call the
+                extraction-service directly.
+          - If all extractors are unavailable or fail, returns a small
+            placeholder Markdown indicating extraction is not implemented.
+
+        Args:
+            file_path: Absolute path to the source document on disk.
+
+        Returns:
+            Markdown content extracted or a placeholder string.
+
+        Notes:
+            This method updates `self._last_extraction_info` to reflect the
+            attempt details (engine selection, outcome, etc.) so the caller can
+            surface it in processing metadata and logs.
         """
         suffix = file_path.suffix.lower()
         if suffix in {'.txt', '.md', '.csv'}:
             return file_path.read_text(encoding='utf-8', errors='ignore')
 
-        # Try external extraction service when configured
-        if getattr(self, 'extract_base', None):
-            try:
-                url = f"{self.extract_base.rstrip('/')}/api/v1/extract"
-                headers = {"Accept": "application/json"}
-                if getattr(self, 'extract_api_key', None):
-                    headers["Authorization"] = f"Bearer {self.extract_api_key}"
+        engine = getattr(self, "extractor_engine", "default")
+        self._last_extraction_info = {"requested_engine": engine, "ok": False}
 
-                # Use streaming file upload via httpx
-                async with httpx.AsyncClient(timeout=self.extract_timeout, verify=getattr(settings, 'extraction_service_verify_ssl', True)) as client:
-                    files = {"file": (file_path.name, file_path.open('rb'), None)}
-                    resp = await client.post(url, headers=headers, files=files)
-                    resp.raise_for_status()
-                    data = resp.json()
-                    # Prefer v1 extractor response shape
-                    md = data.get('content_markdown') or data.get('markdown') or ''
-                    if isinstance(md, str) and md.strip():
-                        return md
-            except Exception as e:
-                print(f"Extraction service failed for {file_path.name}: {e}")
+        # Route based on engine, with fallback behavior
+        if engine == "docling":
+            md = await self._extract_via_docling(file_path)
+            if md:
+                return md
+            # fallback to extraction-service if configured
+            md2 = await self._extract_via_extraction_service(file_path, fallback_from_docling=True)
+            if md2:
+                return md2
+        else:
+            md = await self._extract_via_extraction_service(file_path)
+            if md:
+                return md
 
-        # Fallback placeholder when no extractor is configured or it failed
+        # Final fallback placeholder
+        try:
+            self._logger.info("No extractor configured or all failed; returning placeholder for %s", file_path.name)
+        except Exception:
+            pass
+        self._last_extraction_info = {"engine": "none", "ok": False}
         return f"# {file_path.stem}\n\n*Content extraction not implemented for {file_path.suffix} files.*\n\nFile: {file_path.name}"
 
     async def _evaluate_with_llm(self, content: str, options: ProcessingOptions) -> LLMEvaluation:
