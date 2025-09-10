@@ -20,3 +20,4 @@ zipfile38>=0.0.3
 # Optional queueing (if you enabled Celery/Redis in v2)
 celery>=5.3
 redis>=5.0
+watchdog>=3.0

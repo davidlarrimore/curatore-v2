@@ -68,7 +68,10 @@ services:
       context: ./backend
       dockerfile: Dockerfile
     container_name: curatore-worker
-    command: sh -c "celery -A app.celery_app worker -Q ${CELERY_DEFAULT_QUEUE:-processing} -l info --concurrency=${CELERY_CONCURRENCY:-2}"
+    # Auto-restart worker on code changes using watchdog/watchmedo
+    command: >
+      sh -c "watchmedo auto-restart --directory=/app/app --pattern=*.py --recursive -- 
+      celery -A app.celery_app worker -Q ${CELERY_DEFAULT_QUEUE:-processing} -l info --concurrency=${CELERY_CONCURRENCY:-2}"
     environment:
       - PYTHONUNBUFFERED=1
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
@@ -132,12 +135,17 @@ services:
       context: ./extraction-service
       dockerfile: Dockerfile
     container_name: curatore-extraction
+    volumes:
+      # Hot-reload extraction service code
+      - ./extraction-service/app:/app/app
     ports:
       - "8010:8010"
     environment:
       - CORS_ORIGINS=["http://localhost:3000","http://127.0.0.1:3000"]
       - OCR_LANG=${OCR_LANG:-eng}
       - OCR_PSM=${OCR_PSM:-3}
+    # Run with reload for live dev edits
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
 
 
   # --------------------------------------------------------------------------

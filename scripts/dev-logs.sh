@@ -21,11 +21,11 @@ if [[ -z "${DC}" ]]; then
   exit 1
 fi
 
-echo "🚀 Starting Curatore v2 development environment (detached)..."
-# Ensure helper scripts are executable
-if compgen -G "${REPO_ROOT}/scripts/*.sh" > /dev/null; then
-  chmod +x "${REPO_ROOT}"/scripts/*.sh || true
+if [[ $# -gt 0 ]]; then
+  # Tail specific services passed as args
+  exec ${DC} -f "${REPO_ROOT}/docker-compose.yml" logs -f "$@"
+else
+  # Tail all services
+  exec ${DC} -f "${REPO_ROOT}/docker-compose.yml" logs -f
 fi
-${DC} -f "${REPO_ROOT}/docker-compose.yml" up -d --build
-echo "🌐 Frontend: http://localhost:3000"
-echo "🔗 Backend:  http://localhost:8000 (Swagger at /docs)"
+

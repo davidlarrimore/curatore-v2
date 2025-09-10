@@ -561,25 +561,29 @@ curatore-v2/
 ### **Development Scripts**
 
 ```bash
-# Start development environment with hot-reload
+# Start development environment (detached) with hot-reload
 ./scripts/dev-up.sh
 
-# Stop all services
+# Tail logs (all or specific services)
+./scripts/dev-logs.sh               # all services
+./scripts/dev-logs.sh backend       # specific service
+
+# Restart services (optionally rebuild if deps changed)
+./scripts/dev-restart.sh worker
+./scripts/dev-restart.sh --build backend
+
+# Stop and remove services
 ./scripts/dev-down.sh
 
-# Clean up containers, images, and volumes
+# Deep clean (volumes, images, orphans)
 ./scripts/clean.sh
-
-# View service logs
-docker-compose logs -f backend
-docker-compose logs -f frontend
-
-# Rebuild services
-docker-compose build --no-cache
-
-# Start specific service
-docker-compose up backend
 ```
+
+Notes:
+- Backend and Extraction run with live reload; code edits apply immediately.
+- Worker runs under `watchmedo` and restarts on Python file changes.
+- If you change Python dependencies (`backend/requirements.txt`) or Dockerfiles, run:
+  `./scripts/dev-restart.sh --build backend worker`
 
 ### **Code Standards & Documentation**
 
