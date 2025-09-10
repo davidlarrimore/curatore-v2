@@ -133,6 +133,19 @@ async def get_default_config():
         "auto_optimize": True
     }
 
+@router.get("/config/extraction-services", tags=["Configuration"])
+async def get_extraction_services() -> Dict[str, Any]:
+    """List available document extraction services and which one is active.
+
+    - Always includes the default extraction microservice (if configured).
+    - Includes Docling when the service is reachable within the network.
+    """
+    try:
+        return await document_service.available_extraction_services()
+    except Exception as e:
+        # Return a best-effort structure even on error
+        return {"active": getattr(document_service, "extractor_engine", "default"), "services": [], "error": str(e)}
+
 @router.get("/items", tags=["Legacy"])
 def list_items():
     """Legacy endpoint for frontend compatibility."""

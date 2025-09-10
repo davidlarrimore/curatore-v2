@@ -98,8 +98,8 @@ def _setup_logging() -> logging.Logger:
     ch = logging.StreamHandler()
     fh.setFormatter(fmt)
     ch.setFormatter(fmt)
-    # Console at INFO; file at DEBUG in debug mode, INFO otherwise
-    ch.setLevel(logging.INFO)
+    # Console/file levels: DEBUG when in debug mode, otherwise INFO
+    ch.setLevel(logging.DEBUG if settings.debug else logging.INFO)
     fh.setLevel(logging.DEBUG if settings.debug else logging.INFO)
 
     class ReqIdFilter(logging.Filter):

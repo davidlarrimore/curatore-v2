@@ -254,6 +254,75 @@ class DocumentService:
         except Exception as e:
             return {"engine": engine, "connected": False, "endpoint": None, "error": str(e)}
 
+    async def available_extraction_services(self) -> Dict[str, Any]:
+        """Report availability of supported extraction services.
+
+        Returns a dict with a list of services and the currently active engine:
+          {
+            "active": "docling"|"default",
+            "services": [
+               {"id": "default", "name": "Default Extraction Service", "url": str|None, "available": bool},
+               {"id": "docling", "name": "Docling", "url": str|None, "available": bool}
+            ]
+          }
+        """
+        active = getattr(self, "extractor_engine", "default")
+
+        # Default/legacy extraction-service status
+        default_url = None
+        default_ok = False
+        try:
+            base = getattr(self, 'extract_base', '')
+            if base:
+                default_url = f"{base}/api/v1/system/health"
+                async with httpx.AsyncClient(timeout=5.0, verify=getattr(settings, 'extraction_service_verify_ssl', True)) as client:
+                    resp = await client.get(default_url)
+                    default_ok = resp.status_code == 200
+        except Exception:
+            default_ok = False
+
+        # Docling status
+        docling_url = None
+        docling_ok = False
+        try:
+            base = getattr(self, 'docling_base', '')
+            if base:
+                # Probe /health then fallbacks
+                for path in ("/health", "/v1/health", "/healthz"):
+                    try:
+                        candidate = f"{base}{path}"
+                        async with httpx.AsyncClient(timeout=5.0, verify=getattr(settings, 'docling_verify_ssl', True)) as client:
+                            resp = await client.get(candidate)
+                            if resp.status_code == 200:
+                                docling_url = candidate
+                                docling_ok = True
+                                break
+                    except Exception:
+                        continue
+                # If none succeeded, still expose base URL
+                if not docling_url:
+                    docling_url = f"{base}/health"
+        except Exception:
+            docling_ok = False
+
+        return {
+            "active": active,
+            "services": [
+                {
+                    "id": "default",
+                    "name": "Default Extraction Service",
+                    "url": default_url,
+                    "available": bool(default_ok),
+                },
+                {
+                    "id": "docling",
+                    "name": "Docling",
+                    "url": docling_url,
+                    "available": bool(docling_ok),
+                },
+            ],
+        }
+
     def _safe_clear_dir(self, directory: Path) -> int:
         """Safely clear all files from a directory and return count of deleted files."""
         deleted = 0
@@ -306,20 +375,23 @@ class DocumentService:
                     continue
 
                 stat = entry.stat()
-                # Attempt to parse name as "<document_id>_<original>"
+                # Attempt to parse name as "<document_id>_<original>" ONLY for non-batch kinds
                 parts = entry.name.split("_", 1)
-                # Only treat as a document_id if the prefix looks like a real id (e.g., uuid or token >= 6 chars)
-                if len(parts) == 2 and len(parts[0]) >= 6:
-                    document_id = parts[0]
-                    original_filename = parts[1]
+                if kind != "batch" and len(parts) == 2:
+                    prefix = parts[0]
+                    # Consider it an id only if it looks like a UUID hex (32 chars, lowercase hex)
+                    if len(prefix) == 32 and all(c in "0123456789abcdef" for c in prefix):
+                        document_id = prefix
+                        original_filename = parts[1]
+                    else:
+                        document_id = ""
+                        original_filename = entry.name
                 else:
                     document_id = ""
                     original_filename = entry.name
 
-                # Ensure a stable unique document_id for batch files
-                if not document_id and kind == "batch":
-                    # Use the filename as the document_id for batch items
-                    # This is supported throughout the codebase (lookups accept filename)
+                # For batch files, use the full filename as the document_id (exact match)
+                if kind == "batch":
                     document_id = original_filename
 
                 # Convert datetime to Unix timestamp as integer (not ISO string)
@@ -596,13 +668,25 @@ class DocumentService:
             Path object if file found, None otherwise
         """
         if not self.upload_dir or not self.upload_dir.exists():
+            try:
+                self._logger.debug("find_uploaded_file: upload_dir missing or not exists: %s", self.upload_dir)
+            except Exception:
+                pass
             return None
             
         try:
             # Search for uploaded files with pattern: document_id_originalname.ext
             for file_path in self.upload_dir.glob(f"{document_id}_*.*"):
                 if file_path.is_file() and self.is_supported_file(file_path.name):
+                    try:
+                        self._logger.debug("find_uploaded_file: matched %s", file_path)
+                    except Exception:
+                        pass
                     return file_path
+            try:
+                self._logger.debug("find_uploaded_file: no match for id=%s in %s", document_id, self.upload_dir)
+            except Exception:
+                pass
             return None
         except Exception as e:
             # Log error but don't crash - this is often called during file searches
@@ -626,6 +710,10 @@ class DocumentService:
             Path object if batch file found, None otherwise
         """
         if not self.batch_dir or not self.batch_dir.exists():
+            try:
+                self._logger.debug("find_batch_file_by_document_id: batch_dir missing or not exists: %s", self.batch_dir)
+            except Exception:
+                pass
             return None
             
         try:
@@ -640,29 +728,35 @@ class DocumentService:
                 # Try to find by stem
                 for file_path in self.batch_dir.glob(f"{stem}.*"):
                     if file_path.is_file() and self.is_supported_file(file_path.name):
+                        try:
+                            self._logger.debug("find_batch_file_by_document_id: matched legacy stem %s -> %s", stem, file_path)
+                        except Exception:
+                            pass
                         return file_path
                         
-            # Case 2: document_id might be the actual filename
+            # Case 2: document_id must be the exact filename (preferred for batch items)
             candidate_path = self.batch_dir / doc_id
             if candidate_path.exists() and candidate_path.is_file() and self.is_supported_file(candidate_path.name):
-                return candidate_path
-                
-            # Case 3: Try using document_id as stem for batch files
-            for file_path in self.batch_dir.glob(f"{doc_id}.*"):
-                if file_path.is_file() and self.is_supported_file(file_path.name):
-                    return file_path
-
-            # Case 4: Case-insensitive fallback match on filenames (best-effort)
-            target_lower = doc_id.lower()
-            for file_path in self.batch_dir.iterdir():
                 try:
-                    if file_path.is_file() and self.is_supported_file(file_path.name):
-                        name = file_path.name
-                        if name.lower() == target_lower or name.split(".")[0].lower() == target_lower:
-                            return file_path
+                    self._logger.debug("find_batch_file_by_document_id: matched filename %s", candidate_path)
                 except Exception:
-                    continue
-                    
+                    pass
+                return candidate_path
+
+            # Note: No fuzzy or case-insensitive matching to avoid ambiguity.
+
+            try:
+                # Best-effort directory listing snapshot for debugging
+                names = []
+                for p in self.batch_dir.iterdir():
+                    try:
+                        if p.is_file():
+                            names.append(p.name)
+                    except Exception:
+                        continue
+                self._logger.debug("find_batch_file_by_document_id: no match for id=%s. batch_dir contents: %s", doc_id, ", ".join(sorted(names))[:1000])
+            except Exception:
+                pass
             return None
         except Exception as e:
             print(f"Error searching for batch file by document_id {document_id}: {e}")
@@ -685,18 +779,42 @@ class DocumentService:
             Path object if found in either location, None otherwise
         """
         # First try uploaded files
+        try:
+            self._logger.debug("find_document_file_unified: id=%s upload_dir=%s batch_dir=%s", document_id, self.upload_dir, self.batch_dir)
+        except Exception:
+            pass
+
         uploaded_path = self.find_uploaded_file(document_id)
         if uploaded_path:
+            try:
+                self._logger.debug("find_document_file_unified: found in uploads -> %s", uploaded_path)
+            except Exception:
+                pass
             return uploaded_path
             
         # Then try batch files by document_id
         batch_path = self.find_batch_file_by_document_id(document_id)
         if batch_path:
+            try:
+                self._logger.debug("find_document_file_unified: found in batch -> %s", batch_path)
+            except Exception:
+                pass
             return batch_path
             
         # Finally, fall back to the existing _find_document_file method
         # which has its own logic for handling both locations
-        return self._find_document_file(document_id)
+        fallback = self._find_document_file(document_id)
+        if fallback:
+            try:
+                self._logger.debug("find_document_file_unified: found via legacy fallback -> %s", fallback)
+            except Exception:
+                pass
+            return fallback
+        try:
+            self._logger.debug("find_document_file_unified: NOT FOUND for id=%s", document_id)
+        except Exception:
+            pass
+        return None
 
     def find_batch_file_enhanced(self, filename: str) -> Optional[Path]:
         """Enhanced version of find_batch_file with better error handling and logging.

@@ -144,6 +144,21 @@ async def process_document(
     # Validate file exists first (check uploaded and batch locations)
     file_path = document_service.find_document_file_unified(document_id)
     if not file_path:
+        try:
+            # Emit detailed debug info to API logs to help diagnose path issues
+            from ....main import api_logger
+            extra = {"request_id": getattr(getattr(request, 'state', object()), 'request_id', '-')}
+            upload_dir = str(getattr(document_service, 'upload_dir', ''))
+            batch_dir = str(getattr(document_service, 'batch_dir', ''))
+            api_logger.warning(
+                f"process_document: Document not found id=%s upload_dir=%s batch_dir=%s",
+                document_id,
+                upload_dir,
+                batch_dir,
+                extra=extra,
+            )
+        except Exception:
+            pass
         raise HTTPException(status_code=404, detail="Document not found")
 
     # Synchronous path (optional)

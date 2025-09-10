@@ -241,7 +241,23 @@ DOCLING_TIMEOUT=60
 DOCLING_VERIFY_SSL=true
 ```
 
-Docker Compose already wires a `docling` service if you set the image/tag and port in your environment. See `docker-compose.yml` keys `DOCLING_IMAGE`, `DOCLING_TAG`, `DOCLING_PORT`, and `DOCLING_CONTAINER_NAME`.
+If `CONTENT_EXTRACTOR` is not set, Curatore defaults to the internal extraction-service (equivalent to `CONTENT_EXTRACTOR=default`).
+
+To control whether the bundled `docling` service starts, set the boolean in your `.env`:
+
+```bash
+ENABLE_DOCLING_SERVICE=true   # or false
+```
+
+Use the Makefile helper to respect this toggle:
+
+```bash
+make up
+```
+
+Notes:
+- The Docling port mapping is baked into `docker-compose.yml` as `5151:5001`.
+- The Docling image and tag are baked into `docker-compose.yml` (`ghcr.io/docling-project/docling-serve-cpu:latest`). The Docling container name is baked in as `curatore-docling`.
 
 Behavior when `CONTENT_EXTRACTOR=docling`:
 
