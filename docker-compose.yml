@@ -160,7 +160,7 @@ services:
     ports:
       - "5151:5001"
     environment:
-      DOCLING_SERVE_ENABLE_UI: "0"
+      DOCLING_SERVE_ENABLE_UI: "1"
       DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "1"
       DOCLING_SERVE_ARTIFACTS_PATH: ""
     extra_hosts:
