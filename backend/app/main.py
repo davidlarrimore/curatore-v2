@@ -77,6 +77,34 @@ app = FastAPI(
 # LOGGING
 # ============================================================================
 
+class LevelColorFormatter(logging.Formatter):
+    """Formatter that injects ANSI colors based on record level."""
+
+    RESET = "\033[0m"
+    LEVEL_COLORS = {
+        logging.DEBUG: "\033[36m",    # Cyan
+        logging.INFO: "\033[32m",     # Green
+        logging.WARNING: "\033[33m",  # Yellow
+        logging.ERROR: "\033[31m",    # Red
+        logging.CRITICAL: "\033[35m", # Magenta
+    }
+
+    def __init__(self, fmt: str, datefmt: str | None = None, use_color: bool = True) -> None:
+        super().__init__(fmt=fmt, datefmt=datefmt)
+        self._use_color = use_color
+
+    def format(self, record: logging.LogRecord) -> str:
+        original_levelname = record.levelname
+        if self._use_color:
+            color = self.LEVEL_COLORS.get(record.levelno)
+            if color:
+                record.levelname = f"{color}{original_levelname}{self.RESET}"
+        try:
+            return super().format(record)
+        finally:
+            record.levelname = original_levelname
+
+
 def _setup_logging() -> logging.Logger:
     logger = logging.getLogger("curatore.api")
     if logger.handlers:
@@ -90,14 +118,17 @@ def _setup_logging() -> logging.Logger:
     except Exception:
         log_dir = os.getcwd()
 
-    fmt = logging.Formatter(
-        "%(asctime)s %(levelname)s [%(name)s] [%(request_id)s] %(message)s"
+    fmt_pattern = "%(asctime)s %(levelname)s [%(name)s] [%(request_id)s] %(message)s"
+    file_fmt = logging.Formatter(fmt_pattern)
+    console_fmt = LevelColorFormatter(
+        fmt_pattern,
+        use_color=os.getenv("NO_COLOR") is None
     )
 
     fh = RotatingFileHandler(os.path.join(log_dir, "api.log"), maxBytes=5*1024*1024, backupCount=3)
     ch = logging.StreamHandler()
-    fh.setFormatter(fmt)
-    ch.setFormatter(fmt)
+    fh.setFormatter(file_fmt)
+    ch.setFormatter(console_fmt)
     # Console/file levels: DEBUG when in debug mode, otherwise INFO
     ch.setLevel(logging.DEBUG if settings.debug else logging.INFO)
     fh.setLevel(logging.DEBUG if settings.debug else logging.INFO)
