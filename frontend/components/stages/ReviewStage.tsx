@@ -3,7 +3,7 @@
 
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { ProcessingResult, QualityThresholds } from '@/types';
+import { ProcessingResult, QualityThresholds, ExtractorDiagnostics } from '@/types';
 import { contentApi, jobsApi } from '@/lib/api';
 
 interface ReviewStageProps {
@@ -68,67 +68,6 @@ export function ReviewStage({
       return String(raw)
     }
   }
-
-  // Load document content when result is selected and is editable
-  useEffect(() => {
-    if (!selectedResult || activeTab !== 'editor') return;
-    // Avoid fetching content for failed processing results
-    if (!selectedResult.success) {
-      setDocumentContent('');
-      setEditedContent('');
-      return;
-    }
-    loadDocumentContent(selectedResult.document_id);
-  }, [selectedResult, activeTab]);
-
-  // Load processing log for failed results
-  useEffect(() => {
-    setProcessingLog([]);
-    setLogError('');
-    setJobMeta(null);
-    if (!selectedResult || selectedResult.success !== false) return;
-    const fetchLog = async () => {
-      setLogLoading(true);
-      try {
-        const byDoc: any = await jobsApi.getJobByDocument(selectedResult.document_id);
-        // Attempt to extract logs directly, if present
-        const logs = byDoc?.logs || byDoc?.log || byDoc?.events || [];
-        const normalized = Array.isArray(logs)
-          ? logs.map((l: any) => ({ timestamp: l.timestamp || l.ts || l.time, level: l.level || l.severity || 'info', message: l.message || l.msg || String(l) }))
-          : [];
-        if (normalized.length > 0) {
-          setProcessingLog(normalized);
-        } else if (byDoc?.job_id) {
-          // Fetch job details for logs
-          try {
-            const job = await jobsApi.getJob(byDoc.job_id);
-            const jlogs = job?.logs || job?.log || job?.events || [];
-            const n2 = Array.isArray(jlogs)
-              ? jlogs.map((l: any) => ({ timestamp: l.timestamp || l.ts || l.time, level: l.level || l.severity || 'info', message: l.message || l.msg || String(l) }))
-              : [];
-            if (n2.length > 0) setProcessingLog(n2);
-            setJobMeta(job);
-          } catch {}
-        }
-        setJobMeta((jm: any) => jm || byDoc);
-        if (normalized.length === 0 && !byDoc?.job_id) {
-          setLogError('No processing log available for this file.');
-        }
-      } catch (e: any) {
-        setLogError(e?.message || 'Failed to load processing log');
-      } finally {
-        setLogLoading(false);
-      }
-    };
-    fetchLog();
-  }, [selectedResult]);
-
-  // Auto-select first result when processing completes OR when first result becomes available
-  useEffect(() => {
-    if (processingResults.length > 0 && !selectedResult) {
-      setSelectedResult(processingResults[0]);
-    }
-  }, [processingResults, selectedResult]);
 
   const loadDocumentContent = async (documentId: string) => {
     setIsLoading(true);
@@ -263,6 +202,31 @@ export function ReviewStage({
     return feedback;
   };
 
+  const getExtractorDiagnostics = (r?: ProcessingResult | null): ExtractorDiagnostics | null => {
+    if (!r?.processing_metadata) return null;
+    const extractor = (r.processing_metadata as any).extractor;
+    if (extractor && typeof extractor === 'object') {
+      return extractor as ExtractorDiagnostics;
+    }
+    return null;
+  };
+
+  const didExtractionFail = (r?: ProcessingResult | null): boolean => {
+    const extractor = getExtractorDiagnostics(r);
+    if (!extractor) return false;
+    if (extractor.ok === false) return true;
+    if (extractor.placeholder_content) return true;
+    if (typeof extractor.ok === 'undefined' && Boolean(extractor.error)) return true;
+    return false;
+  };
+
+  const getExtractionFailureReason = (r?: ProcessingResult | null): string => {
+    const extractor = getExtractorDiagnostics(r);
+    if (!extractor) return '';
+    const detail = extractor.error || extractor.note || extractor.status;
+    return detail ? String(detail).trim() : '';
+  };
+
   const isExtractionOnlyFailure = (r?: ProcessingResult | null) => {
     if (!r) return false;
     const nonMdSource = !isMarkdownSource(r.filename);
@@ -285,6 +249,77 @@ export function ReviewStage({
     }
     return message;
   };
+
+  const selectedExtractorInfo = getExtractorDiagnostics(selectedResult);
+  const extractionFailed = didExtractionFail(selectedResult);
+  const extractionFailureReason = getExtractionFailureReason(selectedResult);
+  const canEditSelected = Boolean(selectedResult?.success && !extractionFailed);
+
+  // Load document content when result is selected and remains editable
+  useEffect(() => {
+    if (!selectedResult || activeTab !== 'editor') return;
+    if (!canEditSelected) {
+      setDocumentContent('');
+      setEditedContent('');
+      return;
+    }
+    loadDocumentContent(selectedResult.document_id);
+  }, [selectedResult, activeTab, canEditSelected]);
+
+  // Force quality tab whenever editing is not allowed to avoid showing placeholder content
+  useEffect(() => {
+    if (!selectedResult) return;
+    if (!canEditSelected && activeTab === 'editor') {
+      setActiveTab('quality');
+    }
+  }, [selectedResult, canEditSelected, activeTab]);
+
+  // Load processing log for failed results
+  useEffect(() => {
+    setProcessingLog([]);
+    setLogError('');
+    setJobMeta(null);
+    if (!selectedResult || selectedResult.success !== false) return;
+    const fetchLog = async () => {
+      setLogLoading(true);
+      try {
+        const byDoc: any = await jobsApi.getJobByDocument(selectedResult.document_id);
+        const logs = byDoc?.logs || byDoc?.log || byDoc?.events || [];
+        const normalized = Array.isArray(logs)
+          ? logs.map((l: any) => ({ timestamp: l.timestamp || l.ts || l.time, level: l.level || l.severity || 'info', message: l.message || l.msg || String(l) }))
+          : [];
+        if (normalized.length > 0) {
+          setProcessingLog(normalized);
+        } else if (byDoc?.job_id) {
+          try {
+            const job = await jobsApi.getJob(byDoc.job_id);
+            const jlogs = job?.logs || job?.log || job?.events || [];
+            const n2 = Array.isArray(jlogs)
+              ? jlogs.map((l: any) => ({ timestamp: l.timestamp || l.ts || l.time, level: l.level || l.severity || 'info', message: l.message || l.msg || String(l) }))
+              : [];
+            if (n2.length > 0) setProcessingLog(n2);
+            setJobMeta(job);
+          } catch {}
+        }
+        setJobMeta((jm: any) => jm || byDoc);
+        if (normalized.length === 0 && !byDoc?.job_id) {
+          setLogError('No processing log available for this file.');
+        }
+      } catch (e: any) {
+        setLogError(e?.message || 'Failed to load processing log');
+      } finally {
+        setLogLoading(false);
+      }
+    };
+    fetchLog();
+  }, [selectedResult]);
+
+  // Auto-select first result when processing completes OR when first result becomes available
+  useEffect(() => {
+    if (processingResults.length > 0 && !selectedResult) {
+      setSelectedResult(processingResults[0]);
+    }
+  }, [processingResults, selectedResult]);
 
   const successfulResults = processingResults.filter(r => r.success);
   const filteredResults = (() => {
@@ -528,17 +563,17 @@ export function ReviewStage({
                   </button>
                   <button
                     type="button"
-                    onClick={() => selectedResult?.success && setActiveTab('editor')}
-                    disabled={!selectedResult?.success}
-                    aria-disabled={!selectedResult?.success}
+                    onClick={() => canEditSelected && setActiveTab('editor')}
+                    disabled={!canEditSelected}
+                    aria-disabled={!canEditSelected}
                     className={`flex-1 px-4 py-2 rounded-md transition-colors ${
-                      !selectedResult?.success
+                      !canEditSelected
                         ? 'text-gray-400 cursor-not-allowed'
                         : activeTab === 'editor'
                           ? 'bg-white text-gray-900 shadow-sm'
                           : 'text-gray-600 hover:text-gray-900'
                     }`}
-                     >
+                  >
                     ✏️ Live Editor
                   </button>
                 </div>
@@ -546,6 +581,30 @@ export function ReviewStage({
                 {/* Tab Content */}
                 {activeTab === 'quality' ? (
                   <div className="space-y-6">
+                    {extractionFailed && (
+                      <div className="bg-yellow-50 border border-yellow-200 rounded-lg p-4 space-y-2">
+                        <div className="font-medium text-yellow-900">⚠️ Extraction Issue</div>
+                        <p className="text-sm text-yellow-900">
+                          {extractionFailureReason || 'All extraction engines failed or were unavailable. Placeholder markdown is shown for reference only.'}
+                        </p>
+                        <div className="text-xs text-yellow-800 space-y-1">
+                          {selectedExtractorInfo?.engine && (
+                            <div>
+                              Engine: {selectedExtractorInfo.engine}
+                              {selectedExtractorInfo?.fallback ? ' (fallback attempt)' : ''}
+                            </div>
+                          )}
+                          {selectedExtractorInfo?.status && (
+                            <div>Status: {selectedExtractorInfo.status}</div>
+                          )}
+                          {selectedExtractorInfo?.url && (
+                            <div className="truncate">Endpoint: {selectedExtractorInfo.url}</div>
+                          )}
+                          <div>Live editor is disabled until this document is reprocessed successfully.</div>
+                        </div>
+                      </div>
+                    )}
+
                     {/* Conversion Quality */}
                     <div>
                       <h4 className="font-medium mb-3">📄 Conversion Quality</h4>
@@ -792,9 +851,18 @@ export function ReviewStage({
                     {/* Live Editor Tab */}
                     <h4 className="font-medium">✏️ Live Editor</h4>
                     
-                    {!selectedResult?.success ? (
-                      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md text-sm text-yellow-800">
-                        This document failed processing, so no editable content is available.
+                    {!canEditSelected ? (
+                      <div className="p-4 bg-yellow-50 border border-yellow-200 rounded-md text-sm text-yellow-800 space-y-2">
+                        <div>Live editor is disabled for this document.</div>
+                        {extractionFailed ? (
+                          <div>
+                            {extractionFailureReason
+                              ? `Extraction failed: ${extractionFailureReason}`
+                              : 'Extraction failed. Please reprocess the document when the extractor is available.'}
+                          </div>
+                        ) : (
+                          <div>Processing must complete successfully before edits can be made.</div>
+                        )}
                       </div>
                     ) : isLoading ? (
                       <div className="flex items-center justify-center py-8">

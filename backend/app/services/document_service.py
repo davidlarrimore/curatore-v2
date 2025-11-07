@@ -43,7 +43,8 @@ class DocumentService:
        - Uploaded files are saved under a UUID-prefixed filename to avoid collisions.
        - Batch files live in a separate directory and are discoverable by name.
     2) Extraction dispatch
-       - _extract_content() chooses an extractor based on `CONTENT_EXTRACTOR`.
+       - _extract_content() chooses an extractor based on the explicit
+         `CONTENT_EXTRACTOR` value or the derived order from `EXTRACTION_ENGINES`.
          It calls _extract_via_docling() or _extract_via_extraction_service(),
          and sets `_last_extraction_info` for downstream reporting.
     3) Processing pipeline
@@ -81,7 +82,10 @@ class DocumentService:
         self._supported_extensions: Set[str] = self._load_supported_extensions()
 
         # Extractor selection and service configuration
-        self.extractor_engine: str = getattr(settings, "content_extractor", "default").strip().lower()
+        self.available_extractors: List[str] = list(
+            getattr(settings, "extraction_engine_sequence", ["default"])
+        )
+        self.extractor_engine: str = self._resolve_extractor_engine()
 
         # Existing custom extraction service (legacy/default)
         self.extract_base: str = str(getattr(settings, "extraction_service_url", "")).rstrip("/")
@@ -97,13 +101,25 @@ class DocumentService:
         self._last_extraction_info: Dict[str, Any] = {}
         try:
             self._logger.debug(
-                "Extractor config: engine=%s, extraction_service_url=%s, docling_service_url=%s",
+                "Extractor config: engine=%s, configured=%s, extraction_service_url=%s, docling_service_url=%s",
                 self.extractor_engine,
+                ",".join(self.available_extractors),
                 self.extract_base or "",
                 self.docling_base or "",
             )
         except Exception:
             pass
+
+    def _resolve_extractor_engine(self) -> str:
+        """Determine which extractor engine should be active."""
+        configured = (getattr(settings, "content_extractor", "auto") or "auto").strip().lower()
+        if configured not in {"", "auto"}:
+            return configured
+
+        for engine in self.available_extractors:
+            if engine and engine != "default":
+                return engine
+        return "default"
 
     def _load_supported_extensions(self) -> Set[str]:
         """Load supported file extensions from settings or use defaults."""
@@ -965,6 +981,11 @@ class DocumentService:
             if getattr(options, 'vector_optimize', False):
                 vector_optimized = await self._apply_vector_optimization(markdown_content, markdown_path)
             
+            extractor_info_raw = getattr(self, "_last_extraction_info", {}) or {}
+            extractor_info = dict(extractor_info_raw) if isinstance(extractor_info_raw, dict) else {}
+            extraction_failed = bool(extractor_info) and extractor_info.get("ok") is False
+            extraction_error_message = extractor_info.get("error") if extraction_failed else None
+
             # Step 7: Create final result
             processing_result = ProcessingResult(
                 document_id=document_id,
@@ -976,11 +997,12 @@ class DocumentService:
                 vector_optimized=vector_optimized,
                 is_rag_ready=self._is_rag_ready(conversion_result, llm_evaluation, options),
                 processed_at=datetime.now(),
+                error_message=extraction_error_message,
                 processing_metadata={
                     "service_version": "2.0",
                     "processing_time": time.time() - start_time,
                     "options_used": options.model_dump(),
-                    "extractor": getattr(self, "_last_extraction_info", {})
+                    "extractor": extractor_info,
                 }
             )
             
@@ -1120,15 +1142,40 @@ class DocumentService:
                 if text and text.strip():
                     self._last_extraction_info = {"engine": "docling", "url": url, "ok": True, "status": None, "errors": [], "options": {"output_format": "markdown", "image_export_mode": "placeholder", "include_annotations": True}}
                     return text
+        except httpx.TimeoutException:
+            try:
+                self._logger.warning(
+                    "Docling extraction timed out after %.1fs for %s", self.docling_timeout, file_path.name
+                )
+            except Exception:
+                pass
+            self._last_extraction_info = {
+                "engine": "docling",
+                "url": url,
+                "ok": False,
+                "error": "timeout",
+                "timeout_seconds": self.docling_timeout,
+            }
+            return None
         except Exception as e:
             try:
                 if 'resp' in locals() and hasattr(resp, 'text'):
-                    self._logger.warning("Docling extraction failed for %s: %s | body: %s", file_path.name, e, (resp.text[:500] or '').replace('\n',' '))
+                    self._logger.warning(
+                        "Docling extraction failed for %s: %s | body: %s",
+                        file_path.name,
+                        e,
+                        (resp.text[:500] or '').replace('\n', ' '),
+                    )
                 else:
                     self._logger.warning("Docling extraction failed for %s: %s", file_path.name, e)
             except Exception:
                 pass
-            self._last_extraction_info = {"engine": "docling", "url": url, "ok": False}
+            self._last_extraction_info = {
+                "engine": "docling",
+                "url": url,
+                "ok": False,
+                "error": str(e),
+            }
             return None
 
     async def _extract_via_extraction_service(self, file_path: Path, fallback_from_docling: bool = False) -> Optional[str]:
@@ -1180,11 +1227,37 @@ class DocumentService:
                 if text and text.strip():
                     self._last_extraction_info = {"engine": "extraction", "url": url, "ok": True, "fallback": fallback_from_docling}
                     return text
+        except httpx.TimeoutException:
+            try:
+                self._logger.warning(
+                    "Extraction-service request timed out after %.1fs for %s (fallback=%s)",
+                    self.extract_timeout,
+                    file_path.name,
+                    fallback_from_docling,
+                )
+            except Exception:
+                pass
+            self._last_extraction_info = {
+                "engine": "extraction",
+                "url": url,
+                "ok": False,
+                "fallback": fallback_from_docling,
+                "error": "timeout",
+                "timeout_seconds": self.extract_timeout,
+            }
+            return None
         except Exception as e:
             try:
                 self._logger.warning("Extraction-service failed for %s: %s", file_path.name, e)
             except Exception:
                 pass
+            self._last_extraction_info = {
+                "engine": "extraction",
+                "url": url,
+                "ok": False,
+                "fallback": fallback_from_docling,
+                "error": str(e),
+            }
         return None
 
     async def _extract_content(self, file_path: Path) -> str:
@@ -1237,7 +1310,18 @@ class DocumentService:
             self._logger.info("No extractor configured or all failed; returning placeholder for %s", file_path.name)
         except Exception:
             pass
-        self._last_extraction_info = {"engine": "none", "ok": False}
+        previous_info = getattr(self, "_last_extraction_info", {}) or {}
+        failure_info = dict(previous_info) if isinstance(previous_info, dict) else {}
+        default_reason = f"Content extraction not implemented for {file_path.suffix or 'this'} files."
+        reason = failure_info.get("error") or failure_info.get("message") or default_reason
+        failure_info.update({
+            "engine": failure_info.get("engine") or failure_info.get("requested_engine") or "none",
+            "ok": False,
+            "error": reason,
+            "placeholder_content": True,
+            "note": failure_info.get("note") or "Placeholder markdown returned after extraction failure",
+        })
+        self._last_extraction_info = failure_info
         return f"# {file_path.stem}\n\n*Content extraction not implemented for {file_path.suffix} files.*\n\nFile: {file_path.name}"
 
     async def _evaluate_with_llm(self, content: str, options: ProcessingOptions) -> LLMEvaluation:

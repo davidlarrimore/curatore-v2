@@ -25,6 +25,7 @@ export interface ProcessingResult {
   processing_time?: number;
   processed_at?: number;
   thresholds_used?: QualityThresholds;
+  processing_metadata?: ProcessingMetadata;
 }
 
 export interface ConversionResult {
@@ -54,6 +55,28 @@ export interface QualityThresholds {
   completeness: number;
   relevance: number;
   markdown: number;
+}
+
+export interface ExtractorDiagnostics {
+  engine?: string;
+  requested_engine?: string;
+  url?: string;
+  ok?: boolean;
+  fallback?: boolean;
+  error?: string;
+  status?: string;
+  note?: string;
+  timeout_seconds?: number;
+  placeholder_content?: boolean;
+  [key: string]: any;
+}
+
+export interface ProcessingMetadata {
+  service_version?: string;
+  processing_time?: number;
+  options_used?: Record<string, any>;
+  extractor?: ExtractorDiagnostics | null;
+  [key: string]: any;
 }
 
 export interface OCRSettings {

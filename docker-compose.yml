@@ -39,15 +39,16 @@ services:
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-52428800}
       # Extraction service (optional; when enabled backend will call it for PDFs/DOCX, etc.)
       - EXTRACTION_SERVICE_URL=http://extraction:8010
-      - EXTRACTION_SERVICE_TIMEOUT=60
-      - EXTRACTION_SERVICE_VERIFY_SSL=true
+      - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-180}
+      - EXTRACTION_SERVICE_VERIFY_SSL=${EXTRACTION_SERVICE_VERIFY_SSL:-true}
       # Content extractor switch: default | docling | none
-      - CONTENT_EXTRACTOR=${CONTENT_EXTRACTOR:-default}
+      - EXTRACTION_ENGINES=${EXTRACTION_ENGINES:-default}
+      - CONTENT_EXTRACTOR=${CONTENT_EXTRACTOR:-auto}
       # Docling configuration (when CONTENT_EXTRACTOR=docling)
       - DOCLING_SERVICE_URL=http://docling:5001
       # Docling extract path is fixed per API (/v1/extract)
-      - DOCLING_TIMEOUT=60
-      - DOCLING_VERIFY_SSL=true
+      - DOCLING_TIMEOUT=${DOCLING_TIMEOUT:-300}
+      - DOCLING_VERIFY_SSL=${DOCLING_VERIFY_SSL:-true}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
@@ -84,14 +85,15 @@ services:
       - BATCH_DIR=/app/files/batch_files
       # Extraction service (match backend)
       - EXTRACTION_SERVICE_URL=http://extraction:8010
-      - EXTRACTION_SERVICE_TIMEOUT=60
-      - EXTRACTION_SERVICE_VERIFY_SSL=true
+      - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-180}
+      - EXTRACTION_SERVICE_VERIFY_SSL=${EXTRACTION_SERVICE_VERIFY_SSL:-true}
       # Content extractor switch and Docling (match backend)
-      - CONTENT_EXTRACTOR=${CONTENT_EXTRACTOR:-default}
+      - EXTRACTION_ENGINES=${EXTRACTION_ENGINES:-default}
+      - CONTENT_EXTRACTOR=${CONTENT_EXTRACTOR:-auto}
       - DOCLING_SERVICE_URL=http://docling:5001
       # Docling extract path is fixed per API (/v1/extract)
-      - DOCLING_TIMEOUT=60
-      - DOCLING_VERIFY_SSL=true
+      - DOCLING_TIMEOUT=${DOCLING_TIMEOUT:-300}
+      - DOCLING_VERIFY_SSL=${DOCLING_VERIFY_SSL:-true}
     volumes:
       - ./backend/app:/app/app
       - ./files:/app/files
@@ -163,5 +165,6 @@ services:
       DOCLING_SERVE_ENABLE_UI: "1"
       DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "1"
       DOCLING_SERVE_ARTIFACTS_PATH: ""
+      DOCLING_SERVE_MAX_SYNC_WAIT: "${DOCLING_SERVE_MAX_SYNC_WAIT:-300}"
     extra_hosts:
       - "host.docker.internal:host-gateway"

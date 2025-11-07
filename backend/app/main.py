@@ -245,7 +245,9 @@ async def startup_event() -> None:
     # Extraction engine summary
     try:
         print("🔧 Extraction Engine Configuration:")
+        print(f"   EXTRACTION_ENGINES: {', '.join(settings.extraction_engine_sequence)}")
         print(f"   CONTENT_EXTRACTOR: {settings.content_extractor}")
+        print(f"   Active extractor: {getattr(document_service, 'extractor_engine', 'default')}")
         print(f"   EXTRACTION_SERVICE_URL: {settings.extraction_service_url}")
         print(f"   DOCLING_SERVICE_URL: {getattr(settings, 'docling_service_url', None)}")
     except Exception:

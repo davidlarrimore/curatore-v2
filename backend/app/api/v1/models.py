@@ -5,7 +5,7 @@ Provides a stable import surface and v1-specific request schemas that
 map to internal domain models, allowing the frontend's v1 payload shape.
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pathlib import Path
 from datetime import datetime
 from pydantic import BaseModel, Field
@@ -107,6 +107,7 @@ class V1ProcessingResult(BaseModel):
     processing_time: float
     processed_at: Optional[datetime] = None
     thresholds_used: Optional[QualityThresholds] = None
+    processing_metadata: Optional[Dict[str, Any]] = None
 
     class Config:
         from_attributes = True
@@ -142,6 +143,7 @@ class V1ProcessingResult(BaseModel):
                     "processing_time": getattr(v, "processing_time", 0.0),
                     "processed_at": getattr(v, "processed_at", None),
                     "thresholds_used": getattr(v, "thresholds_used", None),
+                    "processing_metadata": getattr(v, "processing_metadata", None),
                 }
         except Exception:
             return v

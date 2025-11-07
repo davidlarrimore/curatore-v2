@@ -80,18 +80,22 @@ class Settings(BaseSettings):
     # If provided, backend will POST files to this service for text/markdown extraction.
     # Example: http://localhost:8010
     extraction_service_url: Optional[str] = Field(default=None, description="Base URL for extraction service")
-    extraction_service_timeout: float = Field(default=60.0, description="Timeout (s) for extraction requests")
+    extraction_service_timeout: float = Field(default=180.0, description="Timeout (s) for extraction requests")
     extraction_service_api_key: Optional[str] = Field(default=None, description="Bearer token for extraction service")
     extraction_service_verify_ssl: bool = Field(default=True, description="Verify SSL for extraction service calls")
 
     # =========================================================================
     # CONTENT EXTRACTOR SWITCH (default | docling | none)
     # =========================================================================
-    content_extractor: str = Field(default="default", description="Which extractor to use: default | docling | none")
+    content_extractor: str = Field(default="auto", description="Which extractor to use: auto | default | docling | none")
+    extraction_engines: str = Field(
+        default="default",
+        description="Space/comma separated list of extraction engines to start (default always included)",
+    )
 
     # Docling-specific configuration
     docling_service_url: Optional[str] = Field(default=None, description="Base URL for Docling service")
-    docling_timeout: float = Field(default=60.0, description="Timeout (s) for Docling requests")
+    docling_timeout: float = Field(default=300.0, description="Timeout (s) for Docling requests")
     docling_verify_ssl: bool = Field(default=True, description="Verify SSL for Docling service calls")
 
     # =========================================================================
@@ -125,6 +129,36 @@ class Settings(BaseSettings):
     @property
     def batch_path(self) -> Path:
         return Path(self.batch_dir)
+
+    # -------- Extraction helpers --------
+    @staticmethod
+    def _tokenize_engines(raw: str) -> List[str]:
+        lowered = raw.replace(",", " ").replace(";", " ").lower()
+        return [token.strip() for token in lowered.split() if token.strip()]
+
+    @property
+    def extraction_engine_sequence(self) -> List[str]:
+        """Normalized list of extraction engines, always starting with default."""
+        raw = str(getattr(self, "extraction_engines", "") or "").strip()
+        if not raw:
+            raw = "default"
+
+        ordered: List[str] = []
+        for token in self._tokenize_engines(raw):
+            if token == "default":
+                continue
+            if token not in ordered:
+                ordered.append(token)
+
+        return ["default"] + ordered
+
+    @property
+    def primary_extraction_engine(self) -> str:
+        """Return the first non-default extractor or default if none specified."""
+        for engine in self.extraction_engine_sequence:
+            if engine != "default":
+                return engine
+        return "default"
 
 
 # Global settings instance (imported elsewhere)

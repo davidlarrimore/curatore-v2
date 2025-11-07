@@ -219,50 +219,39 @@ CORS_METHODS=["*"]
 CORS_HEADERS=["*"]
 ```
 
-### **Docling Extraction Engine**
+### **Extraction Engines (Default + Docling)**
 
-Curatore supports two extraction engines:
-
-- Default extraction-service (internal microservice)
-- Docling Serve (external image/document converter) — recommended for rich PDFs and Office docs
-
-Set the extractor via `CONTENT_EXTRACTOR`:
+Curatore always boots the internal extraction-service. Additional engines (Docling today, Tika tomorrow, etc.) are enabled by adding them to a single `.env` variable:
 
 ```bash
-# Use the default internal extraction-service
-CONTENT_EXTRACTOR=default
+# Space or comma separated; "default" is added automatically if omitted
+EXTRACTION_ENGINES=default
+EXTRACTION_ENGINES="default docling"
+```
 
-# Or enable Docling
-CONTENT_EXTRACTOR=docling
+- `make up` and `./scripts/dev-up.sh` read `EXTRACTION_ENGINES` to start the matching Docker Compose profiles, so Docling only starts when it is listed.
+- The backend/worker receive the same list via `EXTRACTION_ENGINES`. When `CONTENT_EXTRACTOR=auto` (the new default), the application automatically prioritizes the first non-default engine in the list (Docling) and transparently falls back to the internal extractor if it fails.
+- You can still override the active extractor explicitly by setting `CONTENT_EXTRACTOR=default|docling|none`, but that is optional now that `auto` is the default.
 
-# Docling connection
+Docling-specific configuration:
+
+```bash
 DOCLING_SERVICE_URL=http://docling:5001
-DOCLING_TIMEOUT=60
+DOCLING_TIMEOUT=300
 DOCLING_VERIFY_SSL=true
-```
-
-If `CONTENT_EXTRACTOR` is not set, Curatore defaults to the internal extraction-service (equivalent to `CONTENT_EXTRACTOR=default`).
-
-To control whether the bundled `docling` service starts, set the boolean in your `.env`:
-
-```bash
-ENABLE_DOCLING_SERVICE=true   # or false
-```
-
-Use the Makefile helper to respect this toggle:
-
-```bash
-make up
+# Docling container env that must be >= DOCLING_TIMEOUT to avoid 504s
+DOCLING_SERVE_MAX_SYNC_WAIT=300
 ```
 
 Notes:
 - The Docling port mapping is baked into `docker-compose.yml` as `5151:5001`.
 - The Docling image and tag are baked into `docker-compose.yml` (`ghcr.io/docling-project/docling-serve-cpu:latest`). The Docling container name is baked in as `curatore-docling`.
+- To add a future extractor (e.g., Tika), create a service in `docker-compose.yml` with `profiles: ["tika"]`, add the relevant env vars, and list it in `EXTRACTION_ENGINES`. No additional Makefile or script changes are needed.
 
-Behavior when `CONTENT_EXTRACTOR=docling`:
+Behavior when Docling is the active extractor (`CONTENT_EXTRACTOR=docling` explicitly or via `auto`):
 
 - Backend and Worker POST to `DOCLING_SERVICE_URL + /v1/convert/file` with the uploaded file.
-- If Docling fails, Curatore automatically falls back to the internal extraction-service (if configured).
+- If Docling fails, Curatore automatically falls back to the internal extraction-service (when available).
 
 Docling request options sent by Curatore:
 
@@ -285,6 +274,13 @@ Troubleshooting Docling:
   - “Invalid type for value. Expected primitive type”: update to latest Curatore; options are now sent as primitives.
   - Images embedded instead of placeholders: confirm Docling version and try setting only one key via a reverse proxy rule, e.g. force `image_export_mode=placeholder`.
   - Endpoint mismatch: Curatore uses `POST /v1/convert/file`. If your Docling exposes a different endpoint, set `document_service.docling_extract_path` accordingly in code.
+
+Timeout tuning:
+
+- `DOCLING_TIMEOUT` (backend/worker) controls how long we wait for Docling’s HTTP response. Default is 300 seconds.
+- `EXTRACTION_SERVICE_TIMEOUT` (backend/worker) controls the fallback extractor request timeout. Default is 180 seconds to accommodate OCR-heavy PDFs.
+- The Docling container needs `DOCLING_SERVE_MAX_SYNC_WAIT` set to a value **at least** as large as `DOCLING_TIMEOUT`; otherwise Docling itself returns 504s even if the client waits longer. The Compose file now defaults this to 300 seconds.
+- Increase these values together for very large or scanned PDFs so we don’t fall back to the placeholder “Content extraction not implemented…” output.
 
 ### **Async Processing with Celery**
 

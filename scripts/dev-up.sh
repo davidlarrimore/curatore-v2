@@ -27,24 +27,24 @@ if compgen -G "${REPO_ROOT}/scripts/*.sh" > /dev/null; then
   chmod +x "${REPO_ROOT}"/scripts/*.sh || true
 fi
 
-# Read ENABLE_DOCLING_SERVICE from .env (default: false)
-ENABLE_FLAG="false"
-if [[ -f "${REPO_ROOT}/.env" ]]; then
-  # Extract last defined value, trim quotes and spaces, lowercase
-  ENABLE_FLAG="$(sed -n 's/^ENABLE_DOCLING_SERVICE=\(.*\)$/\1/p' "${REPO_ROOT}/.env" | tail -n1 | tr -d '"' | tr '[:upper:]' '[:lower:]')"
-fi
+# Shared helper to keep Makefile/dev scripts in sync
+ENGINE_HELPER="${REPO_ROOT}/scripts/extraction-engines.sh"
+ENGINES="$("${ENGINE_HELPER}" list)"
+EXTRA_ENGINES="$("${ENGINE_HELPER}" extras)"
+PROFILE_FLAGS=""
+for eng in ${EXTRA_ENGINES}; do
+  PROFILE_FLAGS="${PROFILE_FLAGS} --profile ${eng}"
+done
 
-# Prefer Makefile helper to honor ENABLE_DOCLING_SERVICE toggle
+echo "⚙️  Extraction engines: ${ENGINES:-default}"
+
+# Prefer Makefile helper which uses the same helper script
 if command -v make >/dev/null 2>&1 && [[ -f "${REPO_ROOT}/Makefile" ]]; then
-  echo "🛠  Using Makefile (ENABLE_DOCLING_SERVICE=${ENABLE_FLAG})"
-  ENABLE_DOCLING_SERVICE="${ENABLE_FLAG}" make -C "${REPO_ROOT}" up
+  echo "🛠  Using Makefile to start the stack"
+  make -C "${REPO_ROOT}" up
 else
   echo "ℹ️  Make not available; falling back to docker compose"
-  if [[ "${ENABLE_FLAG}" == "true" ]]; then
-    ${DC} -f "${REPO_ROOT}/docker-compose.yml" --profile docling up -d --build
-  else
-    ${DC} -f "${REPO_ROOT}/docker-compose.yml" up -d --build
-  fi
+  ${DC} -f "${REPO_ROOT}/docker-compose.yml" ${PROFILE_FLAGS} up -d --build
 fi
 
 echo "🌐 Frontend: http://localhost:3000"

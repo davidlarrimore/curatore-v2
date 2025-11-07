@@ -1,20 +1,31 @@
 SHELL := /bin/sh
 
+ENGINE_SCRIPT := ./scripts/extraction-engines.sh
+
 .PHONY: up down ps logs
 
 up:
-	@if [ "$(ENABLE_DOCLING_SERVICE)" = "true" ]; then \
-		echo "Starting with Docling profile (detached)..."; \
-		docker compose --profile docling up -d --build; \
-	else \
-		echo "Starting without Docling (detached)..."; \
-		docker compose up -d --build; \
-	fi
+	@engines="$$(bash $(ENGINE_SCRIPT) list)"; \
+	extras="$$(bash $(ENGINE_SCRIPT) extras)"; \
+	profiles=""; \
+	for eng in $$extras; do \
+		profiles="$$profiles --profile $$eng"; \
+	done; \
+	echo "Starting Curatore (extraction engines: $$engines)"; \
+	docker compose $$profiles up -d --build
 
 down:
-	@echo "Stopping stack (including docling if present)..."
-	- docker compose --profile docling down --remove-orphans
-	- docker compose down --remove-orphans
+	@engines="$$(bash $(ENGINE_SCRIPT) list)"; \
+	extras="$$(bash $(ENGINE_SCRIPT) extras)"; \
+	profiles=""; \
+	for eng in $$extras; do \
+		profiles="$$profiles --profile $$eng"; \
+	done; \
+	echo "Stopping Curatore (extraction engines: $$engines)"; \
+	if [ -n "$$profiles" ]; then \
+		docker compose $$profiles down --remove-orphans || true; \
+	fi; \
+	docker compose down --remove-orphans || true
 
 ps:
 	docker compose ps

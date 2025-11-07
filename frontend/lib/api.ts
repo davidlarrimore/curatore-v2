@@ -378,6 +378,7 @@ function mapV1ResultToFrontend(raw: any): ProcessingResult {
     processing_time: raw.processing_time ?? 0,
     processed_at: raw.processed_at,
     thresholds_used: raw.thresholds_used,
+    processing_metadata: raw.processing_metadata,
   } as ProcessingResult
 }
 
