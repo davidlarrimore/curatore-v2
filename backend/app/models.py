@@ -300,6 +300,20 @@ class ConversionResult(BaseModel):
         default=None,
         description="List of conversion notes/messages"
     )
+    # Extraction engine metadata
+    extraction_engine: Optional[str] = Field(
+        default=None,
+        description="Extraction engine used (e.g., 'extraction-service', 'docling', 'docling->extraction-service')"
+    )
+    extraction_attempts: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Number of extraction attempts made"
+    )
+    extraction_failover: Optional[bool] = Field(
+        default=None,
+        description="Whether extraction failed over to alternate service"
+    )
 
 
 class LLMEvaluation(BaseModel):

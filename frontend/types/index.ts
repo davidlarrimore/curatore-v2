@@ -33,6 +33,9 @@ export interface ConversionResult {
   conversion_score: number;
   conversion_feedback: string;
   conversion_note: string;
+  extraction_engine?: string;
+  extraction_attempts?: number;
+  extraction_failover?: boolean;
 }
 
 export interface LLMEvaluation {

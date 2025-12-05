@@ -498,7 +498,21 @@ export function ReviewStage({
                 {/* Header */}
                 <div className="mb-6">
                   <h3 className="text-xl font-medium mb-2">📄 {selectedResult.filename}</h3>
-                  <div className="flex items-center space-x-4">
+                  <div className="flex items-center flex-wrap gap-2">
+                    {/* Extraction Engine Label */}
+                    {selectedResult.conversion_result?.extraction_engine && (
+                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${
+                        selectedResult.conversion_result.extraction_failover
+                          ? 'bg-orange-100 text-orange-800'
+                          : 'bg-blue-100 text-blue-800'
+                      }`}>
+                        {selectedResult.conversion_result.extraction_failover && '🔄 '}
+                        {selectedResult.conversion_result.extraction_engine}
+                        {selectedResult.conversion_result.extraction_attempts && selectedResult.conversion_result.extraction_attempts > 1 &&
+                          ` (${selectedResult.conversion_result.extraction_attempts}×)`
+                        }
+                      </span>
+                    )}
                     <span className={`px-3 py-1 rounded-full text-sm font-medium ${getQualityColor(selectedResult.conversion_score, qualityThresholds.conversion)}`}>
                       Quality: {selectedResult.conversion_score}%
                     </span>
