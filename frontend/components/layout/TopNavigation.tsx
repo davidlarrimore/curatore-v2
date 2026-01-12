@@ -3,14 +3,15 @@
 
 import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
-import { 
-  Menu, 
-  Settings, 
-  RotateCcw, 
+import {
+  Menu,
+  Settings,
+  RotateCcw,
   HelpCircle,
   Activity,
   AlertCircle,
-  Github
+  Github,
+  Heart
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { systemApi } from '@/lib/api'
@@ -73,7 +74,8 @@ export function TopNavigation({
         'process': 'Processing',
         'settings': 'Settings',
         'analytics': 'Analytics',
-        'batch': 'Batch Processing'
+        'batch': 'Batch Processing',
+        'health': 'System Health'
       }
       
       breadcrumbs.push({ 
@@ -154,6 +156,21 @@ export function TopNavigation({
             aria-label="Refresh system status"
           >
             <Activity className={`w-4 h-4 ${systemStatus.isLoading ? 'animate-spin' : ''}`} />
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => router.push('/health')}
+            title="System Health"
+            aria-label="View system health"
+            className={`${
+              systemStatus.health === 'healthy'
+                ? 'text-green-600 hover:text-green-700 hover:bg-green-50'
+                : 'text-red-600 hover:text-red-700 hover:bg-red-50'
+            }`}
+          >
+            <Heart className="w-4 h-4" />
           </Button>
 
           <Button

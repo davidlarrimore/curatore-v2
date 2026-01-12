@@ -23,7 +23,7 @@ Usage:
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings
 
 
@@ -85,9 +85,13 @@ class Settings(BaseSettings):
     extraction_service_verify_ssl: bool = Field(default=True, description="Verify SSL for extraction service calls")
 
     # =========================================================================
-    # CONTENT EXTRACTOR SWITCH (default | docling | none)
+    # EXTRACTION PRIORITY (default | docling | none)
     # =========================================================================
-    content_extractor: str = Field(default="default", description="Which extractor to use: default | docling | none")
+    extraction_priority: str = Field(
+        default="default",
+        description="Which extractor to prioritize: default | docling | none",
+        validation_alias=AliasChoices("EXTRACTION_PRIORITY", "CONTENT_EXTRACTOR"),
+    )
 
     # Docling-specific configuration
     docling_service_url: Optional[str] = Field(default=None, description="Base URL for Docling service")

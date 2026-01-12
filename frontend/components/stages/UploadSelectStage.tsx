@@ -160,7 +160,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
    */
   const handleDeleteUploadedFile = useCallback(async (file: FileInfo) => {
     if (sourceType !== 'upload') return;
-    const confirmed = confirm(`Delete uploaded file "${file.filename}"? This cannot be undone.`);
+    const confirmed = confirm(`Delete uploaded file "${utils.getDisplayFilename(file.filename)}"? This cannot be undone.`);
     if (!confirmed) return;
 
     try {
@@ -523,8 +523,8 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                         <div className="flex items-center space-x-3">
                           <IconComponent className="w-5 h-5 text-gray-400 flex-shrink-0" />
                           <div className="min-w-0 flex-1">
-                            <p className="font-medium text-gray-900 truncate" title={file.filename}>
-                              {file.filename}
+                            <p className="font-medium text-gray-900 truncate" title={utils.getDisplayFilename(file.filename)}>
+                              {utils.getDisplayFilename(file.filename)}
                             </p>
                           </div>
                         </div>

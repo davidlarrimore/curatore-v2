@@ -42,8 +42,8 @@ services:
       - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-180}
       - EXTRACTION_SERVICE_VERIFY_SSL=true
       # Content extractor switch: default | docling | none
-      - CONTENT_EXTRACTOR=${CONTENT_EXTRACTOR:-default}
-      # Docling configuration (when CONTENT_EXTRACTOR=docling)
+      - EXTRACTION_PRIORITY=${EXTRACTION_PRIORITY:-default}
+      # Docling configuration (when EXTRACTION_PRIORITY=docling)
       - DOCLING_SERVICE_URL=http://docling:5001
       # Docling extract path is fixed per API (/v1/extract)
       - DOCLING_TIMEOUT=${DOCLING_TIMEOUT:-300}
@@ -87,7 +87,7 @@ services:
       - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-180}
       - EXTRACTION_SERVICE_VERIFY_SSL=true
       # Content extractor switch and Docling (match backend)
-      - CONTENT_EXTRACTOR=${CONTENT_EXTRACTOR:-default}
+      - EXTRACTION_PRIORITY=${EXTRACTION_PRIORITY:-default}
       - DOCLING_SERVICE_URL=http://docling:5001
       # Docling extract path is fixed per API (/v1/extract)
       - DOCLING_TIMEOUT=${DOCLING_TIMEOUT:-300}
@@ -120,7 +120,10 @@ services:
       - ./frontend:/app
       - /app/node_modules
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      - NEXT_PUBLIC_API_URL=${NEXT_PUBLIC_API_URL:-http://localhost:8000}
+      - NEXT_PUBLIC_EXTRACTION_URL=${NEXT_PUBLIC_EXTRACTION_URL:-http://localhost:8010}
+      - NEXT_PUBLIC_DOCLING_URL=${NEXT_PUBLIC_DOCLING_URL:-http://localhost:5151}
+      - NEXT_PUBLIC_REDIS_URL=${NEXT_PUBLIC_REDIS_URL:-http://localhost:6379}
     command: npm run dev
     ports:
       - "3000:3000"
@@ -163,5 +166,6 @@ services:
       DOCLING_SERVE_ENABLE_UI: "1"
       DOCLING_SERVE_ENABLE_REMOTE_SERVICES: "1"
       DOCLING_SERVE_ARTIFACTS_PATH: ""
+      DOCLING_SERVE_MAX_SYNC_WAIT: ${DOCLING_SERVE_MAX_SYNC_WAIT:-300}
     extra_hosts:
       - "host.docker.internal:host-gateway"

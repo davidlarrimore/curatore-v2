@@ -15,6 +15,16 @@ interface ProcessingLog {
 
 type PanelState = 'minimized' | 'normal' | 'fullscreen';
 
+interface JobState {
+  job_id: string;
+  document_id: string;
+  filename: string;
+  status: 'PENDING' | 'STARTED' | 'SUCCESS' | 'FAILURE' | 'UNKNOWN';
+  started_at?: string;
+  extractor_info?: string;
+  result?: ProcessingResult;
+}
+
 interface ProcessingPanelProps {
   selectedFiles: FileInfo[];
   processingOptions: ProcessingOptions;
@@ -51,6 +61,74 @@ export function ProcessingPanel({
   const [processingComplete, setProcessingComplete] = useState(false);
   // NEW: State for quick download actions
   const [quickDownloadLoading, setQuickDownloadLoading] = useState<string>('');
+  // NEW: Track individual job states for live status display
+  const [jobStates, setJobStates] = useState<Record<string, JobState>>({});
+  // NEW: Timer for live elapsed time display
+  const [currentTime, setCurrentTime] = useState(Date.now());
+
+  // Update timer every second for live elapsed time
+  useEffect(() => {
+    const interval = setInterval(() => {
+      setCurrentTime(Date.now());
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
+
+  // Helper function to calculate elapsed time
+  const getElapsedTime = (startedAt?: string): string => {
+    if (!startedAt) return '';
+    try {
+      // Backend returns UTC timestamps without 'Z' suffix
+      // Append 'Z' if not present to ensure proper UTC parsing
+      let utcTimestamp = startedAt;
+      if (!startedAt.endsWith('Z') && !startedAt.includes('+') && !startedAt.includes('-', 10)) {
+        utcTimestamp = startedAt + 'Z';
+      }
+
+      // Parse the ISO string to timestamp
+      const start = new Date(utcTimestamp).getTime();
+
+      // If parsing failed, return empty
+      if (isNaN(start)) return '';
+
+      // Calculate elapsed time (current - start should be positive)
+      const elapsed = Math.floor((currentTime - start) / 1000);
+
+      // If negative (clock skew or future date), return empty
+      if (elapsed < 0) return '';
+
+      if (elapsed < 60) return `${elapsed}s`;
+      const minutes = Math.floor(elapsed / 60);
+      const seconds = elapsed % 60;
+      return `${minutes}m ${seconds}s`;
+    } catch (e) {
+      return '';
+    }
+  };
+
+  // Map raw extractor info to a normalized badge (Docling vs Default)
+  const resolveExtractorBadge = (raw?: string) => {
+    if (!raw) return null;
+
+    // Preserve the chain for the label (e.g., "docling→extraction-service (fallback)")
+    const chain = raw.replace(/->/g, "→").trim();
+    const finalSegment = chain.split("→").pop()?.trim() || chain;
+    const normalized = finalSegment.toLowerCase();
+    const isFallback = /fallback/i.test(chain);
+
+    const isDocling = normalized.includes('docling');
+    const isDefault = normalized.includes('extraction') || normalized.includes('default');
+
+    if (!isDocling && !isDefault) return null;
+
+    return {
+      label: isDocling ? (isFallback ? 'Docling → fallback' : 'Docling') : (isFallback ? 'Extraction → fallback' : 'Extraction'),
+      className: isDocling
+        ? 'bg-indigo-900 text-indigo-200 border border-indigo-700'
+        : 'bg-gray-800 text-gray-200 border border-gray-600',
+      title: chain,
+    };
+  };
 
   // Notify parent of panel state changes
   useEffect(() => {
@@ -80,6 +158,7 @@ export function ProcessingPanel({
     setProcessingStartTime(0);
     setProcessingComplete(false);
     setQuickDownloadLoading('');
+    setJobStates({});
   };
 
   // Start processing when panel becomes visible
@@ -352,6 +431,18 @@ export function ProcessingPanel({
       return;
     }
 
+    // Initialize job states as PENDING
+    const initialJobStates: Record<string, JobState> = {};
+    for (const [docId, { job_id, filename }] of Object.entries(jobMap)) {
+      initialJobStates[docId] = {
+        job_id,
+        document_id: docId,
+        filename,
+        status: 'PENDING'
+      };
+    }
+    setJobStates(initialJobStates);
+
     // Persist active job group for status bar summary
     try {
       const group = { batch_id: batchResp?.batch_id || null, job_ids: Object.values(jobMap).map(j => j.job_id), ts: Date.now() };
@@ -367,13 +458,76 @@ export function ProcessingPanel({
 
     const pollOnce = async () => {
       let completed = 0;
+      const newJobStates: Record<string, JobState> = {};
+
       for (const [docId, { job_id, filename }] of Object.entries(jobMap)) {
         if (done[docId]) { completed++; continue; }
         try {
           const status = await jobsApi.getJob(job_id);
           const st = (status.status || '').toUpperCase();
-          // Stream backend logs (if present)
+
+          // Extract extractor info from logs
+          let extractorInfo: string | undefined;
           const backendLogs = Array.isArray(status.logs) ? status.logs : [];
+
+          // Scan logs from most recent to oldest to get current state
+          for (let i = backendLogs.length - 1; i >= 0; i--) {
+            const msg = typeof backendLogs[i].message === 'string' ? backendLogs[i].message : '';
+
+            // Check for initial extractor selection from tasks.py job logs
+            // These are logged at the start: "Extractor: Auto mode (Docling → extraction-service fallback)"
+            if (msg.startsWith('Extractor:')) {
+              const extractorText = msg.substring('Extractor:'.length).trim();
+
+              // Simplify the message for display
+              if (extractorText.includes('Auto mode')) {
+                if (extractorText.includes('Docling')) {
+                  extractorInfo = 'Docling';
+                } else {
+                  extractorInfo = 'Extraction';
+                }
+              } else if (extractorText.includes('Docling')) {
+                extractorInfo = 'Docling';
+              } else if (extractorText.includes('extraction-service')) {
+                extractorInfo = 'Extraction';
+              }
+              // Don't break - keep scanning for more recent status updates
+            }
+
+            // Check for conversion started (indicates extraction is happening)
+            if (msg.includes('Conversion started')) {
+              // Keep the extractor info we found from the "Extractor:" log
+              break;
+            }
+
+            // Check for extractor completion messages
+            if (msg.includes('Extractor used:')) {
+              // e.g., "Extractor used: extraction-service (fallback) - http://..."
+              if (msg.includes('extraction-service (fallback)')) {
+                extractorInfo = 'Extraction (fallback)';
+              } else if (msg.includes('docling (fallback)')) {
+                extractorInfo = 'Docling (fallback)';
+              } else if (msg.includes('extraction-service')) {
+                extractorInfo = 'Extraction';
+              } else if (msg.includes('docling')) {
+                extractorInfo = 'Docling';
+              }
+              break; // Use this final status
+            }
+          }
+
+          // Update job state
+          newJobStates[docId] = {
+            job_id,
+            document_id: docId,
+            filename,
+            status: st as any,
+            started_at: status.started_at,
+            extractor_info: extractorInfo,
+            result: st === 'SUCCESS' ? status.result : undefined
+          };
+
+          // Stream backend logs (if present)
           const seen = logSeen[job_id] || 0;
           if (backendLogs.length > seen) {
             for (let i = seen; i < backendLogs.length; i++) {
@@ -409,9 +563,17 @@ export function ProcessingPanel({
             completed++;
           }
         } catch (e) {
-          // Ignore transient poll errors
+          // Ignore transient poll errors but keep job state as unknown
+          newJobStates[docId] = {
+            job_id,
+            document_id: docId,
+            filename,
+            status: 'UNKNOWN'
+          };
         }
       }
+
+      setJobStates(newJobStates);
       setProgress((completed / totalJobs) * 100);
       return completed === totalJobs;
     };
@@ -648,9 +810,9 @@ export function ProcessingPanel({
       {panelState !== 'minimized' && (
         <div className="flex-1 overflow-hidden min-h-0">
           <div className="h-full p-4">
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full">
-              {/* Progress and Stats - LEFT COLUMN */}
-              <div className="flex flex-col space-y-4 h-full min-h-0 lg:col-span-1">
+            <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 h-full">
+              {/* Processing Results - LEFT COLUMN (50%) */}
+              <div className="flex flex-col space-y-4 h-full min-h-0">
                 {/* Current File - Fixed height */}
                 {currentFile && (
                   <div className="flex items-center space-x-2 text-sm text-gray-300 flex-shrink-0">
@@ -669,42 +831,105 @@ export function ProcessingPanel({
                     <h4 className="font-medium text-gray-200">Processing Results</h4>
                   </div>
                   <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-thin scrollbar-thumb-gray-400 scrollbar-track-gray-800">
-                    {results.length === 0 ? (
-                      <div className="p-3 text-xs text-gray-400">No results yet. Jobs will appear here as they start.</div>
+                    {Object.keys(jobStates).length === 0 && results.length === 0 ? (
+                      <div className="p-3 text-xs text-gray-400">No jobs yet. Jobs will appear here as they start.</div>
                     ) : (
-                      results.map((result, index) => (
-                        <div key={index} className="flex items-center justify-between p-2 hover:bg-gray-700 rounded text-sm">
-                          <div className="flex items-center space-x-2 min-w-0 flex-1">
-                            <span className="flex-shrink-0">
-                              {result.success ? (result.pass_all_thresholds ? '✅' : '⚠️') : '❌'}
-                            </span>
-                            <span className="text-sm font-medium truncate text-gray-200">{result.filename}</span>
-                          </div>
-                          <div className="flex items-center space-x-2 flex-shrink-0">
-                            {/* Primary status badge */}
-                            {result.pass_all_thresholds ? (
-                              <span className="px-2 py-0.5 rounded text-xs bg-blue-900 text-blue-300 border border-blue-700">RAG Ready</span>
-                            ) : result.success ? (
-                              <span className="px-2 py-0.5 rounded text-xs bg-green-900 text-green-300 border border-green-700">Successful</span>
-                            ) : (
-                              <span className="px-2 py-0.5 rounded text-xs bg-red-900 text-red-300 border border-red-700">Failed</span>
-                            )}
-                            {/* Conversion score */}
-                            <span className="px-2 py-0.5 rounded text-xs bg-gray-800 text-gray-300 border border-gray-600">Score: {result.conversion_score}%</span>
-                            {/* Optimization flag */}
-                            {result.vector_optimized && (
-                              <span className="px-2 py-0.5 rounded text-xs bg-purple-900 text-purple-300 border border-purple-700">Optimized</span>
-                            )}
-                          </div>
-                        </div>
-                      ))
+                      <>
+                        {/* Show active jobs (queued or processing) */}
+                        {Object.values(jobStates)
+                          .filter(job => job.status === 'PENDING' || job.status === 'STARTED')
+                          .map((job) => {
+                            const extractorBadge = resolveExtractorBadge(job.extractor_info);
+                            return (
+                              <div
+                                key={job.document_id}
+                                className={`flex items-center justify-between p-2 rounded text-sm ${
+                                  job.status === 'PENDING' ? 'bg-gray-800 text-gray-400' : 'bg-gray-700'
+                                }`}
+                              >
+                                <div className="flex items-center space-x-2 min-w-0 flex-1">
+                                  <span className="flex-shrink-0">
+                                    {job.status === 'PENDING' ? '⏳' : (
+                                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-blue-400"></div>
+                                    )}
+                                  </span>
+                                  <span className="text-sm font-medium truncate text-gray-200">{utils.getDisplayFilename(job.filename)}</span>
+                                </div>
+                                <div className="flex items-center space-x-2 flex-shrink-0">
+                                  {/* Status badge */}
+                                  {job.status === 'PENDING' ? (
+                                    <span className="px-2 py-0.5 rounded text-xs bg-gray-700 text-gray-400 border border-gray-600">Queued</span>
+                                  ) : (
+                                    <>
+                                      <span className="px-2 py-0.5 rounded text-xs bg-blue-900 text-blue-300 border border-blue-700">
+                                        Processing
+                                      </span>
+                                      {/* Elapsed time */}
+                                      {job.started_at && (
+                                        <span className="px-2 py-0.5 rounded text-xs bg-gray-800 text-gray-300 border border-gray-600 font-mono">
+                                          {getElapsedTime(job.started_at)}
+                                        </span>
+                                      )}
+                                      {/* Extractor info */}
+                                      {extractorBadge && (
+                                        <span className={`px-2 py-0.5 rounded text-xs max-w-xs truncate ${extractorBadge.className}`} title={extractorBadge.title}>
+                                          Extractor: {extractorBadge.label}
+                                        </span>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })}
+
+                        {/* Show completed jobs */}
+                        {results.map((result, index) => {
+                          const extractorBadge = resolveExtractorBadge(
+                            result.conversion_result?.extraction_engine || jobStates[result.document_id]?.extractor_info
+                          );
+
+                          return (
+                            <div key={index} className="flex items-center justify-between p-2 hover:bg-gray-700 rounded text-sm">
+                              <div className="flex items-center space-x-2 min-w-0 flex-1">
+                                <span className="flex-shrink-0">
+                                  {result.success ? (result.pass_all_thresholds ? '✅' : '⚠️') : '❌'}
+                                </span>
+                                <span className="text-sm font-medium truncate text-gray-200">{utils.getDisplayFilename(result.filename)}</span>
+                              </div>
+                              <div className="flex items-center space-x-2 flex-shrink-0">
+                                {/* Primary status badge */}
+                                {result.pass_all_thresholds ? (
+                                  <span className="px-2 py-0.5 rounded text-xs bg-blue-900 text-blue-300 border border-blue-700">RAG Ready</span>
+                                ) : result.success ? (
+                                  <span className="px-2 py-0.5 rounded text-xs bg-green-900 text-green-300 border border-green-700">Successful</span>
+                                ) : (
+                                  <span className="px-2 py-0.5 rounded text-xs bg-red-900 text-red-300 border border-red-700">Failed</span>
+                                )}
+                                {/* Extractor badge */}
+                                {extractorBadge && (
+                                  <span className={`px-2 py-0.5 rounded text-xs ${extractorBadge.className}`} title={extractorBadge.title}>
+                                    Extractor: {extractorBadge.label}
+                                  </span>
+                                )}
+                                {/* Conversion score */}
+                                <span className="px-2 py-0.5 rounded text-xs bg-gray-800 text-gray-300 border border-gray-600">Score: {result.conversion_score}%</span>
+                                {/* Optimization flag */}
+                                {result.vector_optimized && (
+                                  <span className="px-2 py-0.5 rounded text-xs bg-purple-900 text-purple-300 border border-purple-700">Optimized</span>
+                                )}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </>
                     )}
                   </div>
                 </div>
               </div>
 
-              {/* Processing Log - RIGHT COLUMN (wider) */}
-              <div className="border border-gray-600 rounded-lg flex flex-col bg-gray-900 h-full min-h-0 lg:col-span-2">
+              {/* Processing Log - RIGHT COLUMN (50%) */}
+              <div className="border border-gray-600 rounded-lg flex flex-col bg-gray-900 h-full min-h-0">
                 <div className="flex items-center justify-between p-3 border-b border-gray-600 bg-gray-800 flex-shrink-0">
                   <h4 className="font-medium text-gray-200">Processing Log</h4>
                   <div className="flex items-center space-x-2">

@@ -63,19 +63,63 @@ def process_document_task(self, document_id: str, options: Dict[str, Any], file_
     # Log which extraction engine will be used
     try:
         engine = (document_service.extractor_engine or "default").lower()
-        if engine == "docling" and getattr(document_service, "docling_base", None):
+        has_docling = bool(getattr(document_service, "docling_base", None))
+        has_extraction = bool(getattr(document_service, "extract_base", None))
+
+        if engine == "auto":
+            # Auto mode: prioritize Docling if available, then extraction-service
+            if has_docling and has_extraction:
+                docling_base = getattr(document_service, "docling_base", "").rstrip("/")
+                extraction_base = getattr(document_service, "extract_base", "")
+                docling_timeout = getattr(document_service, "docling_timeout", 60)
+                append_job_log(self.request.id, "info", f"Extractor: Auto mode (Docling → extraction-service fallback)")
+                try:
+                    logger.info("Extractor selected: Auto mode - trying Docling first (%s), then extraction-service (%s)", docling_base, extraction_base)
+                except Exception:
+                    pass
+            elif has_docling:
+                base = getattr(document_service, "docling_base", "").rstrip("/")
+                timeout = getattr(document_service, "docling_timeout", 60)
+                append_job_log(self.request.id, "info", f"Extractor: Auto mode (Docling only) at {base} (timeout {timeout}s)")
+                try:
+                    logger.info("Extractor selected: Auto mode - Docling %s (timeout %ss)", base, timeout)
+                except Exception:
+                    pass
+            elif has_extraction:
+                base = getattr(document_service, "extract_base", "")
+                timeout = getattr(document_service, "extract_timeout", 60)
+                append_job_log(self.request.id, "info", f"Extractor: Auto mode (extraction-service only) at {base} (timeout {timeout}s)")
+                try:
+                    logger.info("Extractor selected: Auto mode - extraction-service %s (timeout %ss)", base, timeout)
+                except Exception:
+                    pass
+            else:
+                append_job_log(self.request.id, "info", "Extractor: Auto mode (no services configured)")
+                try:
+                    logger.info("Extractor selected: Auto mode (no services configured)")
+                except Exception:
+                    pass
+        elif engine == "docling" and has_docling:
             base = getattr(document_service, "docling_base", "").rstrip("/")
             path = "/v1/convert/file"
             timeout = getattr(document_service, "docling_timeout", 60)
-            append_job_log(self.request.id, "info", f"Extractor: Docling at {base}{path} (timeout {timeout}s)")
+            if has_extraction:
+                extraction_base = getattr(document_service, "extract_base", "")
+                append_job_log(self.request.id, "info", f"Extractor: Docling at {base}{path} (→ extraction-service fallback if needed)")
+            else:
+                append_job_log(self.request.id, "info", f"Extractor: Docling at {base}{path} (timeout {timeout}s)")
             try:
                 logger.info("Extractor selected: Docling %s%s (timeout %ss)", base, path, timeout)
             except Exception:
                 pass
-        elif engine in {"default", "extraction", "auto", "legacy"} and getattr(document_service, "extract_base", None):
+        elif engine in {"default", "extraction", "legacy"} and has_extraction:
             base = getattr(document_service, "extract_base", "")
             timeout = getattr(document_service, "extract_timeout", 60)
-            append_job_log(self.request.id, "info", f"Extractor: Default extraction-service at {base} (timeout {timeout}s)")
+            if has_docling:
+                docling_base = getattr(document_service, "docling_base", "").rstrip("/")
+                append_job_log(self.request.id, "info", f"Extractor: Default extraction-service at {base} (→ Docling fallback if needed)")
+            else:
+                append_job_log(self.request.id, "info", f"Extractor: Default extraction-service at {base} (timeout {timeout}s)")
             try:
                 logger.info("Extractor selected: extraction-service %s (timeout %ss)", base, timeout)
             except Exception:
@@ -121,11 +165,17 @@ def process_document_task(self, document_id: str, options: Dict[str, Any], file_
             ex = meta.get('extractor') if isinstance(meta, dict) else None
             if isinstance(ex, dict) and ex:
                 eng = ex.get('engine') or ex.get('requested_engine') or 'unknown'
+                primary = ex.get('primary_engine') or (ex.get('requested_engine') if ex.get('failover') else None)
+                chain = f"{primary}→{eng}" if primary and primary != eng else eng
                 url = ex.get('url') or ''
-                fb = ex.get('fallback')
+                fb = ex.get('failover') or ex.get('fallback')
                 ok = ex.get('ok')
-                msg = f"Extractor used: {eng}{' (fallback)' if fb else ''}{' - ' + url if url else ''} ({'ok' if ok else 'failed'})"
+                err = ex.get('error')
+                status_txt = "ok" if ok else f"failed{f': {err}' if err else ''}"
+                msg = f"Extractor used: {chain}{' (fallback)' if fb else ''}{' - ' + url if url else ''} ({status_txt})"
                 append_job_log(self.request.id, "info", msg)
+                if err:
+                    append_job_log(self.request.id, "warning", f"Extractor error detail: {err}")
                 # Docling-specific status/error reporting for Processing Panel visibility
                 if eng == 'docling':
                     status_txt = ex.get('status')

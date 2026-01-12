@@ -146,7 +146,7 @@ The backend follows a service-oriented architecture with clear separation of con
 - **`document_service.py`**: Core document processing pipeline
   - Multi-format conversion with intelligent fallback strategies
   - OCR integration for image-based content extraction
-  - Delegates to extraction service or Docling based on `CONTENT_EXTRACTOR` setting
+  - Delegates to extraction service or Docling based on `EXTRACTION_PRIORITY` setting
   - Quality assessment and scoring algorithms
   - File management with UUID-based organization
 
@@ -214,7 +214,7 @@ Documents are processed asynchronously to avoid blocking the API:
 
 ### Extraction Engines
 
-Curatore supports multiple extraction engines via the `CONTENT_EXTRACTOR` environment variable:
+Curatore supports multiple extraction engines via the `EXTRACTION_PRIORITY` environment variable:
 
 - **`default`**: Uses the internal extraction-service microservice (recommended)
 - **`docling`**: Uses Docling Serve for rich PDFs and Office documents
@@ -331,7 +331,7 @@ Key environment variables (see `.env.example` for full list):
 - `OPENAI_BASE_URL`: API endpoint (supports Ollama, OpenWebUI, LM Studio)
 
 **Extraction**:
-- `CONTENT_EXTRACTOR`: `default` | `docling` | `none`
+- `EXTRACTION_PRIORITY`: `default` | `docling` | `none`
 - `EXTRACTION_SERVICE_URL`: Default extraction service URL
 - `DOCLING_SERVICE_URL`: Docling service URL (when using Docling)
 

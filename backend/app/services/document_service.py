@@ -43,7 +43,7 @@ class DocumentService:
        - Uploaded files are saved under a UUID-prefixed filename to avoid collisions.
        - Batch files live in a separate directory and are discoverable by name.
     2) Extraction dispatch
-       - _extract_content() chooses an extractor based on `CONTENT_EXTRACTOR`.
+       - _extract_content() chooses an extractor based on `EXTRACTION_PRIORITY`.
          It calls _extract_via_docling() or _extract_via_extraction_service(),
          and sets `_last_extraction_info` for downstream reporting.
     3) Processing pipeline
@@ -81,7 +81,7 @@ class DocumentService:
         self._supported_extensions: Set[str] = self._load_supported_extensions()
 
         # Extractor selection and service configuration
-        self.extractor_engine: str = getattr(settings, "content_extractor", "default").strip().lower()
+        self.extractor_engine: str = getattr(settings, "extraction_priority", "default").strip().lower()
 
         # Existing custom extraction service (legacy/default)
         self.extract_base: str = str(getattr(settings, "extraction_service_url", "")).rstrip("/")
@@ -1031,8 +1031,8 @@ class DocumentService:
             )
             raise Exception(f"Document processing failed: {e}") from e
 
-    async def _extract_via_docling(self, file_path: Path) -> Optional[str]:
-        """Extract content via Docling.
+    async def _extract_via_docling(self, file_path: Path, max_retries: int = 2) -> Optional[str]:
+        """Extract content via Docling with retry logic.
 
         High-level: Sends a multipart upload to Docling Serve's
         `POST /v1/convert/file` endpoint and requests Markdown output.
@@ -1040,111 +1040,214 @@ class DocumentService:
         documented parameter); if the server responds that it expected `file`,
         it retries automatically. Additional options are provided to improve
         quality (image placeholders and OCR annotations).
+        Implements retry logic with progressive timeout extensions.
 
         Args:
             file_path: Absolute path to the source document on disk.
+            max_retries: Maximum number of retry attempts (default: 2)
 
         Returns:
             Markdown string on success; None if the Docling call fails or
-            returns an empty body.
+            returns an empty body after all retries.
 
         Side effects:
             - Populates `self._last_extraction_info` with diagnostic info
-              including engine, URL, status/errors, options, and outcome.
+              including engine, URL, status/errors, options, outcome, and retry metadata.
             - Emits structured logs for success/failure and response details.
         """
         if not getattr(self, 'docling_base', None):
             return None
         base = self.docling_base.rstrip('/')
         url = f"{base}{self.docling_extract_path if getattr(self, 'docling_extract_path', None) else '/v1/convert/file'}"
-        try:
-            self._logger.info("Using Docling extractor: %s", url)
-        except Exception:
-            pass
-        import mimetypes
-        headers = {"Accept": "application/json"}
-        try:
-            async with httpx.AsyncClient(timeout=self.docling_timeout, verify=getattr(settings, 'docling_verify_ssl', True)) as client:
-                # Docling Serve expects conversion options as query parameters (primitives only).
-                # Ensure images are represented as placeholders and OCR annotations are included.
-                params = {
-                    "output_format": "markdown",
-                    "image_export_mode": "placeholder",
-                    "include_annotations": "true",        # ensures text appears at image positions
-                    # Important toggles to prevent base64 embedding:
-                    "generate_picture_images": "false",
-                    "include_images": "false",
-                }
-                mime = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
 
-                async def _post_with(field_name: str) -> httpx.Response:
-                    with file_path.open('rb') as f:
-                        files = [(field_name, (file_path.name, f, mime))]
-                        # Only send file via multipart; options go in query parameters per API spec.
-                        return await client.post(url, headers=headers, files=files, data=params)
+        base_timeout = float(self.docling_timeout)
+        timeout_extension = 30.0  # 30 seconds per retry
 
-                resp = await _post_with('files')
-                if resp.status_code == 422:
-                    # retry with 'file' if server asked for it
-                    try:
-                        body = resp.json() or {}
-                        needs_file = any(
-                            any(str(x).lower() == 'file' for x in (d.get('loc') or []))
-                            for d in (body.get('detail') or [])
-                        )
-                    except Exception:
-                        needs_file = False
-                    if needs_file:
-                        resp = await _post_with('file')
-                resp.raise_for_status()
+        for attempt in range(max_retries + 1):
+            current_timeout = base_timeout + (attempt * timeout_extension)
 
-                ctype = (resp.headers.get('content-type') or '').lower()
-                if 'application/json' in ctype:
-                    payload = resp.json()
-                    doc = payload.get('document') if isinstance(payload, dict) else None
-                    status_text = payload.get('status') if isinstance(payload, dict) else None
-                    errors_list = payload.get('errors') if isinstance(payload, dict) else None
-                    proc_time = payload.get('processing_time') if isinstance(payload, dict) else None
-                    if isinstance(doc, dict):
-                        md_val = doc.get('md_content')
-                        if isinstance(md_val, str) and md_val.strip():
-                            self._last_extraction_info = {
-                                "engine": "docling",
-                                "url": url,
-                                "ok": True,
-                                "status": status_text,
-                                "errors": errors_list if isinstance(errors_list, list) else [],
-                                "processing_time": proc_time,
-                                "options": {"output_format": "markdown", "image_export_mode": "placeholder", "include_annotations": True},
-                            }
-                            return md_val
-                        txt_val = doc.get('text_content')
-                        if isinstance(txt_val, str) and txt_val.strip():
-                            self._last_extraction_info = {
-                                "engine": "docling",
-                                "url": url,
-                                "ok": True,
-                                "status": status_text,
-                                "errors": errors_list if isinstance(errors_list, list) else [],
-                                "processing_time": proc_time,
-                                "note": "md_content missing; used text_content",
-                                "options": {"output_format": "markdown", "image_export_mode": "placeholder", "include_annotations": True},
-                            }
-                            return txt_val
-                text = resp.text
-                if text and text.strip():
-                    self._last_extraction_info = {"engine": "docling", "url": url, "ok": True, "status": None, "errors": [], "options": {"output_format": "markdown", "image_export_mode": "placeholder", "include_annotations": True}}
-                    return text
-        except Exception as e:
             try:
-                if 'resp' in locals() and hasattr(resp, 'text'):
-                    self._logger.warning("Docling extraction failed for %s: %s | body: %s", file_path.name, e, (resp.text[:500] or '').replace('\n',' '))
+                if attempt == 0:
+                    self._logger.info("Using Docling extractor: %s (timeout: %.0fs)", url, current_timeout)
                 else:
-                    self._logger.warning("Docling extraction failed for %s: %s", file_path.name, e)
+                    self._logger.info("Retrying Docling (attempt %d/%d, timeout: %.0fs): %s",
+                                    attempt + 1, max_retries + 1, current_timeout, file_path.name)
             except Exception:
                 pass
-            self._last_extraction_info = {"engine": "docling", "url": url, "ok": False}
-            return None
+
+            import mimetypes
+            headers = {"Accept": "application/json"}
+
+            try:
+                async with httpx.AsyncClient(timeout=current_timeout, verify=getattr(settings, 'docling_verify_ssl', True)) as client:
+                    # Docling Serve expects conversion options as primitive query/form values.
+                    # Request Markdown with placeholder images, standard pipeline, OCR enabled (auto engine), and accurate tables.
+                    params = {
+                        "output_format": "markdown",
+                        "image_export_mode": "placeholder",
+                        "pipeline_type": "standard",
+                        "enable_ocr": "true",
+                        "ocr_engine": "auto",
+                        "table_mode": "accurate",
+                        "include_annotations": "true",        # ensures text appears at image positions
+                        # Important toggles to prevent base64 embedding:
+                        "generate_picture_images": "false",
+                        "include_images": "false",
+                    }
+                    options_log = {
+                        "output_format": "markdown",
+                        "image_export_mode": "placeholder",
+                        "pipeline_type": "standard",
+                        "enable_ocr": True,
+                        "ocr_engine": "auto",
+                        "table_mode": "accurate",
+                        "include_annotations": True,
+                        "generate_picture_images": False,
+                        "include_images": False,
+                    }
+                    mime = mimetypes.guess_type(str(file_path))[0] or "application/octet-stream"
+
+                    async def _post_with(field_name: str) -> httpx.Response:
+                        with file_path.open('rb') as f:
+                            files = [(field_name, (file_path.name, f, mime))]
+                            # Only send file via multipart; mirror options in query + form for compatibility across Docling builds.
+                            return await client.post(url, headers=headers, params=params, files=files, data=params)
+
+                    resp = await _post_with('files')
+                    if resp.status_code == 422:
+                        # retry with 'file' if server asked for it
+                        try:
+                            body = resp.json() or {}
+                            needs_file = any(
+                                any(str(x).lower() == 'file' for x in (d.get('loc') or []))
+                                for d in (body.get('detail') or [])
+                            )
+                        except Exception:
+                            needs_file = False
+                        if needs_file:
+                            resp = await _post_with('file')
+                    resp.raise_for_status()
+
+                    ctype = (resp.headers.get('content-type') or '').lower()
+                    if 'application/json' in ctype:
+                        payload = resp.json()
+                        doc = payload.get('document') if isinstance(payload, dict) else None
+                        status_text = payload.get('status') if isinstance(payload, dict) else None
+                        errors_list = payload.get('errors') if isinstance(payload, dict) else None
+                        proc_time = payload.get('processing_time') if isinstance(payload, dict) else None
+                        if isinstance(doc, dict):
+                            md_val = doc.get('md_content')
+                            if isinstance(md_val, str) and md_val.strip():
+                                self._last_extraction_info = {
+                                    "engine": "docling",
+                                    "url": url,
+                                    "ok": True,
+                                    "status": status_text,
+                                    "errors": errors_list if isinstance(errors_list, list) else [],
+                                    "processing_time": proc_time,
+                                    "attempts": attempt + 1,
+                                    "timeout_used": current_timeout,
+                                    "options": options_log,
+                                }
+                                return md_val
+                            txt_val = doc.get('text_content')
+                            if isinstance(txt_val, str) and txt_val.strip():
+                                self._last_extraction_info = {
+                                    "engine": "docling",
+                                    "url": url,
+                                    "ok": True,
+                                    "status": status_text,
+                                    "errors": errors_list if isinstance(errors_list, list) else [],
+                                    "processing_time": proc_time,
+                                    "attempts": attempt + 1,
+                                    "timeout_used": current_timeout,
+                                    "note": "md_content missing; used text_content",
+                                    "options": options_log,
+                                }
+                                return txt_val
+                    text = resp.text
+                    if text and text.strip():
+                        self._last_extraction_info = {
+                            "engine": "docling",
+                            "url": url,
+                            "ok": True,
+                            "status": None,
+                            "errors": [],
+                            "attempts": attempt + 1,
+                            "timeout_used": current_timeout,
+                            "options": options_log,
+                        }
+                        return text
+
+            except httpx.TimeoutException as e:
+                is_last_attempt = (attempt >= max_retries)
+                try:
+                    if is_last_attempt:
+                        self._logger.warning("Docling timeout for %s after %d attempts (final timeout: %.0fs): %s",
+                                           file_path.name, attempt + 1, current_timeout, e)
+                    else:
+                        self._logger.warning("Docling timeout for %s (attempt %d/%d, timeout: %.0fs), will retry: %s",
+                                           file_path.name, attempt + 1, max_retries + 1, current_timeout, e)
+                except Exception:
+                    pass
+
+                if is_last_attempt:
+                    self._last_extraction_info = {
+                        "engine": "docling",
+                        "url": url,
+                        "ok": False,
+                        "error": "timeout",
+                        "attempts": attempt + 1,
+                        "timeout_used": current_timeout
+                    }
+                    break
+                # Continue to next retry
+
+            except httpx.RequestError as e:
+                # Network / connection errors (non-timeout) – retry unless out of attempts
+                is_last_attempt = (attempt >= max_retries)
+                try:
+                    if is_last_attempt:
+                        self._logger.warning("Docling request error for %s after %d attempts: %s", file_path.name, attempt + 1, e)
+                    else:
+                        self._logger.warning("Docling request error for %s (attempt %d/%d), will retry: %s",
+                                             file_path.name, attempt + 1, max_retries + 1, e)
+                except Exception:
+                    pass
+
+                if is_last_attempt:
+                    self._last_extraction_info = {
+                        "engine": "docling",
+                        "url": url,
+                        "ok": False,
+                        "error": str(e),
+                        "attempts": attempt + 1
+                    }
+                    break
+                # Continue to next retry
+
+            except Exception as e:
+                try:
+                    if 'resp' in locals() and hasattr(resp, 'text'):
+                        self._logger.warning("Docling extraction failed for %s (attempt %d/%d): %s | body: %s",
+                                           file_path.name, attempt + 1, max_retries + 1, e, (resp.text[:500] or '').replace('\n',' '))
+                    else:
+                        self._logger.warning("Docling extraction failed for %s (attempt %d/%d): %s",
+                                           file_path.name, attempt + 1, max_retries + 1, e)
+                except Exception:
+                    pass
+
+                # For non-timeout errors, don't retry
+                self._last_extraction_info = {
+                    "engine": "docling",
+                    "url": url,
+                    "ok": False,
+                    "error": str(e),
+                    "attempts": attempt + 1
+                }
+                break
+
+        return None
 
     async def _extract_via_extraction_service(self, file_path: Path, fallback_from_docling: bool = False, max_retries: int = 2) -> Optional[str]:
         """Extract content via the default extraction-service with retry logic.
@@ -1273,11 +1376,11 @@ class DocumentService:
         Behavior:
           - For `.txt`, `.md`, or `.csv` files, reads the file as UTF-8.
           - Otherwise, routes to the configured extractor with retry/failover:
-              - `CONTENT_EXTRACTOR=docling`: try Docling first (with retries); on failure,
+              - `EXTRACTION_PRIORITY=docling`: try Docling first (with retries); on failure,
                 fall back to extraction-service (with retries) when available.
-              - `CONTENT_EXTRACTOR=default`: try extraction-service (with retries); on failure,
+              - `EXTRACTION_PRIORITY=default`: try extraction-service (with retries); on failure,
                 fall back to Docling (with retries) when available.
-              - `CONTENT_EXTRACTOR=auto`: prioritize non-default engine; if both enabled,
+              - `EXTRACTION_PRIORITY=auto`: prioritize non-default engine; if both enabled,
                 try primary then failover to secondary.
           - If all extractors fail after retries, returns a placeholder Markdown.
 

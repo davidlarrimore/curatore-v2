@@ -99,6 +99,16 @@ export const systemApi = {
     const res = await fetch(url.toString(), { cache: 'no-store' })
     return handleJson(res)
   },
+
+  async getComprehensiveHealth(): Promise<any> {
+    const res = await fetch(apiUrl('/system/health/comprehensive'), { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  async getComponentHealth(component: 'backend' | 'redis' | 'celery' | 'extraction' | 'docling' | 'llm'): Promise<any> {
+    const res = await fetch(apiUrl(`/system/health/${component}`), { cache: 'no-store' })
+    return handleJson(res)
+  },
 }
 
 // -------------------- File API --------------------
@@ -269,6 +279,28 @@ export const utils = {
     a.click()
     document.body.removeChild(a)
     URL.revokeObjectURL(url)
+  },
+
+  /**
+   * Remove hash prefix from filename and replace underscores with spaces
+   * (e.g., "abc123_document_name.pdf" -> "document name.pdf")
+   * Backend stores files as {hash}_{original_name}, but we should display just the original name
+   */
+  getDisplayFilename(filename: string): string {
+    if (!filename) return filename;
+    // Check if filename has hash prefix pattern (32 hex chars followed by underscore)
+    const match = filename.match(/^[0-9a-f]{32}_(.+)$/i);
+    const nameWithoutHash = match ? match[1] : filename;
+
+    // Replace underscores with spaces, but preserve file extension
+    const lastDotIndex = nameWithoutHash.lastIndexOf('.');
+    if (lastDotIndex > 0) {
+      const nameWithoutExt = nameWithoutHash.substring(0, lastDotIndex);
+      const extension = nameWithoutHash.substring(lastDotIndex);
+      return nameWithoutExt.replace(/_/g, ' ') + extension;
+    }
+
+    return nameWithoutHash.replace(/_/g, ' ');
   },
 
   /**

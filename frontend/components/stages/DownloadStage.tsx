@@ -66,13 +66,14 @@ export function DownloadStage({
     setIsDownloading(result.document_id);
     try {
       const blob: Blob = await fileApi.downloadDocument(result.document_id);
-      const filename = `${result.filename.split('.')[0]}.md`;
+      const displayName = utils.getDisplayFilename(result.filename);
+      const filename = `${displayName.split('.')[0]}.md`;
       utils.downloadBlob(blob, filename);
       toast.success(`Downloaded ${filename}`, { icon: '💾' });
     } catch (error) {
       console.error('Download failed:', error);
       const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      toast.error(`Failed to download ${result.filename}: ${errorMessage}`);
+      toast.error(`Failed to download ${utils.getDisplayFilename(result.filename)}: ${errorMessage}`);
     } finally {
       setIsDownloading('');
     }
@@ -192,7 +193,7 @@ export function DownloadStage({
       const status = result.pass_all_thresholds ? 'RAG Ready ✅' : 'Needs Improvement ⚠️';
       const optimization = result.vector_optimized ? 'Vector Optimized 🎯' : 'Standard Processing';
       
-      reportLines.push(`### ${result.filename}`);
+      reportLines.push(`### ${utils.getDisplayFilename(result.filename)}`);
       reportLines.push(`- **Status:** ${status}`);
       reportLines.push(`- **Processing:** ${optimization}`);
       reportLines.push(`- **Conversion Score:** ${result.conversion_score}/100`);
@@ -349,8 +350,8 @@ export function DownloadStage({
                               {result.vector_optimized ? '🎯' : '📄'}
                             </span>
                             <div className="min-w-0 flex-1">
-                              <p className="text-sm font-medium text-gray-900 truncate" title={result.filename}>
-                                {result.filename}
+                              <p className="text-sm font-medium text-gray-900 truncate" title={utils.getDisplayFilename(result.filename)}>
+                                {utils.getDisplayFilename(result.filename)}
                               </p>
                               {result.document_summary && (
                                 <p className="text-xs text-gray-500 truncate mt-1" title={result.document_summary}>

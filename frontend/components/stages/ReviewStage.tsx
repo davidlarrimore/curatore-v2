@@ -4,7 +4,7 @@
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
 import { ProcessingResult, QualityThresholds } from '@/types';
-import { contentApi, jobsApi } from '@/lib/api';
+import { contentApi, jobsApi, utils } from '@/lib/api';
 
 interface ReviewStageProps {
   processingResults: ProcessingResult[];
@@ -435,7 +435,7 @@ export function ReviewStage({
                     }`}
                   >
                     <div className="flex items-center justify-between mb-2">
-                      <span className="font-medium text-gray-900 truncate">{result.filename}</span>
+                      <span className="font-medium text-gray-900 truncate">{utils.getDisplayFilename(result.filename)}</span>
                     </div>
                     
                     <div className="flex items-center justify-between text-xs">
@@ -497,7 +497,7 @@ export function ReviewStage({
               <div>
                 {/* Header */}
                 <div className="mb-6">
-                  <h3 className="text-xl font-medium mb-2">📄 {selectedResult.filename}</h3>
+                  <h3 className="text-xl font-medium mb-2">📄 {utils.getDisplayFilename(selectedResult.filename)}</h3>
                   <div className="flex items-center flex-wrap gap-2">
                     {/* Extraction Engine Label */}
                     {selectedResult.conversion_result?.extraction_engine && (
@@ -507,7 +507,12 @@ export function ReviewStage({
                           : 'bg-blue-100 text-blue-800'
                       }`}>
                         {selectedResult.conversion_result.extraction_failover && '🔄 '}
-                        {selectedResult.conversion_result.extraction_engine}
+                        {/* Show simplified extraction engine name */}
+                        {selectedResult.conversion_result.extraction_engine.includes('docling')
+                          ? 'Docling'
+                          : selectedResult.conversion_result.extraction_engine.includes('extraction-service')
+                          ? 'Extraction'
+                          : selectedResult.conversion_result.extraction_engine}
                         {selectedResult.conversion_result.extraction_attempts && selectedResult.conversion_result.extraction_attempts > 1 &&
                           ` (${selectedResult.conversion_result.extraction_attempts}×)`
                         }

@@ -226,14 +226,14 @@ Curatore supports two extraction engines:
 - Default extraction-service (internal microservice)
 - Docling Serve (external image/document converter) — recommended for rich PDFs and Office docs
 
-Set the extractor via `CONTENT_EXTRACTOR`:
+Set the extractor priority via `EXTRACTION_PRIORITY`:
 
 ```bash
 # Use the default internal extraction-service
-CONTENT_EXTRACTOR=default
+EXTRACTION_PRIORITY=default
 
 # Or enable Docling
-CONTENT_EXTRACTOR=docling
+EXTRACTION_PRIORITY=docling
 
 # Docling connection
 DOCLING_SERVICE_URL=http://docling:5001
@@ -241,7 +241,7 @@ DOCLING_TIMEOUT=60
 DOCLING_VERIFY_SSL=true
 ```
 
-If `CONTENT_EXTRACTOR` is not set, Curatore defaults to the internal extraction-service (equivalent to `CONTENT_EXTRACTOR=default`).
+If `EXTRACTION_PRIORITY` is not set, Curatore defaults to the internal extraction-service (equivalent to `EXTRACTION_PRIORITY=default`).
 
 To control whether the bundled `docling` service starts, set the boolean in your `.env`:
 
@@ -259,7 +259,7 @@ Notes:
 - The Docling port mapping is baked into `docker-compose.yml` as `5151:5001`.
 - The Docling image and tag are baked into `docker-compose.yml` (`ghcr.io/docling-project/docling-serve-cpu:latest`). The Docling container name is baked in as `curatore-docling`.
 
-Behavior when `CONTENT_EXTRACTOR=docling`:
+Behavior when `EXTRACTION_PRIORITY=docling`:
 
 - Backend and Worker POST to `DOCLING_SERVICE_URL + /v1/convert/file` with the uploaded file.
 - If Docling fails, Curatore automatically falls back to the internal extraction-service (if configured).
@@ -267,11 +267,11 @@ Behavior when `CONTENT_EXTRACTOR=docling`:
 Docling request options sent by Curatore:
 
 - Output format: `output_format=markdown`
-- Image handling: prefers placeholders, sent with multiple keys to support API variants:
-  - `image_export_mode=placeholder`
-  - `imageExportMode=PLACEHOLDER`
-  - `images=placeholder`
-- Annotations: `include_annotations=true`
+- Image handling: `image_export_mode=placeholder`
+- Pipeline: `pipeline_type=standard`
+- OCR: `enable_ocr=true`, `ocr_engine=auto`
+- Tables: `table_mode=accurate`
+- Annotations & images: `include_annotations=true`, `generate_picture_images=false`, `include_images=false`
 
 Notes on compatibility:
 

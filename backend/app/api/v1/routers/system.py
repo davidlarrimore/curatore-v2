@@ -307,3 +307,370 @@ async def queue_summary(
         "done": done,
         "total": requested,
     }
+
+
+@router.get("/system/health/backend", tags=["System"])
+async def health_check_backend() -> Dict[str, Any]:
+    """Health check for backend API component."""
+    return {
+        "status": "healthy",
+        "message": "API is responding",
+        "version": settings.api_version
+    }
+
+
+@router.get("/system/health/redis", tags=["System"])
+async def health_check_redis() -> Dict[str, Any]:
+    """Health check for Redis component."""
+    try:
+        r = get_redis_client()
+        ping_result = r.ping()
+        return {
+            "status": "healthy" if ping_result else "unhealthy",
+            "message": "Redis connection successful" if ping_result else "Redis ping failed",
+            "broker_url": os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
+            "result_backend": os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Redis connection error: {str(e)}"
+        }
+
+
+@router.get("/system/health/celery", tags=["System"])
+async def health_check_celery() -> Dict[str, Any]:
+    """Health check for Celery worker component."""
+    try:
+        insp = celery_app.control.inspect(timeout=2.0)
+        ping_result = insp.ping() or {}
+        worker_count = len(ping_result)
+
+        active_tasks = {}
+        try:
+            active = insp.active() or {}
+            active_tasks = {worker: len(tasks or []) for worker, tasks in active.items()}
+        except Exception:
+            pass
+
+        return {
+            "status": "healthy" if worker_count > 0 else "unhealthy",
+            "message": f"{worker_count} worker(s) active" if worker_count > 0 else "No workers responding",
+            "worker_count": worker_count,
+            "active_tasks": active_tasks,
+            "queue": os.getenv("CELERY_DEFAULT_QUEUE", "processing")
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Worker check error: {str(e)}",
+            "worker_count": 0
+        }
+
+
+@router.get("/system/health/extraction", tags=["System"])
+async def health_check_extraction() -> Dict[str, Any]:
+    """Health check for extraction service component."""
+    try:
+        extractor_status = await document_service.extractor_health()
+        is_connected = extractor_status.get("connected", False)
+
+        if is_connected:
+            return {
+                "status": "healthy",
+                "message": "Extraction service is responding",
+                "url": extractor_status.get("endpoint"),
+                "engine": extractor_status.get("engine", "default"),
+                "response": extractor_status.get("response", {})
+            }
+        elif extractor_status.get("error") == "not_configured":
+            return {
+                "status": "not_configured",
+                "message": "Extraction service not configured",
+                "engine": extractor_status.get("engine", "default")
+            }
+        else:
+            error_msg = extractor_status.get("error", "Service check failed")
+            return {
+                "status": "unhealthy",
+                "message": f"Extraction service unreachable: {error_msg}",
+                "url": extractor_status.get("endpoint"),
+                "engine": extractor_status.get("engine", "default")
+            }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Extraction service error: {str(e)}"
+        }
+
+
+@router.get("/system/health/docling", tags=["System"])
+async def health_check_docling() -> Dict[str, Any]:
+    """Health check for Docling service component."""
+    import httpx
+
+    docling_url = getattr(settings, "docling_service_url", "").rstrip("/")
+    if not docling_url:
+        return {
+            "status": "not_configured",
+            "message": "Docling service not configured"
+        }
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            health_url = f"{docling_url}/health"
+            try:
+                resp = await client.get(health_url)
+                if resp.status_code == 200:
+                    return {
+                        "status": "healthy",
+                        "message": "Docling service is responding",
+                        "url": docling_url
+                    }
+                else:
+                    return {
+                        "status": "degraded",
+                        "message": f"Docling returned status {resp.status_code}",
+                        "url": docling_url
+                    }
+            except httpx.HTTPStatusError:
+                return {
+                    "status": "unknown",
+                    "message": "Docling service configured but health endpoint not available",
+                    "url": docling_url
+                }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Docling service error: {str(e)}",
+            "url": docling_url
+        }
+
+
+@router.get("/system/health/llm", tags=["System"])
+async def health_check_llm() -> Dict[str, Any]:
+    """Health check for LLM connection component."""
+    try:
+        llm_status = await llm_service.test_connection()
+        if llm_status.connected:
+            return {
+                "status": "healthy",
+                "message": f"Connected to {llm_status.model}",
+                "model": llm_status.model,
+                "endpoint": llm_status.endpoint
+            }
+        else:
+            error_msg = llm_status.error or "Connection failed"
+            return {
+                "status": "unhealthy",
+                "message": error_msg,
+                "model": llm_status.model,
+                "endpoint": llm_status.endpoint
+            }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"LLM check error: {str(e)}"
+        }
+
+
+@router.get("/system/health/comprehensive", tags=["System"])
+async def comprehensive_health() -> Dict[str, Any]:
+    """Comprehensive health check for all system components.
+
+    Checks the health of:
+    - Backend API
+    - Extraction Service (default microservice)
+    - Docling Service (if configured)
+    - Celery Worker
+    - Redis (broker and backend)
+    - LLM Connection
+
+    Returns detailed status for each component with timestamps and error messages.
+    """
+    import httpx
+    from datetime import datetime
+
+    health_report: Dict[str, Any] = {
+        "timestamp": datetime.now().isoformat(),
+        "overall_status": "healthy",
+        "components": {}
+    }
+
+    issues = []
+
+    # 1. Backend API (self)
+    health_report["components"]["backend"] = {
+        "status": "healthy",
+        "message": "API is responding",
+        "version": settings.api_version
+    }
+
+    # 2. Redis Connection
+    try:
+        r = get_redis_client()
+        ping_result = r.ping()
+        health_report["components"]["redis"] = {
+            "status": "healthy" if ping_result else "unhealthy",
+            "message": "Redis connection successful" if ping_result else "Redis ping failed",
+            "broker_url": os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
+            "result_backend": os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
+        }
+        if not ping_result:
+            issues.append("Redis connection failed")
+    except Exception as e:
+        health_report["components"]["redis"] = {
+            "status": "unhealthy",
+            "message": f"Redis connection error: {str(e)}"
+        }
+        issues.append(f"Redis: {str(e)}")
+
+    # 3. Celery Worker
+    try:
+        insp = celery_app.control.inspect(timeout=2.0)
+        ping_result = insp.ping() or {}
+        worker_count = len(ping_result)
+
+        active_tasks = {}
+        try:
+            active = insp.active() or {}
+            active_tasks = {worker: len(tasks or []) for worker, tasks in active.items()}
+        except Exception:
+            pass
+
+        health_report["components"]["celery_worker"] = {
+            "status": "healthy" if worker_count > 0 else "unhealthy",
+            "message": f"{worker_count} worker(s) active" if worker_count > 0 else "No workers responding",
+            "worker_count": worker_count,
+            "active_tasks": active_tasks,
+            "queue": os.getenv("CELERY_DEFAULT_QUEUE", "processing")
+        }
+
+        if worker_count == 0:
+            issues.append("No Celery workers available")
+    except Exception as e:
+        health_report["components"]["celery_worker"] = {
+            "status": "unhealthy",
+            "message": f"Worker check error: {str(e)}",
+            "worker_count": 0
+        }
+        issues.append(f"Celery Worker: {str(e)}")
+
+    # 4. Extraction Service (default microservice)
+    try:
+        extractor_status = await document_service.extractor_health()
+        is_connected = extractor_status.get("connected", False)
+
+        if is_connected:
+            health_report["components"]["extraction_service"] = {
+                "status": "healthy",
+                "message": "Extraction service is responding",
+                "url": extractor_status.get("endpoint"),
+                "engine": extractor_status.get("engine", "default"),
+                "response": extractor_status.get("response", {})
+            }
+        elif extractor_status.get("error") == "not_configured":
+            health_report["components"]["extraction_service"] = {
+                "status": "not_configured",
+                "message": "Extraction service not configured",
+                "engine": extractor_status.get("engine", "default")
+            }
+        else:
+            error_msg = extractor_status.get("error", "Service check failed")
+            health_report["components"]["extraction_service"] = {
+                "status": "unhealthy",
+                "message": f"Extraction service unreachable: {error_msg}",
+                "url": extractor_status.get("endpoint"),
+                "engine": extractor_status.get("engine", "default")
+            }
+            issues.append(f"Extraction service: {error_msg}")
+    except Exception as e:
+        health_report["components"]["extraction_service"] = {
+            "status": "unhealthy",
+            "message": f"Extraction service error: {str(e)}"
+        }
+        issues.append(f"Extraction Service: {str(e)}")
+
+    # 5. Docling Service (if configured)
+    docling_url = getattr(settings, "docling_service_url", "").rstrip("/")
+    if docling_url:
+        try:
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                # Docling health check endpoint (trying common patterns)
+                health_url = f"{docling_url}/health"
+                try:
+                    resp = await client.get(health_url)
+                    if resp.status_code == 200:
+                        health_report["components"]["docling"] = {
+                            "status": "healthy",
+                            "message": "Docling service is responding",
+                            "url": docling_url
+                        }
+                    else:
+                        health_report["components"]["docling"] = {
+                            "status": "degraded",
+                            "message": f"Docling returned status {resp.status_code}",
+                            "url": docling_url
+                        }
+                        issues.append(f"Docling service returned {resp.status_code}")
+                except httpx.HTTPStatusError:
+                    # Try alternate endpoint
+                    health_report["components"]["docling"] = {
+                        "status": "unknown",
+                        "message": "Docling service configured but health endpoint not available",
+                        "url": docling_url
+                    }
+        except Exception as e:
+            health_report["components"]["docling"] = {
+                "status": "unhealthy",
+                "message": f"Docling service error: {str(e)}",
+                "url": docling_url
+            }
+            issues.append(f"Docling: {str(e)}")
+    else:
+        health_report["components"]["docling"] = {
+            "status": "not_configured",
+            "message": "Docling service not configured"
+        }
+
+    # 6. LLM Connection
+    try:
+        llm_status = await llm_service.test_connection()
+        if llm_status.connected:
+            health_report["components"]["llm"] = {
+                "status": "healthy",
+                "message": f"Connected to {llm_status.model}",
+                "model": llm_status.model,
+                "endpoint": llm_status.endpoint
+            }
+        else:
+            error_msg = llm_status.error or "Connection failed"
+            health_report["components"]["llm"] = {
+                "status": "unhealthy",
+                "message": error_msg,
+                "model": llm_status.model,
+                "endpoint": llm_status.endpoint
+            }
+            issues.append(f"LLM connection failed: {error_msg}")
+    except Exception as e:
+        health_report["components"]["llm"] = {
+            "status": "unhealthy",
+            "message": f"LLM check error: {str(e)}"
+        }
+        issues.append(f"LLM: {str(e)}")
+
+    # Determine overall status
+    component_statuses = [c.get("status") for c in health_report["components"].values()]
+
+    if any(s == "unhealthy" for s in component_statuses):
+        health_report["overall_status"] = "unhealthy"
+    elif any(s in ["degraded", "unknown"] for s in component_statuses):
+        health_report["overall_status"] = "degraded"
+    else:
+        health_report["overall_status"] = "healthy"
+
+    # Add issues summary
+    if issues:
+        health_report["issues"] = issues
+
+    return health_report
