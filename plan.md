@@ -1,8 +1,8 @@
 # Curatore v2 - System Persistence & Multi-Tenancy Implementation Plan
 
-**Status**: Phase 2 Complete ✅ (Authentication)
-**Last Updated**: 2026-01-12
-**Progress**: 25% (2 of 8 phases complete)
+**Status**: Phase 3 Complete ✅ (Multi-tenant API Management)
+**Last Updated**: 2026-01-13
+**Progress**: 37.5% (3 of 8 phases complete)
 
 ## Current Status
 
@@ -23,15 +23,22 @@
 - ✅ Enhanced database health panel (table counts, migration version, size)
 - ✅ All authentication flows tested and working
 
-**🔄 NEXT: Phase 3 - Multi-Tenant Organizations**
-- Organization management endpoints (CRUD)
-- User management endpoints (invite, update, deactivate)
-- API key management endpoints (generate, revoke, list)
-- Connection management endpoints (LLM, SharePoint)
-- Multi-tenant query isolation (add org_id filters everywhere)
-- Audit logging for all changes
+**✅ COMPLETED: Phase 3 - Multi-Tenant Organizations**
+- ✅ Organization management endpoints (GET, PUT settings)
+- ✅ User management endpoints (list, invite, update, deactivate, reactivate)
+- ✅ API key management endpoints (create, list, update, revoke)
+- ✅ Multi-tenant query isolation (org_id filters in all queries)
+- ✅ Role-based access control (org_admin, member, viewer)
+- ✅ Deep merge settings updates
+- ✅ Flexible authentication (JWT + API keys)
+- ✅ All endpoints manually tested and verified
 
-See `CHECKPOINT_PHASE2_COMPLETE.md` for detailed resume instructions and Phase 3 plan.
+**🔄 NEXT: Phase 4 - Connection Management**
+- Connection service with extensible type registry
+- SharePoint, LLM, and Extraction connection types
+- Connection CRUD endpoints
+- Test-on-save functionality
+- Connection health tracking
 
 ---
 
