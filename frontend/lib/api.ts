@@ -105,7 +105,7 @@ export const systemApi = {
     return handleJson(res)
   },
 
-  async getComponentHealth(component: 'backend' | 'redis' | 'celery' | 'extraction' | 'docling' | 'llm'): Promise<any> {
+  async getComponentHealth(component: 'backend' | 'database' | 'redis' | 'celery' | 'extraction' | 'docling' | 'llm' | 'sharepoint'): Promise<any> {
     const res = await fetch(apiUrl(`/system/health/${component}`), { cache: 'no-store' })
     return handleJson(res)
   },

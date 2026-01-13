@@ -70,6 +70,64 @@ class V1BatchProcessingRequest(BaseModel):
     options: Optional[V1ProcessingOptions] = None
 
 
+class SharePointInventoryRequest(BaseModel):
+    folder_url: str = Field(..., description="SharePoint folder URL or share link")
+    recursive: bool = Field(default=False, description="Traverse subfolders")
+    include_folders: bool = Field(default=False, description="Include folders in results")
+    page_size: int = Field(default=200, ge=1, le=2000, description="Items per page")
+    max_items: Optional[int] = Field(default=None, ge=1, description="Max items to return")
+
+
+class SharePointInventoryItem(BaseModel):
+    index: int
+    name: str
+    type: str
+    folder: str
+    extension: str
+    size: Optional[int] = None
+    created: Optional[str] = None
+    modified: Optional[str] = None
+    mime: Optional[str] = None
+    id: str
+    web_url: Optional[str] = None
+
+
+class SharePointInventoryFolder(BaseModel):
+    name: str
+    id: str
+    web_url: Optional[str] = None
+    drive_id: str
+
+
+class SharePointInventoryResponse(BaseModel):
+    folder: SharePointInventoryFolder
+    items: List[SharePointInventoryItem]
+
+
+class SharePointDownloadRequest(BaseModel):
+    folder_url: str = Field(..., description="SharePoint folder URL or share link")
+    indices: Optional[List[int]] = Field(default=None, description="Indices from inventory")
+    download_all: bool = Field(default=False, description="Download all files")
+    recursive: bool = Field(default=False, description="Traverse subfolders")
+    page_size: int = Field(default=200, ge=1, le=2000, description="Items per page")
+    max_items: Optional[int] = Field(default=None, ge=1, description="Max items to scan")
+    preserve_folders: bool = Field(default=True, description="Preserve subfolder structure")
+
+
+class SharePointDownloadItem(BaseModel):
+    index: int
+    name: str
+    folder: str
+    path: str
+    size: Optional[int] = None
+
+
+class SharePointDownloadResponse(BaseModel):
+    downloaded: List[SharePointDownloadItem]
+    skipped: List[SharePointDownloadItem]
+    batch_dir: str
+
+
 __all__ = [
     # Re-exports
     "FileUploadResponse",
@@ -87,6 +145,11 @@ __all__ = [
     "V1BatchProcessingResult",
     # Domain mapping helper types
     "ProcessingOptions",
+    # SharePoint
+    "SharePointInventoryRequest",
+    "SharePointInventoryResponse",
+    "SharePointDownloadRequest",
+    "SharePointDownloadResponse",
 ]
 
 

@@ -107,6 +107,59 @@ class Settings(BaseSettings):
     default_relevance_threshold: int = Field(default=7, description="1–10")
     default_markdown_threshold: int = Field(default=7, description="1–10")
 
+    # =========================================================================
+    # DATABASE CONFIGURATION
+    # =========================================================================
+    database_url: str = Field(
+        default="sqlite+aiosqlite:///./data/curatore.db",
+        description="Database URL for SQLAlchemy (SQLite or PostgreSQL)",
+    )
+    db_pool_size: int = Field(default=20, description="Database connection pool size (PostgreSQL)")
+    db_max_overflow: int = Field(default=40, description="Max overflow connections (PostgreSQL)")
+    db_pool_recycle: int = Field(default=3600, description="Connection recycle time in seconds")
+
+    # =========================================================================
+    # AUTHENTICATION & SECURITY
+    # =========================================================================
+    jwt_secret_key: str = Field(
+        default="your-secret-key-change-in-production",
+        description="JWT secret key (use openssl rand -hex 32)",
+    )
+    jwt_algorithm: str = Field(default="HS256", description="JWT signing algorithm")
+    jwt_access_token_expire_minutes: int = Field(
+        default=60, description="JWT access token expiration in minutes"
+    )
+    jwt_refresh_token_expire_days: int = Field(
+        default=30, description="JWT refresh token expiration in days"
+    )
+    bcrypt_rounds: int = Field(default=12, description="Bcrypt hashing work factor")
+    api_key_prefix: str = Field(default="cur_", description="API key prefix")
+
+    # =========================================================================
+    # MULTI-TENANCY & ORGANIZATIONS
+    # =========================================================================
+    enable_auth: bool = Field(
+        default=False, description="Enable authentication (set to false for backward compatibility)"
+    )
+    default_org_id: Optional[str] = Field(
+        default=None, description="Default organization ID for unauthenticated requests"
+    )
+    auto_test_connections: bool = Field(
+        default=True, description="Automatically test connections on create/update"
+    )
+
+    # =========================================================================
+    # INITIAL SEEDING (for first-time setup)
+    # =========================================================================
+    admin_email: str = Field(default="admin@example.com", description="Initial admin email")
+    admin_username: str = Field(default="admin", description="Initial admin username")
+    admin_password: str = Field(default="changeme", description="Initial admin password")
+    admin_full_name: str = Field(default="Admin User", description="Initial admin full name")
+    default_org_name: str = Field(
+        default="Default Organization", description="Default organization name"
+    )
+    default_org_slug: str = Field(default="default", description="Default organization slug")
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

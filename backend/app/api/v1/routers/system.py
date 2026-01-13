@@ -12,6 +12,7 @@ from ....services.document_service import document_service
 from ....services.storage_service import storage_service
 from ....services.zip_service import zip_service
 from ....services.job_service import get_redis_client
+from ....services.database_service import database_service
 from ....celery_app import app as celery_app
 
 router = APIRouter()
@@ -319,6 +320,50 @@ async def health_check_backend() -> Dict[str, Any]:
     }
 
 
+@router.get("/system/health/database", tags=["System"])
+async def health_check_database() -> Dict[str, Any]:
+    """
+    Health check for database component.
+
+    Returns database status including table counts, migration version, and size.
+    """
+    try:
+        db_health = await database_service.health_check()
+
+        if db_health["status"] == "healthy":
+            # Get sanitized database URL (hide credentials)
+            database_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./data/curatore.db")
+            safe_url = database_url.split("@")[-1].split("?")[0]
+
+            response = {
+                "status": "healthy",
+                "message": "Database connection successful",
+                "database_type": db_health.get("database_type", "unknown"),
+                "database_url": safe_url,
+                "connected": True,
+                "tables": db_health.get("tables", {}),
+                "migration_version": db_health.get("migration_version", "unknown"),
+            }
+
+            # Add database size if available (SQLite only)
+            if "database_size_mb" in db_health:
+                response["database_size_mb"] = db_health["database_size_mb"]
+
+            return response
+        else:
+            return {
+                "status": "unhealthy",
+                "message": f"Database connection error: {db_health.get('error', 'unknown')}",
+                "connected": False
+            }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Database health check failed: {str(e)}",
+            "connected": False
+        }
+
+
 @router.get("/system/health/redis", tags=["System"])
 async def health_check_redis() -> Dict[str, Any]:
     """Health check for Redis component."""
@@ -474,17 +519,129 @@ async def health_check_llm() -> Dict[str, Any]:
         }
 
 
+@router.get("/system/health/sharepoint", tags=["System"])
+async def health_check_sharepoint() -> Dict[str, Any]:
+    """Health check for SharePoint / Microsoft Graph API connectivity.
+
+    Verifies:
+    - Required environment variables are configured
+    - Can authenticate with Azure AD
+    - Can access Microsoft Graph API
+    """
+    import httpx
+
+    # Check if SharePoint is configured
+    tenant_id = os.getenv("MS_TENANT_ID", "").strip()
+    client_id = os.getenv("MS_CLIENT_ID", "").strip()
+    client_secret = os.getenv("MS_CLIENT_SECRET", "").strip()
+
+    if not tenant_id or not client_id or not client_secret:
+        return {
+            "status": "not_configured",
+            "message": "SharePoint integration not configured (missing MS_TENANT_ID, MS_CLIENT_ID, or MS_CLIENT_SECRET)",
+            "configured": False
+        }
+
+    # Try to authenticate and get a token
+    try:
+        graph_base = os.getenv("MS_GRAPH_BASE_URL", "https://graph.microsoft.com/v1.0")
+        token_url = os.getenv(
+            "MS_GRAPH_TOKEN_URL",
+            f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+        )
+        scope = os.getenv("MS_GRAPH_SCOPE", "https://graph.microsoft.com/.default")
+
+        token_payload = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "client_credentials",
+            "scope": scope,
+        }
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Request access token
+            token_resp = await client.post(token_url, data=token_payload)
+            token_resp.raise_for_status()
+            token_data = token_resp.json()
+            access_token = token_data.get("access_token")
+
+            if not access_token:
+                return {
+                    "status": "unhealthy",
+                    "message": "Failed to obtain access token from Microsoft identity platform",
+                    "configured": True,
+                    "authenticated": False
+                }
+
+            # Test Graph API access by querying /me endpoint (or a simple endpoint)
+            # Since we're using app-only auth, /me won't work. Try /sites/root instead
+            headers = {"Authorization": f"Bearer {access_token}"}
+            try:
+                # Try a minimal query that should work with Sites.Read.All permission
+                graph_resp = await client.get(f"{graph_base}/sites/root", headers=headers, timeout=5.0)
+                graph_resp.raise_for_status()
+
+                return {
+                    "status": "healthy",
+                    "message": "Successfully authenticated with Microsoft Graph API",
+                    "configured": True,
+                    "authenticated": True,
+                    "tenant_id": tenant_id,
+                    "graph_endpoint": graph_base
+                }
+            except httpx.HTTPStatusError as graph_error:
+                # Token works but might not have proper permissions
+                if graph_error.response.status_code == 403:
+                    return {
+                        "status": "degraded",
+                        "message": "Authenticated but missing required permissions (Sites.Read.All or Files.Read.All)",
+                        "configured": True,
+                        "authenticated": True,
+                        "tenant_id": tenant_id,
+                        "graph_endpoint": graph_base,
+                        "error": "Permission denied"
+                    }
+                else:
+                    return {
+                        "status": "unhealthy",
+                        "message": f"Graph API request failed: {graph_error.response.status_code}",
+                        "configured": True,
+                        "authenticated": True,
+                        "tenant_id": tenant_id,
+                        "graph_endpoint": graph_base
+                    }
+
+    except httpx.HTTPStatusError as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Authentication failed: {e.response.status_code} - Check client credentials",
+            "configured": True,
+            "authenticated": False,
+            "error": str(e)
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"SharePoint health check error: {str(e)}",
+            "configured": True,
+            "authenticated": False,
+            "error": str(e)
+        }
+
+
 @router.get("/system/health/comprehensive", tags=["System"])
 async def comprehensive_health() -> Dict[str, Any]:
     """Comprehensive health check for all system components.
 
     Checks the health of:
     - Backend API
+    - Database (SQLite/PostgreSQL)
+    - Redis (broker and backend)
+    - Celery Worker
     - Extraction Service (default microservice)
     - Docling Service (if configured)
-    - Celery Worker
-    - Redis (broker and backend)
     - LLM Connection
+    - SharePoint / Microsoft Graph (if configured)
 
     Returns detailed status for each component with timestamps and error messages.
     """
@@ -506,7 +663,26 @@ async def comprehensive_health() -> Dict[str, Any]:
         "version": settings.api_version
     }
 
-    # 2. Redis Connection
+    # 2. Database Connection
+    try:
+        db_health = await database_service.health_check()
+        health_report["components"]["database"] = {
+            "status": db_health["status"],
+            "message": db_health.get("error", "Database connection successful") if db_health["status"] == "unhealthy" else "Database connection successful",
+            "database_type": db_health.get("database_type", "unknown"),
+            "connected": db_health.get("connected", False)
+        }
+        if db_health["status"] == "unhealthy":
+            issues.append(f"Database: {db_health.get('error', 'connection failed')}")
+    except Exception as e:
+        health_report["components"]["database"] = {
+            "status": "unhealthy",
+            "message": f"Database health check failed: {str(e)}",
+            "connected": False
+        }
+        issues.append(f"Database: {str(e)}")
+
+    # 3. Redis Connection
     try:
         r = get_redis_client()
         ping_result = r.ping()
@@ -525,7 +701,7 @@ async def comprehensive_health() -> Dict[str, Any]:
         }
         issues.append(f"Redis: {str(e)}")
 
-    # 3. Celery Worker
+    # 4. Celery Worker
     try:
         insp = celery_app.control.inspect(timeout=2.0)
         ping_result = insp.ping() or {}
@@ -658,6 +834,12 @@ async def comprehensive_health() -> Dict[str, Any]:
             "message": f"LLM check error: {str(e)}"
         }
         issues.append(f"LLM: {str(e)}")
+
+    # 7. SharePoint / Microsoft Graph
+    sharepoint_status = await health_check_sharepoint()
+    health_report["components"]["sharepoint"] = sharepoint_status
+    if sharepoint_status.get("status") in ["unhealthy", "degraded"]:
+        issues.append(f"SharePoint: {sharepoint_status.get('message')}")
 
     # Determine overall status
     component_statuses = [c.get("status") for c in health_report["components"].values()]

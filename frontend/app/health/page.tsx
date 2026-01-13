@@ -13,7 +13,7 @@ interface ComponentHealth {
   [key: string]: any
 }
 
-type ComponentKey = 'backend' | 'redis' | 'celery_worker' | 'extraction_service' | 'docling' | 'llm'
+type ComponentKey = 'backend' | 'database' | 'redis' | 'celery_worker' | 'extraction_service' | 'docling' | 'llm' | 'sharepoint'
 
 // Map internal Docker URLs to public localhost URLs
 const mapToPublicUrl = (internalUrl: string): string => {
@@ -43,7 +43,7 @@ const mapToPublicUrl = (internalUrl: string): string => {
 }
 
 const COMPONENT_MAP: Record<ComponentKey, {
-  apiKey: 'backend' | 'redis' | 'celery' | 'extraction' | 'docling' | 'llm',
+  apiKey: 'backend' | 'database' | 'redis' | 'celery' | 'extraction' | 'docling' | 'llm' | 'sharepoint',
   displayName: string,
   docsUrl?: string | ((component: ComponentHealth) => string | null)
 }> = {
@@ -55,6 +55,7 @@ const COMPONENT_MAP: Record<ComponentKey, {
       return `${apiBase}/docs`
     }
   },
+  database: { apiKey: 'database', displayName: 'Database' },
   redis: { apiKey: 'redis', displayName: 'Redis' },
   celery_worker: { apiKey: 'celery', displayName: 'Celery Worker' },
   extraction_service: {
@@ -85,16 +86,23 @@ const COMPONENT_MAP: Record<ComponentKey, {
     }
   },
   llm: { apiKey: 'llm', displayName: 'LLM Connection' },
+  sharepoint: {
+    apiKey: 'sharepoint',
+    displayName: 'SharePoint / Microsoft Graph',
+    docsUrl: () => 'https://learn.microsoft.com/en-us/graph/api/overview'
+  },
 }
 
 export default function SystemHealthPage() {
   const [components, setComponents] = useState<Record<ComponentKey, ComponentHealth>>({
     backend: { status: 'checking', message: 'Checking...' },
+    database: { status: 'checking', message: 'Checking...' },
     redis: { status: 'checking', message: 'Checking...' },
     celery_worker: { status: 'checking', message: 'Checking...' },
     extraction_service: { status: 'checking', message: 'Checking...' },
     docling: { status: 'checking', message: 'Checking...' },
     llm: { status: 'checking', message: 'Checking...' },
+    sharepoint: { status: 'checking', message: 'Checking...' },
   })
 
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
@@ -145,21 +153,25 @@ export default function SystemHealthPage() {
     // Reset all to checking state
     setComponents({
       backend: { status: 'checking', message: 'Checking...' },
+      database: { status: 'checking', message: 'Checking...' },
       redis: { status: 'checking', message: 'Checking...' },
       celery_worker: { status: 'checking', message: 'Checking...' },
       extraction_service: { status: 'checking', message: 'Checking...' },
       docling: { status: 'checking', message: 'Checking...' },
       llm: { status: 'checking', message: 'Checking...' },
+      sharepoint: { status: 'checking', message: 'Checking...' },
     })
 
     // Fire off all health checks in parallel
     await Promise.all([
       checkComponentHealth('backend'),
+      checkComponentHealth('database'),
       checkComponentHealth('redis'),
       checkComponentHealth('celery_worker'),
       checkComponentHealth('extraction_service'),
       checkComponentHealth('docling'),
       checkComponentHealth('llm'),
+      checkComponentHealth('sharepoint'),
     ])
 
     setLastChecked(new Date())
@@ -399,6 +411,38 @@ export default function SystemHealthPage() {
                 {/* Additional component details */}
                 {component.status !== 'checking' && (
                   <div className="space-y-1 text-xs text-gray-600">
+                    {/* Database-specific fields */}
+                    {component.database_type && (
+                      <div className="flex justify-between">
+                        <span className="font-medium">Type:</span>
+                        <span className="uppercase">{component.database_type}</span>
+                      </div>
+                    )}
+                    {component.migration_version && (
+                      <div className="flex justify-between">
+                        <span className="font-medium">Migration:</span>
+                        <span className="font-mono">{component.migration_version}</span>
+                      </div>
+                    )}
+                    {component.database_size_mb !== undefined && (
+                      <div className="flex justify-between">
+                        <span className="font-medium">Size:</span>
+                        <span>{component.database_size_mb} MB</span>
+                      </div>
+                    )}
+                    {component.tables && Object.keys(component.tables).length > 0 && (
+                      <div className="mt-2 pt-2 border-t border-gray-200">
+                        <span className="font-medium block mb-1">Tables:</span>
+                        {Object.entries(component.tables).map(([table, count]) => (
+                          <div key={table} className="flex justify-between ml-2">
+                            <span className="capitalize">{table.replace(/_/g, ' ')}:</span>
+                            <span>{count}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* Generic fields */}
                     {component.version && (
                       <div className="flex justify-between">
                         <span className="font-medium">Version:</span>
@@ -453,6 +497,34 @@ export default function SystemHealthPage() {
                       <div className="flex justify-between">
                         <span className="font-medium">Engine:</span>
                         <span>{component.engine}</span>
+                      </div>
+                    )}
+                    {component.tenant_id && (
+                      <div className="flex justify-between">
+                        <span className="font-medium">Tenant ID:</span>
+                        <span className="truncate ml-2" title={component.tenant_id}>
+                          {component.tenant_id.substring(0, 8)}...
+                        </span>
+                      </div>
+                    )}
+                    {component.graph_endpoint && (
+                      <div className="flex justify-between">
+                        <span className="font-medium">Graph API:</span>
+                        <span className="truncate ml-2" title={component.graph_endpoint}>
+                          {component.graph_endpoint.replace(/^https?:\/\//, '')}
+                        </span>
+                      </div>
+                    )}
+                    {component.configured !== undefined && (
+                      <div className="flex justify-between">
+                        <span className="font-medium">Configured:</span>
+                        <span>{component.configured ? 'Yes' : 'No'}</span>
+                      </div>
+                    )}
+                    {component.authenticated !== undefined && (
+                      <div className="flex justify-between">
+                        <span className="font-medium">Authenticated:</span>
+                        <span>{component.authenticated ? 'Yes' : 'No'}</span>
                       </div>
                     )}
                     {component.active_tasks && Object.keys(component.active_tasks).length > 0 && (

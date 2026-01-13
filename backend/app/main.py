@@ -54,6 +54,7 @@ from .models import ErrorResponse
 from .api.v1 import api_router as v1_router
 from .services.document_service import document_service
 from .services.storage_service import storage_service
+from .services.database_service import database_service
 
 # ============================================================================
 # APPLICATION INITIALIZATION
@@ -258,9 +259,36 @@ async def startup_event() -> None:
         print("   This may indicate Docker volume mount issues.")
     
     try:
+        # Initialize database
+        print("🗄️  Initializing database...")
+        try:
+            # Check database health first
+            db_health = await database_service.health_check()
+            if db_health["status"] == "healthy":
+                print(f"   ✅ Database connected ({db_health.get('database_type', 'unknown')})")
+            else:
+                print(f"   ⚠️  Database connection issue: {db_health.get('error', 'unknown')}")
+
+            # Initialize database tables (safe to run multiple times)
+            await database_service.init_db()
+            print("   ✅ Database tables initialized")
+
+            # Log authentication status
+            auth_enabled = settings.enable_auth
+            auth_status = "enabled" if auth_enabled else "disabled (backward compatibility mode)"
+            print(f"   🔐 Authentication: {auth_status}")
+
+        except Exception as e:
+            print(f"   ⚠️  Database initialization warning: {e}")
+            if settings.enable_auth:
+                print("   ❌ CRITICAL: Authentication is enabled but database failed to initialize")
+                raise
+            else:
+                print("   ℹ️  Continuing without database (authentication disabled)")
+
         # The DocumentService handles directory creation and validation
         # This is called during service import/initialization
-        
+
         # Clear files and storage on startup in debug or when explicitly requested
         # Preserve batch files by default; only clear batch when CLEAR_BATCH_ON_STARTUP is set.
         clear_on_startup = bool(os.getenv("CLEAR_ON_STARTUP", "").lower() in {"1", "true", "yes"})
@@ -277,12 +305,12 @@ async def startup_event() -> None:
             print("✅ File directories and storage cleared")
         else:
             print("↩️  Preserving existing files and storage (production mode)")
-        
+
         # Log LLM service status
         from .services.llm_service import llm_service
         llm_status = "available" if llm_service.is_available else "unavailable"
         print(f"🤖 LLM Service: {llm_status}")
-        
+
         print("✅ Startup complete - Curatore v2 ready to process documents")
         
     except Exception as e:
@@ -294,21 +322,29 @@ async def startup_event() -> None:
 async def shutdown_event() -> None:
     """
     Application shutdown event handler.
-    
+
     Performs cleanup tasks including:
+    - Database connection cleanup
     - Temporary file cleanup
     - Connection cleanup
     - Resource deallocation
     """
     print("🛑 Shutting down Curatore v2...")
-    
+
     try:
+        # Close database connections
+        print("🧹 Performing shutdown cleanup...")
+        try:
+            await database_service.close()
+            print("   ✅ Database connections closed")
+        except Exception as e:
+            print(f"   ⚠️  Database cleanup warning: {e}")
+
         # Clean up any temporary files or connections
         # Note: In-memory storage will be garbage collected
-        print("🧹 Performing shutdown cleanup...")
-        
+
         print("✅ Shutdown complete")
-        
+
     except Exception as e:
         print(f"⚠️  Shutdown cleanup warning: {e}")
 

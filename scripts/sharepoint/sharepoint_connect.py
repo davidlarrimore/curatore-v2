@@ -7,67 +7,28 @@ credentials and resolves a SharePoint folder URL to a drive item.
 from __future__ import annotations
 
 import argparse
-import base64
-import json
-import os
 import sys
+from pathlib import Path
 from typing import Any, Dict
 
 import httpx
 
-try:
-    from dotenv import load_dotenv
-except ImportError:  # pragma: no cover - optional dependency
-    load_dotenv = None
+ROOT_DIR = Path(__file__).resolve().parents[2]
+if str(ROOT_DIR) not in sys.path:
+    sys.path.insert(0, str(ROOT_DIR))
+
+from scripts.sharepoint.graph_client import (  # noqa: E402
+    encode_share_url,
+    get_access_token,
+    get_graph_base_url,
+    load_env,
+    resolve_drive_item,
+    require_env,
+)
 
 
 def _load_env() -> None:
-    if load_dotenv:
-        load_dotenv()
-
-
-def _require_env(name: str) -> str:
-    value = os.getenv(name)
-    if not value:
-        raise RuntimeError(f"Missing required environment variable: {name}")
-    return value
-
-
-def _encode_share_url(url: str) -> str:
-    encoded = base64.b64encode(url.encode("utf-8")).decode("ascii")
-    encoded = encoded.rstrip("=").replace("/", "_").replace("+", "-")
-    return f"u!{encoded}"
-
-
-def _get_access_token(tenant_id: str, client_id: str, client_secret: str) -> str:
-    token_url = os.getenv(
-        "MS_GRAPH_TOKEN_URL",
-        f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
-    )
-    scope = os.getenv("MS_GRAPH_SCOPE", "https://graph.microsoft.com/.default")
-    payload = {
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "grant_type": "client_credentials",
-        "scope": scope,
-    }
-    with httpx.Client(timeout=30.0) as client:
-        response = client.post(token_url, data=payload)
-        response.raise_for_status()
-        data = response.json()
-    token = data.get("access_token")
-    if not token:
-        raise RuntimeError("No access_token returned from Microsoft identity platform.")
-    return token
-
-
-def _resolve_drive_item(graph_base: str, token: str, share_id: str) -> Dict[str, Any]:
-    url = f"{graph_base}/shares/{share_id}/driveItem"
-    headers = {"Authorization": f"Bearer {token}"}
-    with httpx.Client(timeout=30.0) as client:
-        response = client.get(url, headers=headers)
-        response.raise_for_status()
-        return response.json()
+    load_env()
 
 
 def _list_children(
@@ -156,18 +117,18 @@ def main() -> int:
     _load_env()
 
     try:
-        tenant_id = _require_env("MS_TENANT_ID")
-        client_id = _require_env("MS_CLIENT_ID")
-        client_secret = _require_env("MS_CLIENT_SECRET")
-        graph_base = os.getenv("MS_GRAPH_BASE_URL", "https://graph.microsoft.com/v1.0")
+        tenant_id = require_env("MS_TENANT_ID")
+        client_id = require_env("MS_CLIENT_ID")
+        client_secret = require_env("MS_CLIENT_SECRET")
+        graph_base = get_graph_base_url()
 
         folder_url = args.folder_url or _prompt_folder_url()
         if not folder_url:
             raise RuntimeError("Folder URL is required.")
 
-        token = _get_access_token(tenant_id, client_id, client_secret)
-        share_id = _encode_share_url(folder_url)
-        item = _resolve_drive_item(graph_base, token, share_id)
+        token = get_access_token(tenant_id, client_id, client_secret)
+        share_id = encode_share_url(folder_url)
+        item = resolve_drive_item(graph_base, token, share_id)
 
         parent_ref = item.get("parentReference", {})
         drive_id = parent_ref.get("driveId", "")

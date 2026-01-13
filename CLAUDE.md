@@ -97,6 +97,25 @@ pytest extraction-service/tests -v
 ./scripts/enqueue_and_poll.sh <document_id>
 ```
 
+### SharePoint Operations
+
+```bash
+# Test SharePoint connectivity and authentication
+python scripts/sharepoint/sharepoint_connect.py
+
+# List files in SharePoint folder (inventory)
+python scripts/sharepoint/sharepoint_inventory.py
+
+# Download files from SharePoint to batch directory
+python scripts/sharepoint/sharepoint_download.py
+
+# End-to-end: inventory, download, and process
+python scripts/sharepoint/sharepoint_process.py
+
+# Note: All scripts require MS_TENANT_ID, MS_CLIENT_ID, and MS_CLIENT_SECRET
+# in .env file or environment variables
+```
+
 ### Cleanup
 
 ```bash
@@ -177,6 +196,13 @@ The backend follows a service-oriented architecture with clear separation of con
   - Handles communication with extraction-service or Docling
   - Automatic fallback on failures
 
+- **`sharepoint_service.py`**: Microsoft SharePoint integration
+  - Connects to SharePoint via Microsoft Graph API
+  - Lists folder contents with metadata (inventory)
+  - Downloads files to batch directory for processing
+  - Supports recursive traversal and folder structure preservation
+  - Uses Azure AD app-only authentication (client credentials flow)
+
 ### API Structure
 
 All API endpoints are versioned under `/api/v1/`:
@@ -188,6 +214,7 @@ backend/app/
 │       ├── routers/
 │       │   ├── documents.py    # Document upload, process, download
 │       │   ├── jobs.py         # Job status, polling
+│       │   ├── sharepoint.py   # SharePoint inventory, download
 │       │   └── system.py       # Health, config, queue info
 │       └── models.py           # V1-specific Pydantic models
 ├── models.py                   # Shared domain models
@@ -347,6 +374,13 @@ Key environment variables (see `.env.example` for full list):
 - `DEFAULT_RELEVANCE_THRESHOLD`: 1-10 scale (default: 7)
 - `DEFAULT_MARKDOWN_THRESHOLD`: 1-10 scale (default: 7)
 
+**SharePoint / Microsoft Graph**:
+- `MS_TENANT_ID`: Azure AD tenant ID (GUID format)
+- `MS_CLIENT_ID`: Azure AD app registration client ID
+- `MS_CLIENT_SECRET`: Azure AD app registration client secret
+- `MS_GRAPH_SCOPE`: OAuth scope (default: `https://graph.microsoft.com/.default`)
+- `MS_GRAPH_BASE_URL`: Graph API base URL (default: `https://graph.microsoft.com/v1.0`)
+
 ## Common Development Tasks
 
 ### Debugging Processing Failures
@@ -383,6 +417,68 @@ curl http://localhost:8000/api/v1/llm/status
 4. Add test cases in `extraction-service/tests/`
 5. Update supported formats in backend config
 
+### SharePoint Integration Workflow
+
+The SharePoint integration allows you to list and download files from SharePoint directly into Curatore for processing:
+
+**Setup Requirements**:
+1. Azure AD app registration with client credentials
+2. Microsoft Graph API permissions: `Sites.Read.All` or `Files.Read.All`
+3. Grant admin consent for the application
+4. Configure environment variables: `MS_TENANT_ID`, `MS_CLIENT_ID`, `MS_CLIENT_SECRET`
+
+**Typical Workflow**:
+
+1. **Inventory**: List files in a SharePoint folder
+   ```bash
+   curl -X POST http://localhost:8000/api/v1/sharepoint/inventory \
+     -H "Content-Type: application/json" \
+     -d '{
+       "folder_url": "https://tenant.sharepoint.com/sites/docs/Shared Documents/folder",
+       "recursive": false,
+       "include_folders": false,
+       "page_size": 200
+     }'
+   ```
+
+   Returns indexed list of files with metadata (name, type, size, modified date, etc.)
+
+2. **Download**: Download selected files to batch directory
+   ```bash
+   curl -X POST http://localhost:8000/api/v1/sharepoint/download \
+     -H "Content-Type: application/json" \
+     -d '{
+       "folder_url": "https://tenant.sharepoint.com/sites/docs/Shared Documents/folder",
+       "indices": [1, 3, 5],
+       "preserve_folders": true
+     }'
+   ```
+
+   Files are downloaded to `/app/files/batch_files` and ready for batch processing
+
+3. **Process**: Use existing batch processing endpoints to process downloaded files
+   ```bash
+   curl -X POST http://localhost:8000/api/v1/documents/batch/process
+   ```
+
+**Script Integration**:
+
+Helper scripts in `scripts/sharepoint/` provide standalone functionality:
+- `sharepoint_connect.py`: Test connectivity and authentication
+- `sharepoint_inventory.py`: List folder contents
+- `sharepoint_download.py`: Download files with selection
+- `sharepoint_process.py`: End-to-end workflow (inventory, download, process)
+- `graph_client.py`: Reusable Microsoft Graph API helpers
+- `inventory_utils.py`: Shared utilities for inventory operations
+
+**Key Features**:
+- Recursive folder traversal
+- Selective file downloads by index
+- Folder structure preservation
+- Duplicate detection (skips already-downloaded files)
+- Pagination support for large folders
+- Automatic OAuth token management
+
 ## API Endpoints (v1)
 
 Base URL: `http://localhost:8000/api/v1`
@@ -399,6 +495,10 @@ Base URL: `http://localhost:8000/api/v1`
 - `GET /jobs/{job_id}` - Get job status
 - `GET /jobs/by-document/{document_id}` - Get last job for document
 
+**SharePoint**:
+- `POST /sharepoint/inventory` - List SharePoint folder contents with metadata
+- `POST /sharepoint/download` - Download selected files to batch directory
+
 **System**:
 - `GET /health` - API health check
 - `GET /llm/status` - LLM connection status
@@ -406,6 +506,14 @@ Base URL: `http://localhost:8000/api/v1`
 - `GET /config/defaults` - Default configuration
 - `GET /system/queues` - Queue health and metrics
 - `GET /system/queues/summary` - Queue summary by batch or jobs
+- `GET /system/health/backend` - Backend API health check
+- `GET /system/health/redis` - Redis health check
+- `GET /system/health/celery` - Celery worker health check
+- `GET /system/health/extraction` - Extraction service health check
+- `GET /system/health/docling` - Docling service health check
+- `GET /system/health/llm` - LLM connection health check
+- `GET /system/health/sharepoint` - SharePoint / Microsoft Graph health check
+- `GET /system/health/comprehensive` - Comprehensive health check for all components
 
 **Interactive Docs**: http://localhost:8000/docs
 

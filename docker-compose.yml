@@ -48,6 +48,12 @@ services:
       # Docling extract path is fixed per API (/v1/extract)
       - DOCLING_TIMEOUT=${DOCLING_TIMEOUT:-300}
       - DOCLING_VERIFY_SSL=true
+      # SharePoint / Microsoft Graph
+      - MS_TENANT_ID=${MS_TENANT_ID:-}
+      - MS_CLIENT_ID=${MS_CLIENT_ID:-}
+      - MS_CLIENT_SECRET=${MS_CLIENT_SECRET:-}
+      - MS_GRAPH_SCOPE=${MS_GRAPH_SCOPE:-https://graph.microsoft.com/.default}
+      - MS_GRAPH_BASE_URL=${MS_GRAPH_BASE_URL:-https://graph.microsoft.com/v1.0}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
@@ -92,6 +98,12 @@ services:
       # Docling extract path is fixed per API (/v1/extract)
       - DOCLING_TIMEOUT=${DOCLING_TIMEOUT:-300}
       - DOCLING_VERIFY_SSL=true
+      # SharePoint / Microsoft Graph
+      - MS_TENANT_ID=${MS_TENANT_ID:-}
+      - MS_CLIENT_ID=${MS_CLIENT_ID:-}
+      - MS_CLIENT_SECRET=${MS_CLIENT_SECRET:-}
+      - MS_GRAPH_SCOPE=${MS_GRAPH_SCOPE:-https://graph.microsoft.com/.default}
+      - MS_GRAPH_BASE_URL=${MS_GRAPH_BASE_URL:-https://graph.microsoft.com/v1.0}
     volumes:
       - ./backend/app:/app/app
       - ./files:/app/files
