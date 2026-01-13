@@ -8,6 +8,7 @@ import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import ConnectionForm from '@/components/connections/ConnectionForm'
 import ConnectionCard from '@/components/connections/ConnectionCard'
+import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
 interface Connection {
   id: string
@@ -23,20 +24,21 @@ interface Connection {
 }
 
 export default function ConnectionsPage() {
+  return (
+    <ProtectedRoute>
+      <ConnectionsContent />
+    </ProtectedRoute>
+  )
+}
+
+function ConnectionsContent() {
   const router = useRouter()
-  const { token, isAuthenticated, isLoading: authLoading } = useAuth()
+  const { token } = useAuth()
   const [connections, setConnections] = useState<Connection[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editingConnection, setEditingConnection] = useState<Connection | null>(null)
-
-  // Redirect to login if not authenticated
-  useEffect(() => {
-    if (!authLoading && !isAuthenticated) {
-      router.push('/login')
-    }
-  }, [authLoading, isAuthenticated, router])
 
   // Load connections
   const loadConnections = async () => {
@@ -130,14 +132,6 @@ export default function ConnectionsPage() {
     llm: 'LLM Providers',
     sharepoint: 'SharePoint',
     extraction: 'Extraction Services'
-  }
-
-  if (authLoading || !isAuthenticated) {
-    return (
-      <div className="flex items-center justify-center min-h-screen">
-        <p className="text-gray-600 dark:text-gray-400">Loading...</p>
-      </div>
-    )
   }
 
   return (

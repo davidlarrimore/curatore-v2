@@ -629,6 +629,156 @@ export const connectionsApi = {
   },
 }
 
+// -------------------- Settings API --------------------
+export const settingsApi = {
+  async getOrganizationSettings(token: string): Promise<{
+    organization_id: string
+    organization_name: string
+    settings: Record<string, any>
+  }> {
+    const res = await fetch(apiUrl('/settings/organization'), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async updateOrganizationSettings(token: string, settings: Record<string, any>): Promise<{
+    message: string
+    settings: Record<string, any>
+  }> {
+    const res = await fetch(apiUrl('/settings/organization'), {
+      method: 'PUT',
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ settings }),
+    })
+    return handleJson(res)
+  },
+
+  async getUserSettings(token: string): Promise<{
+    user_id: string
+    settings: Record<string, any>
+  }> {
+    const res = await fetch(apiUrl('/settings/user'), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async updateUserSettings(token: string, settings: Record<string, any>): Promise<{
+    message: string
+    settings: Record<string, any>
+  }> {
+    const res = await fetch(apiUrl('/settings/user'), {
+      method: 'PUT',
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ settings }),
+    })
+    return handleJson(res)
+  },
+
+  async getSettingsSchema(token: string): Promise<{
+    organization_schema: any
+    user_schema: any
+    merged_example: Record<string, any>
+  }> {
+    const res = await fetch(apiUrl('/settings/schema'), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+}
+
+// -------------------- Users API --------------------
+export const usersApi = {
+  async listUsers(token: string): Promise<{
+    users: Array<{
+      id: string
+      email: string
+      username: string
+      full_name?: string
+      role: string
+      organization_id: string
+      is_active: boolean
+      created_at: string
+      last_login?: string
+    }>
+  }> {
+    const res = await fetch(apiUrl('/users'), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getUser(token: string, userId: string): Promise<any> {
+    const res = await fetch(apiUrl(`/users/${userId}`), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async inviteUser(token: string, data: {
+    email: string
+    role?: string
+    full_name?: string
+    send_email?: boolean
+  }): Promise<{
+    message: string
+    user: any
+    temporary_password?: string
+  }> {
+    const res = await fetch(apiUrl('/users/invite'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async updateUser(token: string, userId: string, data: {
+    email?: string
+    username?: string
+    full_name?: string
+    role?: string
+    is_active?: boolean
+  }): Promise<{
+    message: string
+    user: any
+  }> {
+    const res = await fetch(apiUrl(`/users/${userId}`), {
+      method: 'PUT',
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteUser(token: string, userId: string): Promise<{
+    message: string
+  }> {
+    const res = await fetch(apiUrl(`/users/${userId}`), {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    return handleJson(res)
+  },
+
+  async changePassword(token: string, userId: string, newPassword: string): Promise<{
+    message: string
+  }> {
+    const res = await fetch(apiUrl(`/users/${userId}/password`), {
+      method: 'PUT',
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ new_password: newPassword }),
+    })
+    return handleJson(res)
+  },
+}
+
 // Default export with all API modules
 export default {
   API_BASE_URL,
@@ -640,5 +790,7 @@ export default {
   jobsApi,
   authApi,
   connectionsApi,
+  settingsApi,
+  usersApi,
   utils,
 }

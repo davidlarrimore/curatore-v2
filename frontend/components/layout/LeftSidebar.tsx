@@ -10,10 +10,14 @@ import {
   FileText,
   Settings,
   PanelLeftOpen,
-  PanelLeftClose
+  PanelLeftClose,
+  Link as LinkIcon,
+  Users,
+  Shield
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { systemApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth-context'
 import { QualityThresholds, OCRSettings } from '@/types'
 import clsx from 'clsx'
 
@@ -52,6 +56,7 @@ export function LeftSidebar({
 }: LeftSidebarProps) {
   const router = useRouter()
   const pathname = usePathname()
+  const { user, isAuthenticated } = useAuth()
 
   // Settings state for quick settings panel
   const [settingsData, setSettingsData] = useState({
@@ -87,14 +92,36 @@ export function LeftSidebar({
     }
   }
 
-  // Navigation items - ONLY existing routes
+  // Navigation items
   const navigation: NavItem[] = [
     {
       name: 'Process Documents',
       href: '/process',
       icon: FileText,
       current: pathname === '/process'
-    }
+    },
+    ...(isAuthenticated ? [
+      {
+        name: 'Connections',
+        href: '/connections',
+        icon: LinkIcon,
+        current: pathname === '/connections'
+      }
+    ] : []),
+    ...(isAuthenticated && user?.role === 'admin' ? [
+      {
+        name: 'Users',
+        href: '/users',
+        icon: Users,
+        current: pathname === '/users'
+      },
+      {
+        name: 'Admin Settings',
+        href: '/settings-admin',
+        icon: Shield,
+        current: pathname === '/settings-admin'
+      }
+    ] : [])
   ]
 
   // Mobile sidebar component
