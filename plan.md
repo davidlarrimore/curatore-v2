@@ -1,8 +1,8 @@
 # Curatore v2 - System Persistence & Multi-Tenancy Implementation Plan
 
-**Status**: Phase 3 Complete ✅ (Multi-tenant API Management)
+**Status**: Phase 4 Complete ✅ (Connection Management)
 **Last Updated**: 2026-01-13
-**Progress**: 37.5% (3 of 8 phases complete)
+**Progress**: 50% (4 of 8 phases complete)
 
 ## Current Status
 
@@ -33,12 +33,22 @@
 - ✅ Flexible authentication (JWT + API keys)
 - ✅ All endpoints manually tested and verified
 
-**🔄 NEXT: Phase 4 - Connection Management**
-- Connection service with extensible type registry
-- SharePoint, LLM, and Extraction connection types
-- Connection CRUD endpoints
-- Test-on-save functionality
-- Connection health tracking
+**✅ COMPLETED: Phase 4 - Connection Management**
+- ✅ Connection service with extensible type registry
+- ✅ SharePoint, LLM, and Extraction connection types
+- ✅ Connection CRUD endpoints (list, create, get, update, delete)
+- ✅ Test-on-save functionality
+- ✅ Connection health tracking and status monitoring
+- ✅ Secret redaction in API responses
+- ✅ Default connection management per type
+- ✅ JSON schema generation for frontend forms
+
+**🔄 NEXT: Phase 5 - Service Integration**
+- Integrate connection_service into llm_service
+- Integrate connection_service into sharepoint_service
+- Integrate connection_service into extraction_client
+- Add ENV fallback for backward compatibility
+- Test all services with database connections
 
 ---
 

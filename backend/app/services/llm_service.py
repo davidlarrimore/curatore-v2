@@ -30,10 +30,12 @@
 
 import json
 import re
-from typing import Optional
+from typing import Optional, Dict, Any
+from uuid import UUID
 from openai import OpenAI
 import httpx
 import urllib3
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..models import LLMEvaluation, LLMConnectionStatus
@@ -128,7 +130,100 @@ class LLMService:
         except Exception as e:
             print(f"Warning: Failed to initialize OpenAI client: {e}")
             self._client = None
-    
+
+    async def _get_llm_config(
+        self,
+        organization_id: Optional[UUID] = None,
+        session: Optional[AsyncSession] = None
+    ) -> Dict[str, Any]:
+        """
+        Get LLM configuration from database connection or ENV fallback.
+
+        Tries to get LLM connection from database for the organization.
+        If found, uses connection config. Otherwise, falls back to ENV settings.
+
+        Args:
+            organization_id: Organization UUID (optional)
+            session: Database session (optional)
+
+        Returns:
+            Dict[str, Any]: LLM configuration with keys:
+                - api_key: API key for authentication
+                - model: Model name
+                - base_url: API endpoint URL
+                - timeout: Request timeout
+                - verify_ssl: SSL verification flag
+
+        Priority:
+            1. Database connection (if organization_id and session provided)
+            2. ENV variables (fallback)
+        """
+        # Try database connection first
+        if organization_id and session:
+            try:
+                from .connection_service import connection_service
+
+                connection = await connection_service.get_default_connection(
+                    session, organization_id, "llm"
+                )
+
+                if connection and connection.is_active:
+                    config = connection.config
+                    return {
+                        "api_key": config.get("api_key", ""),
+                        "model": config.get("model", settings.openai_model),
+                        "base_url": config.get("base_url", settings.openai_base_url),
+                        "timeout": config.get("timeout", settings.openai_timeout),
+                        "verify_ssl": config.get("verify_ssl", settings.openai_verify_ssl),
+                    }
+            except Exception as e:
+                print(f"Warning: Failed to get LLM connection from database: {e}")
+
+        # Fallback to ENV settings
+        return {
+            "api_key": settings.openai_api_key,
+            "model": settings.openai_model,
+            "base_url": settings.openai_base_url,
+            "timeout": settings.openai_timeout,
+            "verify_ssl": settings.openai_verify_ssl,
+        }
+
+    async def _create_client_from_config(self, config: Dict[str, Any]) -> Optional[OpenAI]:
+        """
+        Create OpenAI client from configuration dictionary.
+
+        Args:
+            config: Configuration dictionary with api_key, base_url, etc.
+
+        Returns:
+            Optional[OpenAI]: Initialized client or None if config invalid
+        """
+        api_key = config.get("api_key")
+        if not api_key:
+            return None
+
+        try:
+            # Disable SSL warnings if needed
+            verify_ssl = config.get("verify_ssl", True)
+            if not verify_ssl:
+                urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
+
+            # Create HTTP client
+            http_client = httpx.Client(
+                verify=verify_ssl,
+                timeout=config.get("timeout", 60)
+            )
+
+            return OpenAI(
+                api_key=api_key,
+                base_url=config.get("base_url", "https://api.openai.com/v1"),
+                http_client=http_client,
+                max_retries=settings.openai_max_retries
+            )
+        except Exception as e:
+            print(f"Warning: Failed to create OpenAI client: {e}")
+            return None
+
     @property
     def is_available(self) -> bool:
         """
@@ -212,19 +307,30 @@ class LLMService:
                 timeout=settings.openai_timeout
             )
     
-    async def evaluate_document(self, markdown_text: str) -> Optional[LLMEvaluation]:
+    async def evaluate_document(
+        self,
+        markdown_text: str,
+        organization_id: Optional[UUID] = None,
+        session: Optional[AsyncSession] = None
+    ) -> Optional[LLMEvaluation]:
         """
         Evaluate document quality using LLM across four key dimensions.
-        
+
         Performs comprehensive document evaluation using structured prompting to
         assess document quality for RAG applications. The LLM evaluates content
         across four dimensions and provides actionable feedback for improvements.
-        
+
         Args:
             markdown_text (str): The markdown content to evaluate
-        
+            organization_id (Optional[UUID]): Organization ID for database connection lookup
+            session (Optional[AsyncSession]): Database session for connection lookup
+
         Returns:
             Optional[LLMEvaluation]: Structured evaluation results or None if LLM unavailable
+
+        Connection Priority:
+            1. Database connection (if organization_id and session provided)
+            2. ENV-based client (fallback, backward compatible)
         
         Evaluation Dimensions:
             1. Clarity (1-10): Document structure, readability, logical flow
@@ -248,7 +354,16 @@ class LLMService:
             >>> if evaluation and evaluation.clarity_score >= 7:
             >>>     print(f"Document clarity is good: {evaluation.clarity_feedback}")
         """
-        if not self._client:
+        # Get client (from database connection or fallback to ENV-based client)
+        client = self._client
+        model = settings.openai_model
+
+        if organization_id and session:
+            config = await self._get_llm_config(organization_id, session)
+            client = await self._create_client_from_config(config)
+            model = config.get("model", settings.openai_model)
+
+        if not client:
             return None
         
         try:
@@ -270,9 +385,9 @@ class LLMService:
             )
             
             content = f"Document (Markdown):\n```markdown\n{markdown_text}\n```"
-            
-            resp = self._client.chat.completions.create(
-                model=settings.openai_model,
+
+            resp = client.chat.completions.create(
+                model=model,
                 temperature=0,  # Deterministic evaluation
                 messages=[
                     {"role": "system", "content": system_prompt},

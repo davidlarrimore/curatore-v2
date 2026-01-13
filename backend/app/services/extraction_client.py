@@ -20,8 +20,10 @@ import mimetypes
 import time
 from pathlib import Path
 from typing import Optional, Tuple
+from uuid import UUID
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 
@@ -32,6 +34,46 @@ class ExtractionError(RuntimeError):
 
 class ExtractionClient:
     """Async client to call the extraction service."""
+
+    @classmethod
+    async def from_database(
+        cls,
+        organization_id: UUID,
+        session: AsyncSession,
+    ) -> "ExtractionClient":
+        """
+        Create ExtractionClient from database connection or ENV fallback.
+
+        Args:
+            organization_id: Organization UUID for connection lookup
+            session: Database session
+
+        Returns:
+            ExtractionClient: Client configured from database or ENV
+
+        Priority:
+            1. Database connection (if found)
+            2. ENV variables (fallback)
+        """
+        try:
+            from .connection_service import connection_service
+
+            connection = await connection_service.get_default_connection(
+                session, organization_id, "extraction"
+            )
+
+            if connection and connection.is_active:
+                config = connection.config
+                return cls(
+                    base_url=config.get("service_url", settings.extractor_base_url),
+                    timeout=config.get("timeout", settings.extractor_timeout),
+                    api_key=config.get("api_key", settings.extractor_api_key),
+                )
+        except Exception as e:
+            print(f"Warning: Failed to get extraction connection from database: {e}")
+
+        # Fallback to ENV settings
+        return cls()
 
     def __init__(
         self,
