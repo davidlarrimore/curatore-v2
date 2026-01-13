@@ -905,7 +905,12 @@ def _extract_past_performance_task(
         return entries
 
 
-def _print_status_table(pending: List[Dict[str, Any]], completed: int, total: int) -> None:
+def _print_status_table(
+    pending: List[Dict[str, Any]],
+    completed: int,
+    total: int,
+    queue_stats: Dict[str, int] | None = None,
+) -> None:
     status_counts: Dict[str, int] = {}
     stage_counts: Dict[str, int] = {}
     lines = ["Status update:"]
@@ -918,6 +923,9 @@ def _print_status_table(pending: List[Dict[str, Any]], completed: int, total: in
     stage_summary = " | ".join(f"{key}: {value}" for key, value in sorted(stage_counts.items()))
     lines.append(f"Progress: {completed}/{total} | {status_summary}")
     lines.append(f"Stages: {stage_summary}")
+    if queue_stats:
+        queue_summary = " | ".join(f"{key}: {value}" for key, value in sorted(queue_stats.items()))
+        lines.append(f"Queues: {queue_summary}")
     for entry in pending:
         name = entry.get("item", {}).get("name", "")
         status = entry.get("status", "UNKNOWN")
@@ -1003,6 +1011,11 @@ def main() -> int:
         default=2,
         help="Maximum number of simultaneous past performance extraction tasks.",
     )
+    parser.add_argument(
+        "--disable-past-performance",
+        action="store_true",
+        help="Skip past performance extraction and synthesis.",
+    )
     args = parser.parse_args()
 
     load_env()
@@ -1042,8 +1055,8 @@ def main() -> int:
     if args.clear_dirs:
         if input_root.exists():
             shutil.rmtree(input_root)
-    if output_root.exists():
-        shutil.rmtree(output_root)
+        if output_root.exists():
+            shutil.rmtree(output_root)
     input_root.mkdir(parents=True, exist_ok=True)
     output_root.mkdir(parents=True, exist_ok=True)
 
@@ -1088,6 +1101,7 @@ def main() -> int:
     inventory = _load_inventory(inventory_path)
     registry = _load_download_registry(registry_path)
     run_id = uuid.uuid4().hex
+    enable_past_performance = not args.disable_past_performance
     run_record: Dict[str, Any] = {
         "run_id": run_id,
         "generated_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
@@ -1145,7 +1159,9 @@ def main() -> int:
                 )
                 download_futures[future] = item
                 _print_status_table(
-                    [{"item": item, "status": "PENDING", "stage": "DOWNLOADING"}], completed, total_items
+                    [{"item": item, "status": "PENDING", "stage": "DOWNLOADING"}],
+                    completed,
+                    total_items,
                 )
 
             for future in list(download_futures):
@@ -1220,54 +1236,67 @@ def main() -> int:
                     print(f"[{completed}/{total_items}] failed: {entry['target_path']} ({exc})", file=sys.stderr)
                     continue
 
-                extract_ready.append(
-                    {
-                        "item_record": result["item_record"],
-                        "content": result["content"],
-                        "target_path": result["target_path"],
-                        "item": result["item"],
-                    }
-                )
-
-            while extract_ready and len(extract_futures) < args.max_past_performance:
-                entry = extract_ready.pop(0)
-                future = extract_executor.submit(
-                    _extract_past_performance_task,
-                    llm_config,
-                    entry["content"],
-                    entry["item_record"],
-                    llm_log_path,
-                )
-                extract_futures[future] = entry
-
-            for future in list(extract_futures):
-                if not future.done():
-                    continue
-                entry = extract_futures.pop(future)
-                try:
-                    past_entries = future.result()
-                except Exception as exc:
+                if enable_past_performance:
+                    extract_ready.append(
+                        {
+                            "item_record": result["item_record"],
+                            "content": result["content"],
+                            "target_path": result["target_path"],
+                            "item": result["item"],
+                        }
+                    )
+                else:
+                    with inventory_lock:
+                        run_record["items"].append(result["item_record"])
+                        inventory["generated_at"] = run_record["generated_at"]
+                        _write_inventory(inventory_path, inventory)
                     completed += 1
-                    results.append(f"[{completed}/{total_items}] failed: {entry['target_path']} ({exc})")
-                    print(f"[{completed}/{total_items}] failed: {entry['target_path']} ({exc})", file=sys.stderr)
-                    continue
+                    output_path = result["item_record"].get("path", str(result["target_path"]))
+                    results.append(f"[{completed}/{total_items}] processed: {output_path}")
+                    print(f"[{completed}/{total_items}] processed: {output_path}")
 
-                item_record = entry["item_record"]
-                for pp_entry in past_entries:
-                    entry_id = f"pp_{uuid.uuid4().hex}"
-                    pp_entry["entry_id"] = entry_id
-                    extracted_entries.append(pp_entry)
-                    item_record["past_performance_refs"].append(entry_id)
+            if enable_past_performance:
+                while extract_ready and len(extract_futures) < args.max_past_performance:
+                    entry = extract_ready.pop(0)
+                    future = extract_executor.submit(
+                        _extract_past_performance_task,
+                        llm_config,
+                        entry["content"],
+                        entry["item_record"],
+                        llm_log_path,
+                    )
+                    extract_futures[future] = entry
 
-                with inventory_lock:
-                    run_record["items"].append(item_record)
-                    inventory["generated_at"] = run_record["generated_at"]
-                    run_record["past_performance"]["extracted"] = extracted_entries
-                    _write_inventory(inventory_path, inventory)
+            if enable_past_performance:
+                for future in list(extract_futures):
+                    if not future.done():
+                        continue
+                    entry = extract_futures.pop(future)
+                    try:
+                        past_entries = future.result()
+                    except Exception as exc:
+                        completed += 1
+                        results.append(f"[{completed}/{total_items}] failed: {entry['target_path']} ({exc})")
+                        print(f"[{completed}/{total_items}] failed: {entry['target_path']} ({exc})", file=sys.stderr)
+                        continue
 
-                completed += 1
-                results.append(f"[{completed}/{total_items}] processed: {entry['target_path']}")
-                print(f"[{completed}/{total_items}] processed: {entry['target_path']}")
+                    item_record = entry["item_record"]
+                    for pp_entry in past_entries:
+                        entry_id = f"pp_{uuid.uuid4().hex}"
+                        pp_entry["entry_id"] = entry_id
+                        extracted_entries.append(pp_entry)
+                        item_record["past_performance_refs"].append(entry_id)
+
+                    with inventory_lock:
+                        run_record["items"].append(item_record)
+                        inventory["generated_at"] = run_record["generated_at"]
+                        run_record["past_performance"]["extracted"] = extracted_entries
+                        _write_inventory(inventory_path, inventory)
+
+                    completed += 1
+                    output_path = item_record.get("path", str(entry["target_path"]))
+                    results.append(f"[{completed}/{total_items}] processed: {output_path}")
+                    print(f"[{completed}/{total_items}] processed: {output_path}")
 
             pending_entries: List[Dict[str, Any]] = []
             pending_entries.extend(
@@ -1283,35 +1312,51 @@ def main() -> int:
             pending_entries.extend(
                 [{**entry, "status": "RUNNING", "stage": "SUMMARIZING"} for entry in summarize_futures.values()]
             )
-            pending_entries.extend(
-                [
-                    {
-                        "item": entry.get("item"),
-                        "status": "QUEUED",
-                        "stage": "PAST_PERFORMANCE",
-                    }
-                    for entry in extract_ready
-                ]
-            )
-            pending_entries.extend(
-                [
-                    {
-                        "item": entry.get("item"),
-                        "status": "RUNNING",
-                        "stage": "PAST_PERFORMANCE",
-                    }
-                    for entry in extract_futures.values()
-                ]
-            )
+            if enable_past_performance:
+                pending_entries.extend(
+                    [
+                        {
+                            "item": entry.get("item"),
+                            "status": "QUEUED",
+                            "stage": "PAST_PERFORMANCE",
+                        }
+                        for entry in extract_ready
+                    ]
+                )
+                pending_entries.extend(
+                    [
+                        {
+                            "item": entry.get("item"),
+                            "status": "RUNNING",
+                            "stage": "PAST_PERFORMANCE",
+                        }
+                        for entry in extract_futures.values()
+                    ]
+                )
             if pending_entries:
-                _print_status_table(pending_entries, completed, total_items)
+                queue_stats = {
+                    "download_queue": len(download_queue),
+                    "downloaded_ready": len(downloaded_ready),
+                    "summarize_queue": len(summarize_ready),
+                }
+                if enable_past_performance:
+                    queue_stats["past_performance_queue"] = len(extract_ready)
+                _print_status_table(pending_entries, completed, total_items, queue_stats)
                 time.sleep(args.poll_interval)
 
-    with httpx.Client(timeout=60.0) as llm_client:
-        synthesized = _synthesize_past_performance(llm_client, llm_config, extracted_entries, llm_log_path)
-    run_record["past_performance"]["synthesized"] = synthesized
-    _write_inventory(inventory_path, inventory)
-    _write_consolidated_markdown(consolidated_path, synthesized, extracted_entries)
+    if enable_past_performance:
+        with httpx.Client(timeout=60.0) as llm_client:
+            synthesized = _synthesize_past_performance(llm_client, llm_config, extracted_entries, llm_log_path)
+        run_record["past_performance"]["synthesized"] = synthesized
+        _write_inventory(inventory_path, inventory)
+        _write_consolidated_markdown(consolidated_path, synthesized, extracted_entries)
+    else:
+        if consolidated_path.exists():
+            try:
+                consolidated_path.unlink()
+            except OSError:
+                pass
+        _write_inventory(inventory_path, inventory)
 
     temp_root = output_root / "temp_files"
     if temp_root.exists():
