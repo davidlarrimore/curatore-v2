@@ -7,6 +7,8 @@ import json
 import os
 import sys
 import time
+import threading
+from concurrent.futures import ThreadPoolExecutor, Future
 import uuid
 import shutil
 from dataclasses import dataclass
@@ -32,12 +34,15 @@ from scripts.sharepoint.inventory_utils import collect_items  # noqa: E402
 
 
 POLL_STATUS_ACTIVE = {"PENDING", "STARTED", "RETRY"}
-SUMMARY_MAX_CHARS = 1000
+SUMMARY_MAX_CHARS = 1500
+MIN_SUMMARY_CHARS = 300
 CHUNK_SIZE_CHARS = 12000
 CHUNK_OVERLAP_CHARS = 500
-LLM_MODEL = "gpt-4o"
+LLM_MODEL = "claude-4-5-haiku"
 LLM_TEMPERATURE = 0.1
 DOC_TYPE_MAX_TOKENS = 120
+SUMMARY_MAX_TOKENS = 900
+SUMMARY_TEMPLATE_MAX_TOKENS = 400
 
 
 @dataclass
@@ -133,6 +138,13 @@ def _openai_config() -> LLMCallConfig:
     return LLMCallConfig(api_key=api_key, base_url=base_url, model=LLM_MODEL)
 
 
+def _graph_access_token() -> str:
+    tenant_id = require_env("MS_TENANT_ID")
+    client_id = require_env("MS_CLIENT_ID")
+    client_secret = require_env("MS_CLIENT_SECRET")
+    return get_access_token(tenant_id, client_id, client_secret)
+
+
 def _log_llm_event(log_path: Path | None, label: str, payload: Dict[str, Any]) -> None:
     if not log_path:
         return
@@ -186,6 +198,16 @@ def _llm_chat_with_retries(
     for attempt in range(1, attempts + 1):
         try:
             return _llm_chat(client, config, messages, max_tokens, log_path, label)
+        except httpx.HTTPStatusError as exc:
+            status = exc.response.status_code
+            _log_llm_event(log_path, f"{label}.error", {"attempt": attempt, "status": status, "error": str(exc)})
+            if attempt == attempts:
+                raise
+            if status == 429:
+                delay = min(60.0, 5.0 * attempt)
+            else:
+                delay = 1.5 * attempt
+            time.sleep(delay)
         except Exception as exc:
             _log_llm_event(log_path, f"{label}.error", {"attempt": attempt, "error": str(exc)})
             if attempt == attempts:
@@ -238,27 +260,43 @@ def _summarize_content(
     file_name: str,
     content: str,
     log_path: Path | None,
+    extra_instruction: str = "",
 ) -> str:
     clipped = content[:8000]
+    _log_llm_event(
+        log_path,
+        "summary.prompt_meta",
+        {
+            "file": file_name,
+            "content_chars": len(content),
+            "clipped_chars": len(clipped),
+            "max_tokens": SUMMARY_MAX_TOKENS,
+        },
+    )
     system = (
-        "You are a precise document summarizer for government contracting materials. "
+        "You are a data engineer summarizing government contracting documents for classification and tagging. "
         "The organization is Amivero, a government contractor. "
         "Documents include RFIs, RFPs, whitepapers, proposals, reviews/ratings, and past performance write-ups."
     )
     user = (
         f"Summarize the document below in no more than {SUMMARY_MAX_CHARS} characters. "
-        "Start with a short phrase stating the document type (e.g., 'RFP response', 'RFI', "
-        "'past performance summary', 'whitepaper', 'proposal', 'review/ratings', or 'sales/growth memo'), "
-        "then continue with the summary. Return only the summary text with no labels, headings, bullet points, "
-        "or field concatenation. If the summary would exceed the limit, rewrite to fit. "
-        "Focus on key topics, decisions, and audiences.\n\n"
+        "Start with the document type and purpose (e.g., "
+        "'RFP response for [contract] to [agency]', 'RFI response for [program]', "
+        "'whitepaper on [topic]' or 'past performance write-up for [customer]'). "
+        "Then add technical details needed for tagging: year created (or most likely year), "
+        "customer/agency/office names, contract/RFI/RFP numbers, key requirements, "
+        "customer requirements outlined in the document, "
+        "and technologies/capabilities (e.g., DevSecOps, AI/ML, RPA, cloud, data analytics). "       
+        "If the summary would exceed the limit, rewrite to fit. "
+        f"{extra_instruction}"
+        "Be concise but information-dense and end with a full sentence.\n\n"
         f"Document: {file_name}\n\n{clipped}"
     )
     return _llm_chat_with_retries(
         client,
         config,
         [{"role": "system", "content": system}, {"role": "user", "content": user}],
-        max_tokens=450,
+        max_tokens=SUMMARY_MAX_TOKENS,
         log_path=log_path,
         label="summary",
     )
@@ -304,6 +342,16 @@ def _summarize_for_type(
 ) -> str:
     if doc_type in {"template", "reference_list"}:
         clipped = content[:6000]
+        _log_llm_event(
+            log_path,
+            "summary_template.prompt_meta",
+            {
+                "file": file_name,
+                "content_chars": len(content),
+                "clipped_chars": len(clipped),
+                "max_tokens": SUMMARY_TEMPLATE_MAX_TOKENS,
+            },
+        )
         system = (
             "You summarize government contracting templates and reference lists. "
             "Be concise and descriptive; do not summarize detailed contents."
@@ -319,11 +367,51 @@ def _summarize_for_type(
             client,
             config,
             [{"role": "system", "content": system}, {"role": "user", "content": user}],
-            max_tokens=300,
+            max_tokens=SUMMARY_TEMPLATE_MAX_TOKENS,
             log_path=log_path,
             label="summary_template",
         )
-    return _summarize_content(client, config, file_name, content, log_path)
+    summary = _summarize_content(client, config, file_name, content, log_path)
+    _log_llm_event(
+        log_path,
+        "summary.length",
+        {"file": file_name, "chars": len(summary), "preview": summary[:200]},
+    )
+    _log_llm_event(
+        log_path,
+        "summary.full",
+        {"file": file_name, "text": summary},
+    )
+    needs_retry = len(summary) < MIN_SUMMARY_CHARS or not summary.rstrip().endswith((".", "!", "?"))
+    if needs_retry:
+        summary = _summarize_content(
+            client,
+            config,
+            file_name,
+            content,
+            log_path,
+            extra_instruction=(
+                f"Ensure at least {MIN_SUMMARY_CHARS} characters and 3-5 sentences unless the source text is very short. "
+                "Do not end mid-sentence or mid-word; end with a complete sentence. "
+            ),
+        )
+        _log_llm_event(
+            log_path,
+            "summary.length.retry",
+            {"file": file_name, "chars": len(summary), "preview": summary[:200]},
+        )
+        _log_llm_event(
+            log_path,
+            "summary.full.retry",
+            {"file": file_name, "text": summary},
+        )
+        if len(summary) < MIN_SUMMARY_CHARS or not summary.rstrip().endswith((".", "!", "?")):
+            _log_llm_event(
+                log_path,
+                "summary.short.final",
+                {"file": file_name, "chars": len(summary), "preview": summary[:200]},
+            )
+    return summary
 
 
 def _extract_past_performance(
@@ -377,6 +465,8 @@ def _extract_past_performance(
                 continue
             entry.setdefault("source_link", metadata.get("web_url"))
             entry.setdefault("source_file", metadata.get("path"))
+            entry.setdefault("source_file_name", metadata.get("name"))
+            entry.setdefault("source_last_updated", metadata.get("last_updated") or metadata.get("modified"))
             if not entry.get("performance_id") or not entry.get("narrative"):
                 continue
             extracted.append(entry)
@@ -470,6 +560,12 @@ def _resolve_output_path(input_root: Path, output_root: Path, file_path: Path) -
     return out_path.with_suffix(".md")
 
 
+def _resolve_temp_path(output_root: Path, file_path: Path) -> Path:
+    temp_root = output_root / "temp_files"
+    temp_root.mkdir(parents=True, exist_ok=True)
+    return temp_root / f"tmp_{file_path.stem}.md"
+
+
 def _ensure_parent(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -526,6 +622,13 @@ def _poll_job(client: httpx.Client, api_base: str, job_id: str, poll_interval: f
         time.sleep(poll_interval)
 
 
+def _get_job_status(client: httpx.Client, api_base: str, job_id: str) -> Dict[str, Any]:
+    url = f"{api_base}/api/v1/jobs/{job_id}"
+    response = client.get(url)
+    response.raise_for_status()
+    return response.json()
+
+
 def _fetch_content(client: httpx.Client, api_base: str, document_id: str) -> str:
     url = f"{api_base}/api/v1/documents/{document_id}/content"
     response = client.get(url)
@@ -541,6 +644,14 @@ def _cleanup_backend_output(processed_root: Path, document_id: str, output_path:
     for candidate in processed_root.glob(f"{document_id}_*.md"):
         if candidate == output_path:
             continue
+        try:
+            candidate.unlink()
+        except OSError:
+            pass
+
+
+def _cleanup_base_processed(processed_base: Path, document_id: str) -> None:
+    for candidate in processed_base.glob(f"{document_id}_*.md"):
         try:
             candidate.unlink()
         except OSError:
@@ -563,7 +674,23 @@ def _write_inventory(path: Path, inventory: Dict[str, Any]) -> None:
     temp_path.replace(path)
 
 
-def _write_consolidated_markdown(path: Path, synthesized: List[Dict[str, Any]]) -> None:
+def _write_consolidated_markdown(
+    path: Path,
+    synthesized: List[Dict[str, Any]],
+    extracted_entries: List[Dict[str, Any]],
+) -> None:
+    sources_map: Dict[str, List[Dict[str, Any]]] = {}
+    for entry in extracted_entries:
+        perf_id = str(entry.get("performance_id", "")).strip()
+        if not perf_id:
+            continue
+        sources_map.setdefault(perf_id, []).append(
+            {
+                "name": entry.get("source_file_name"),
+                "last_updated": entry.get("source_last_updated"),
+                "link": entry.get("source_link"),
+            }
+        )
     lines = ["# Past Performance Consolidated", ""]
     for entry in synthesized:
         identifier = entry.get("performance_id", "Unknown")
@@ -572,11 +699,15 @@ def _write_consolidated_markdown(path: Path, synthesized: List[Dict[str, Any]]) 
         narrative = entry.get("narrative", "")
         lines.append(narrative)
         lines.append("")
-        links = entry.get("source_links", [])
-        if links:
+        sources = sources_map.get(identifier, [])
+        if sources:
             lines.append("Sources:")
-            for link in links:
-                lines.append(f"- {link}")
+            for source in sources:
+                name = source.get("name") or "Unknown"
+                updated = source.get("last_updated") or ""
+                link = source.get("link") or ""
+                suffix = f" (last_updated: {updated})" if updated else ""
+                lines.append(f"- {name}{suffix} | {link}")
             lines.append("")
     path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -613,6 +744,186 @@ def _should_download(item: Dict[str, Any], registry: Dict[str, Any]) -> bool:
     if record.get("size") != item.get("size"):
         return True
     return False
+
+
+def _download_item(
+    item: Dict[str, Any],
+    input_root: Path,
+    graph_base: str,
+    drive_id: str,
+    token_holder: Dict[str, str],
+    token_lock: threading.Lock,
+    registry: Dict[str, Any],
+    registry_lock: threading.Lock,
+) -> Dict[str, Any]:
+    target_path = _resolve_download_path(input_root, item, preserve_folders=False)
+    expected_size = _parse_size(item.get("size"))
+    needs_download = _should_download(item, registry)
+    if not target_path.exists():
+        needs_download = True
+    if needs_download or not _should_skip(target_path, expected_size):
+        try:
+            download_drive_item(
+                graph_base,
+                token_holder["token"],
+                drive_id,
+                str(item.get("id", "")),
+                str(target_path),
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code == 401:
+                with token_lock:
+                    token_holder["token"] = _graph_access_token()
+                download_drive_item(
+                    graph_base,
+                    token_holder["token"],
+                    drive_id,
+                    str(item.get("id", "")),
+                    str(target_path),
+                )
+            else:
+                raise
+        key = _registry_key(item)
+        if key:
+            with registry_lock:
+                registry.setdefault("files", {})[key] = {
+                    "name": item.get("name"),
+                    "web_url": item.get("web_url"),
+                    "last_modified": item.get("modified"),
+                    "size": item.get("size"),
+                    "downloaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+                    "path": str(target_path),
+                }
+                registry["generated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    if not target_path.exists():
+        raise RuntimeError("Downloaded file missing.")
+    return {"item": item, "target_path": target_path}
+
+
+def _summarize_only(
+    api_base: str,
+    llm_config: LLMCallConfig,
+    input_root: Path,
+    output_root: Path,
+    target_path: Path,
+    document_id: str,
+    item: Dict[str, Any],
+    llm_log_path: Path,
+) -> Dict[str, Any]:
+    step_times: Dict[str, float] = {}
+    with httpx.Client(timeout=60.0) as client, httpx.Client(timeout=60.0) as llm_client:
+        start = time.perf_counter()
+        content = _fetch_content(client, api_base, document_id)
+        step_times["fetch_content_s"] = time.perf_counter() - start
+
+        start = time.perf_counter()
+        temp_path = _resolve_temp_path(output_root, target_path)
+        temp_path.write_text(content, encoding="utf-8")
+        output_path = _resolve_output_path(input_root, output_root, target_path)
+        step_times["write_temp_s"] = time.perf_counter() - start
+
+        start = time.perf_counter()
+        document_type = _detect_document_type(
+            llm_client,
+            llm_config,
+            target_path.name,
+            content,
+            llm_log_path,
+        )
+        step_times["detect_type_s"] = time.perf_counter() - start
+
+        start = time.perf_counter()
+        summary = _summarize_for_type(
+            llm_client,
+            llm_config,
+            target_path.name,
+            content,
+            document_type,
+            llm_log_path,
+        )
+        step_times["summarize_s"] = time.perf_counter() - start
+        metadata = {**item, "document_type": document_type}
+        header = _write_front_matter(metadata, summary, content)
+        start = time.perf_counter()
+        _ensure_parent(output_path)
+        output_path.write_text(header, encoding="utf-8")
+        _cleanup_backend_output(output_root, document_id, output_path)
+        step_times["write_final_s"] = time.perf_counter() - start
+
+        item_record = {
+            "name": item.get("name"),
+            "folder": item.get("folder"),
+            "path": str(output_path),
+            "web_url": item.get("web_url"),
+            "created": item.get("created"),
+            "modified": item.get("modified"),
+            "last_updated": item.get("last_updated") or item.get("modified"),
+            "created_by": item.get("created_by"),
+            "last_modified_by": item.get("last_modified_by"),
+            "file_type": item.get("file_type"),
+            "mime": item.get("mime"),
+            "document_type": document_type,
+            "summary": summary,
+            "summary_chars": len(summary),
+            "processed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+            "past_performance_refs": [],
+            "timings": step_times,
+        }
+
+        start = time.perf_counter()
+        _log_llm_event(
+            llm_log_path,
+            "timings",
+            {"file": target_path.name, "timings": step_times},
+        )
+        return {
+            "item_record": item_record,
+            "content": content,
+            "target_path": target_path,
+            "document_id": document_id,
+            "item": item,
+        }
+
+
+def _extract_past_performance_task(
+    llm_config: LLMCallConfig,
+    content: str,
+    item_record: Dict[str, Any],
+    llm_log_path: Path,
+) -> List[Dict[str, Any]]:
+    with httpx.Client(timeout=60.0) as llm_client:
+        start = time.perf_counter()
+        entries = _extract_past_performance(llm_client, llm_config, content, item_record, llm_log_path)
+        _log_llm_event(
+            llm_log_path,
+            "timings",
+            {
+                "file": item_record.get("name", ""),
+                "extract_past_performance_s": time.perf_counter() - start,
+            },
+        )
+        return entries
+
+
+def _print_status_table(pending: List[Dict[str, Any]], completed: int, total: int) -> None:
+    status_counts: Dict[str, int] = {}
+    stage_counts: Dict[str, int] = {}
+    lines = ["Status update:"]
+    for entry in pending:
+        status = entry.get("status", "UNKNOWN")
+        stage = entry.get("stage", "UNKNOWN")
+        status_counts[status] = status_counts.get(status, 0) + 1
+        stage_counts[stage] = stage_counts.get(stage, 0) + 1
+    status_summary = " | ".join(f"{key}: {value}" for key, value in sorted(status_counts.items()))
+    stage_summary = " | ".join(f"{key}: {value}" for key, value in sorted(stage_counts.items()))
+    lines.append(f"Progress: {completed}/{total} | {status_summary}")
+    lines.append(f"Stages: {stage_summary}")
+    for entry in pending:
+        name = entry.get("item", {}).get("name", "")
+        status = entry.get("status", "UNKNOWN")
+        stage = entry.get("stage", "UNKNOWN")
+        lines.append(f"- {name}: {stage} ({status})")
+    print("\n".join(lines))
 
 
 def main() -> int:
@@ -667,6 +978,30 @@ def main() -> int:
         "--clear-dirs",
         action="store_true",
         help="Clear batch and processed directories before running.",
+    )
+    parser.add_argument(
+        "--max-downloads",
+        type=int,
+        default=5,
+        help="Maximum number of simultaneous downloads.",
+    )
+    parser.add_argument(
+        "--max-extracting",
+        type=int,
+        default=5,
+        help="Maximum number of simultaneous extraction jobs.",
+    )
+    parser.add_argument(
+        "--max-summarizing",
+        type=int,
+        default=2,
+        help="Maximum number of simultaneous summarization tasks.",
+    )
+    parser.add_argument(
+        "--max-past-performance",
+        type=int,
+        default=2,
+        help="Maximum number of simultaneous past performance extraction tasks.",
     )
     args = parser.parse_args()
 
@@ -764,128 +1099,229 @@ def main() -> int:
 
     results: List[str] = []
     extracted_entries: List[Dict[str, Any]] = []
-    with httpx.Client(timeout=60.0) as client, httpx.Client(timeout=60.0) as llm_client:
-        for item in selected_items:
-            try:
-                target_path = _resolve_download_path(input_root, item, preserve_folders=False)
-                expected_size = _parse_size(item.get("size"))
-                needs_download = _should_download(item, registry)
-                if needs_download:
-                    download_drive_item(
-                        graph_base,
-                        token,
-                        drive_id,
-                        str(item.get("id", "")),
-                        str(target_path),
-                    )
-                    key = _registry_key(item)
-                    registry.setdefault("files", {})[key] = {
-                        "name": item.get("name"),
-                        "web_url": item.get("web_url"),
-                        "last_modified": item.get("modified"),
-                        "size": item.get("size"),
-                        "downloaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        "path": str(target_path),
-                    }
-                    registry["generated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    _write_download_registry(registry_path, registry)
-                elif not _should_skip(target_path, expected_size):
-                    download_drive_item(
-                        graph_base,
-                        token,
-                        drive_id,
-                        str(item.get("id", "")),
-                        str(target_path),
-                    )
-                    key = _registry_key(item)
-                    registry.setdefault("files", {})[key] = {
-                        "name": item.get("name"),
-                        "web_url": item.get("web_url"),
-                        "last_modified": item.get("modified"),
-                        "size": item.get("size"),
-                        "downloaded_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                        "path": str(target_path),
-                    }
-                    registry["generated_at"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-                    _write_download_registry(registry_path, registry)
+    total_items = len(selected_items)
+    completed = 0
+    download_queue = list(selected_items)
+    download_futures: Dict[Future, Dict[str, Any]] = {}
+    downloaded_ready: List[Dict[str, Any]] = []
+    extracting: List[Dict[str, Any]] = []
+    summarize_futures: Dict[Future, Dict[str, Any]] = {}
+    summarize_ready: List[Dict[str, Any]] = []
+    extract_futures: Dict[Future, Dict[str, Any]] = {}
+    extract_ready: List[Dict[str, Any]] = []
 
-                if not target_path.exists():
-                    raise RuntimeError("Downloaded file missing.")
+    token_holder = {"token": token}
+    token_lock = threading.Lock()
+    registry_lock = threading.Lock()
+    inventory_lock = threading.Lock()
 
-                batch_response = _enqueue_batch_process(client, api_base, target_path.name)
-                job_id = batch_response["job_id"]
-                document_id = batch_response["document_id"]
-                result = _poll_job(client, api_base, job_id, args.poll_interval)
-                status = result.get("status")
+    with ThreadPoolExecutor(max_workers=args.max_downloads) as download_executor, ThreadPoolExecutor(
+        max_workers=args.max_summarizing
+    ) as summarize_executor, ThreadPoolExecutor(max_workers=args.max_past_performance) as extract_executor, httpx.Client(
+        timeout=60.0
+    ) as client:
+        while (
+            download_queue
+            or download_futures
+            or downloaded_ready
+            or extracting
+            or summarize_ready
+            or summarize_futures
+            or extract_ready
+            or extract_futures
+        ):
+            while download_queue and len(download_futures) < args.max_downloads:
+                item = download_queue.pop(0)
+                future = download_executor.submit(
+                    _download_item,
+                    item,
+                    input_root,
+                    graph_base,
+                    drive_id,
+                    token_holder,
+                    token_lock,
+                    registry,
+                    registry_lock,
+                )
+                download_futures[future] = item
+                _print_status_table(
+                    [{"item": item, "status": "PENDING", "stage": "DOWNLOADING"}], completed, total_items
+                )
+
+            for future in list(download_futures):
+                if not future.done():
+                    continue
+                item = download_futures.pop(future)
+                try:
+                    downloaded_ready.append(future.result())
+                except Exception as exc:
+                    completed += 1
+                    results.append(f"[{completed}/{total_items}] failed: {item.get('name', '')} ({exc})")
+                    print(f"[{completed}/{total_items}] failed: {item.get('name', '')} ({exc})", file=sys.stderr)
+
+            while downloaded_ready and len(extracting) < args.max_extracting:
+                entry = downloaded_ready.pop(0)
+                batch_response = _enqueue_batch_process(client, api_base, entry["target_path"].name)
+                extracting.append(
+                    {
+                        "item": entry["item"],
+                        "target_path": entry["target_path"],
+                        "job_id": batch_response["job_id"],
+                        "document_id": batch_response["document_id"],
+                        "status": "PENDING",
+                        "stage": "EXTRACTING",
+                    }
+                )
+
+            for entry in list(extracting):
+                job_id = entry["job_id"]
+                try:
+                    status_payload = _get_job_status(client, api_base, job_id)
+                except Exception as exc:
+                    _log_llm_event(llm_log_path, "job_status.error", {"job_id": job_id, "error": str(exc)})
+                    continue
+                status = status_payload.get("status")
+                entry["status"] = status
+                if status in POLL_STATUS_ACTIVE:
+                    continue
+                extracting.remove(entry)
                 if status != "SUCCESS":
-                    results.append(f"failed ({status}): {target_path}")
+                    completed += 1
+                    results.append(f"[{completed}/{total_items}] failed ({status}): {entry['target_path']}")
+                    print(f"[{completed}/{total_items}] failed ({status}): {entry['target_path']}", file=sys.stderr)
+                    continue
+                entry["stage"] = "SUMMARIZING"
+                summarize_ready.append(entry)
+
+            while summarize_ready and len(summarize_futures) < args.max_summarizing:
+                entry = summarize_ready.pop(0)
+                future = summarize_executor.submit(
+                    _summarize_only,
+                    api_base,
+                    llm_config,
+                    input_root,
+                    output_root,
+                    entry["target_path"],
+                    entry["document_id"],
+                    entry["item"],
+                    llm_log_path,
+                )
+                summarize_futures[future] = entry
+
+            for future in list(summarize_futures):
+                if not future.done():
+                    continue
+                entry = summarize_futures.pop(future)
+                try:
+                    result = future.result()
+                except Exception as exc:
+                    completed += 1
+                    results.append(f"[{completed}/{total_items}] failed: {entry['target_path']} ({exc})")
+                    print(f"[{completed}/{total_items}] failed: {entry['target_path']} ({exc})", file=sys.stderr)
                     continue
 
-                content = _fetch_content(client, api_base, document_id)
-                output_path = _resolve_output_path(input_root, output_root, target_path)
-                document_type = _detect_document_type(
-                    llm_client,
+                extract_ready.append(
+                    {
+                        "item_record": result["item_record"],
+                        "content": result["content"],
+                        "target_path": result["target_path"],
+                        "item": result["item"],
+                    }
+                )
+
+            while extract_ready and len(extract_futures) < args.max_past_performance:
+                entry = extract_ready.pop(0)
+                future = extract_executor.submit(
+                    _extract_past_performance_task,
                     llm_config,
-                    target_path.name,
-                    content,
+                    entry["content"],
+                    entry["item_record"],
                     llm_log_path,
                 )
-                summary = _summarize_for_type(
-                    llm_client,
-                    llm_config,
-                    target_path.name,
-                    content,
-                    document_type,
-                    llm_log_path,
-                )
-                metadata = {**item, "document_type": document_type}
-                header = _write_front_matter(metadata, summary, content)
-                _ensure_parent(output_path)
-                output_path.write_text(header, encoding="utf-8")
-                _cleanup_backend_output(output_root, document_id, output_path)
+                extract_futures[future] = entry
 
-                item_record = {
-                    "name": item.get("name"),
-                    "folder": item.get("folder"),
-                    "path": str(output_path),
-                    "web_url": item.get("web_url"),
-                    "created": item.get("created"),
-                    "modified": item.get("modified"),
-                    "last_updated": item.get("last_updated") or item.get("modified"),
-                    "created_by": item.get("created_by"),
-                    "last_modified_by": item.get("last_modified_by"),
-                    "file_type": item.get("file_type"),
-                    "mime": item.get("mime"),
-                    "document_type": document_type,
-                    "summary": summary,
-                    "processed_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-                    "past_performance_refs": [],
-                }
+            for future in list(extract_futures):
+                if not future.done():
+                    continue
+                entry = extract_futures.pop(future)
+                try:
+                    past_entries = future.result()
+                except Exception as exc:
+                    completed += 1
+                    results.append(f"[{completed}/{total_items}] failed: {entry['target_path']} ({exc})")
+                    print(f"[{completed}/{total_items}] failed: {entry['target_path']} ({exc})", file=sys.stderr)
+                    continue
 
-                past_entries = _extract_past_performance(llm_client, llm_config, content, item_record, llm_log_path)
-                for entry in past_entries:
+                item_record = entry["item_record"]
+                for pp_entry in past_entries:
                     entry_id = f"pp_{uuid.uuid4().hex}"
-                    entry["entry_id"] = entry_id
-                    extracted_entries.append(entry)
+                    pp_entry["entry_id"] = entry_id
+                    extracted_entries.append(pp_entry)
                     item_record["past_performance_refs"].append(entry_id)
 
-                run_record["items"].append(item_record)
-                inventory["generated_at"] = run_record["generated_at"]
-                run_record["past_performance"]["extracted"] = extracted_entries
-                _write_inventory(inventory_path, inventory)
+                with inventory_lock:
+                    run_record["items"].append(item_record)
+                    inventory["generated_at"] = run_record["generated_at"]
+                    run_record["past_performance"]["extracted"] = extracted_entries
+                    _write_inventory(inventory_path, inventory)
 
-                results.append(f"processed: {target_path}")
-                print(f"processed: {target_path}")
-            except Exception as exc:
-                results.append(f"failed: {item.get('name', '')} ({exc})")
-                print(f"failed: {item.get('name', '')} ({exc})", file=sys.stderr)
+                completed += 1
+                results.append(f"[{completed}/{total_items}] processed: {entry['target_path']}")
+                print(f"[{completed}/{total_items}] processed: {entry['target_path']}")
 
+            pending_entries: List[Dict[str, Any]] = []
+            pending_entries.extend(
+                [{"item": item, "status": "QUEUED", "stage": "DOWNLOADING"} for item in download_queue]
+            )
+            pending_entries.extend(
+                [{"item": item, "status": "RUNNING", "stage": "DOWNLOADING"} for item in download_futures.values()]
+            )
+            pending_entries.extend(extracting)
+            pending_entries.extend(
+                [{**entry, "status": "QUEUED", "stage": "SUMMARIZING"} for entry in summarize_ready]
+            )
+            pending_entries.extend(
+                [{**entry, "status": "RUNNING", "stage": "SUMMARIZING"} for entry in summarize_futures.values()]
+            )
+            pending_entries.extend(
+                [
+                    {
+                        "item": entry.get("item"),
+                        "status": "QUEUED",
+                        "stage": "PAST_PERFORMANCE",
+                    }
+                    for entry in extract_ready
+                ]
+            )
+            pending_entries.extend(
+                [
+                    {
+                        "item": entry.get("item"),
+                        "status": "RUNNING",
+                        "stage": "PAST_PERFORMANCE",
+                    }
+                    for entry in extract_futures.values()
+                ]
+            )
+            if pending_entries:
+                _print_status_table(pending_entries, completed, total_items)
+                time.sleep(args.poll_interval)
+
+    with httpx.Client(timeout=60.0) as llm_client:
         synthesized = _synthesize_past_performance(llm_client, llm_config, extracted_entries, llm_log_path)
-        run_record["past_performance"]["synthesized"] = synthesized
-        _write_inventory(inventory_path, inventory)
-        _write_consolidated_markdown(consolidated_path, synthesized)
+    run_record["past_performance"]["synthesized"] = synthesized
+    _write_inventory(inventory_path, inventory)
+    _write_consolidated_markdown(consolidated_path, synthesized, extracted_entries)
 
-    print("\n".join(results))
+    temp_root = output_root / "temp_files"
+    if temp_root.exists():
+        shutil.rmtree(temp_root)
+    for candidate in processed_base.glob("batch_*.md"):
+        try:
+            candidate.unlink()
+        except OSError:
+            pass
+
     return 0
 
 

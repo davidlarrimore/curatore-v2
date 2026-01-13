@@ -113,7 +113,7 @@ def _openai_config() -> Dict[str, str]:
     if not api_key:
         raise RuntimeError("OPENAI_API_KEY is required for summaries.")
     base_url = os.getenv("OPENAI_BASE_URL", "https://api.openai.com/v1").rstrip("/")
-    model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+    model = os.getenv("OPENAI_MODEL", "claude-3-5-haiku")
     return {"api_key": api_key, "base_url": base_url, "model": model}
 
 
