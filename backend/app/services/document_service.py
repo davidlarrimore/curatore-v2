@@ -895,10 +895,12 @@ class DocumentService:
     # ====================== DOCUMENT PROCESSING METHODS ======================
 
     async def process_document(
-        self, 
-        document_id: str, 
-        file_path: Path, 
-        options: ProcessingOptions
+        self,
+        document_id: str,
+        file_path: Path,
+        options: ProcessingOptions,
+        organization_id: Optional[str] = None,
+        session = None
     ) -> ProcessingResult:
         """Process a document end-to-end and return a ProcessingResult.
 
@@ -913,6 +915,8 @@ class DocumentService:
             file_path: Absolute path to the source file.
             options: Domain ProcessingOptions controlling thresholds, OCR hints,
                      and whether to apply vector optimization and LLM analysis.
+            organization_id: Optional organization ID for database connection lookup.
+            session: Optional database session for connection lookup.
 
         Returns:
             ProcessingResult containing:
@@ -966,7 +970,12 @@ class DocumentService:
             llm_evaluation = None
             if llm_service.is_available and getattr(options, 'auto_improve', True):
                 try:
-                    llm_evaluation = await self._evaluate_with_llm(markdown_content, options)
+                    llm_evaluation = await self._evaluate_with_llm(
+                        markdown_content,
+                        options,
+                        organization_id=organization_id,
+                        session=session
+                    )
                 except Exception as e:
                     print(f"LLM evaluation failed: {e}")
             
@@ -978,7 +987,12 @@ class DocumentService:
             # Step 6: Apply vector optimization if requested
             vector_optimized = False
             if getattr(options, 'vector_optimize', False):
-                vector_optimized = await self._apply_vector_optimization(markdown_content, markdown_path)
+                vector_optimized = await self._apply_vector_optimization(
+                    markdown_content,
+                    markdown_path,
+                    organization_id=organization_id,
+                    session=session
+                )
             
             # Step 7: Create final result
             processing_result = ProcessingResult(
@@ -1498,29 +1512,65 @@ class DocumentService:
         }
         return f"# {file_path.stem}\n\n*Content extraction failed after all retry attempts and failover options.*\n\nFile: {file_path.name}"
 
-    async def _evaluate_with_llm(self, content: str, options: ProcessingOptions) -> LLMEvaluation:
+    async def _evaluate_with_llm(
+        self,
+        content: str,
+        options: ProcessingOptions,
+        organization_id: Optional[str] = None,
+        session = None
+    ) -> Optional[LLMEvaluation]:
         """Evaluate document quality using LLM.
-        
-        This is a placeholder for LLM-based quality evaluation.
-        """
-        # Placeholder implementation
-        return LLMEvaluation(
-            clarity_score=8,
-            completeness_score=7,
-            relevance_score=8,
-            markdown_score=9,
-            overall_feedback="Document appears well-structured and complete.",
-            processing_time=1.5,
-            token_usage={"prompt": 150, "completion": 75}
-        )
 
-    async def _apply_vector_optimization(self, content: str, output_path: Path) -> bool:
-        """Apply vector database optimization to the content.
-        
-        This would optimize the content for RAG applications.
+        Args:
+            content: Markdown content to evaluate
+            options: Processing options (unused currently)
+            organization_id: Optional organization ID for database connection lookup
+            session: Optional database session for connection lookup
+
+        Returns:
+            LLMEvaluation if successful, None if evaluation fails
         """
-        # Placeholder - would implement actual optimization
-        return True
+        try:
+            return await llm_service.evaluate_document(
+                content,
+                organization_id=organization_id,
+                session=session
+            )
+        except Exception as e:
+            self._logger.error(f"LLM evaluation failed: {e}")
+            return None
+
+    async def _apply_vector_optimization(
+        self,
+        content: str,
+        output_path: Path,
+        organization_id: Optional[str] = None,
+        session = None
+    ) -> bool:
+        """Apply vector database optimization to the content.
+
+        Args:
+            content: Markdown content to optimize
+            output_path: Path where optimized content will be written
+            organization_id: Optional organization ID for database connection lookup
+            session: Optional database session for connection lookup
+
+        Returns:
+            True if optimization succeeded, False otherwise
+        """
+        try:
+            optimized_content = await llm_service.optimize_for_vector_db(
+                content,
+                organization_id=organization_id,
+                session=session
+            )
+            if optimized_content and optimized_content != content:
+                output_path.write_text(optimized_content, encoding='utf-8')
+                return True
+            return False
+        except Exception as e:
+            self._logger.error(f"Vector optimization failed: {e}")
+            return False
 
     def _is_rag_ready(self, conversion: ConversionResult, llm_eval: Optional[LLMEvaluation], options: ProcessingOptions) -> bool:
         """Determine if document meets RAG readiness criteria."""

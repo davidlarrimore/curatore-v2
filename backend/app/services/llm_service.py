@@ -418,110 +418,142 @@ class LLMService:
             print(f"LLM evaluation failed: {e}")
             return None
     
-    async def improve_document(self, markdown_text: str, prompt: str) -> str:
+    async def improve_document(
+        self,
+        markdown_text: str,
+        prompt: str,
+        organization_id: Optional[UUID] = None,
+        session: Optional[AsyncSession] = None
+    ) -> str:
         """
         Improve document content using LLM with a custom improvement prompt.
-        
+
         Uses the LLM to rewrite and improve document content based on specific
         user instructions. This method preserves factual content while improving
         structure, clarity, and formatting according to the provided prompt.
-        
+
         Args:
             markdown_text (str): The original markdown content to improve
             prompt (str): Custom instructions for how to improve the document
-        
+            organization_id (Optional[UUID]): Organization ID for database connection lookup
+            session (Optional[AsyncSession]): Database session for connection lookup
+
         Returns:
             str: Improved markdown content, or original content if LLM unavailable/fails
-        
+
+        Connection Priority:
+            1. Database connection (if organization_id and session provided)
+            2. ENV-based client (fallback, backward compatible)
+
         Improvement Process:
             1. Sends structured prompt with improvement instructions
             2. Includes original content in markdown code block
             3. Requests only the improved content (no wrappers)
             4. Cleans response to remove any code block formatting
             5. Falls back to original content on any error
-        
+
         Temperature Settings:
             - Uses temperature=0.2 for controlled creativity
             - Balances improvement with content preservation
             - Maintains factual accuracy while enhancing presentation
-        
+
         Error Handling:
             - Client unavailable: Returns original content
             - API errors: Returns original content, logs error
             - Response parsing errors: Returns original content
-        
+
         Example:
             >>> prompt = "Make this more concise and add bullet points for key features"
             >>> improved = await llm_service.improve_document(content, prompt)
             >>> if improved != content:
             >>>     print("Document was successfully improved")
         """
-        if not self._client:
+        # Get client (from database connection or fallback to ENV-based client)
+        client = self._client
+        model = settings.openai_model
+
+        if organization_id and session:
+            config = await self._get_llm_config(organization_id, session)
+            client = await self._create_client_from_config(config)
+            model = config.get("model", settings.openai_model)
+
+        if not client:
             return markdown_text
-        
+
         try:
             system_prompt = (
                 "You are a technical editor. Improve the given Markdown in-place per the user's instructions. "
                 "Preserve facts and structure when possible. "
                 "Return ONLY the revised Markdown content without any code block wrappers or extra formatting."
             )
-            
+
             user_prompt = f"Instructions:\n{prompt}\n\nCurrent Markdown:\n```markdown\n{markdown_text}\n```"
-            
-            resp = self._client.chat.completions.create(
-                model=settings.openai_model,
+
+            resp = client.chat.completions.create(
+                model=model,
                 temperature=0.2,  # Allow controlled creativity for editing
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
             )
-            
+
             improved_content = resp.choices[0].message.content.strip()
-            
+
             # Clean the response to remove any markdown code block wrappers
             return clean_llm_response(improved_content)
-            
+
         except Exception as e:
             print(f"LLM improvement failed: {e}")
             return markdown_text
     
-    async def optimize_for_vector_db(self, markdown_text: str) -> str:
+    async def optimize_for_vector_db(
+        self,
+        markdown_text: str,
+        organization_id: Optional[UUID] = None,
+        session: Optional[AsyncSession] = None
+    ) -> str:
         """
         Optimize document content specifically for vector database storage and retrieval.
-        
+
         Applies specialized optimization to make documents more suitable for RAG
         applications by improving structure, adding context, and enhancing semantic
         searchability while preserving all factual information.
-        
+
         Args:
             markdown_text (str): The original markdown content to optimize
-        
+            organization_id (Optional[UUID]): Organization ID for database connection lookup
+            session (Optional[AsyncSession]): Database session for connection lookup
+
         Returns:
             str: Vector-optimized markdown content, or original content if LLM unavailable
-        
+
+        Connection Priority:
+            1. Database connection (if organization_id and session provided)
+            2. ENV-based client (fallback, backward compatible)
+
         Optimization Guidelines Applied:
             1. Clear Structure: Descriptive headings capturing key concepts
-            2. Chunk-Friendly: Self-contained sections that can stand alone  
+            2. Chunk-Friendly: Self-contained sections that can stand alone
             3. Context Rich: Each section includes sufficient context for independent retrieval
             4. Keyword Rich: Natural inclusion of relevant keywords and synonyms
             5. Consistent Format: Uniform markdown formatting for easy parsing
             6. Concise but Complete: Removes redundancy while preserving information
             7. Question-Answer Ready: Structures content to answer potential queries
             8. Cross-References: Adds context when referencing other sections
-        
+
         Implementation:
             - Uses the improve_document method with specialized RAG optimization prompt
             - Focuses on semantic search enhancement
             - Maintains factual accuracy while improving retrievability
             - Optimizes for vector embedding and similarity matching
-        
+
         Use Cases:
             - Preparing documents for vector database ingestion
             - Enhancing semantic search performance
             - Improving RAG question-answering accuracy
             - Creating self-contained, context-rich content chunks
-        
+
         Example:
             >>> optimized = await llm_service.optimize_for_vector_db(content)
             >>> # optimized content will have better structure and context for RAG
@@ -541,48 +573,74 @@ class LLMService:
         Transform the content while preserving all factual information and making it ideal for semantic search and retrieval.
         Return only the optimized markdown content without any code block wrappers.
         """
-        
-        return await self.improve_document(markdown_text, optimization_prompt)
+
+        return await self.improve_document(
+            markdown_text,
+            optimization_prompt,
+            organization_id=organization_id,
+            session=session
+        )
     
-    async def summarize_document(self, markdown_text: str, filename: str) -> str:
+    async def summarize_document(
+        self,
+        markdown_text: str,
+        filename: str,
+        organization_id: Optional[UUID] = None,
+        session: Optional[AsyncSession] = None
+    ) -> str:
         """
         Generate a concise summary of document content for metadata and previews.
-        
+
         Creates a professional 2-3 sentence summary that captures the document's
         main topic, type, and key content highlights. This is used for document
         previews, processing reports, and quick content identification.
-        
+
         Args:
             markdown_text (str): The full markdown content to summarize
             filename (str): Original filename (for context, currently not used in prompt)
-        
+            organization_id (Optional[UUID]): Organization ID for database connection lookup
+            session (Optional[AsyncSession]): Database session for connection lookup
+
         Returns:
             str: Concise document summary, or error message if LLM unavailable/fails
-        
+
+        Connection Priority:
+            1. Database connection (if organization_id and session provided)
+            2. ENV-based client (fallback, backward compatible)
+
         Summary Structure:
             1. Main topic/subject matter identification
-            2. Document type classification (report, manual, guide, etc.)  
+            2. Document type classification (report, manual, guide, etc.)
             3. Key content highlights and document purpose
-        
+
         Length Control:
             - Limited to 200 tokens maximum
             - Targets 2-3 sentences for optimal readability
             - Maintains professional, informative tone
             - Removes markdown formatting from output
-        
+
         Error Handling:
             - Client unavailable: Returns unavailability message
             - API errors: Returns error message with truncated details
             - Response parsing errors: Returns cleaned response or error message
-        
+
         Example:
             >>> summary = await llm_service.summarize_document(content, "user_guide.pdf")
             >>> print(f"Document summary: {summary}")
             >>> # Output: "This technical user guide covers software installation..."
         """
-        if not self._client:
+        # Get client (from database connection or fallback to ENV-based client)
+        client = self._client
+        model = settings.openai_model
+
+        if organization_id and session:
+            config = await self._get_llm_config(organization_id, session)
+            client = await self._create_client_from_config(config)
+            model = config.get("model", settings.openai_model)
+
+        if not client:
             return f"Unable to generate summary - LLM not available"
-        
+
         try:
             system_prompt = (
                 "You are a document analyzer. Create a concise 2-3 sentence summary that captures: "
@@ -592,11 +650,11 @@ class LLMService:
                 "Keep the summary professional and informative. "
                 "Return ONLY the summary text without any markdown formatting or code blocks."
             )
-            
+
             user_prompt = f"Analyze this document and provide a summary:\n\n```markdown\n{markdown_text}\n```"
-            
-            resp = self._client.chat.completions.create(
-                model=settings.openai_model,
+
+            resp = client.chat.completions.create(
+                model=model,
                 temperature=0.1,  # Deterministic summaries
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -604,13 +662,13 @@ class LLMService:
                 ],
                 max_tokens=200  # Limit summary length
             )
-            
+
             summary = resp.choices[0].message.content.strip()
-            
+
             # Clean the response to remove any markdown formatting
             summary = clean_llm_response(summary)
             return summary.strip()
-            
+
         except Exception as e:
             print(f"Summary generation failed: {e}")
             return f"Summary generation failed: {str(e)[:100]}..."

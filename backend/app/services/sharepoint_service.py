@@ -5,8 +5,10 @@ import base64
 import os
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+from uuid import UUID
 
 import httpx
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 
@@ -74,7 +76,10 @@ def _build_item(
         "size": item.get("size"),
         "created": item.get("createdDateTime"),
         "modified": item.get("lastModifiedDateTime"),
+        "created_by": item.get("createdBy", {}).get("user", {}).get("displayName"),
+        "last_modified_by": item.get("lastModifiedBy", {}).get("user", {}).get("displayName"),
         "mime": item.get("file", {}).get("mimeType"),
+        "file_type": item.get("file", {}).get("mimeType"),
         "id": item.get("id", ""),
         "web_url": item.get("webUrl"),
     }
@@ -183,16 +188,84 @@ async def _collect_items(
     return collected, fetched
 
 
+async def _get_sharepoint_credentials(
+    organization_id: Optional[UUID] = None,
+    session: Optional[AsyncSession] = None,
+) -> Dict[str, str]:
+    """
+    Get SharePoint credentials from database or environment variables.
+
+    Args:
+        organization_id: Optional organization ID for database lookup
+        session: Optional database session for connection lookup
+
+    Returns:
+        Dict with tenant_id, client_id, and client_secret
+
+    Priority:
+        1. Database connection (if organization_id and session provided)
+        2. Environment variables (fallback)
+    """
+    # Try database connection first
+    if organization_id and session:
+        try:
+            from .connection_service import connection_service
+
+            connection = await connection_service.get_default_connection(
+                session, organization_id, "sharepoint"
+            )
+
+            if connection and connection.is_active:
+                config = connection.config
+                return {
+                    "tenant_id": config.get("tenant_id", _require_env("MS_TENANT_ID")),
+                    "client_id": config.get("client_id", _require_env("MS_CLIENT_ID")),
+                    "client_secret": config.get("client_secret", _require_env("MS_CLIENT_SECRET")),
+                }
+        except Exception:
+            # Fall through to ENV fallback
+            pass
+
+    # Fallback to environment variables
+    return {
+        "tenant_id": _require_env("MS_TENANT_ID"),
+        "client_id": _require_env("MS_CLIENT_ID"),
+        "client_secret": _require_env("MS_CLIENT_SECRET"),
+    }
+
+
 async def sharepoint_inventory(
     folder_url: str,
     recursive: bool,
     include_folders: bool,
     page_size: int,
     max_items: Optional[int],
+    organization_id: Optional[UUID] = None,
+    session: Optional[AsyncSession] = None,
 ) -> Dict[str, Any]:
-    tenant_id = _require_env("MS_TENANT_ID")
-    client_id = _require_env("MS_CLIENT_ID")
-    client_secret = _require_env("MS_CLIENT_SECRET")
+    """
+    List SharePoint folder contents with metadata.
+
+    Args:
+        folder_url: SharePoint folder URL
+        recursive: Whether to recursively traverse subfolders
+        include_folders: Whether to include folders in the results
+        page_size: Number of items per page
+        max_items: Maximum number of items to return
+        organization_id: Optional organization ID for database connection lookup
+        session: Optional database session for connection lookup
+
+    Returns:
+        Dict with folder info and items list
+
+    Connection Priority:
+        1. Database connection (if organization_id and session provided)
+        2. Environment variables (fallback)
+    """
+    credentials = await _get_sharepoint_credentials(organization_id, session)
+    tenant_id = credentials["tenant_id"]
+    client_id = credentials["client_id"]
+    client_secret = credentials["client_secret"]
 
     token_payload = {
         "client_id": client_id,
@@ -248,10 +321,34 @@ async def sharepoint_download(
     page_size: int,
     max_items: Optional[int],
     preserve_folders: bool,
+    organization_id: Optional[UUID] = None,
+    session: Optional[AsyncSession] = None,
 ) -> Dict[str, Any]:
-    tenant_id = _require_env("MS_TENANT_ID")
-    client_id = _require_env("MS_CLIENT_ID")
-    client_secret = _require_env("MS_CLIENT_SECRET")
+    """
+    Download files from SharePoint folder to batch directory.
+
+    Args:
+        folder_url: SharePoint folder URL
+        indices: Optional list of file indices to download
+        download_all: Whether to download all files
+        recursive: Whether to recursively download from subfolders
+        page_size: Number of items per page
+        max_items: Maximum number of items to download
+        preserve_folders: Whether to preserve folder structure
+        organization_id: Optional organization ID for database connection lookup
+        session: Optional database session for connection lookup
+
+    Returns:
+        Dict with download results (downloaded, skipped, failed)
+
+    Connection Priority:
+        1. Database connection (if organization_id and session provided)
+        2. Environment variables (fallback)
+    """
+    credentials = await _get_sharepoint_credentials(organization_id, session)
+    tenant_id = credentials["tenant_id"]
+    client_id = credentials["client_id"]
+    client_secret = credentials["client_secret"]
 
     token_payload = {
         "client_id": client_id,

@@ -1,11 +1,12 @@
 # backend/app/api/v1/routers/documents.py
+import os
 import time
 import uuid
 from datetime import datetime
-from typing import List, Optional
 from pathlib import Path
+from typing import List, Optional
 
-from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Request
+from fastapi import APIRouter, File, UploadFile, HTTPException, Query, Request, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -22,6 +23,8 @@ from ..models import (
     V1BatchProcessingResult,
 )
 from ....models import FileListResponse
+from ....database.models import User
+from ....dependencies import get_current_user_optional
 from ....services.document_service import document_service
 from ....models import BatchProcessingResult
 from ....services.job_service import (
@@ -30,10 +33,9 @@ from ....services.job_service import (
     record_job_status,
     append_job_log,
 )
+from ....services.database_service import database_service
 from ....celery_app import app as celery_app
 from ....tasks import process_document_task
-import os
-from datetime import datetime
 from ....services.storage_service import storage_service
 from ....services.zip_service import zip_service
 
@@ -139,8 +141,14 @@ async def process_document(
     options: Optional[V1ProcessingOptions] = None,
     request: Request = None,
     sync: bool = Query(False, description="Run synchronously (for tests only)"),
+    user: Optional[User] = Depends(get_current_user_optional),
 ):
-    """Enqueue processing for a single document (Celery) or run sync when requested."""
+    """
+    Enqueue processing for a single document (Celery) or run sync when requested.
+
+    Supports optional authentication for database connection lookup in synchronous mode.
+    Async mode (Celery) currently uses environment variables for backward compatibility.
+    """
     # Validate file exists first (check uploaded and batch locations)
     file_path = document_service.find_document_file_unified(document_id)
     if not file_path:
@@ -164,7 +172,24 @@ async def process_document(
     # Synchronous path (optional)
     if sync and os.getenv("ALLOW_SYNC_PROCESS", "false").lower() in {"1", "true", "yes"}:
         domain_options = options.to_domain() if options else ProcessingOptions()
-        result = await document_service.process_document(document_id, file_path, domain_options)
+        organization_id = user.organization_id if user else None
+
+        if organization_id:
+            async with database_service.get_session() as session:
+                result = await document_service.process_document(
+                    document_id,
+                    file_path,
+                    domain_options,
+                    organization_id=organization_id,
+                    session=session
+                )
+        else:
+            result = await document_service.process_document(
+                document_id,
+                file_path,
+                domain_options
+            )
+
         storage_service.save_processing_result(result)
         return V1ProcessingResult.model_validate(result)
 

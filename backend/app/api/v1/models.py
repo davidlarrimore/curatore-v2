@@ -546,7 +546,10 @@ class SharePointInventoryItem(BaseModel):
     size: Optional[int] = None
     created: Optional[str] = None
     modified: Optional[str] = None
+    created_by: Optional[str] = None
+    last_modified_by: Optional[str] = None
     mime: Optional[str] = None
+    file_type: Optional[str] = None
     id: str
     web_url: Optional[str] = None
 

@@ -22,6 +22,8 @@ def build_item(
     if not is_folder:
         _, ext = os.path.splitext(name)
         ext = ext.lstrip(".")
+    file_type = ext or item.get("file", {}).get("mimeType", "")
+    modified = item.get("lastModifiedDateTime", "")
     return {
         "index": index,
         "name": name,
@@ -30,8 +32,12 @@ def build_item(
         "extension": ext,
         "size": item.get("size", ""),
         "created": item.get("createdDateTime", ""),
-        "modified": item.get("lastModifiedDateTime", ""),
+        "modified": modified,
+        "last_updated": modified,
+        "created_by": item.get("createdBy", {}).get("user", {}).get("displayName", ""),
+        "last_modified_by": item.get("lastModifiedBy", {}).get("user", {}).get("displayName", ""),
         "mime": item.get("file", {}).get("mimeType", ""),
+        "file_type": file_type,
         "id": item.get("id", ""),
         "web_url": item.get("webUrl", ""),
     }
