@@ -11,10 +11,14 @@ import {
   Activity,
   AlertCircle,
   Github,
-  Heart
+  Heart,
+  Link as LinkIcon,
+  LogOut,
+  User
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { systemApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth-context'
 import Image from 'next/image'
 import toast from 'react-hot-toast'
 
@@ -39,8 +43,15 @@ export function TopNavigation({
 }: TopNavigationProps) {
   const pathname = usePathname()
   const router = useRouter()
+  const { user, isAuthenticated, logout } = useAuth()
   const [isResetting, setIsResetting] = useState(false)
   const [showResetConfirm, setShowResetConfirm] = useState(false)
+
+  const handleLogout = () => {
+    logout()
+    router.push('/login')
+    toast.success('Logged out successfully')
+  }
 
   const handleReset = async () => {
     setIsResetting(true)
@@ -73,6 +84,8 @@ export function TopNavigation({
       const friendlyNames: Record<string, string> = {
         'process': 'Processing',
         'settings': 'Settings',
+        'connections': 'Connections',
+        'login': 'Login',
         'analytics': 'Analytics',
         'batch': 'Batch Processing',
         'health': 'System Health'
@@ -195,6 +208,49 @@ export function TopNavigation({
           >
             <Settings className="w-4 h-4" />
           </Button>
+
+          {/* Auth controls */}
+          {isAuthenticated ? (
+            <>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => router.push('/connections')}
+                title="Manage Connections"
+                aria-label="Manage connections"
+                className="hidden sm:flex"
+              >
+                <LinkIcon className="w-4 h-4" />
+              </Button>
+
+              <div className="hidden sm:flex items-center space-x-2 px-3 py-1.5 bg-gray-100 dark:bg-gray-800 rounded-md">
+                <User className="w-4 h-4 text-gray-600 dark:text-gray-400" />
+                <span className="text-sm text-gray-700 dark:text-gray-300">
+                  {user?.username}
+                </span>
+              </div>
+
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={handleLogout}
+                title="Logout"
+                aria-label="Logout"
+                className="hidden sm:flex"
+              >
+                <LogOut className="w-4 h-4" />
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="primary"
+              size="sm"
+              onClick={() => router.push('/login')}
+              className="hidden sm:flex"
+            >
+              Login
+            </Button>
+          )}
 
           <Button
             variant="ghost"

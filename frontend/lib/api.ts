@@ -449,6 +449,186 @@ export const jobsApi = {
   },
 }
 
+// -------------------- Auth API --------------------
+export const authApi = {
+  async login(emailOrUsername: string, password: string): Promise<{
+    access_token: string
+    refresh_token: string
+    token_type: string
+    user: {
+      id: string
+      email: string
+      username: string
+      full_name?: string
+      role: string
+      organization_id: string
+    }
+  }> {
+    const res = await fetch(apiUrl('/auth/login'), {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ email_or_username: emailOrUsername, password }),
+    })
+    return handleJson(res)
+  },
+
+  async register(data: {
+    email: string
+    username: string
+    password: string
+    full_name?: string
+    organization_name?: string
+  }): Promise<{
+    access_token: string
+    refresh_token: string
+    user: any
+  }> {
+    const res = await fetch(apiUrl('/auth/register'), {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async refreshToken(refreshToken: string): Promise<{
+    access_token: string
+    refresh_token: string
+    token_type: string
+  }> {
+    const res = await fetch(apiUrl('/auth/refresh'), {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+    return handleJson(res)
+  },
+
+  async getCurrentUser(token: string): Promise<{
+    id: string
+    email: string
+    username: string
+    full_name?: string
+    role: string
+    organization_id: string
+    organization_name: string
+    is_active: boolean
+  }> {
+    const res = await fetch(apiUrl('/auth/me'), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+}
+
+// -------------------- Connections API --------------------
+export const connectionsApi = {
+  async listConnections(token: string): Promise<{
+    connections: Array<{
+      id: string
+      name: string
+      connection_type: string
+      config: Record<string, any>
+      is_default: boolean
+      is_active: boolean
+      last_tested_at?: string
+      health_status?: 'healthy' | 'unhealthy' | 'unknown'
+      created_at: string
+      updated_at: string
+    }>
+  }> {
+    const res = await fetch(apiUrl('/connections'), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getConnection(token: string, connectionId: string): Promise<any> {
+    const res = await fetch(apiUrl(`/connections/${connectionId}`), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async createConnection(token: string, data: {
+    name: string
+    connection_type: string
+    config: Record<string, any>
+    is_default?: boolean
+    test_on_save?: boolean
+  }): Promise<any> {
+    const res = await fetch(apiUrl('/connections'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async updateConnection(token: string, connectionId: string, data: {
+    name?: string
+    config?: Record<string, any>
+    is_active?: boolean
+    test_on_save?: boolean
+  }): Promise<any> {
+    const res = await fetch(apiUrl(`/connections/${connectionId}`), {
+      method: 'PUT',
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteConnection(token: string, connectionId: string): Promise<{ message: string }> {
+    const res = await fetch(apiUrl(`/connections/${connectionId}`), {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    return handleJson(res)
+  },
+
+  async testConnection(token: string, connectionId: string): Promise<{
+    success: boolean
+    message?: string
+    health_status?: 'healthy' | 'unhealthy'
+    details?: any
+  }> {
+    const res = await fetch(apiUrl(`/connections/${connectionId}/test`), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    return handleJson(res)
+  },
+
+  async setDefaultConnection(token: string, connectionId: string): Promise<{ message: string }> {
+    const res = await fetch(apiUrl(`/connections/${connectionId}/set-default`), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    return handleJson(res)
+  },
+
+  async listConnectionTypes(token?: string): Promise<{
+    types: Array<{
+      type: string
+      display_name: string
+      description: string
+      config_schema: any
+      example_config: Record<string, any>
+    }>
+  }> {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined
+    const res = await fetch(apiUrl('/connections/types'), {
+      headers,
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+}
+
 // Default export with all API modules
 export default {
   API_BASE_URL,
@@ -458,5 +638,7 @@ export default {
   processingApi,
   contentApi,
   jobsApi,
+  authApi,
+  connectionsApi,
   utils,
 }

@@ -634,6 +634,13 @@ class DocumentService:
             for p in self.batch_dir.glob(f"{stem}.*"):
                 if self.is_supported_file(p.name):
                     return p
+            # Fallback: search recursively in batch subfolders
+            for p in self.batch_dir.rglob(filename):
+                if p.is_file() and self.is_supported_file(p.name):
+                    return p
+            for p in self.batch_dir.rglob(f"{stem}.*"):
+                if p.is_file() and self.is_supported_file(p.name):
+                    return p
             return None
         except Exception:
             return None
