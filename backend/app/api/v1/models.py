@@ -5,10 +5,10 @@ Provides a stable import surface and v1-specific request schemas that
 map to internal domain models, allowing the frontend's v1 payload shape.
 """
 
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from pathlib import Path
 from datetime import datetime
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, EmailStr
 from pydantic import AliasChoices
 from pydantic import model_validator
 from pydantic import AliasChoices
@@ -27,6 +27,285 @@ from ...models import (
     HealthStatus,
     LLMConnectionStatus,
 )
+
+
+# =========================================================================
+# ORGANIZATION MODELS
+# =========================================================================
+
+class OrganizationResponse(BaseModel):
+    """Organization details response."""
+    id: str = Field(..., description="Organization UUID")
+    name: str = Field(..., description="Organization name")
+    display_name: str = Field(..., description="Display name")
+    slug: str = Field(..., description="URL-friendly slug")
+    is_active: bool = Field(..., description="Whether organization is active")
+    settings: Dict[str, Any] = Field(default_factory=dict, description="Organization settings")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "name": "Acme Corporation",
+                "display_name": "Acme Corp",
+                "slug": "acme-corp",
+                "is_active": True,
+                "settings": {
+                    "quality_thresholds": {
+                        "conversion": 70,
+                        "clarity": 7,
+                        "completeness": 7,
+                        "relevance": 7,
+                        "markdown": 7
+                    },
+                    "auto_optimize": False
+                },
+                "created_at": "2024-01-01T00:00:00",
+                "updated_at": "2024-01-12T15:30:00"
+            }
+        }
+
+
+class OrganizationUpdateRequest(BaseModel):
+    """Request to update organization details."""
+    display_name: Optional[str] = Field(None, min_length=1, max_length=255, description="Display name")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "display_name": "Acme Corporation Ltd."
+            }
+        }
+
+
+class OrganizationSettingsResponse(BaseModel):
+    """Organization settings response."""
+    settings: Dict[str, Any] = Field(..., description="Organization settings")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "settings": {
+                    "quality_thresholds": {
+                        "conversion": 70,
+                        "clarity": 7,
+                        "completeness": 7,
+                        "relevance": 7,
+                        "markdown": 7
+                    },
+                    "auto_optimize": False,
+                    "max_file_size_mb": 100,
+                    "allowed_formats": ["pdf", "docx", "pptx", "txt"]
+                }
+            }
+        }
+
+
+class OrganizationSettingsUpdateRequest(BaseModel):
+    """Request to update organization settings."""
+    settings: Dict[str, Any] = Field(..., description="Settings to update (merged with existing)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "settings": {
+                    "auto_optimize": True,
+                    "max_file_size_mb": 200
+                }
+            }
+        }
+
+
+# =========================================================================
+# USER MANAGEMENT MODELS
+# =========================================================================
+
+class UserResponse(BaseModel):
+    """User details response."""
+    id: str = Field(..., description="User UUID")
+    email: str = Field(..., description="Email address")
+    username: str = Field(..., description="Username")
+    full_name: Optional[str] = Field(None, description="Full name")
+    role: str = Field(..., description="Role (org_admin, member, viewer)")
+    is_active: bool = Field(..., description="Whether user is active")
+    is_verified: bool = Field(..., description="Whether email is verified")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    last_login_at: Optional[datetime] = Field(None, description="Last login timestamp")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "email": "user@example.com",
+                "username": "johndoe",
+                "full_name": "John Doe",
+                "role": "member",
+                "is_active": True,
+                "is_verified": True,
+                "created_at": "2024-01-01T00:00:00",
+                "last_login_at": "2024-01-12T15:30:00"
+            }
+        }
+
+
+class UserInviteRequest(BaseModel):
+    """Request to invite a new user to the organization."""
+    email: EmailStr = Field(..., description="Email address")
+    username: str = Field(..., min_length=3, max_length=100, description="Username")
+    full_name: Optional[str] = Field(None, max_length=255, description="Full name")
+    role: str = Field(default="member", description="Role (org_admin, member, viewer)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "email": "newuser@example.com",
+                "username": "newuser",
+                "full_name": "New User",
+                "role": "member"
+            }
+        }
+
+
+class UserUpdateRequest(BaseModel):
+    """Request to update user details."""
+    full_name: Optional[str] = Field(None, max_length=255, description="Full name")
+    role: Optional[str] = Field(None, description="Role (org_admin, member, viewer)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "full_name": "John Smith",
+                "role": "org_admin"
+            }
+        }
+
+
+class UserListResponse(BaseModel):
+    """List of users response."""
+    users: List[UserResponse] = Field(..., description="List of users")
+    total: int = Field(..., description="Total number of users")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "users": [
+                    {
+                        "id": "123e4567-e89b-12d3-a456-426614174000",
+                        "email": "user@example.com",
+                        "username": "johndoe",
+                        "full_name": "John Doe",
+                        "role": "member",
+                        "is_active": True,
+                        "is_verified": True,
+                        "created_at": "2024-01-01T00:00:00",
+                        "last_login_at": "2024-01-12T15:30:00"
+                    }
+                ],
+                "total": 1
+            }
+        }
+
+
+# =========================================================================
+# API KEY MODELS
+# =========================================================================
+
+class ApiKeyResponse(BaseModel):
+    """API key details response."""
+    id: str = Field(..., description="API key UUID")
+    name: str = Field(..., description="Key name/description")
+    prefix: str = Field(..., description="Key prefix for identification")
+    is_active: bool = Field(..., description="Whether key is active")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    last_used_at: Optional[datetime] = Field(None, description="Last used timestamp")
+    expires_at: Optional[datetime] = Field(None, description="Expiration timestamp")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "name": "Production API Key",
+                "prefix": "cur_1a2b3c4d",
+                "is_active": True,
+                "created_at": "2024-01-01T00:00:00",
+                "last_used_at": "2024-01-12T15:30:00",
+                "expires_at": None
+            }
+        }
+
+
+class ApiKeyCreateRequest(BaseModel):
+    """Request to create a new API key."""
+    name: str = Field(..., min_length=1, max_length=255, description="Key name/description")
+    expires_days: Optional[int] = Field(None, ge=1, le=365, description="Expiration in days (optional)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "Production API Key",
+                "expires_days": 90
+            }
+        }
+
+
+class ApiKeyCreateResponse(BaseModel):
+    """API key creation response with full key (shown only once)."""
+    id: str = Field(..., description="API key UUID")
+    name: str = Field(..., description="Key name/description")
+    key: str = Field(..., description="Full API key (SAVE THIS - shown only once!)")
+    prefix: str = Field(..., description="Key prefix for identification")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    expires_at: Optional[datetime] = Field(None, description="Expiration timestamp")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "name": "Production API Key",
+                "key": "cur_1a2b3c4d5e6f7g8h9i0j1k2l3m4n5o6p",
+                "prefix": "cur_1a2b3c4d",
+                "created_at": "2024-01-01T00:00:00",
+                "expires_at": "2024-04-01T00:00:00"
+            }
+        }
+
+
+class ApiKeyUpdateRequest(BaseModel):
+    """Request to update API key details."""
+    name: Optional[str] = Field(None, min_length=1, max_length=255, description="Key name/description")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "Updated Production Key"
+            }
+        }
+
+
+class ApiKeyListResponse(BaseModel):
+    """List of API keys response."""
+    keys: List[ApiKeyResponse] = Field(..., description="List of API keys")
+    total: int = Field(..., description="Total number of keys")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "keys": [
+                    {
+                        "id": "123e4567-e89b-12d3-a456-426614174000",
+                        "name": "Production API Key",
+                        "prefix": "cur_1a2b3c4d",
+                        "is_active": True,
+                        "created_at": "2024-01-01T00:00:00",
+                        "last_used_at": "2024-01-12T15:30:00",
+                        "expires_at": None
+                    }
+                ],
+                "total": 1
+            }
+        }
 
 
 class V1QualityThresholds(BaseModel):
