@@ -35,3 +35,9 @@ pyjwt==2.8.0
 bcrypt==4.1.2
 python-jose[cryptography]==3.3.0
 passlib[bcrypt]==1.7.4
+
+# Email
+aiosmtplib>=3.0.0  # Async SMTP client
+jinja2>=3.1.3  # Email template rendering
+sendgrid>=6.11.0  # Optional: SendGrid backend
+boto3>=1.34.0  # Optional: AWS SES backend

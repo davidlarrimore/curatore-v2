@@ -1,0 +1,113 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to Curatore</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 600px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        .container {
+            background-color: #f9f9f9;
+            border-radius: 8px;
+            padding: 30px;
+            margin: 20px 0;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .header h1 {
+            color: #2563eb;
+            margin: 0;
+        }
+        .content {
+            background-color: white;
+            border-radius: 6px;
+            padding: 25px;
+        }
+        .button {
+            display: inline-block;
+            padding: 12px 30px;
+            background-color: #2563eb;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            margin: 20px 0;
+            font-weight: 600;
+        }
+        .button:hover {
+            background-color: #1d4ed8;
+        }
+        .features {
+            margin: 20px 0;
+        }
+        .feature {
+            margin: 15px 0;
+            padding-left: 25px;
+            position: relative;
+        }
+        .feature:before {
+            content: "✓";
+            position: absolute;
+            left: 0;
+            color: #10b981;
+            font-weight: bold;
+        }
+        .footer {
+            text-align: center;
+            margin-top: 30px;
+            color: #666;
+            font-size: 14px;
+        }
+        .footer a {
+            color: #2563eb;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Curatore</h1>
+        </div>
+
+        <div class="content">
+            <h2>Welcome to Curatore! 🎉</h2>
+
+            <p>Hi {{ user_name }},</p>
+
+            <p>Your email has been verified and your account is now active! You're all set to start using Curatore's powerful document processing capabilities.</p>
+
+            <div class="features">
+                <h3>What you can do with Curatore:</h3>
+                <div class="feature">Convert documents to high-quality Markdown</div>
+                <div class="feature">Optimize content for vector databases and RAG systems</div>
+                <div class="feature">Batch process multiple documents</div>
+                <div class="feature">Integrate with SharePoint and other services</div>
+                <div class="feature">Evaluate document quality with AI-powered analysis</div>
+            </div>
+
+            <div style="text-align: center;">
+                <a href="{{ frontend_base_url }}" class="button">Get Started</a>
+            </div>
+
+            <p>If you have any questions or need help getting started, feel free to explore our documentation or reach out to our support team.</p>
+
+            <p>Happy processing!</p>
+            <p>The Curatore Team</p>
+        </div>
+
+        <div class="footer">
+            <p>Curatore - Document Processing & Optimization Platform</p>
+            <p><a href="{{ frontend_base_url }}">Visit Curatore</a></p>
+        </div>
+    </div>
+</body>
+</html>

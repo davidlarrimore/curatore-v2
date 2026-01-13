@@ -136,6 +136,53 @@ class Settings(BaseSettings):
     api_key_prefix: str = Field(default="cur_", description="API key prefix")
 
     # =========================================================================
+    # EMAIL CONFIGURATION
+    # =========================================================================
+    email_backend: str = Field(
+        default="console",
+        description="Email backend: console (dev), smtp, sendgrid, ses",
+    )
+    email_from_address: str = Field(
+        default="noreply@curatore.app", description="From email address"
+    )
+    email_from_name: str = Field(default="Curatore", description="From name")
+    frontend_base_url: str = Field(
+        default="http://localhost:3000", description="Frontend URL for email links"
+    )
+
+    # SMTP Configuration
+    smtp_host: Optional[str] = Field(default=None, description="SMTP server host")
+    smtp_port: int = Field(default=587, description="SMTP server port")
+    smtp_username: Optional[str] = Field(default=None, description="SMTP username")
+    smtp_password: Optional[str] = Field(default=None, description="SMTP password")
+    smtp_use_tls: bool = Field(default=True, description="Use TLS for SMTP")
+
+    # SendGrid Configuration
+    sendgrid_api_key: Optional[str] = Field(
+        default=None, description="SendGrid API key"
+    )
+
+    # AWS SES Configuration
+    aws_region: str = Field(default="us-east-1", description="AWS region for SES")
+    aws_access_key_id: Optional[str] = Field(
+        default=None, description="AWS access key ID"
+    )
+    aws_secret_access_key: Optional[str] = Field(
+        default=None, description="AWS secret access key"
+    )
+
+    # Token Expiration
+    email_verification_token_expire_hours: int = Field(
+        default=24, description="Email verification token expiration in hours"
+    )
+    password_reset_token_expire_hours: int = Field(
+        default=1, description="Password reset token expiration in hours"
+    )
+    email_verification_grace_period_days: int = Field(
+        default=7, description="Days before enforcing email verification"
+    )
+
+    # =========================================================================
     # MULTI-TENANCY & ORGANIZATIONS
     # =========================================================================
     enable_auth: bool = Field(

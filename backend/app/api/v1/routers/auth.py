@@ -33,6 +33,8 @@ from app.database.models import Organization, User
 from app.dependencies import get_current_user
 from app.services.auth_service import auth_service
 from app.services.database_service import database_service
+from app.services.verification_service import verification_service
+from app.services.password_reset_service import password_reset_service
 
 # Initialize router
 router = APIRouter(prefix="/auth", tags=["Authentication"])
@@ -153,6 +155,75 @@ class MessageResponse(BaseModel):
     message: str = Field(..., description="Response message")
 
 
+class VerifyEmailRequest(BaseModel):
+    """Email verification request."""
+
+    token: str = Field(..., description="Email verification token from email link")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "token": "a1b2c3d4e5f6g7h8i9j0..."
+            }
+        }
+
+
+class ResendVerificationRequest(BaseModel):
+    """Resend verification email request."""
+
+    email: EmailStr = Field(..., description="User's email address")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "email": "user@example.com"
+            }
+        }
+
+
+class ForgotPasswordRequest(BaseModel):
+    """Forgot password request."""
+
+    email: EmailStr = Field(..., description="User's email address")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "email": "user@example.com"
+            }
+        }
+
+
+class ResetPasswordRequest(BaseModel):
+    """Reset password request."""
+
+    token: str = Field(..., description="Password reset token from email link")
+    new_password: str = Field(..., min_length=8, max_length=100, description="New password (min 8 chars)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "token": "a1b2c3d4e5f6g7h8i9j0...",
+                "new_password": "NewSecurePass123!"
+            }
+        }
+
+
+class ValidateResetTokenResponse(BaseModel):
+    """Validate reset token response."""
+
+    valid: bool = Field(..., description="Whether token is valid")
+    email: Optional[str] = Field(None, description="User email if token is valid")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "valid": True,
+                "email": "user@example.com"
+            }
+        }
+
+
 # =========================================================================
 # ENDPOINTS
 # =========================================================================
@@ -251,6 +322,20 @@ async def register(request: UserRegisterRequest) -> UserProfileResponse:
         await session.refresh(new_user)
 
         logger.info(f"User registered successfully: {new_user.email} (id: {new_user.id})")
+
+        # Generate verification token and send email
+        try:
+            token = await verification_service.generate_verification_token(session, new_user.id)
+            from app.tasks import send_verification_email_task
+            send_verification_email_task.delay(
+                user_email=new_user.email,
+                user_name=new_user.full_name or new_user.username,
+                verification_token=token,
+            )
+            logger.info(f"Verification email queued for {new_user.email}")
+        except Exception as e:
+            logger.error(f"Failed to send verification email: {e}")
+            # Don't fail registration if email fails
 
         return UserProfileResponse(
             id=str(new_user.id),
@@ -510,3 +595,235 @@ async def get_current_user_profile(user: User = Depends(get_current_user)) -> Us
         created_at=user.created_at,
         last_login_at=user.last_login_at,
     )
+
+
+# =========================================================================
+# EMAIL VERIFICATION ENDPOINTS
+# =========================================================================
+
+
+@router.post(
+    "/verify-email",
+    response_model=UserProfileResponse,
+    summary="Verify email address",
+    description="Verify user's email address using token from verification email.",
+)
+async def verify_email(request: VerifyEmailRequest) -> UserProfileResponse:
+    """
+    Verify email address with token.
+
+    Validates the verification token and marks the user's email as verified.
+
+    Args:
+        request: Verification token from email
+
+    Returns:
+        UserProfileResponse: Verified user profile
+
+    Raises:
+        HTTPException: 400 if token is invalid, expired, or already used
+    """
+    logger.info("Email verification attempt")
+
+    async with database_service.get_session() as session:
+        user = await verification_service.verify_email_token(session, request.token)
+
+        if not user:
+            logger.warning("Email verification failed: invalid or expired token")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired verification token",
+            )
+
+        logger.info(f"Email verified successfully for user {user.email}")
+
+        # Optionally send welcome email
+        try:
+            from app.tasks import send_welcome_email_task
+            send_welcome_email_task.delay(
+                user_email=user.email,
+                user_name=user.full_name or user.username,
+            )
+            logger.info(f"Welcome email queued for {user.email}")
+        except Exception as e:
+            logger.error(f"Failed to queue welcome email: {e}")
+
+        return UserProfileResponse(
+            id=str(user.id),
+            email=user.email,
+            username=user.username,
+            full_name=user.full_name,
+            role=user.role,
+            is_active=user.is_active,
+            is_verified=user.is_verified,
+            organization_id=str(user.organization_id),
+            created_at=user.created_at,
+            last_login_at=user.last_login_at,
+        )
+
+
+@router.post(
+    "/resend-verification",
+    response_model=MessageResponse,
+    summary="Resend verification email",
+    description="Resend email verification link to user's email address.",
+)
+async def resend_verification(request: ResendVerificationRequest) -> MessageResponse:
+    """
+    Resend verification email.
+
+    Generates a new verification token and sends it to the user's email.
+
+    Args:
+        request: User's email address
+
+    Returns:
+        MessageResponse: Confirmation message
+
+    Note:
+        Always returns success to prevent email enumeration attacks.
+    """
+    logger.info(f"Verification email resend requested for: {request.email}")
+
+    async with database_service.get_session() as session:
+        # Look up user by email
+        result = await session.execute(select(User).where(User.email == request.email.lower()))
+        user = result.scalar_one_or_none()
+
+        if user and user.is_active and not user.is_verified:
+            try:
+                await verification_service.resend_verification_email(session, user.id)
+                logger.info(f"Verification email resent to {request.email}")
+            except Exception as e:
+                logger.error(f"Failed to resend verification email: {e}")
+
+    # Always return success to prevent email enumeration
+    return MessageResponse(
+        message="If that email address exists and is not yet verified, a verification link has been sent."
+    )
+
+
+# =========================================================================
+# PASSWORD RESET ENDPOINTS
+# =========================================================================
+
+
+@router.post(
+    "/forgot-password",
+    response_model=MessageResponse,
+    summary="Request password reset",
+    description="Request password reset link via email.",
+)
+async def forgot_password(request: ForgotPasswordRequest) -> MessageResponse:
+    """
+    Request password reset.
+
+    Generates a password reset token and sends it to the user's email.
+
+    Args:
+        request: User's email address
+
+    Returns:
+        MessageResponse: Confirmation message
+
+    Note:
+        Always returns success to prevent email enumeration attacks.
+        Token expires in 1 hour for security.
+    """
+    logger.info(f"Password reset requested for: {request.email}")
+
+    async with database_service.get_session() as session:
+        await password_reset_service.request_password_reset(session, request.email)
+
+    # Always return success to prevent email enumeration
+    return MessageResponse(
+        message="If that email address exists, a password reset link has been sent."
+    )
+
+
+@router.get(
+    "/validate-reset-token/{token}",
+    response_model=ValidateResetTokenResponse,
+    summary="Validate password reset token",
+    description="Check if password reset token is valid without using it.",
+)
+async def validate_reset_token(token: str) -> ValidateResetTokenResponse:
+    """
+    Validate password reset token.
+
+    Checks if the token is valid, not expired, and not already used.
+
+    Args:
+        token: Password reset token
+
+    Returns:
+        ValidateResetTokenResponse: Token validity and user email
+
+    Example:
+        GET /api/v1/auth/validate-reset-token/abc123...
+
+        Response:
+        {
+            "valid": true,
+            "email": "user@example.com"
+        }
+    """
+    logger.debug("Reset token validation attempt")
+
+    async with database_service.get_session() as session:
+        user = await password_reset_service.validate_reset_token(session, token)
+
+        if user:
+            return ValidateResetTokenResponse(
+                valid=True,
+                email=user.email,
+            )
+        else:
+            return ValidateResetTokenResponse(
+                valid=False,
+                email=None,
+            )
+
+
+@router.post(
+    "/reset-password",
+    response_model=MessageResponse,
+    summary="Reset password",
+    description="Reset password using token from password reset email.",
+)
+async def reset_password(request: ResetPasswordRequest) -> MessageResponse:
+    """
+    Reset password with token.
+
+    Validates the reset token and updates the user's password.
+
+    Args:
+        request: Reset token and new password
+
+    Returns:
+        MessageResponse: Success confirmation
+
+    Raises:
+        HTTPException: 400 if token is invalid, expired, or already used
+    """
+    logger.info("Password reset attempt")
+
+    async with database_service.get_session() as session:
+        success = await password_reset_service.reset_password(
+            session,
+            request.token,
+            request.new_password,
+        )
+
+        if not success:
+            logger.warning("Password reset failed: invalid or expired token")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid or expired reset token",
+            )
+
+        logger.info("Password reset successful")
+
+        return MessageResponse(
+            message="Password reset successfully. You can now login with your new password."
+        )

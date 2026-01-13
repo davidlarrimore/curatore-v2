@@ -1,0 +1,15 @@
+CURATORE - VERIFY YOUR EMAIL ADDRESS
+
+Hi {{ user_name }},
+
+Thanks for signing up for Curatore! Please verify your email address by clicking the link below:
+
+{{ verification_url }}
+
+This verification link will expire in 24 hours.
+
+If you didn't create an account with Curatore, you can safely ignore this email.
+
+---
+Curatore - Document Processing & Optimization Platform
+{{ frontend_base_url }}

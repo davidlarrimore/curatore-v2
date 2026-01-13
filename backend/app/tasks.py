@@ -257,3 +257,145 @@ def update_document_content_task(self, document_id: str, payload: Dict[str, Any]
 
     storage_service.save_processing_result(result)
     return V1ProcessingResult.model_validate(result).model_dump()
+
+
+# ============================================================================
+# EMAIL TASKS
+# ============================================================================
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def send_verification_email_task(self, user_email: str, user_name: str, verification_token: str) -> bool:
+    """
+    Send email verification email asynchronously.
+
+    Args:
+        user_email: User's email address
+        user_name: User's name
+        verification_token: Verification token
+
+    Returns:
+        bool: True if sent successfully
+    """
+    from .services.email_service import email_service
+
+    logger = logging.getLogger("curatore.email")
+    logger.info(f"Sending verification email to {user_email}")
+
+    try:
+        result = asyncio.run(
+            email_service.send_verification_email(user_email, user_name, verification_token)
+        )
+        if result:
+            logger.info(f"Verification email sent successfully to {user_email}")
+        else:
+            logger.error(f"Failed to send verification email to {user_email}")
+        return result
+    except Exception as e:
+        logger.error(f"Error sending verification email to {user_email}: {e}")
+        raise
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def send_password_reset_email_task(self, user_email: str, user_name: str, reset_token: str) -> bool:
+    """
+    Send password reset email asynchronously.
+
+    Args:
+        user_email: User's email address
+        user_name: User's name
+        reset_token: Password reset token
+
+    Returns:
+        bool: True if sent successfully
+    """
+    from .services.email_service import email_service
+
+    logger = logging.getLogger("curatore.email")
+    logger.info(f"Sending password reset email to {user_email}")
+
+    try:
+        result = asyncio.run(
+            email_service.send_password_reset_email(user_email, user_name, reset_token)
+        )
+        if result:
+            logger.info(f"Password reset email sent successfully to {user_email}")
+        else:
+            logger.error(f"Failed to send password reset email to {user_email}")
+        return result
+    except Exception as e:
+        logger.error(f"Error sending password reset email to {user_email}: {e}")
+        raise
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def send_welcome_email_task(self, user_email: str, user_name: str) -> bool:
+    """
+    Send welcome email asynchronously.
+
+    Args:
+        user_email: User's email address
+        user_name: User's name
+
+    Returns:
+        bool: True if sent successfully
+    """
+    from .services.email_service import email_service
+
+    logger = logging.getLogger("curatore.email")
+    logger.info(f"Sending welcome email to {user_email}")
+
+    try:
+        result = asyncio.run(
+            email_service.send_welcome_email(user_email, user_name)
+        )
+        if result:
+            logger.info(f"Welcome email sent successfully to {user_email}")
+        else:
+            logger.error(f"Failed to send welcome email to {user_email}")
+        return result
+    except Exception as e:
+        logger.error(f"Error sending welcome email to {user_email}: {e}")
+        raise
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def send_invitation_email_task(
+    self,
+    user_email: str,
+    user_name: str,
+    invitation_token: str,
+    invited_by: str,
+    organization_name: str,
+) -> bool:
+    """
+    Send user invitation email asynchronously.
+
+    Args:
+        user_email: User's email address
+        user_name: User's name
+        invitation_token: Invitation/setup token
+        invited_by: Name of person who invited the user
+        organization_name: Organization name
+
+    Returns:
+        bool: True if sent successfully
+    """
+    from .services.email_service import email_service
+
+    logger = logging.getLogger("curatore.email")
+    logger.info(f"Sending invitation email to {user_email} for organization {organization_name}")
+
+    try:
+        result = asyncio.run(
+            email_service.send_invitation_email(
+                user_email, user_name, invitation_token, invited_by, organization_name
+            )
+        )
+        if result:
+            logger.info(f"Invitation email sent successfully to {user_email}")
+        else:
+            logger.error(f"Failed to send invitation email to {user_email}")
+        return result
+    except Exception as e:
+        logger.error(f"Error sending invitation email to {user_email}: {e}")
+        raise

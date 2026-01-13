@@ -204,6 +204,80 @@ class User(Base):
         return f"<User(id={self.id}, username={self.username}, email={self.email})>"
 
 
+class EmailVerificationToken(Base):
+    """
+    Email verification token model.
+
+    Stores tokens for email verification during user registration.
+    Tokens expire after a configurable period (default 24 hours).
+
+    Attributes:
+        id: Unique token identifier
+        user_id: User this token belongs to
+        token: Verification token (unique, indexed)
+        expires_at: Token expiration timestamp
+        used_at: Timestamp when token was used (null if unused)
+        created_at: Timestamp when token was created
+
+    Relationships:
+        user: User this token belongs to
+    """
+
+    __tablename__ = "email_verification_tokens"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        UUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token = Column(String(255), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    user = relationship("User")
+
+    def __repr__(self) -> str:
+        return f"<EmailVerificationToken(id={self.id}, user_id={self.user_id})>"
+
+
+class PasswordResetToken(Base):
+    """
+    Password reset token model.
+
+    Stores tokens for password reset requests.
+    Tokens expire after a short period (default 1 hour) for security.
+
+    Attributes:
+        id: Unique token identifier
+        user_id: User this token belongs to
+        token: Reset token (unique, indexed)
+        expires_at: Token expiration timestamp
+        used_at: Timestamp when token was used (null if unused)
+        created_at: Timestamp when token was created
+
+    Relationships:
+        user: User this token belongs to
+    """
+
+    __tablename__ = "password_reset_tokens"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        UUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    token = Column(String(255), nullable=False, unique=True, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    used_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    user = relationship("User")
+
+    def __repr__(self) -> str:
+        return f"<PasswordResetToken(id={self.id}, user_id={self.user_id})>"
+
+
 class ApiKey(Base):
     """
     API Key model for headless/backend authentication.
