@@ -28,7 +28,7 @@ export default function LoginPage() {
       await login(emailOrUsername, password)
       router.push('/')
     } catch (err: any) {
-      setError(err.detail || err.message || 'Login failed. Please check your credentials.')
+      setError(err.message || 'Login failed. Please check your credentials.')
     } finally {
       setIsLoading(false)
     }

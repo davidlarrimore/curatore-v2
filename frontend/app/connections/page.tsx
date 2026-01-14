@@ -51,7 +51,7 @@ function ConnectionsContent() {
       const response = await connectionsApi.listConnections(token)
       setConnections(response.connections)
     } catch (err: any) {
-      setError(err.detail || err.message || 'Failed to load connections')
+      setError(err.message || 'Failed to load connections')
     } finally {
       setIsLoading(false)
     }
@@ -81,7 +81,7 @@ function ConnectionsContent() {
       await connectionsApi.deleteConnection(token, connectionId)
       await loadConnections()
     } catch (err: any) {
-      alert(`Failed to delete connection: ${err.detail || err.message}`)
+      alert(`Failed to delete connection: ${err.message}`)
     }
   }
 
@@ -93,7 +93,7 @@ function ConnectionsContent() {
       alert(result.success ? '✅ Connection test successful!' : `❌ Connection test failed: ${result.message}`)
       await loadConnections()
     } catch (err: any) {
-      alert(`Failed to test connection: ${err.detail || err.message}`)
+      alert(`Failed to test connection: ${err.message}`)
     }
   }
 
@@ -104,7 +104,7 @@ function ConnectionsContent() {
       await connectionsApi.setDefaultConnection(token, connectionId)
       await loadConnections()
     } catch (err: any) {
-      alert(`Failed to set default connection: ${err.detail || err.message}`)
+      alert(`Failed to set default connection: ${err.message}`)
     }
   }
 

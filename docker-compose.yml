@@ -17,6 +17,8 @@ services:
       - ./backend/app:/app/app
       # Shared storage (authoritative on host)
       - ./files:/app/files
+      # Database persistence
+      - ./backend/data:/app/data
     environment:
       - PYTHONUNBUFFERED=1
       - DEBUG=${DEBUG:-false}
@@ -107,6 +109,8 @@ services:
     volumes:
       - ./backend/app:/app/app
       - ./files:/app/files
+      # Database persistence (shared with backend)
+      - ./backend/data:/app/data
     depends_on:
       - redis
 

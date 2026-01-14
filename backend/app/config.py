@@ -75,6 +75,67 @@ class Settings(BaseSettings):
     max_file_size: int = Field(default=50 * 1024 * 1024, description="Max upload size in bytes")
 
     # =========================================================================
+    # HIERARCHICAL STORAGE CONFIGURATION
+    # =========================================================================
+    use_hierarchical_storage: bool = Field(
+        default=True, description="Use new hierarchical organization-based file structure"
+    )
+    temp_dir: str = Field(
+        default="/app/files/temp", description="Temporary processing files"
+    )
+    dedupe_dir: str = Field(
+        default="/app/files/dedupe", description="Content-addressable storage for deduplication"
+    )
+
+    # =========================================================================
+    # FILE RETENTION CONFIGURATION
+    # =========================================================================
+    file_retention_uploaded_days: int = Field(
+        default=7, description="Days to retain uploaded files"
+    )
+    file_retention_processed_days: int = Field(
+        default=30, description="Days to retain processed files"
+    )
+    file_retention_batch_days: int = Field(
+        default=14, description="Days to retain batch files"
+    )
+    file_retention_temp_hours: int = Field(
+        default=24, description="Hours to retain temp files"
+    )
+
+    # =========================================================================
+    # FILE CLEANUP CONFIGURATION
+    # =========================================================================
+    file_cleanup_enabled: bool = Field(
+        default=True, description="Enable automatic file cleanup"
+    )
+    file_cleanup_schedule_cron: str = Field(
+        default="0 2 * * *", description="Cleanup schedule (daily at 2 AM)"
+    )
+    file_cleanup_batch_size: int = Field(
+        default=1000, description="Files to process per cleanup batch"
+    )
+    file_cleanup_dry_run: bool = Field(
+        default=False, description="Dry run mode for testing cleanup"
+    )
+
+    # =========================================================================
+    # FILE DEDUPLICATION CONFIGURATION
+    # =========================================================================
+    file_deduplication_enabled: bool = Field(
+        default=True, description="Enable duplicate file detection and storage optimization"
+    )
+    file_deduplication_strategy: str = Field(
+        default="symlink", description="Deduplication strategy: symlink | copy | reference"
+    )
+    dedupe_hash_algorithm: str = Field(
+        default="sha256", description="Hash algorithm for deduplication"
+    )
+    dedupe_min_file_size: int = Field(
+        default=1024, description="Minimum file size (bytes) to deduplicate"
+    )
+
+    # =========================================================================
     # EXTRACTION SERVICE (optional external microservice)
     # =========================================================================
     # If provided, backend will POST files to this service for text/markdown extraction.
@@ -229,6 +290,14 @@ class Settings(BaseSettings):
     @property
     def batch_path(self) -> Path:
         return Path(self.batch_dir)
+
+    @property
+    def temp_path(self) -> Path:
+        return Path(self.temp_dir)
+
+    @property
+    def dedupe_path(self) -> Path:
+        return Path(self.dedupe_dir)
 
 
 # Global settings instance (imported elsewhere)

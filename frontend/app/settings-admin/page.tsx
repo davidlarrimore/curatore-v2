@@ -8,7 +8,7 @@ import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
 export default function SettingsAdminPage() {
   return (
-    <ProtectedRoute requiredRole="admin">
+    <ProtectedRoute requiredRole="org_admin">
       <SettingsAdminContent />
     </ProtectedRoute>
   )
@@ -49,7 +49,7 @@ function SettingsAdminContent() {
       setUserSettings(userData.settings || {})
       setEditedUserSettings(userData.settings || {})
     } catch (err: any) {
-      setError(err.detail || err.message || 'Failed to load settings')
+      setError(err.message || 'Failed to load settings')
     } finally {
       setIsLoading(false)
     }
@@ -66,7 +66,7 @@ function SettingsAdminContent() {
       setOrgSettings(editedOrgSettings)
       alert('✅ Organization settings saved successfully!')
     } catch (err: any) {
-      setError(err.detail || err.message || 'Failed to save organization settings')
+      setError(err.message || 'Failed to save organization settings')
     } finally {
       setIsSaving(false)
     }
@@ -83,7 +83,7 @@ function SettingsAdminContent() {
       setUserSettings(editedUserSettings)
       alert('✅ User settings saved successfully!')
     } catch (err: any) {
-      setError(err.detail || err.message || 'Failed to save user settings')
+      setError(err.message || 'Failed to save user settings')
     } finally {
       setIsSaving(false)
     }

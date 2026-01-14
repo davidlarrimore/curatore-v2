@@ -36,3 +36,40 @@ app.conf.update(
     task_routes={},
 )
 
+# ============================================================================
+# Celery Beat Schedule (for periodic tasks)
+# ============================================================================
+from celery.schedules import crontab
+
+# Parse cron schedule from config (default: daily at 2 AM)
+cleanup_schedule_str = os.getenv("FILE_CLEANUP_SCHEDULE_CRON", "0 2 * * *")
+cleanup_enabled = _bool(os.getenv("FILE_CLEANUP_ENABLED", "true"), True)
+
+# Parse cron string (format: "minute hour day month day_of_week")
+try:
+    parts = cleanup_schedule_str.split()
+    if len(parts) == 5:
+        cleanup_schedule = crontab(
+            minute=parts[0],
+            hour=parts[1],
+            day_of_month=parts[2],
+            month_of_year=parts[3],
+            day_of_week=parts[4],
+        )
+    else:
+        # Default to daily at 2 AM if parsing fails
+        cleanup_schedule = crontab(hour=2, minute=0)
+except Exception:
+    # Fallback to daily at 2 AM
+    cleanup_schedule = crontab(hour=2, minute=0)
+
+app.conf.beat_schedule = {
+    "cleanup-expired-files": {
+        "task": "app.tasks.cleanup_expired_files_task",
+        "schedule": cleanup_schedule,
+        "options": {"queue": "processing"},
+    },
+}
+
+app.conf.timezone = "UTC"
+

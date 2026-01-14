@@ -23,7 +23,7 @@ interface User {
 
 export default function UsersPage() {
   return (
-    <ProtectedRoute requiredRole="admin">
+    <ProtectedRoute requiredRole="org_admin">
       <UsersContent />
     </ProtectedRoute>
   )
@@ -53,7 +53,7 @@ function UsersContent() {
       const response = await usersApi.listUsers(token)
       setUsers(response.users)
     } catch (err: any) {
-      setError(err.detail || err.message || 'Failed to load users')
+      setError(err.message || 'Failed to load users')
     } finally {
       setIsLoading(false)
     }
@@ -77,7 +77,7 @@ function UsersContent() {
       await usersApi.updateUser(token, userId, { is_active: !isActive })
       await loadUsers()
     } catch (err: any) {
-      alert(`Failed to update user: ${err.detail || err.message}`)
+      alert(`Failed to update user: ${err.message}`)
     }
   }
 
@@ -89,7 +89,7 @@ function UsersContent() {
       await usersApi.deleteUser(token, userId)
       await loadUsers()
     } catch (err: any) {
-      alert(`Failed to delete user: ${err.detail || err.message}`)
+      alert(`Failed to delete user: ${err.message}`)
     }
   }
 

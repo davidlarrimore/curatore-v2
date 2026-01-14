@@ -24,6 +24,9 @@ from ..models import (
     ProcessingOptions,
 )
 from .llm_service import llm_service
+from .path_service import path_service
+from .deduplication_service import deduplication_service
+from .metadata_service import metadata_service
 from ..utils.text_utils import clean_llm_response
 
 
@@ -508,21 +511,106 @@ class DocumentService:
         ext = Path(filename).suffix.lower()
         return not self._supported_extensions or ext in self._supported_extensions
 
-    async def save_uploaded_file(self, filename: str, content: bytes) -> Tuple[str, str]:
-        """Save an uploaded file and return document_id and relative path."""
+    async def save_uploaded_file(
+        self,
+        filename: str,
+        content: bytes,
+        organization_id: Optional[str] = None,
+        batch_id: Optional[str] = None,
+    ) -> Tuple[str, str, Optional[str]]:
+        """
+        Save an uploaded file with hierarchical storage and deduplication support.
+
+        Returns: (document_id, relative_path, file_hash)
+        """
         self._ensure_directories()
         if not self.is_supported_file(filename):
             raise ValueError(f"Unsupported file type: {filename}")
 
         safe = self._safe_filename(Path(filename).name)
-        ext = Path(safe).suffix
-        stem = safe[: -len(ext)] if ext else safe
-
         document_id = uuid.uuid4().hex
-        unique_name = f"{document_id}_{stem}{ext}"
-        dest_path = self.upload_dir / unique_name
-        dest_path.write_bytes(content)
-        return document_id, str(dest_path.relative_to(self.upload_dir))
+
+        # Use hierarchical storage if enabled
+        if settings.use_hierarchical_storage:
+            # Get hierarchical path
+            dest_path = path_service.get_document_path(
+                document_id=document_id,
+                organization_id=organization_id,
+                batch_id=batch_id,
+                file_type="uploaded",
+                filename=safe,
+                create_dirs=True,
+            )
+
+            # Write content to temporary location first
+            temp_path = Path(settings.temp_dir) / f"upload_{document_id}_{safe}"
+            temp_path.parent.mkdir(parents=True, exist_ok=True)
+            temp_path.write_bytes(content)
+
+            file_hash = None
+            try:
+                # Check if deduplication is enabled and file meets size threshold
+                if (settings.file_deduplication_enabled and
+                    await deduplication_service.should_deduplicate_file(temp_path)):
+
+                    # Calculate file hash
+                    file_hash = await deduplication_service.calculate_file_hash(temp_path)
+
+                    # Check for existing duplicate
+                    existing = await deduplication_service.find_duplicate_by_hash(file_hash)
+
+                    if existing:
+                        # File is a duplicate, create reference
+                        self._logger.info(f"Duplicate file detected: {file_hash[:16]}...")
+                        await deduplication_service.add_reference(
+                            hash_value=file_hash,
+                            document_id=document_id,
+                            organization_id=organization_id,
+                        )
+                        # Create symlink or copy to target location
+                        await deduplication_service.create_reference_link(
+                            content_path=existing,
+                            target_path=dest_path,
+                        )
+                    else:
+                        # New file, store in dedupe storage
+                        self._logger.info(f"Storing new file in dedupe storage: {file_hash[:16]}...")
+                        await deduplication_service.store_deduplicated_file(
+                            file_path=temp_path,
+                            hash_value=file_hash,
+                            document_id=document_id,
+                            organization_id=organization_id,
+                            original_filename=safe,
+                        )
+                        # Create reference link
+                        dedupe_content = await deduplication_service.find_duplicate_by_hash(file_hash)
+                        if dedupe_content:
+                            await deduplication_service.create_reference_link(
+                                content_path=dedupe_content,
+                                target_path=dest_path,
+                            )
+                else:
+                    # No deduplication, just copy file
+                    shutil.copy2(temp_path, dest_path)
+
+            finally:
+                # Clean up temp file
+                if temp_path.exists():
+                    temp_path.unlink()
+
+            # Get relative path from organization root
+            org_path = path_service.resolve_organization_path(organization_id)
+            relative_path = str(dest_path.relative_to(org_path))
+            return document_id, relative_path, file_hash
+
+        else:
+            # Legacy flat storage
+            ext = Path(safe).suffix
+            stem = safe[: -len(ext)] if ext else safe
+            unique_name = f"{document_id}_{stem}{ext}"
+            dest_path = self.upload_dir / unique_name
+            dest_path.write_bytes(content)
+            return document_id, str(dest_path.relative_to(self.upload_dir)), None
 
     # ====================== FILE LISTING METHODS ======================
 
@@ -662,25 +750,77 @@ class DocumentService:
 
     # ====================== NEW METHODS FOR V2 ENDPOINT SUPPORT ======================
     
-    def find_uploaded_file(self, document_id: str) -> Optional[Path]:
-        """Find an uploaded file by document_id.
-        
-        This method was missing but is called by the v2 processing endpoint.
-        Searches for files with pattern: {document_id}_*.*
-        
+    def find_uploaded_file(
+        self,
+        document_id: str,
+        organization_id: Optional[str] = None,
+        batch_id: Optional[str] = None,
+    ) -> Optional[Path]:
+        """
+        Find an uploaded file by document_id with hierarchical storage support.
+
+        Searches in hierarchical structure first, then falls back to legacy flat structure.
+        Resolves symlinks if file is deduplicated.
+
         Args:
             document_id: The unique identifier for the uploaded document
-            
+            organization_id: Organization UUID (for hierarchical search)
+            batch_id: Batch UUID (for hierarchical search)
+
         Returns:
             Path object if file found, None otherwise
         """
+        # Try hierarchical storage first
+        if settings.use_hierarchical_storage:
+            try:
+                # Search in hierarchical structure
+                org_path = path_service.resolve_organization_path(organization_id)
+
+                # Determine search paths
+                search_paths = []
+                if batch_id:
+                    # Specific batch
+                    batch_path = org_path / "batches" / batch_id / "uploaded"
+                    if batch_path.exists():
+                        search_paths.append(batch_path)
+                else:
+                    # Search both adhoc and all batches
+                    adhoc_path = org_path / "adhoc" / "uploaded"
+                    if adhoc_path.exists():
+                        search_paths.append(adhoc_path)
+
+                    batches_path = org_path / "batches"
+                    if batches_path.exists():
+                        for batch_dir in batches_path.iterdir():
+                            if batch_dir.is_dir():
+                                uploaded_path = batch_dir / "uploaded"
+                                if uploaded_path.exists():
+                                    search_paths.append(uploaded_path)
+
+                # Search for file
+                for search_path in search_paths:
+                    for file_path in search_path.glob(f"{document_id}_*.*"):
+                        if file_path.is_file() and self.is_supported_file(file_path.name):
+                            # Resolve symlink if deduplicated
+                            if file_path.is_symlink():
+                                resolved = file_path.resolve()
+                                if resolved.exists():
+                                    self._logger.debug(f"Found deduplicated file: {file_path} -> {resolved}")
+                                    return file_path  # Return symlink path for consistency
+                            self._logger.debug(f"Found file in hierarchical storage: {file_path}")
+                            return file_path
+
+            except Exception as e:
+                self._logger.warning(f"Error searching hierarchical storage: {e}")
+
+        # Fallback to legacy flat structure
         if not self.upload_dir or not self.upload_dir.exists():
             try:
                 self._logger.debug("find_uploaded_file: upload_dir missing or not exists: %s", self.upload_dir)
             except Exception:
                 pass
             return None
-            
+
         try:
             # Search for uploaded files with pattern: document_id_originalname.ext
             for file_path in self.upload_dir.glob(f"{document_id}_*.*"):
@@ -1602,6 +1742,129 @@ class DocumentService:
                 return False
         
         return True
+
+    # ====================== HIERARCHICAL STORAGE HELPER METHODS ======================
+
+    def create_temp_job_directory(self, job_id: str) -> Path:
+        """
+        Create a temporary processing directory for a job.
+
+        Args:
+            job_id: Job UUID
+
+        Returns:
+            Path to job's temp directory
+        """
+        return path_service.get_temp_job_path(job_id, create_dirs=True)
+
+    def cleanup_temp_job_directory(self, job_id: str) -> bool:
+        """
+        Clean up temporary processing directory for a job.
+
+        Args:
+            job_id: Job UUID
+
+        Returns:
+            True if cleaned up successfully, False otherwise
+        """
+        try:
+            temp_path = path_service.get_temp_job_path(job_id, create_dirs=False)
+            if temp_path.exists():
+                shutil.rmtree(temp_path)
+                self._logger.info(f"Cleaned up temp directory: {temp_path}")
+                return True
+            return False
+        except Exception as e:
+            self._logger.error(f"Failed to cleanup temp directory for job {job_id}: {e}")
+            return False
+
+    async def get_file_hash(self, document_id: str, organization_id: Optional[str] = None, batch_id: Optional[str] = None) -> Optional[str]:
+        """
+        Retrieve the content hash for a document.
+
+        Args:
+            document_id: Document UUID
+            organization_id: Organization UUID
+            batch_id: Batch UUID
+
+        Returns:
+            File hash string or None if not found
+        """
+        file_path = self.find_uploaded_file(document_id, organization_id, batch_id)
+        if not file_path or not file_path.exists():
+            return None
+
+        try:
+            # If file is a symlink, it's deduplicated - resolve to get hash from path
+            if file_path.is_symlink():
+                resolved = file_path.resolve()
+                # Hash is the parent directory name in dedupe structure
+                if "dedupe" in str(resolved):
+                    return resolved.parent.name
+
+            # Otherwise calculate hash
+            return await deduplication_service.calculate_file_hash(file_path)
+        except Exception as e:
+            self._logger.error(f"Failed to get file hash for {document_id}: {e}")
+            return None
+
+    async def find_duplicates(self, organization_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Find all duplicate files in an organization.
+
+        Args:
+            organization_id: Organization UUID (None for all orgs)
+
+        Returns:
+            List of duplicate file groups with metadata
+        """
+        duplicates = []
+        dedupe_base = settings.dedupe_path
+
+        if not dedupe_base.exists():
+            return duplicates
+
+        # Scan dedupe directory for files with multiple references
+        for shard_dir in dedupe_base.iterdir():
+            if not shard_dir.is_dir():
+                continue
+
+            for hash_dir in shard_dir.iterdir():
+                if not hash_dir.is_dir():
+                    continue
+
+                refs_path = hash_dir / "refs.json"
+                if not refs_path.exists():
+                    continue
+
+                try:
+                    import json
+                    refs_data = json.loads(refs_path.read_text())
+
+                    # Filter by organization if specified
+                    references = refs_data.get("references", [])
+                    if organization_id:
+                        references = [
+                            ref for ref in references
+                            if ref.get("organization_id") == organization_id
+                        ]
+
+                    # Only include if there are multiple references (duplicates)
+                    if len(references) > 1:
+                        duplicates.append({
+                            "hash": refs_data.get("hash"),
+                            "original_filename": refs_data.get("original_filename"),
+                            "file_size": refs_data.get("file_size"),
+                            "reference_count": len(references),
+                            "references": references,
+                            "storage_saved": refs_data.get("file_size", 0) * (len(references) - 1),
+                        })
+
+                except Exception as e:
+                    self._logger.error(f"Error reading refs file {refs_path}: {e}")
+                    continue
+
+        return duplicates
 
 
 # Create singleton instance

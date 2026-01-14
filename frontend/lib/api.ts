@@ -691,6 +691,132 @@ export const settingsApi = {
   },
 }
 
+// -------------------- Storage API --------------------
+export const storageApi = {
+  async getStats(token: string, organizationId?: string): Promise<{
+    organization_id: string
+    total_files: number
+    total_size_bytes: number
+    files_by_type: { uploaded: number; processed: number }
+    deduplication: {
+      unique_files: number
+      total_references: number
+      duplicate_references: number
+      storage_used_bytes: number
+      storage_saved_bytes: number
+      savings_percentage: number
+    }
+  }> {
+    const url = new URL(apiUrl('/storage/stats'))
+    if (organizationId) url.searchParams.set('organization_id', organizationId)
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async triggerCleanup(token: string, dryRun: boolean = true): Promise<{
+    dry_run: boolean
+    started_at: string
+    completed_at: string
+    duration_seconds: number
+    total_expired: number
+    deleted_count: number
+    would_delete_count: number
+    skipped_count: number
+    error_count: number
+    expired_batches: number
+  }> {
+    const url = new URL(apiUrl('/storage/cleanup'))
+    url.searchParams.set('dry_run', String(dryRun))
+    const res = await fetch(url.toString(), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    return handleJson(res)
+  },
+
+  async getRetentionPolicy(token: string): Promise<{
+    enabled: boolean
+    retention_periods: {
+      uploaded_days: number
+      processed_days: number
+      batch_days: number
+      temp_hours: number
+    }
+    cleanup_schedule: string
+    batch_size: number
+    dry_run: boolean
+  }> {
+    const res = await fetch(apiUrl('/storage/retention'), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getDeduplicationStats(token: string, organizationId?: string): Promise<{
+    organization_id: string
+    enabled: boolean
+    strategy: string
+    min_file_size: number
+    unique_files: number
+    total_references: number
+    duplicate_references: number
+    storage_used_bytes: number
+    storage_saved_bytes: number
+    savings_percentage: number
+  }> {
+    const url = new URL(apiUrl('/storage/deduplication'))
+    if (organizationId) url.searchParams.set('organization_id', organizationId)
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async listDuplicates(token: string, organizationId?: string): Promise<{
+    organization_id: string
+    duplicate_groups: number
+    total_storage_saved: number
+    duplicates: Array<{
+      hash: string
+      file_count: number
+      document_ids: string[]
+      storage_saved: number
+    }>
+  }> {
+    const url = new URL(apiUrl('/storage/duplicates'))
+    if (organizationId) url.searchParams.set('organization_id', organizationId)
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getDuplicateDetails(token: string, hash: string): Promise<{
+    hash: string
+    original_filename: string
+    file_size: number
+    created_at: string
+    reference_count: number
+    references: Array<{
+      document_id: string
+      organization_id: string
+      created_at: string
+    }>
+  }> {
+    const res = await fetch(apiUrl(`/storage/duplicates/${hash}`), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+}
+
 // -------------------- Users API --------------------
 export const usersApi = {
   async listUsers(token: string): Promise<{

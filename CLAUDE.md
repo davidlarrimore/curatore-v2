@@ -203,6 +203,40 @@ The backend follows a service-oriented architecture with clear separation of con
   - Supports recursive traversal and folder structure preservation
   - Uses Azure AD app-only authentication (client credentials flow)
 
+- **`auth_service.py`**: Authentication and authorization
+  - JWT token generation (access + refresh tokens)
+  - API key generation and validation with bcrypt hashing
+  - Password hashing and verification
+  - Token refresh and validation logic
+
+- **`database_service.py`**: Database session management
+  - Async SQLAlchemy session handling
+  - Supports SQLite (development) and PostgreSQL (production)
+  - Connection pooling and health checks
+  - Singleton pattern for global session management
+
+- **`email_service.py`**: Email delivery system
+  - Multiple backends: console (dev), SMTP, SendGrid, AWS SES
+  - Email verification and password reset workflows
+  - Template-based email generation
+  - Configurable retry logic and error handling
+
+- **`verification_service.py`**: Email verification management
+  - Token generation and validation for email verification
+  - Grace period enforcement before requiring verification
+  - Integration with email service for delivery
+
+- **`password_reset_service.py`**: Password reset workflows
+  - Secure token generation for password reset links
+  - Token expiration and validation
+  - Integration with email service
+
+- **`connection_service.py`**: Runtime-configurable connections
+  - Store and manage external service connections (SharePoint, LLM, etc.)
+  - Per-organization connection isolation
+  - Automatic connection health testing
+  - Secure credential storage
+
 ### API Structure
 
 All API endpoints are versioned under `/api/v1/`:
@@ -212,13 +246,23 @@ backend/app/
 ├── api/
 │   └── v1/
 │       ├── routers/
-│       │   ├── documents.py    # Document upload, process, download
-│       │   ├── jobs.py         # Job status, polling
-│       │   ├── sharepoint.py   # SharePoint inventory, download
-│       │   └── system.py       # Health, config, queue info
-│       └── models.py           # V1-specific Pydantic models
-├── models.py                   # Shared domain models
-└── services/                   # Business logic layer
+│       │   ├── documents.py       # Document upload, process, download
+│       │   ├── jobs.py            # Job status, polling
+│       │   ├── sharepoint.py      # SharePoint inventory, download
+│       │   ├── system.py          # Health, config, queue info
+│       │   ├── auth.py            # Authentication (login, register, refresh)
+│       │   ├── users.py           # User management
+│       │   ├── organizations.py   # Organization/tenant management
+│       │   ├── api_keys.py        # API key management
+│       │   └── connections.py     # Runtime connection management
+│       └── models.py              # V1-specific Pydantic models
+├── models.py                      # Shared domain models
+├── database/
+│   ├── models.py                  # SQLAlchemy ORM models
+│   └── base.py                    # SQLAlchemy base and metadata
+├── commands/
+│   └── seed.py                    # Database seeding command
+└── services/                      # Business logic layer
 ```
 
 **Important**: Always use `/api/v1/` paths. The legacy `/api/` alias exists for backwards compatibility but returns deprecation headers.
@@ -259,18 +303,113 @@ Curatore supports multiple extraction engines via the `EXTRACTION_PRIORITY` envi
 - Endpoint: `POST /v1/convert/file`
 - Enable in docker-compose: `ENABLE_DOCLING_SERVICE=true`
 
+### Multi-Tenancy & Authentication
+
+Curatore v2 supports multi-tenant architecture with optional authentication:
+
+**Database Models**:
+- **Organization**: Tenant with isolated settings and connections
+- **User**: User accounts with email verification and password reset
+- **ApiKey**: API keys for headless/programmatic access
+- **Connection**: Runtime-configurable service connections (SharePoint, LLM, etc.)
+- **SystemSetting**: Global system settings
+- **AuditLog**: Audit trail for configuration changes
+
+**Authentication Modes**:
+- **`ENABLE_AUTH=false`** (default): Backward compatibility mode
+  - No authentication required
+  - Uses `DEFAULT_ORG_ID` from env or first organization in database
+  - All requests operate in context of default organization
+
+- **`ENABLE_AUTH=true`**: Multi-tenant mode with authentication
+  - JWT token-based authentication (for frontend users)
+  - API key authentication (for programmatic access)
+  - Per-organization isolation of settings, connections, and users
+  - Email verification and password reset workflows
+
+**Initial Setup** (when using authentication):
+1. Copy `.env.example` to `.env` and configure database settings
+2. Run database initialization: `python -m app.commands.seed --create-admin`
+3. Set `ENABLE_AUTH=true` in `.env`
+4. Login with admin credentials and change password
+5. Create organizations, users, and API keys as needed
+
+**Important Files**:
+- `backend/app/database/models.py`: ORM models for multi-tenant data
+- `backend/app/commands/seed.py`: Database seeding and admin user creation
+- `backend/app/services/auth_service.py`: JWT and API key handling
+- `backend/app/dependencies.py`: Authentication dependency injection
+
 ### File Storage
 
-All file operations use volume-mounted storage at `/app/files` (in containers):
+#### Hierarchical Storage Structure (v2.1+)
+
+Curatore uses a hierarchical file organization system with multi-tenant isolation, batch groupings, and automatic deduplication:
 
 ```
 /app/files/
-├── uploaded_files/       # User uploads (original files)
-├── processed_files/      # Converted markdown output
-└── batch_files/          # Operator-provided bulk inputs
+├── organizations/                  # Multi-tenant file isolation
+│   └── {organization_id}/          # UUID-based organization folder
+│       ├── batches/
+│       │   └── {batch_id}/         # Batch-grouped files
+│       │       ├── uploaded/       # Original uploaded files (or symlinks)
+│       │       │   └── {document_id}_{name}.ext
+│       │       ├── processed/      # Converted markdown files
+│       │       │   └── {document_id}_{name}.md
+│       │       └── metadata.json   # Batch metadata + expiration
+│       └── adhoc/                  # Single-file uploads (no batch)
+│           ├── uploaded/
+│           └── processed/
+├── shared/                         # For unauthenticated mode (ENABLE_AUTH=false)
+│   ├── batches/{batch_id}/...
+│   └── adhoc/...
+├── dedupe/                         # Content-addressable storage (deduplication)
+│   └── {hash[:2]}/                 # Shard by first 2 chars of SHA-256
+│       └── {hash}/                 # Full hash directory
+│           ├── content.ext         # Actual file content (stored once)
+│           └── refs.json           # Reference count + document IDs
+├── temp/                           # Temporary processing files
+│   └── {job_id}/                   # Auto-cleanup after job completion
+├── uploaded_files/                 # Legacy flat structure (backward compat)
+├── processed_files/                # Legacy flat structure (backward compat)
+└── batch_files/                    # Legacy bulk inputs (backward compat)
 ```
 
-**Important**: File paths in code should use `settings.upload_dir`, `settings.processed_dir`, etc. from `config.py`. Never hardcode paths.
+**File Deduplication:**
+- Identical files are stored only once in `dedupe/` using SHA-256 content hashing
+- Original file locations contain symlinks (default) or copies to deduplicated content
+- Reference counting tracks how many documents use each unique file
+- Storage savings are reported via `/api/v1/storage/deduplication` endpoint
+
+**Automatic Cleanup:**
+- Expired files are automatically deleted based on configurable retention periods:
+  - Uploaded files: 7 days (configurable via `FILE_RETENTION_UPLOADED_DAYS`)
+  - Processed files: 30 days (configurable via `FILE_RETENTION_PROCESSED_DAYS`)
+  - Batch files: 14 days (configurable via `FILE_RETENTION_BATCH_DAYS`)
+  - Temp files: 24 hours (configurable via `FILE_RETENTION_TEMP_HOURS`)
+- Cleanup runs daily at 2 AM UTC (configurable via `FILE_CLEANUP_SCHEDULE_CRON`)
+- Active jobs are protected from cleanup
+- Deduplicated files are only deleted when all references are removed
+
+**Database Storage** (when using SQLite):
+```
+/app/data/
+└── curatore.db          # SQLite database file
+```
+
+**Important**:
+- File paths in code should use `path_service.get_document_path()` or `settings.upload_dir`, `settings.processed_dir`, etc. from `config.py`. Never hardcode paths.
+- Both `files/` and `data/` directories are bind-mounted from the host in docker-compose
+- SQLite database file persists across container restarts via volume mount
+- Set `USE_HIERARCHICAL_STORAGE=true` to enable new structure (default: true)
+- Legacy flat structure is maintained for backward compatibility
+
+**Configuration:**
+- Hierarchical storage: `USE_HIERARCHICAL_STORAGE` (default: true)
+- Deduplication: `FILE_DEDUPLICATION_ENABLED` (default: true)
+- Deduplication strategy: `FILE_DEDUPLICATION_STRATEGY` (symlink | copy | reference)
+- Automatic cleanup: `FILE_CLEANUP_ENABLED` (default: true)
+- See `.env.example` for complete configuration options
 
 ### Frontend Architecture
 
@@ -315,7 +454,30 @@ frontend/
 1. Create endpoint in appropriate router (`backend/app/api/v1/routers/`)
 2. Define request/response models in `backend/app/api/v1/models.py`
 3. Implement business logic in service layer (`backend/app/services/`)
-4. Update frontend API client if needed (`frontend/lib/api.ts`)
+4. Add authentication dependencies if needed (`from app.dependencies import get_current_user`)
+5. Update frontend API client if needed (`frontend/lib/api.ts`)
+
+### Working with Runtime-Configurable Connections
+
+When `ENABLE_AUTH=true`, external service connections (SharePoint, LLM, etc.) can be managed at runtime per organization:
+
+**Connection Types**:
+- `sharepoint`: Microsoft SharePoint/Graph API connection
+- `openai`: OpenAI API connection (or compatible endpoints)
+- `smtp`: SMTP email server connection
+- Custom types can be added by extending the Connection model
+
+**Typical Flow**:
+1. User creates connection via `POST /api/v1/connections` with credentials
+2. Backend optionally tests connection health on save (`AUTO_TEST_CONNECTIONS=true`)
+3. Services fetch active connection for organization from database
+4. If no connection exists, fall back to environment variables
+
+**Important**:
+- Credentials are stored encrypted in the database
+- Each organization has isolated connections
+- Connection health can be tested via `POST /api/v1/connections/{id}/test`
+- Services should gracefully fall back to env vars when no connection exists
 
 ### Testing Strategy
 
@@ -381,7 +543,67 @@ Key environment variables (see `.env.example` for full list):
 - `MS_GRAPH_SCOPE`: OAuth scope (default: `https://graph.microsoft.com/.default`)
 - `MS_GRAPH_BASE_URL`: Graph API base URL (default: `https://graph.microsoft.com/v1.0`)
 
+**Database**:
+- `DATABASE_URL`: SQLAlchemy connection URL
+  - SQLite (dev): `sqlite+aiosqlite:///./data/curatore.db`
+  - PostgreSQL (prod): `postgresql+asyncpg://user:pass@host:5432/curatore`
+- `DB_POOL_SIZE`: Connection pool size (PostgreSQL, default: 20)
+- `DB_MAX_OVERFLOW`: Max overflow connections (PostgreSQL, default: 40)
+- `DB_POOL_RECYCLE`: Connection recycle time in seconds (PostgreSQL, default: 3600)
+
+**Authentication & Security**:
+- `ENABLE_AUTH`: Enable authentication layer (default: `false`)
+- `DEFAULT_ORG_ID`: Default organization UUID (when `ENABLE_AUTH=false`)
+- `JWT_SECRET_KEY`: Secret key for JWT signing (change in production!)
+- `JWT_ALGORITHM`: JWT signing algorithm (default: `HS256`)
+- `JWT_ACCESS_TOKEN_EXPIRE_MINUTES`: Access token TTL (default: 60)
+- `JWT_REFRESH_TOKEN_EXPIRE_DAYS`: Refresh token TTL (default: 30)
+- `BCRYPT_ROUNDS`: Bcrypt work factor (default: 12)
+- `API_KEY_PREFIX`: API key prefix for display (default: `cur_`)
+
+**Email Configuration**:
+- `EMAIL_BACKEND`: Email backend (`console`, `smtp`, `sendgrid`, `ses`)
+- `EMAIL_FROM_ADDRESS`: From email address
+- `EMAIL_FROM_NAME`: From display name
+- `FRONTEND_BASE_URL`: Frontend URL for verification/reset links
+- `SMTP_HOST`, `SMTP_PORT`, `SMTP_USERNAME`, `SMTP_PASSWORD`: SMTP settings (when using `smtp`)
+- `SENDGRID_API_KEY`: SendGrid API key (when using `sendgrid`)
+- `AWS_REGION`, `AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`: AWS SES settings (when using `ses`)
+- `EMAIL_VERIFICATION_TOKEN_EXPIRE_HOURS`: Verification token TTL (default: 24)
+- `PASSWORD_RESET_TOKEN_EXPIRE_HOURS`: Reset token TTL (default: 1)
+- `EMAIL_VERIFICATION_GRACE_PERIOD_DAYS`: Grace period before enforcing verification (default: 7)
+
+**Initial Seeding** (first-time setup):
+- `ADMIN_EMAIL`: Initial admin email
+- `ADMIN_USERNAME`: Initial admin username
+- `ADMIN_PASSWORD`: Initial admin password (change after first login!)
+- `ADMIN_FULL_NAME`: Initial admin full name
+- `DEFAULT_ORG_NAME`: Default organization name
+- `DEFAULT_ORG_SLUG`: Default organization slug
+
 ## Common Development Tasks
+
+### Database Setup and Seeding
+
+When using multi-tenancy and authentication features:
+
+```bash
+# Initialize database and create admin user
+python -m app.commands.seed --create-admin
+
+# The seed command:
+# 1. Creates database tables (if not exist)
+# 2. Creates default organization from env vars
+# 3. Creates admin user with credentials from env vars
+# 4. Returns organization ID and admin user ID
+
+# After seeding, set ENABLE_AUTH=true in .env to enable authentication
+```
+
+**Important**:
+- Run the seed command before enabling authentication
+- Change the default admin password immediately after first login
+- Store `DEFAULT_ORG_ID` from seed output in `.env` for backward compatibility mode
 
 ### Debugging Processing Failures
 
@@ -498,6 +720,44 @@ Base URL: `http://localhost:8000/api/v1`
 **SharePoint**:
 - `POST /sharepoint/inventory` - List SharePoint folder contents with metadata
 - `POST /sharepoint/download` - Download selected files to batch directory
+
+**Authentication** (when `ENABLE_AUTH=true`):
+- `POST /auth/register` - Register new user
+- `POST /auth/login` - Login and receive JWT tokens
+- `POST /auth/refresh` - Refresh access token
+- `POST /auth/logout` - Logout (client-side token discard)
+- `GET /auth/me` - Get current user profile
+- `POST /auth/verify-email` - Verify email address
+- `POST /auth/request-password-reset` - Request password reset
+- `POST /auth/reset-password` - Reset password with token
+
+**Organizations** (when `ENABLE_AUTH=true`):
+- `GET /organizations` - List organizations (admin only)
+- `POST /organizations` - Create organization (admin only)
+- `GET /organizations/{id}` - Get organization details
+- `PATCH /organizations/{id}` - Update organization
+- `DELETE /organizations/{id}` - Delete organization (admin only)
+
+**Users** (when `ENABLE_AUTH=true`):
+- `GET /users` - List users in organization
+- `GET /users/{id}` - Get user details
+- `PATCH /users/{id}` - Update user
+- `DELETE /users/{id}` - Delete user
+
+**API Keys** (when `ENABLE_AUTH=true`):
+- `GET /api-keys` - List API keys
+- `POST /api-keys` - Create API key
+- `GET /api-keys/{id}` - Get API key details
+- `PATCH /api-keys/{id}` - Update API key (revoke, etc.)
+- `DELETE /api-keys/{id}` - Delete API key
+
+**Connections** (when `ENABLE_AUTH=true`):
+- `GET /connections` - List connections
+- `POST /connections` - Create connection (SharePoint, LLM, etc.)
+- `GET /connections/{id}` - Get connection details
+- `PATCH /connections/{id}` - Update connection
+- `DELETE /connections/{id}` - Delete connection
+- `POST /connections/{id}/test` - Test connection health
 
 **System**:
 - `GET /health` - API health check

@@ -856,3 +856,199 @@ async def comprehensive_health() -> Dict[str, Any]:
         health_report["issues"] = issues
 
     return health_report
+
+
+# ============================================================================
+# STORAGE MANAGEMENT & DEDUPLICATION ENDPOINTS
+# ============================================================================
+
+@router.get("/storage/stats", tags=["System", "Storage"])
+async def get_storage_stats(organization_id: Optional[str] = None):
+    """
+    Get storage usage statistics by organization.
+
+    Returns total files, total size, deduplication savings, and file count by type.
+    """
+    try:
+        from ....services.deduplication_service import deduplication_service
+        from ....services.path_service import path_service
+
+        # Get deduplication stats
+        dedupe_stats = await deduplication_service.get_deduplication_stats(organization_id)
+
+        # Calculate storage used by organization
+        total_files = 0
+        total_size = 0
+        files_by_type = {"uploaded": 0, "processed": 0}
+
+        if organization_id:
+            org_paths = [path_service.resolve_organization_path(organization_id)]
+        else:
+            # All organizations
+            base_path = settings.files_root_path
+            org_base = base_path / "organizations"
+            shared_base = base_path / "shared"
+
+            org_paths = []
+            if org_base.exists():
+                org_paths.extend([p for p in org_base.iterdir() if p.is_dir()])
+            if shared_base.exists():
+                org_paths.append(shared_base)
+
+        # Scan files
+        for org_path in org_paths:
+            if not org_path.exists():
+                continue
+
+            for file_type in ["uploaded", "processed"]:
+                # Check batches
+                batches_path = org_path / "batches"
+                if batches_path.exists():
+                    for batch_dir in batches_path.iterdir():
+                        if not batch_dir.is_dir():
+                            continue
+
+                        type_dir = batch_dir / file_type
+                        if type_dir.exists():
+                            for file_path in type_dir.rglob("*"):
+                                if file_path.is_file():
+                                    total_files += 1
+                                    files_by_type[file_type] += 1
+
+                                    # Get actual file size (resolve symlinks)
+                                    if file_path.is_symlink():
+                                        resolved = file_path.resolve()
+                                        if resolved.exists():
+                                            total_size += resolved.stat().st_size
+                                    else:
+                                        total_size += file_path.stat().st_size
+
+                # Check adhoc
+                adhoc_dir = org_path / "adhoc" / file_type
+                if adhoc_dir.exists():
+                    for file_path in adhoc_dir.rglob("*"):
+                        if file_path.is_file():
+                            total_files += 1
+                            files_by_type[file_type] += 1
+
+                            if file_path.is_symlink():
+                                resolved = file_path.resolve()
+                                if resolved.exists():
+                                    total_size += resolved.stat().st_size
+                            else:
+                                total_size += file_path.stat().st_size
+
+        return {
+            "organization_id": organization_id,
+            "total_files": total_files,
+            "total_size_bytes": total_size,
+            "files_by_type": files_by_type,
+            "deduplication": dedupe_stats,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get storage stats: {str(e)}")
+
+
+@router.post("/storage/cleanup", tags=["System", "Storage"])
+async def trigger_manual_cleanup(dry_run: bool = Query(default=True, description="Dry run mode")):
+    """
+    Manually trigger cleanup of expired files.
+
+    By default runs in dry_run mode to preview what would be deleted.
+    Set dry_run=false to actually delete files.
+    """
+    try:
+        from ....services.retention_service import retention_service
+
+        result = await retention_service.cleanup_expired_files(dry_run=dry_run)
+        return result
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
+
+
+@router.get("/storage/retention", tags=["System", "Storage"])
+async def get_retention_policy():
+    """Get current retention policy settings."""
+    return {
+        "enabled": settings.file_cleanup_enabled,
+        "retention_periods": {
+            "uploaded_days": settings.file_retention_uploaded_days,
+            "processed_days": settings.file_retention_processed_days,
+            "batch_days": settings.file_retention_batch_days,
+            "temp_hours": settings.file_retention_temp_hours,
+        },
+        "cleanup_schedule": settings.file_cleanup_schedule_cron,
+        "batch_size": settings.file_cleanup_batch_size,
+        "dry_run": settings.file_cleanup_dry_run,
+    }
+
+
+@router.get("/storage/deduplication", tags=["System", "Storage"])
+async def get_deduplication_stats(organization_id: Optional[str] = None):
+    """
+    Get deduplication statistics and storage savings.
+
+    Returns unique files, duplicate references, storage saved, and savings percentage.
+    """
+    try:
+        from ....services.deduplication_service import deduplication_service
+
+        stats = await deduplication_service.get_deduplication_stats(organization_id)
+        return {
+            "organization_id": organization_id,
+            "enabled": settings.file_deduplication_enabled,
+            "strategy": settings.file_deduplication_strategy,
+            "min_file_size": settings.dedupe_min_file_size,
+            **stats,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get deduplication stats: {str(e)}")
+
+
+@router.get("/storage/duplicates", tags=["System", "Storage"])
+async def list_duplicate_files(organization_id: Optional[str] = None):
+    """
+    List all files with duplicates.
+
+    Returns hash, file count, document IDs, and storage saved per file.
+    """
+    try:
+        from ....services.document_service import document_service
+
+        duplicates = await document_service.find_duplicates(organization_id)
+
+        return {
+            "organization_id": organization_id,
+            "duplicate_groups": len(duplicates),
+            "total_storage_saved": sum(d.get("storage_saved", 0) for d in duplicates),
+            "duplicates": duplicates,
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to list duplicates: {str(e)}")
+
+
+@router.get("/storage/duplicates/{hash}", tags=["System", "Storage"])
+async def get_duplicate_details(hash: str):
+    """
+    Get detailed info about a specific duplicate file group.
+
+    Returns full reference list, file size, original name, and created dates.
+    """
+    try:
+        from ....services.deduplication_service import deduplication_service
+
+        refs = await deduplication_service.get_file_references(hash)
+
+        if not refs:
+            raise HTTPException(status_code=404, detail=f"Duplicate group not found: {hash}")
+
+        return refs
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to get duplicate details: {str(e)}")

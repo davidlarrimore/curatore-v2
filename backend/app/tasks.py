@@ -399,3 +399,48 @@ def send_invitation_email_task(
     except Exception as e:
         logger.error(f"Error sending invitation email to {user_email}: {e}")
         raise
+
+
+# ============================================================================
+# FILE CLEANUP TASKS
+# ============================================================================
+
+@shared_task(bind=True)
+def cleanup_expired_files_task(self, dry_run: bool = False) -> Dict[str, Any]:
+    """
+    Scheduled task for cleaning up expired files.
+
+    This task runs on a schedule defined in celery_app.py (default: daily at 2 AM).
+    It identifies and deletes files that have exceeded their retention period,
+    handles deduplicated files with reference counting, and respects active jobs.
+
+    Args:
+        dry_run: If True, only report what would be deleted without actual deletion
+
+    Returns:
+        Dict with cleanup statistics
+    """
+    from .services.retention_service import retention_service
+
+    logger = logging.getLogger("curatore.cleanup")
+    logger.info(f"Starting scheduled file cleanup task (dry_run={dry_run})")
+
+    try:
+        result = asyncio.run(retention_service.cleanup_expired_files(dry_run=dry_run))
+
+        if dry_run:
+            logger.info(
+                f"[DRY RUN] Would delete {result['would_delete_count']} files, "
+                f"skip {result['skipped_count']}, errors: {result['error_count']}"
+            )
+        else:
+            logger.info(
+                f"Cleanup completed: deleted {result['deleted_count']} files, "
+                f"skipped {result['skipped_count']}, errors: {result['error_count']}"
+            )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error in cleanup task: {e}")
+        raise

@@ -67,6 +67,10 @@ def _sanitize_folder_name(name: str) -> str:
     return cleaned.replace(" ", "_") or "sharepoint_folder"
 
 
+def _should_skip_file(name: str) -> bool:
+    return Path(name).suffix.lower() == ".eml"
+
+
 def _prompt_folder_url() -> str:
     try:
         return input("SharePoint folder URL: ").strip()
@@ -1146,6 +1150,16 @@ def main() -> int:
         ):
             while download_queue and len(download_futures) < args.max_downloads:
                 item = download_queue.pop(0)
+                if _should_skip_file(item.get("name", "")):
+                    completed += 1
+                    results.append(
+                        f"[{completed}/{total_items}] skipped: {item.get('name', '')} (unsupported .eml)"
+                    )
+                    print(
+                        f"[{completed}/{total_items}] skipped: {item.get('name', '')} (unsupported .eml)",
+                        file=sys.stderr,
+                    )
+                    continue
                 future = download_executor.submit(
                     _download_item,
                     item,
@@ -1177,7 +1191,19 @@ def main() -> int:
 
             while downloaded_ready and len(extracting) < args.max_extracting:
                 entry = downloaded_ready.pop(0)
-                batch_response = _enqueue_batch_process(client, api_base, entry["target_path"].name)
+                try:
+                    batch_response = _enqueue_batch_process(client, api_base, entry["target_path"].name)
+                except httpx.HTTPStatusError as exc:
+                    completed += 1
+                    detail = f"{exc.response.status_code} {exc.response.reason_phrase}"
+                    results.append(
+                        f"[{completed}/{total_items}] failed: {entry['target_path'].name} ({detail})"
+                    )
+                    print(
+                        f"[{completed}/{total_items}] failed: {entry['target_path'].name} ({detail})",
+                        file=sys.stderr,
+                    )
+                    continue
                 extracting.append(
                     {
                         "item": entry["item"],

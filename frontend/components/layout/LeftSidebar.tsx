@@ -13,7 +13,8 @@ import {
   PanelLeftClose,
   Link as LinkIcon,
   Users,
-  Shield
+  Shield,
+  HardDrive
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { systemApi } from '@/lib/api'
@@ -108,12 +109,18 @@ export function LeftSidebar({
         current: pathname === '/connections'
       }
     ] : []),
-    ...(isAuthenticated && user?.role === 'admin' ? [
+    ...(isAuthenticated && user?.role === 'org_admin' ? [
       {
         name: 'Users',
         href: '/users',
         icon: Users,
         current: pathname === '/users'
+      },
+      {
+        name: 'Storage',
+        href: '/storage',
+        icon: HardDrive,
+        current: pathname === '/storage'
       },
       {
         name: 'Admin Settings',

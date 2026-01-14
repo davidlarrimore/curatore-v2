@@ -52,12 +52,16 @@ class InMemoryStorage:
     def __init__(self):
         """
         Initialize the in-memory storage with empty dictionaries.
-        
+
         Creates two empty dictionaries to store processing results and batch results.
         This method is called once when the storage service is instantiated.
         """
         self.processing_results: Dict[str, ProcessingResult] = {}
         self.batch_results: Dict[str, BatchProcessingResult] = {}
+        # Indices for organization, batch, and hash lookups
+        self._org_index: Dict[str, List[str]] = {}  # org_id -> [doc_ids]
+        self._batch_index: Dict[str, List[str]] = {}  # batch_id -> [doc_ids]
+        self._hash_index: Dict[str, List[str]] = {}  # file_hash -> [doc_ids]
 
     def get_processing_result(self, document_id: str) -> Optional[ProcessingResult]:
         """
@@ -204,26 +208,80 @@ class InMemoryStorage:
     def clear_all(self):
         """
         Clear all stored data from memory.
-        
+
         This method removes all processing results and batch results from storage.
         This operation cannot be undone and all data will be permanently lost.
-        
+
         Side Effects:
             - Clears processing_results dictionary
             - Clears batch_results dictionary
             - Frees memory used by stored results
-        
+
         Use Cases:
             - Application startup/restart
             - System reset functionality
             - Testing cleanup
-        
+
         Example:
             >>> storage_service.clear_all()
             >>> print(len(storage_service.get_all_processing_results()))  # Output: 0
         """
         self.processing_results.clear()
         self.batch_results.clear()
+        if hasattr(self, '_org_index'):
+            self._org_index.clear()
+        if hasattr(self, '_batch_index'):
+            self._batch_index.clear()
+        if hasattr(self, '_hash_index'):
+            self._hash_index.clear()
+
+    def get_results_by_organization(self, organization_id: str) -> List[ProcessingResult]:
+        """
+        Get all processing results for a specific organization.
+
+        Args:
+            organization_id: Organization UUID
+
+        Returns:
+            List of processing results for the organization
+        """
+        if not hasattr(self, '_org_index'):
+            return []
+
+        doc_ids = self._org_index.get(organization_id, [])
+        return [self.processing_results[doc_id] for doc_id in doc_ids if doc_id in self.processing_results]
+
+    def get_results_by_batch(self, batch_id: str) -> List[ProcessingResult]:
+        """
+        Get all processing results for a specific batch.
+
+        Args:
+            batch_id: Batch UUID
+
+        Returns:
+            List of processing results for the batch
+        """
+        if not hasattr(self, '_batch_index'):
+            return []
+
+        doc_ids = self._batch_index.get(batch_id, [])
+        return [self.processing_results[doc_id] for doc_id in doc_ids if doc_id in self.processing_results]
+
+    def get_results_by_hash(self, file_hash: str) -> List[ProcessingResult]:
+        """
+        Get all processing results with a specific file hash (duplicates).
+
+        Args:
+            file_hash: File content hash (SHA-256)
+
+        Returns:
+            List of processing results with matching hash
+        """
+        if not hasattr(self, '_hash_index'):
+            return []
+
+        doc_ids = self._hash_index.get(file_hash, [])
+        return [self.processing_results[doc_id] for doc_id in doc_ids if doc_id in self.processing_results]
 
 
 # ============================================================================
@@ -329,9 +387,76 @@ class RedisStorage(InMemoryStorage):
                 if cursor == 0:
                     break
             self.r.delete(self._key_all_docs())
+            # Clear organization, batch, and hash indices
+            self.r.delete("storage:org:index")
+            self.r.delete("storage:batch:index")
+            self.r.delete("storage:hash:index")
+            cursor = 0
+            while True:
+                cursor, keys = self.r.scan(cursor=cursor, match="storage:org:*", count=500)
+                if keys:
+                    self.r.delete(*keys)
+                if cursor == 0:
+                    break
+            cursor = 0
+            while True:
+                cursor, keys = self.r.scan(cursor=cursor, match="storage:batch:*", count=500)
+                if keys:
+                    self.r.delete(*keys)
+                if cursor == 0:
+                    break
+            cursor = 0
+            while True:
+                cursor, keys = self.r.scan(cursor=cursor, match="storage:hash:*", count=500)
+                if keys:
+                    self.r.delete(*keys)
+                if cursor == 0:
+                    break
         except Exception:
             pass
         return super().clear_all()
+
+    def get_results_by_organization(self, organization_id: str) -> List[ProcessingResult]:
+        """Get all processing results for a specific organization."""
+        try:
+            doc_ids = self.r.smembers(f"storage:org:{organization_id}")
+            results = []
+            for b in doc_ids:
+                doc_id = b.decode()
+                res = self.get_processing_result(doc_id)
+                if res:
+                    results.append(res)
+            return results
+        except Exception:
+            return super().get_results_by_organization(organization_id)
+
+    def get_results_by_batch(self, batch_id: str) -> List[ProcessingResult]:
+        """Get all processing results for a specific batch."""
+        try:
+            doc_ids = self.r.smembers(f"storage:batch:{batch_id}")
+            results = []
+            for b in doc_ids:
+                doc_id = b.decode()
+                res = self.get_processing_result(doc_id)
+                if res:
+                    results.append(res)
+            return results
+        except Exception:
+            return super().get_results_by_batch(batch_id)
+
+    def get_results_by_hash(self, file_hash: str) -> List[ProcessingResult]:
+        """Get all processing results with a specific file hash."""
+        try:
+            doc_ids = self.r.smembers(f"storage:hash:{file_hash}")
+            results = []
+            for b in doc_ids:
+                doc_id = b.decode()
+                res = self.get_processing_result(doc_id)
+                if res:
+                    results.append(res)
+            return results
+        except Exception:
+            return super().get_results_by_hash(file_hash)
 
 
 # Swap storage backend if requested by env

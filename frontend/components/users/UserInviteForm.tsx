@@ -14,7 +14,7 @@ export default function UserInviteForm({ onSuccess, onCancel }: UserInviteFormPr
   const { token } = useAuth()
   const [email, setEmail] = useState('')
   const [fullName, setFullName] = useState('')
-  const [role, setRole] = useState('user')
+  const [role, setRole] = useState('member')
   const [sendEmail, setSendEmail] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
@@ -45,7 +45,7 @@ export default function UserInviteForm({ onSuccess, onCancel }: UserInviteFormPr
 
       onSuccess()
     } catch (err: any) {
-      setError(err.detail || err.message || 'Failed to invite user')
+      setError(err.message || 'Failed to invite user')
     } finally {
       setIsLoading(false)
     }
@@ -114,8 +114,9 @@ export default function UserInviteForm({ onSuccess, onCancel }: UserInviteFormPr
             onChange={(e) => setRole(e.target.value)}
             className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
           >
-            <option value="user">User</option>
-            <option value="admin">Admin</option>
+            <option value="viewer">Viewer</option>
+            <option value="member">Member</option>
+            <option value="org_admin">Admin</option>
           </select>
           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
             Admins can manage users, connections, and organization settings

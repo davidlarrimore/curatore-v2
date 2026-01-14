@@ -55,7 +55,7 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
           setConfig(response.types[0].example_config || {})
         }
       } catch (err: any) {
-        setError(err.detail || err.message || 'Failed to load connection types')
+        setError(err.message || 'Failed to load connection types')
       }
     }
 
@@ -100,7 +100,7 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
 
       onSuccess()
     } catch (err: any) {
-      setError(err.detail || err.message || `Failed to ${connection ? 'update' : 'create'} connection`)
+      setError(err.message || `Failed to ${connection ? 'update' : 'create'} connection`)
     } finally {
       setIsLoading(false)
     }
