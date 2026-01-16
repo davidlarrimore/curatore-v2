@@ -9,6 +9,9 @@ Models:
     - Connection: Runtime-configurable service connections (SharePoint, LLM, etc.)
     - SystemSetting: Global system settings
     - AuditLog: Audit trail for configuration changes
+    - Job: Batch job tracking for document processing
+    - JobDocument: Per-document status within jobs
+    - JobLog: Job execution logs and audit trail
 
 All models use UUID primary keys and include timestamps for auditing.
 """
@@ -23,6 +26,7 @@ from sqlalchemy import (
     Boolean,
     Column,
     DateTime,
+    Float,
     ForeignKey,
     Index,
     Integer,
@@ -358,6 +362,8 @@ class Connection(Base):
         config: JSONB field for type-specific configuration
         is_active: Whether connection is active
         is_default: Whether this is the default connection for its type
+        is_managed: Whether connection is managed by environment variables
+        managed_by: Description of what manages this connection (e.g., env vars)
         last_tested_at: Timestamp of last health check
         test_status: Health check status (healthy, unhealthy, not_tested)
         test_result: Detailed test results (JSONB)
@@ -396,6 +402,8 @@ class Connection(Base):
     # Status
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     is_default = Column(Boolean, default=False, nullable=False)
+    is_managed = Column(Boolean, default=False, nullable=False)
+    managed_by = Column(String(255), nullable=True)
 
     # Health check
     last_tested_at = Column(DateTime, nullable=True)
@@ -526,3 +534,229 @@ class AuditLog(Base):
 
     def __repr__(self) -> str:
         return f"<AuditLog(id={self.id}, action={self.action}, status={self.status})>"
+
+
+class Job(Base):
+    """
+    Job model for batch document processing tracking.
+
+    Represents a batch processing job that processes multiple documents.
+    Jobs track overall progress, status, and results across all documents.
+
+    Attributes:
+        id: Unique job identifier
+        organization_id: Organization that owns this job
+        user_id: User who created this job (nullable for system jobs)
+        name: Human-readable job name
+        description: Optional job description
+        job_type: Type of job (default: 'batch_processing')
+        status: Current job status (PENDING, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED)
+        celery_batch_id: Celery batch identifier for grouping tasks
+        total_documents: Total number of documents in job
+        completed_documents: Number of completed documents
+        failed_documents: Number of failed documents
+        processing_options: Snapshot of processing options used (JSONB)
+        results_summary: Aggregated quality scores and metrics (JSONB)
+        error_message: Error message if job failed
+        created_at: When job was created
+        queued_at: When job was queued for processing
+        started_at: When job started processing
+        completed_at: When job completed (success or failure)
+        cancelled_at: When job was cancelled
+        expires_at: When job should be automatically deleted (based on retention policy)
+
+    Relationships:
+        organization: Organization that owns this job
+        user: User who created this job
+        documents: List of documents in this job
+        logs: List of log entries for this job
+
+    Job Status Flow:
+        PENDING → QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED
+    """
+
+    __tablename__ = "jobs"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    user_id = Column(
+        UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # Job metadata
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    job_type = Column(String(50), nullable=False, default="batch_processing")
+
+    # Job status
+    status = Column(String(50), nullable=False, default="PENDING", index=True)
+    celery_batch_id = Column(String(255), nullable=True, index=True)
+
+    # Progress tracking
+    total_documents = Column(Integer, nullable=False, default=0)
+    completed_documents = Column(Integer, nullable=False, default=0)
+    failed_documents = Column(Integer, nullable=False, default=0)
+
+    # Processing configuration and results
+    processing_options = Column(JSON, nullable=False, default=dict, server_default="{}")
+    results_summary = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    queued_at = Column(DateTime, nullable=True)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    cancelled_at = Column(DateTime, nullable=True)
+    expires_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    organization = relationship("Organization")
+    user = relationship("User")
+    documents = relationship(
+        "JobDocument", back_populates="job", cascade="all, delete-orphan"
+    )
+    logs = relationship("JobLog", back_populates="job", cascade="all, delete-orphan")
+
+    # Indexes for common queries
+    __table_args__ = (
+        Index("ix_jobs_org_created", "organization_id", "created_at"),
+        Index("ix_jobs_org_status", "organization_id", "status"),
+        Index("ix_jobs_user", "user_id", "created_at"),
+        Index("ix_jobs_expires", "expires_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Job(id={self.id}, name={self.name}, status={self.status})>"
+
+
+class JobDocument(Base):
+    """
+    JobDocument model for tracking individual documents within a job.
+
+    Represents a single document being processed as part of a batch job.
+    Tracks document-level status, quality scores, and processing results.
+
+    Attributes:
+        id: Unique job document identifier
+        job_id: Job this document belongs to
+        document_id: Document identifier (UUID from storage)
+        filename: Original filename
+        file_path: Path to original file
+        file_hash: SHA-256 hash for deduplication
+        file_size: File size in bytes
+        status: Document processing status (PENDING, RUNNING, COMPLETED, FAILED, CANCELLED)
+        celery_task_id: Individual Celery task ID
+        conversion_score: Overall conversion quality score (0-100)
+        quality_scores: Detailed quality metrics (JSONB)
+        is_rag_ready: Whether document meets RAG quality thresholds
+        error_message: Error message if processing failed
+        created_at: When document was added to job
+        started_at: When document processing started
+        completed_at: When document processing completed
+        processing_time_seconds: Total processing time
+        processed_file_path: Path to processed markdown file
+
+    Relationships:
+        job: Job this document belongs to
+
+    Document Status Flow:
+        PENDING → RUNNING → COMPLETED/FAILED/CANCELLED
+    """
+
+    __tablename__ = "job_documents"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    job_id = Column(
+        UUID(), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Document identification
+    document_id = Column(String(255), nullable=False, index=True)
+    filename = Column(String(500), nullable=False)
+    file_path = Column(Text, nullable=False)
+    file_hash = Column(String(64), nullable=True)
+    file_size = Column(Integer, nullable=True)
+
+    # Processing status
+    status = Column(String(50), nullable=False, default="PENDING", index=True)
+    celery_task_id = Column(String(255), nullable=True, index=True)
+
+    # Quality metrics
+    conversion_score = Column(Integer, nullable=True)
+    quality_scores = Column(JSON, nullable=True)
+    is_rag_ready = Column(Boolean, nullable=False, default=False)
+    error_message = Column(Text, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    processing_time_seconds = Column(Float, nullable=True)
+
+    # Result
+    processed_file_path = Column(Text, nullable=True)
+
+    # Relationships
+    job = relationship("Job", back_populates="documents")
+
+    # Indexes for common queries
+    __table_args__ = (
+        Index("ix_job_docs_document", "document_id"),
+        Index("ix_job_docs_celery_task", "celery_task_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<JobDocument(id={self.id}, document_id={self.document_id}, status={self.status})>"
+
+
+class JobLog(Base):
+    """
+    JobLog model for job execution logs and audit trail.
+
+    Stores log entries for job execution, including progress updates,
+    errors, and document-level events. Provides audit trail and debugging.
+
+    Attributes:
+        id: Unique log entry identifier
+        job_id: Job this log belongs to
+        document_id: Document this log relates to (nullable for job-level logs)
+        timestamp: When log entry was created
+        level: Log level (INFO, SUCCESS, WARNING, ERROR)
+        message: Log message
+        log_metadata: Additional structured data (JSONB)
+
+    Relationships:
+        job: Job this log belongs to
+
+    Log Levels:
+        - INFO: General progress updates
+        - SUCCESS: Successful operations
+        - WARNING: Non-critical issues
+        - ERROR: Errors and failures
+    """
+
+    __tablename__ = "job_logs"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    job_id = Column(
+        UUID(), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id = Column(String(255), nullable=True, index=True)
+
+    # Log details
+    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
+    level = Column(String(20), nullable=False, index=True)
+    message = Column(Text, nullable=False)
+    log_metadata = Column(JSON, nullable=True)
+
+    # Relationships
+    job = relationship("Job", back_populates="logs")
+
+    # Indexes for common queries
+    __table_args__ = (Index("ix_job_logs_job_ts", "job_id", "timestamp"),)
+
+    def __repr__(self) -> str:
+        return f"<JobLog(id={self.id}, job_id={self.job_id}, level={self.level})>"

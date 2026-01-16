@@ -610,7 +610,7 @@ class ConnectionTypeRegistry:
                 "type": ct.connection_type,
                 "display_name": ct.display_name,
                 "description": ct.description,
-                "schema": ct.get_config_schema()
+                "config_schema": ct.get_config_schema()
             }
             for ct in self._types.values()
         ]
@@ -735,3 +735,249 @@ class ConnectionService:
 # =========================================================================
 
 connection_service = ConnectionService()
+
+
+# =========================================================================
+# DEFAULT CONNECTION SYNC
+# =========================================================================
+
+
+async def sync_default_connections_from_env(
+    session: AsyncSession, organization_id: UUID
+) -> Dict[str, str]:
+    """
+    Sync default connections from environment variables.
+
+    Creates or updates "Default" connections for each type where env vars exist.
+    Connections are marked as managed and cannot be edited through the UI.
+
+    This function is called on application startup to ensure that connections
+    defined in environment variables are always available in the database.
+
+    Args:
+        session: Database session
+        organization_id: Organization to create connections for
+
+    Returns:
+        Dict mapping connection type to status:
+            - "created": New connection was created
+            - "updated": Existing connection was updated
+            - "unchanged": Connection exists and is up to date
+            - "skipped": Required env vars not found
+            - "error": Failed to sync connection
+
+    Example:
+        >>> async with database_service.get_session() as session:
+        ...     results = await sync_default_connections_from_env(
+        ...         session, org_id
+        ...     )
+        ...     print(results)
+        {"sharepoint": "created", "llm": "updated", "extraction": "unchanged"}
+    """
+    import os
+    from datetime import datetime
+    from sqlalchemy import select
+    from ..database.models import Connection
+    from ..config import settings
+
+    logger = logging.getLogger("curatore.connection_sync")
+    results: Dict[str, str] = {}
+
+    # -------------------------------------------------------------------------
+    # SharePoint Connection
+    # -------------------------------------------------------------------------
+    try:
+        tenant_id = os.environ.get("MS_TENANT_ID")
+        client_id = os.environ.get("MS_CLIENT_ID")
+        client_secret = os.environ.get("MS_CLIENT_SECRET")
+
+        if tenant_id and client_id and client_secret:
+            config = {
+                "tenant_id": tenant_id,
+                "client_id": client_id,
+                "client_secret": client_secret,
+                "graph_base_url": os.environ.get(
+                    "MS_GRAPH_BASE_URL", "https://graph.microsoft.com/v1.0"
+                ),
+                "graph_scope": os.environ.get(
+                    "MS_GRAPH_SCOPE", "https://graph.microsoft.com/.default"
+                ),
+            }
+
+            # Query for existing managed SharePoint connection
+            result = await session.execute(
+                select(Connection).where(
+                    Connection.organization_id == organization_id,
+                    Connection.connection_type == "sharepoint",
+                    Connection.is_managed == True,
+                )
+            )
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # Update if config changed
+                if existing.config != config:
+                    existing.config = config
+                    existing.updated_at = datetime.utcnow()
+                    await session.commit()
+                    results["sharepoint"] = "updated"
+                    logger.info("Updated managed SharePoint connection")
+                else:
+                    results["sharepoint"] = "unchanged"
+            else:
+                # Create new managed connection
+                new_connection = Connection(
+                    organization_id=organization_id,
+                    name="Default SharePoint",
+                    description="Auto-managed SharePoint connection from environment variables",
+                    connection_type="sharepoint",
+                    config=config,
+                    is_active=True,
+                    is_default=True,
+                    is_managed=True,
+                    managed_by="Environment variables: MS_TENANT_ID, MS_CLIENT_ID, MS_CLIENT_SECRET",
+                    scope="organization",
+                )
+                session.add(new_connection)
+                await session.commit()
+                results["sharepoint"] = "created"
+                logger.info("Created managed SharePoint connection")
+        else:
+            results["sharepoint"] = "skipped"
+            logger.debug(
+                "Skipping SharePoint connection sync - missing required env vars"
+            )
+
+    except Exception as e:
+        results["sharepoint"] = "error"
+        logger.error(f"Failed to sync SharePoint connection: {e}")
+
+    # -------------------------------------------------------------------------
+    # LLM Connection
+    # -------------------------------------------------------------------------
+    try:
+        api_key = os.environ.get("OPENAI_API_KEY")
+
+        if api_key:
+            config = {
+                "api_key": api_key,
+                "model": settings.openai_model,
+                "base_url": settings.openai_base_url,
+                "timeout": int(settings.openai_timeout),
+                "verify_ssl": settings.openai_verify_ssl,
+            }
+
+            # Query for existing managed LLM connection
+            result = await session.execute(
+                select(Connection).where(
+                    Connection.organization_id == organization_id,
+                    Connection.connection_type == "llm",
+                    Connection.is_managed == True,
+                )
+            )
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # Update if config changed
+                if existing.config != config:
+                    existing.config = config
+                    existing.updated_at = datetime.utcnow()
+                    await session.commit()
+                    results["llm"] = "updated"
+                    logger.info("Updated managed LLM connection")
+                else:
+                    results["llm"] = "unchanged"
+            else:
+                # Create new managed connection
+                new_connection = Connection(
+                    organization_id=organization_id,
+                    name="Default LLM",
+                    description="Auto-managed LLM connection from environment variables",
+                    connection_type="llm",
+                    config=config,
+                    is_active=True,
+                    is_default=True,
+                    is_managed=True,
+                    managed_by="Environment variables: OPENAI_API_KEY, OPENAI_MODEL, OPENAI_BASE_URL",
+                    scope="organization",
+                )
+                session.add(new_connection)
+                await session.commit()
+                results["llm"] = "created"
+                logger.info("Created managed LLM connection")
+        else:
+            results["llm"] = "skipped"
+            logger.debug("Skipping LLM connection sync - missing OPENAI_API_KEY")
+
+    except Exception as e:
+        results["llm"] = "error"
+        logger.error(f"Failed to sync LLM connection: {e}")
+
+    # -------------------------------------------------------------------------
+    # Extraction Service Connection
+    # -------------------------------------------------------------------------
+    try:
+        service_url = settings.extraction_service_url
+
+        if service_url:
+            config = {
+                "service_url": service_url,
+                "timeout": int(settings.extraction_service_timeout),
+            }
+
+            # Add API key if present
+            if settings.extraction_service_api_key:
+                config["api_key"] = settings.extraction_service_api_key
+
+            # Add verify_ssl setting
+            config["verify_ssl"] = settings.extraction_service_verify_ssl
+
+            # Query for existing managed extraction connection
+            result = await session.execute(
+                select(Connection).where(
+                    Connection.organization_id == organization_id,
+                    Connection.connection_type == "extraction",
+                    Connection.is_managed == True,
+                )
+            )
+            existing = result.scalar_one_or_none()
+
+            if existing:
+                # Update if config changed
+                if existing.config != config:
+                    existing.config = config
+                    existing.updated_at = datetime.utcnow()
+                    await session.commit()
+                    results["extraction"] = "updated"
+                    logger.info("Updated managed Extraction Service connection")
+                else:
+                    results["extraction"] = "unchanged"
+            else:
+                # Create new managed connection
+                new_connection = Connection(
+                    organization_id=organization_id,
+                    name="Default Extraction Service",
+                    description="Auto-managed extraction service connection from environment variables",
+                    connection_type="extraction",
+                    config=config,
+                    is_active=True,
+                    is_default=True,
+                    is_managed=True,
+                    managed_by="Environment variables: EXTRACTION_SERVICE_URL",
+                    scope="organization",
+                )
+                session.add(new_connection)
+                await session.commit()
+                results["extraction"] = "created"
+                logger.info("Created managed Extraction Service connection")
+        else:
+            results["extraction"] = "skipped"
+            logger.debug(
+                "Skipping extraction connection sync - missing EXTRACTION_SERVICE_URL"
+            )
+
+    except Exception as e:
+        results["extraction"] = "error"
+        logger.error(f"Failed to sync Extraction Service connection: {e}")
+
+    return results

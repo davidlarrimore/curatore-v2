@@ -14,7 +14,8 @@ import {
   Link as LinkIcon,
   Users,
   Shield,
-  HardDrive
+  HardDrive,
+  Briefcase
 } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { systemApi } from '@/lib/api'
@@ -102,6 +103,12 @@ export function LeftSidebar({
       current: pathname === '/process'
     },
     ...(isAuthenticated ? [
+      {
+        name: 'Jobs',
+        href: '/jobs',
+        icon: Briefcase,
+        current: pathname?.startsWith('/jobs')
+      },
       {
         name: 'Connections',
         href: '/connections',

@@ -211,6 +211,8 @@ async def list_connections(
                     config=_redact_secrets(conn.config),
                     is_active=conn.is_active,
                     is_default=conn.is_default,
+                    is_managed=conn.is_managed,
+                    managed_by=conn.managed_by,
                     last_tested_at=conn.last_tested_at,
                     test_status=conn.test_status,
                     test_result=conn.test_result,
@@ -336,6 +338,8 @@ async def create_connection(
             config=_redact_secrets(connection.config),
             is_active=connection.is_active,
             is_default=connection.is_default,
+            is_managed=connection.is_managed,
+            managed_by=connection.managed_by,
             last_tested_at=connection.last_tested_at,
             test_status=connection.test_status,
             test_result=test_result.model_dump() if test_result else None,
@@ -400,6 +404,8 @@ async def get_connection(
             config=_redact_secrets(connection.config),
             is_active=connection.is_active,
             is_default=connection.is_default,
+            is_managed=connection.is_managed,
+            managed_by=connection.managed_by,
             last_tested_at=connection.last_tested_at,
             test_status=connection.test_status,
             test_result=connection.test_result,
@@ -466,6 +472,14 @@ async def update_connection(
                 detail="Connection not found"
             )
 
+        # Check if connection is managed
+        if connection.is_managed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This connection is managed by environment variables and cannot be edited. "
+                       "Update your .env file and restart the application to modify this connection."
+            )
+
         # Update fields
         if request.name is not None:
             connection.name = request.name
@@ -522,6 +536,8 @@ async def update_connection(
             config=_redact_secrets(connection.config),
             is_active=connection.is_active,
             is_default=connection.is_default,
+            is_managed=connection.is_managed,
+            managed_by=connection.managed_by,
             last_tested_at=connection.last_tested_at,
             test_status=connection.test_status,
             test_result=test_result.model_dump() if test_result else connection.test_result,
@@ -577,6 +593,14 @@ async def delete_connection(
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Connection not found"
+            )
+
+        # Check if connection is managed
+        if connection.is_managed:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This connection is managed by environment variables and cannot be deleted. "
+                       "Remove the environment variables and restart the application to delete this connection."
             )
 
         await session.delete(connection)
@@ -664,6 +688,116 @@ async def test_connection_endpoint(
 
 
 @router.post(
+    "/test-credentials",
+    summary="Test LLM credentials and fetch models",
+    description="Test LLM credentials and fetch available models without creating a connection."
+)
+async def test_llm_credentials(
+    request: dict,
+    current_user: User = Depends(get_current_user),
+) -> dict:
+    """
+    Test LLM credentials and fetch available models.
+
+    This endpoint allows testing credentials before creating a connection.
+    For LLM connections, it will fetch the list of available models from the provider.
+
+    Args:
+        request: Dictionary with api_key, base_url, and optional provider info
+        current_user: Current authenticated user
+
+    Returns:
+        dict: Success status, available models, and any errors
+
+    Example:
+        POST /api/v1/connections/test-credentials
+        Authorization: Bearer <token>
+        Content-Type: application/json
+
+        {
+            "provider": "openai",
+            "base_url": "https://api.openai.com/v1",
+            "api_key": "sk-..."
+        }
+
+        Response:
+        {
+            "success": true,
+            "models": ["gpt-4", "gpt-3.5-turbo", ...],
+            "message": "Successfully connected"
+        }
+    """
+    import httpx
+
+    base_url = request.get("base_url", "").rstrip("/")
+    api_key = request.get("api_key", "")
+    provider = request.get("provider", "openai")
+
+    if not base_url or not api_key:
+        return {
+            "success": False,
+            "error": "base_url and api_key are required",
+            "models": []
+        }
+
+    try:
+        # Try to fetch models from the /models endpoint
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            headers = {"Authorization": f"Bearer {api_key}"}
+
+            # Handle different provider endpoints
+            if provider == "bedrock":
+                # Bedrock uses different auth mechanism
+                return {
+                    "success": False,
+                    "error": "Bedrock model fetching requires AWS SDK - please enter model manually",
+                    "models": [],
+                    "requires_manual_model": True
+                }
+
+            # Standard OpenAI-compatible endpoint
+            models_url = f"{base_url}/models"
+            response = await client.get(models_url, headers=headers)
+
+            if response.status_code == 200:
+                data = response.json()
+                models = []
+
+                # Parse response based on provider format
+                if "data" in data and isinstance(data["data"], list):
+                    # OpenAI format
+                    models = [model.get("id") for model in data["data"] if model.get("id")]
+                elif "models" in data and isinstance(data["models"], list):
+                    # Alternative format
+                    models = data["models"]
+
+                return {
+                    "success": True,
+                    "models": sorted(models) if models else [],
+                    "message": f"Successfully connected to {provider}"
+                }
+            else:
+                return {
+                    "success": False,
+                    "error": f"Failed to fetch models: HTTP {response.status_code}",
+                    "models": []
+                }
+
+    except httpx.TimeoutException:
+        return {
+            "success": False,
+            "error": "Connection timeout - check your base URL",
+            "models": []
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": f"Connection failed: {str(e)}",
+            "models": []
+        }
+
+
+@router.post(
     "/{connection_id}/set-default",
     response_model=ConnectionResponse,
     summary="Set default connection",
@@ -737,6 +871,8 @@ async def set_default_connection(
             config=_redact_secrets(connection.config),
             is_active=connection.is_active,
             is_default=connection.is_default,
+            is_managed=connection.is_managed,
+            managed_by=connection.managed_by,
             last_tested_at=connection.last_tested_at,
             test_status=connection.test_status,
             test_result=connection.test_result,

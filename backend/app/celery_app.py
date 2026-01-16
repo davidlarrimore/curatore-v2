@@ -63,13 +63,45 @@ except Exception:
     # Fallback to daily at 2 AM
     cleanup_schedule = crontab(hour=2, minute=0)
 
-app.conf.beat_schedule = {
+# Parse job cleanup schedule from config (default: daily at 3 AM)
+job_cleanup_schedule_str = os.getenv("JOB_CLEANUP_SCHEDULE_CRON", "0 3 * * *")
+job_cleanup_enabled = _bool(os.getenv("JOB_CLEANUP_ENABLED", "true"), True)
+
+# Parse job cleanup cron string
+try:
+    parts = job_cleanup_schedule_str.split()
+    if len(parts) == 5:
+        job_cleanup_schedule = crontab(
+            minute=parts[0],
+            hour=parts[1],
+            day_of_month=parts[2],
+            month_of_year=parts[3],
+            day_of_week=parts[4],
+        )
+    else:
+        # Default to daily at 3 AM if parsing fails
+        job_cleanup_schedule = crontab(hour=3, minute=0)
+except Exception:
+    # Fallback to daily at 3 AM
+    job_cleanup_schedule = crontab(hour=3, minute=0)
+
+beat_schedule = {
     "cleanup-expired-files": {
         "task": "app.tasks.cleanup_expired_files_task",
         "schedule": cleanup_schedule,
         "options": {"queue": "processing"},
     },
 }
+
+# Add job cleanup task if enabled (Phase 2+)
+if job_cleanup_enabled:
+    beat_schedule["cleanup-expired-jobs"] = {
+        "task": "app.tasks.cleanup_expired_jobs_task",
+        "schedule": job_cleanup_schedule,
+        "options": {"queue": "processing"},
+    }
+
+app.conf.beat_schedule = beat_schedule
 
 app.conf.timezone = "UTC"
 

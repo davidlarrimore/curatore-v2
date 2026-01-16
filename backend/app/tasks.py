@@ -3,10 +3,12 @@ Celery tasks wrapping the existing document processing pipeline.
 """
 import asyncio
 import logging
+import uuid
 from datetime import datetime
 from typing import Any, Dict, Optional
 
 from celery import shared_task, Task
+from sqlalchemy import select, and_
 
 from .services.document_service import document_service
 from .services.storage_service import storage_service
@@ -15,12 +17,14 @@ from .services.job_service import (
     clear_active_job,
     append_job_log,
 )
+from .services.database_service import database_service
+from .database.models import Job, JobDocument, JobLog
 
 
 class BaseTask(Task):
     def on_success(self, retval: Any, task_id: str, args: Any, kwargs: Any):
         try:
-            # retval should be a dict with result payload
+            # Legacy Redis tracking
             record_job_status(task_id, {
                 "job_id": task_id,
                 "document_id": kwargs.get("document_id") or (args[0] if args else None),
@@ -28,6 +32,11 @@ class BaseTask(Task):
                 "finished_at": datetime.utcnow().isoformat(),
                 "result": retval,
             })
+
+            # Database job tracking (Phase 2+)
+            job_document_id = kwargs.get("job_document_id")
+            if job_document_id:
+                asyncio.run(_update_job_document_success(job_document_id, retval))
         finally:
             doc_id = kwargs.get("document_id") or (args[0] if args else None)
             if doc_id:
@@ -35,6 +44,7 @@ class BaseTask(Task):
 
     def on_failure(self, exc: Exception, task_id: str, args: Any, kwargs: Any, einfo):
         try:
+            # Legacy Redis tracking
             record_job_status(task_id, {
                 "job_id": task_id,
                 "document_id": kwargs.get("document_id") or (args[0] if args else None),
@@ -42,6 +52,11 @@ class BaseTask(Task):
                 "finished_at": datetime.utcnow().isoformat(),
                 "error": str(exc),
             })
+
+            # Database job tracking (Phase 2+)
+            job_document_id = kwargs.get("job_document_id")
+            if job_document_id:
+                asyncio.run(_update_job_document_failure(job_document_id, str(exc)))
         finally:
             doc_id = kwargs.get("document_id") or (args[0] if args else None)
             if doc_id:
@@ -49,8 +64,28 @@ class BaseTask(Task):
 
 
 @shared_task(bind=True, base=BaseTask, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
-def process_document_task(self, document_id: str, options: Dict[str, Any], file_path: Optional[str] = None) -> Dict[str, Any]:
-    # Mark started
+def process_document_task(
+    self,
+    document_id: str,
+    options: Dict[str, Any],
+    file_path: Optional[str] = None,
+    job_id: Optional[str] = None,
+    job_document_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Process a document with optional job tracking.
+
+    Args:
+        document_id: Document ID to process
+        options: Processing options dict
+        file_path: Optional explicit file path
+        job_id: Optional job ID for database tracking (Phase 2+)
+        job_document_id: Optional job document ID for database tracking (Phase 2+)
+
+    Returns:
+        Dict with processing result
+    """
+    # Legacy Redis tracking
     record_job_status(self.request.id, {
         "job_id": self.request.id,
         "document_id": document_id,
@@ -59,6 +94,10 @@ def process_document_task(self, document_id: str, options: Dict[str, Any], file_
     })
 
     append_job_log(self.request.id, "info", f"Job started for document '{document_id}'")
+
+    # Database job tracking (Phase 2+)
+    if job_document_id:
+        asyncio.run(_update_job_document_started(job_document_id, self.request.id, document_id, file_path))
     logger = logging.getLogger("curatore.api")
     # Log which extraction engine will be used
     try:
@@ -444,3 +483,345 @@ def cleanup_expired_files_task(self, dry_run: bool = False) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error in cleanup task: {e}")
         raise
+
+
+# ============================================================================
+# JOB CLEANUP TASK (Phase 2)
+# ============================================================================
+
+@shared_task(bind=True)
+def cleanup_expired_jobs_task(self, dry_run: bool = False) -> Dict[str, Any]:
+    """
+    Scheduled task for cleaning up expired jobs.
+
+    This task runs daily (default: 3 AM UTC) to delete jobs that have exceeded
+    their retention period based on organization settings.
+
+    Args:
+        dry_run: If True, only report what would be deleted without actual deletion
+
+    Returns:
+        Dict with cleanup statistics:
+            {
+                "deleted_jobs": int,
+                "deleted_files": int,
+                "errors": int,
+                "completed_at": str
+            }
+    """
+    from .services.job_service import cleanup_expired_jobs
+
+    logger = logging.getLogger("curatore.jobs")
+    logger.info(f"Starting scheduled job cleanup task (dry_run={dry_run})")
+
+    try:
+        if dry_run:
+            logger.info("[DRY RUN] Would execute job cleanup (not implemented)")
+            return {
+                "deleted_jobs": 0,
+                "deleted_files": 0,
+                "errors": 0,
+                "completed_at": datetime.utcnow().isoformat(),
+                "dry_run": True,
+            }
+
+        result = asyncio.run(cleanup_expired_jobs())
+
+        logger.info(
+            f"Job cleanup completed: deleted {result['deleted_jobs']} jobs, "
+            f"{result['deleted_files']} files, {result['errors']} errors"
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"Error in job cleanup task: {e}")
+        raise
+
+
+# ============================================================================
+# JOB DOCUMENT TRACKING HELPERS (Phase 2)
+# ============================================================================
+
+async def _update_job_document_started(
+    job_document_id: str,
+    celery_task_id: str,
+    document_id: str,
+    file_path: Optional[str] = None,
+) -> None:
+    """
+    Update job document status to RUNNING when task starts.
+
+    Args:
+        job_document_id: JobDocument UUID
+        celery_task_id: Celery task ID
+        document_id: Document ID
+        file_path: Optional file path
+    """
+    try:
+        async with database_service.get_session() as session:
+            result = await session.execute(
+                select(JobDocument).where(JobDocument.id == uuid.UUID(job_document_id))
+            )
+            job_doc = result.scalar_one_or_none()
+
+            if job_doc:
+                job_doc.status = "RUNNING"
+                job_doc.started_at = datetime.utcnow()
+                job_doc.celery_task_id = celery_task_id
+
+                # Update file info if available
+                if file_path:
+                    from pathlib import Path
+                    p = Path(file_path)
+                    job_doc.file_path = str(p)
+                    job_doc.filename = p.name
+                    if p.exists():
+                        job_doc.file_size = p.stat().st_size
+
+                # Log start
+                log_entry = JobLog(
+                    id=uuid.uuid4(),
+                    job_id=job_doc.job_id,
+                    document_id=document_id,
+                    level="INFO",
+                    message=f"Document processing started: {document_id}",
+                    log_metadata={"celery_task_id": celery_task_id},
+                )
+                session.add(log_entry)
+
+                await session.commit()
+
+                # Update job status to RUNNING if still QUEUED
+                await _update_job_status_if_needed(job_doc.job_id)
+
+    except Exception as e:
+        logging.getLogger("curatore.jobs").error(
+            f"Failed to update job document started: {e}"
+        )
+
+
+async def _update_job_document_success(
+    job_document_id: str, result: Dict[str, Any]
+) -> None:
+    """
+    Update job document status to COMPLETED on success.
+
+    Args:
+        job_document_id: JobDocument UUID
+        result: Processing result dict
+    """
+    try:
+        async with database_service.get_session() as session:
+            result_obj = await session.execute(
+                select(JobDocument).where(JobDocument.id == uuid.UUID(job_document_id))
+            )
+            job_doc = result_obj.scalar_one_or_none()
+
+            if job_doc:
+                job_doc.status = "COMPLETED"
+                job_doc.completed_at = datetime.utcnow()
+
+                # Calculate processing time
+                if job_doc.started_at:
+                    processing_time = (job_doc.completed_at - job_doc.started_at).total_seconds()
+                    job_doc.processing_time_seconds = processing_time
+
+                # Extract quality metrics from result
+                if result and isinstance(result, dict):
+                    conversion_result = result.get("conversion_result", {})
+                    if isinstance(conversion_result, dict):
+                        job_doc.conversion_score = conversion_result.get("conversion_score")
+
+                    quality_scores = result.get("llm_evaluation", {})
+                    if isinstance(quality_scores, dict):
+                        job_doc.quality_scores = quality_scores
+
+                    job_doc.is_rag_ready = result.get("is_rag_ready", False)
+
+                    # Store processed file path
+                    if result.get("markdown_path"):
+                        job_doc.processed_file_path = result["markdown_path"]
+
+                # Log success
+                log_entry = JobLog(
+                    id=uuid.uuid4(),
+                    job_id=job_doc.job_id,
+                    document_id=job_doc.document_id,
+                    level="SUCCESS",
+                    message=f"Document processed successfully: {job_doc.document_id}",
+                    log_metadata={
+                        "conversion_score": job_doc.conversion_score,
+                        "is_rag_ready": job_doc.is_rag_ready,
+                    },
+                )
+                session.add(log_entry)
+
+                # Update job counters
+                job_result = await session.execute(
+                    select(Job).where(Job.id == job_doc.job_id)
+                )
+                job = job_result.scalar_one_or_none()
+                if job:
+                    job.completed_documents += 1
+                    await session.commit()
+
+                    # Check if job is complete
+                    await _check_job_completion(job.id)
+                else:
+                    await session.commit()
+
+    except Exception as e:
+        logging.getLogger("curatore.jobs").error(
+            f"Failed to update job document success: {e}"
+        )
+
+
+async def _update_job_document_failure(
+    job_document_id: str, error_message: str
+) -> None:
+    """
+    Update job document status to FAILED on error.
+
+    Args:
+        job_document_id: JobDocument UUID
+        error_message: Error message
+    """
+    try:
+        async with database_service.get_session() as session:
+            result = await session.execute(
+                select(JobDocument).where(JobDocument.id == uuid.UUID(job_document_id))
+            )
+            job_doc = result.scalar_one_or_none()
+
+            if job_doc:
+                job_doc.status = "FAILED"
+                job_doc.completed_at = datetime.utcnow()
+                job_doc.error_message = error_message
+
+                # Calculate processing time
+                if job_doc.started_at:
+                    processing_time = (job_doc.completed_at - job_doc.started_at).total_seconds()
+                    job_doc.processing_time_seconds = processing_time
+
+                # Log failure
+                log_entry = JobLog(
+                    id=uuid.uuid4(),
+                    job_id=job_doc.job_id,
+                    document_id=job_doc.document_id,
+                    level="ERROR",
+                    message=f"Document processing failed: {job_doc.document_id}",
+                    log_metadata={"error": error_message},
+                )
+                session.add(log_entry)
+
+                # Update job counters
+                job_result = await session.execute(
+                    select(Job).where(Job.id == job_doc.job_id)
+                )
+                job = job_result.scalar_one_or_none()
+                if job:
+                    job.failed_documents += 1
+                    await session.commit()
+
+                    # Check if job is complete
+                    await _check_job_completion(job.id)
+                else:
+                    await session.commit()
+
+    except Exception as e:
+        logging.getLogger("curatore.jobs").error(
+            f"Failed to update job document failure: {e}"
+        )
+
+
+async def _update_job_status_if_needed(job_id: uuid.UUID) -> None:
+    """
+    Update job status to RUNNING if it's still QUEUED and has started documents.
+
+    Args:
+        job_id: Job UUID
+    """
+    try:
+        async with database_service.get_session() as session:
+            result = await session.execute(select(Job).where(Job.id == job_id))
+            job = result.scalar_one_or_none()
+
+            if job and job.status == "QUEUED":
+                job.status = "RUNNING"
+                job.started_at = datetime.utcnow()
+
+                log_entry = JobLog(
+                    id=uuid.uuid4(),
+                    job_id=job.id,
+                    level="INFO",
+                    message="Job processing started",
+                )
+                session.add(log_entry)
+
+                await session.commit()
+
+    except Exception as e:
+        logging.getLogger("curatore.jobs").error(
+            f"Failed to update job status: {e}"
+        )
+
+
+async def _check_job_completion(job_id: uuid.UUID) -> None:
+    """
+    Check if all documents in a job are complete and update job status accordingly.
+
+    Args:
+        job_id: Job UUID
+    """
+    try:
+        async with database_service.get_session() as session:
+            # Get job
+            result = await session.execute(select(Job).where(Job.id == job_id))
+            job = result.scalar_one_or_none()
+
+            if not job:
+                return
+
+            # Check if all documents are complete
+            total = job.completed_documents + job.failed_documents
+            if total >= job.total_documents:
+                # Job is complete
+                if job.failed_documents > 0 and job.completed_documents == 0:
+                    # All failed
+                    job.status = "FAILED"
+                    job.error_message = f"All {job.failed_documents} documents failed"
+                elif job.failed_documents > 0:
+                    # Partial success
+                    job.status = "COMPLETED"
+                    job.error_message = f"{job.failed_documents}/{job.total_documents} documents failed"
+                else:
+                    # All succeeded
+                    job.status = "COMPLETED"
+
+                job.completed_at = datetime.utcnow()
+
+                # Log completion
+                log_entry = JobLog(
+                    id=uuid.uuid4(),
+                    job_id=job.id,
+                    level="SUCCESS" if job.status == "COMPLETED" else "ERROR",
+                    message=f"Job completed: {job.completed_documents} succeeded, {job.failed_documents} failed",
+                    log_metadata={
+                        "total_documents": job.total_documents,
+                        "completed_documents": job.completed_documents,
+                        "failed_documents": job.failed_documents,
+                    },
+                )
+                session.add(log_entry)
+
+                await session.commit()
+
+                logging.getLogger("curatore.jobs").info(
+                    f"Job {job.id} completed: {job.completed_documents}/{job.total_documents} succeeded"
+                )
+
+    except Exception as e:
+        logging.getLogger("curatore.jobs").error(
+            f"Failed to check job completion: {e}"
+        )

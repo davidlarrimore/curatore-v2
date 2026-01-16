@@ -8,6 +8,8 @@ interface Connection {
   config: Record<string, any>
   is_default: boolean
   is_active: boolean
+  is_managed: boolean
+  managed_by?: string
   last_tested_at?: string
   health_status?: 'healthy' | 'unhealthy' | 'unknown'
   created_at: string
@@ -84,6 +86,11 @@ export default function ConnectionCard({
             {connection.is_default && (
               <Badge variant="primary">Default</Badge>
             )}
+            {connection.is_managed && (
+              <Badge variant="warning" title={connection.managed_by || 'Managed by environment variables'}>
+                Managed
+              </Badge>
+            )}
             {!connection.is_active && (
               <Badge variant="error">Inactive</Badge>
             )}
@@ -114,14 +121,16 @@ export default function ConnectionCard({
         >
           Test
         </Button>
-        <Button
-          onClick={onEdit}
-          variant="secondary"
-          size="sm"
-        >
-          Edit
-        </Button>
-        {!connection.is_default && (
+        {!connection.is_managed && (
+          <Button
+            onClick={onEdit}
+            variant="secondary"
+            size="sm"
+          >
+            Edit
+          </Button>
+        )}
+        {!connection.is_default && !connection.is_managed && (
           <Button
             onClick={onSetDefault}
             variant="secondary"
@@ -130,13 +139,20 @@ export default function ConnectionCard({
             Set Default
           </Button>
         )}
-        <Button
-          onClick={onDelete}
-          variant="destructive"
-          size="sm"
-        >
-          Delete
-        </Button>
+        {!connection.is_managed && (
+          <Button
+            onClick={onDelete}
+            variant="destructive"
+            size="sm"
+          >
+            Delete
+          </Button>
+        )}
+        {connection.is_managed && (
+          <span className="text-xs text-gray-500 dark:text-gray-400 italic self-center">
+            This connection is managed by environment variables
+          </span>
+        )}
       </div>
     </div>
   )

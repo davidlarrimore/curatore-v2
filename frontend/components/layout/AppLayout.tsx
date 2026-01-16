@@ -1,10 +1,33 @@
 // components/layout/AppLayout.tsx
 'use client'
 
+/**
+ * Main application layout wrapper.
+ *
+ * Provides the base layout structure for the application including:
+ * - Top navigation bar
+ * - Left sidebar with navigation
+ * - Status bar at bottom
+ * - System status monitoring
+ * - Toast notifications
+ *
+ * Authentication-aware:
+ * - Conditionally renders navigation/sidebars based on auth status
+ * - Login page uses a minimal layout without chrome
+ * - Protected pages get full navigation
+ *
+ * The layout adapts to:
+ * - Current route (login vs app pages)
+ * - Authentication state
+ * - Screen size (responsive sidebar)
+ */
+
 import { useState, useEffect } from 'react'
+import { usePathname } from 'next/navigation'
 import { TopNavigation } from './TopNavigation'
 import { LeftSidebar } from './LeftSidebar'
 import { StatusBar } from './StatusBar'
+import JobStatusBar from '@/components/jobs/JobStatusBar'
 import { systemApi } from '@/lib/api'
 import toast, { Toaster } from 'react-hot-toast'
 
@@ -22,6 +45,7 @@ interface AppLayoutProps {
 }
 
 export function AppLayout({ children }: AppLayoutProps) {
+  const pathname = usePathname()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
@@ -31,6 +55,17 @@ export function AppLayout({ children }: AppLayoutProps) {
     supportedFormats: [],
     maxFileSize: 52428800
   })
+
+  /**
+   * Determine if the current page should show navigation.
+   *
+   * Navigation is hidden ONLY for:
+   * - Login page (/login)
+   *
+   * All other pages show full navigation (ProtectedRoute handles auth).
+   * This provides a clean, minimal experience for the login page only.
+   */
+  const showNavigation = pathname !== '/login'
 
   // Load system status on mount and set up refresh interval
   useEffect(() => {
@@ -90,6 +125,16 @@ export function AppLayout({ children }: AppLayoutProps) {
             // Navigate to settings
             window.location.href = '/settings'
             break
+          case 'j':
+            e.preventDefault()
+            // Navigate to jobs page
+            window.location.href = '/jobs'
+            break
+          case 'p':
+            e.preventDefault()
+            // Navigate to process page
+            window.location.href = '/process'
+            break
           case 'k':
             e.preventDefault()
             // Future: Open command palette
@@ -136,6 +181,57 @@ export function AppLayout({ children }: AppLayoutProps) {
     return () => window.removeEventListener('resize', handleResize)
   }, [])
 
+  /**
+   * Render minimal layout for login/public pages.
+   *
+   * No navigation, sidebar, or status bar - just the content
+   * with toast notifications for user feedback.
+   */
+  if (!showNavigation) {
+    return (
+      <div className="h-full flex flex-col">
+        {/* Toast notifications */}
+        <Toaster
+          position="top-right"
+          toastOptions={{
+            duration: 4000,
+            className: 'text-sm',
+            style: {
+              background: '#fff',
+              border: '1px solid #e5e7eb',
+              borderRadius: '0.5rem',
+              boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
+              maxWidth: '400px'
+            },
+            success: {
+              iconTheme: {
+                primary: '#10b981',
+                secondary: '#fff',
+              },
+            },
+            error: {
+              iconTheme: {
+                primary: '#ef4444',
+                secondary: '#fff',
+              },
+            },
+          }}
+        />
+
+        {/* Content only - no navigation chrome */}
+        <main className="flex-1">
+          {children}
+        </main>
+      </div>
+    )
+  }
+
+  /**
+   * Render full layout for authenticated pages.
+   *
+   * Includes top navigation, left sidebar, status bar,
+   * and responsive behavior.
+   */
   return (
     <div className="h-full flex flex-col" style={{
       '--sidebar-width': sidebarCollapsed ? '4rem' : '16rem'
@@ -204,10 +300,13 @@ export function AppLayout({ children }: AppLayoutProps) {
       </div>
 
       {/* Status Bar - Higher z-index to stay above processing panel */}
-      <StatusBar 
+      <StatusBar
         systemStatus={systemStatus}
         sidebarCollapsed={sidebarCollapsed}
       />
+
+      {/* Job Status Bar - Floating widget for active jobs */}
+      <JobStatusBar />
     </div>
   )
 }
@@ -215,6 +314,8 @@ export function AppLayout({ children }: AppLayoutProps) {
 // Export keyboard shortcut help for documentation
 export const keyboardShortcuts = [
   { key: 'Cmd/Ctrl + B', description: 'Toggle sidebar' },
+  { key: 'Cmd/Ctrl + J', description: 'Navigate to Jobs page' },
+  { key: 'Cmd/Ctrl + P', description: 'Navigate to Process page' },
   { key: 'Cmd/Ctrl + ,', description: 'Open settings' },
   { key: 'Cmd/Ctrl + K', description: 'Command palette (coming soon)' },
   { key: 'Escape', description: 'Close mobile sidebar' }

@@ -32,15 +32,17 @@ logs/
 *.log
 
 # Project storage (keep structure, ignore contents)
-#/files is the authoritative storage root
+# /files is the authoritative storage root
 /files/uploaded_files/*
 /files/processed_files/*
 /files/batch_files/*
+/files/organizations/*
+/files/shared/*
+/files/dedupe/*
+/files/temp/*
 
 # Keep directory markers
-!/files/uploaded_files/.gitkeep
-!/files/processed_files/.gitkeep
-!/files/batch_files/.gitkeep
+!/files/**/.gitkeep
 
 # Database files (keep structure, ignore contents)
 /backend/data/*.db

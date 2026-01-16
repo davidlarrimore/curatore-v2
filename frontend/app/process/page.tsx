@@ -1,15 +1,17 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useRouter } from 'next/navigation'
 import toast from 'react-hot-toast'
-import { 
-  FileInfo, 
-  ProcessingResult, 
+import {
+  FileInfo,
+  ProcessingResult,
   ProcessingOptions,
   QualityThresholds,
   OCRSettings
 } from '@/types'
-import { systemApi, fileApi, processingApi, utils } from '@/lib/api'
+import { systemApi, fileApi, processingApi, jobsApi, utils } from '@/lib/api'
+import { useAuth } from '@/lib/auth-context'
 import { UploadSelectStage } from '@/components/stages/UploadSelectStage'
 import { ProcessingPanel } from '@/components/ProcessingPanel'
 import { ReviewStage } from '@/components/stages/ReviewStage'
@@ -45,6 +47,9 @@ interface SystemConfig {
 }
 
 export default function ProcessingPage() {
+  const router = useRouter()
+  const { accessToken, isAuthenticated } = useAuth()
+
   // State management
   const [state, setState] = useState<ProcessingState>({
     currentStage: 'upload',
@@ -206,14 +211,64 @@ export default function ProcessingPage() {
   }
 
   // Processing management
-  const handleStartProcessing = () => {
+  const handleStartProcessing = async () => {
     if (state.selectedFiles.length === 0) {
       toast.error('Please select files to process')
       return
     }
 
-    setState(prev => ({ 
-      ...prev, 
+    // If authenticated, offer to create a job
+    if (isAuthenticated && accessToken) {
+      const createJob = window.confirm(
+        `Create a batch job for ${state.selectedFiles.length} documents?\n\n` +
+        `This will track processing in the Jobs page with real-time updates.\n\n` +
+        `Click OK to create a job, or Cancel to process immediately.`
+      )
+
+      if (createJob) {
+        const jobName = window.prompt(
+          'Enter a name for this job:',
+          `Process ${state.selectedFiles.length} documents`
+        )
+
+        if (jobName === null) {
+          // User cancelled
+          return
+        }
+
+        try {
+          toast.loading('Creating job...')
+
+          // Extract document IDs from selected files
+          const documentIds = state.selectedFiles.map(f => f.document_id)
+
+          // Create job via API
+          const job = await jobsApi.createJob(accessToken, {
+            document_ids: documentIds,
+            options: state.processingOptions,
+            name: jobName || `Process ${state.selectedFiles.length} documents`,
+            description: `Processing ${state.selectedFiles.length} documents from ${state.sourceType}`,
+            start_immediately: true
+          })
+
+          toast.dismiss()
+          toast.success(`Job created: ${job.name}`)
+
+          // Redirect to job detail page
+          router.push(`/jobs/${job.id}`)
+          return
+        } catch (error: any) {
+          toast.dismiss()
+          toast.error(`Failed to create job: ${error.message || 'Unknown error'}`)
+          console.error('Job creation failed:', error)
+          return
+        }
+      }
+    }
+
+    // Fall back to immediate processing with ProcessingPanel
+    setState(prev => ({
+      ...prev,
       isProcessing: true,
       processingComplete: false,
       processingResults: [],
@@ -288,6 +343,32 @@ export default function ProcessingPage() {
 
   return (
     <div className="h-full flex flex-col">
+      {/* Deprecation Notice */}
+      {isAuthenticated && (
+        <div className="bg-yellow-50 border-b border-yellow-200 px-4 py-3">
+          <div className="max-w-7xl mx-auto flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0">
+                <svg className="h-5 w-5 text-yellow-600" viewBox="0 0 20 20" fill="currentColor">
+                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
+                </svg>
+              </div>
+              <div className="flex-1">
+                <p className="text-sm text-yellow-800">
+                  <strong>Notice:</strong> This page will be deprecated soon. We recommend using the new <strong>Jobs</strong> page for batch document processing with better tracking and management.
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={() => router.push('/jobs')}
+              className="flex-shrink-0 px-4 py-2 bg-yellow-600 text-white text-sm font-medium rounded-md hover:bg-yellow-700 transition-colors"
+            >
+              Try Jobs Page
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Progress Bar Component */}
       <ProgressBar
         steps={progressSteps}

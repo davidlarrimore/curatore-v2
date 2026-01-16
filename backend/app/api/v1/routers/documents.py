@@ -75,12 +75,12 @@ async def upload_document(file: UploadFile = File(...)):
     content = await file.read()
     if len(content) > settings.max_file_size:
         raise HTTPException(
-            status_code=413, 
+            status_code=413,
             detail=f"File too large. Maximum size: {settings.max_file_size} bytes"
         )
-    
-    document_id, file_path = await document_service.save_uploaded_file(file.filename, content)
-    
+
+    document_id, file_path, file_hash = await document_service.save_uploaded_file(file.filename, content)
+
     return FileUploadResponse(
         document_id=document_id,
         filename=file.filename,
@@ -146,8 +146,14 @@ async def process_document(
     """
     Enqueue processing for a single document (Celery) or run sync when requested.
 
+    **DEPRECATED**: This endpoint is deprecated and will be removed in a future version.
+    Use POST /api/v1/jobs to create batch jobs with proper tracking and management.
+
     Supports optional authentication for database connection lookup in synchronous mode.
     Async mode (Celery) currently uses environment variables for backward compatibility.
+
+    When authentication is enabled, this endpoint creates a single-document batch job
+    internally for proper tracking while maintaining backward compatibility.
     """
     # Validate file exists first (check uploaded and batch locations)
     file_path = document_service.find_document_file_unified(document_id)
@@ -193,7 +199,45 @@ async def process_document(
         storage_service.save_processing_result(result)
         return V1ProcessingResult.model_validate(result)
 
-    # Enqueue Celery task
+    # NEW: If authentication is enabled and user exists, create database-backed job
+    # Otherwise fall back to legacy Redis-based tracking
+    if settings.enable_auth and user:
+        from ....services.job_service import create_batch_job, enqueue_job, check_concurrency_limit
+
+        # Check concurrency limit
+        can_create, error_msg = await check_concurrency_limit(user.organization_id)
+        if not can_create:
+            raise HTTPException(
+                status_code=409,
+                detail=error_msg or "Organization concurrency limit exceeded"
+            )
+
+        try:
+            # Create single-document batch job
+            opts = (options.model_dump() if options else {})
+            job = await create_batch_job(
+                organization_id=user.organization_id,
+                user_id=user.id,
+                document_ids=[document_id],
+                options=opts,
+                name=f"Document {document_id}",
+                description="Single document processing (legacy endpoint)",
+            )
+
+            # Enqueue job
+            enqueue_result = await enqueue_job(job.id)
+
+            # Return legacy response format
+            return {
+                "job_id": str(job.id),
+                "document_id": document_id,
+                "status": "queued",
+                "enqueued_at": job.created_at,
+            }
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+    # Legacy path: Enqueue Celery task with Redis tracking
     opts = (options.model_dump() if options else {})
     async_result = process_document_task.apply_async(
         kwargs={

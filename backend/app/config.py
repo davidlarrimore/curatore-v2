@@ -257,6 +257,25 @@ class Settings(BaseSettings):
     )
 
     # =========================================================================
+    # JOB MANAGEMENT CONFIGURATION
+    # =========================================================================
+    default_job_concurrency_limit: int = Field(
+        default=3, description="Default concurrent jobs per organization"
+    )
+    default_job_retention_days: int = Field(
+        default=30, description="Default job retention in days before auto-cleanup"
+    )
+    job_cleanup_enabled: bool = Field(
+        default=True, description="Enable automatic job cleanup"
+    )
+    job_cleanup_schedule_cron: str = Field(
+        default="0 3 * * *", description="Job cleanup schedule (daily at 3 AM)"
+    )
+    job_cancellation_timeout: int = Field(
+        default=30, description="Timeout (s) for job cancellation verification"
+    )
+
+    # =========================================================================
     # INITIAL SEEDING (for first-time setup)
     # =========================================================================
     admin_email: str = Field(default="admin@example.com", description="Initial admin email")

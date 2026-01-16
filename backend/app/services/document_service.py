@@ -353,25 +353,46 @@ class DocumentService:
     def _list_files_for_api(self, base_dir: Path, kind: str) -> List[Dict[str, Any]]:
         """
         Returns list items properly shaped for FileListResponse/FileInfo model.
-        
+
         FIXED: This method now returns properly formatted data that matches the
         FileInfo Pydantic model requirements:
         - document_id (str): Unique identifier for the file
-        - filename (str): Original filename of the file  
+        - filename (str): Original filename of the file
         - original_filename (str): Same as filename for most cases
         - file_size (int): Size in bytes
         - upload_time (int): Unix timestamp (NOT ISO string)
         - file_path (str): Relative path to the file
+
+        When hierarchical storage is enabled, recursively scans subdirectories.
         """
         results: List[Dict[str, Any]] = []
         if not base_dir.exists():
             return results
 
-        for entry in sorted(base_dir.iterdir(), key=lambda p: p.name.lower()):
+        # Use recursive glob when hierarchical storage is enabled, otherwise list directory
+        if settings.use_hierarchical_storage:
+            # Recursively find all files in subdirectories
+            entries = sorted(base_dir.rglob("*"), key=lambda p: p.name.lower())
+        else:
+            # Only list files in the immediate directory (legacy behavior)
+            entries = sorted(base_dir.iterdir(), key=lambda p: p.name.lower())
+
+        for entry in entries:
             try:
                 # Guard even is_file() since it can stat() under the hood
                 if not entry.is_file():
                     continue
+
+                # Skip system files
+                if entry.name.startswith('.') or entry.name in ['Thumbs.db', 'desktop.ini']:
+                    continue
+
+                # When using hierarchical storage, filter by parent directory to match kind
+                if settings.use_hierarchical_storage and kind in ["uploaded", "processed"]:
+                    # Only include files from directories matching the kind
+                    parent_name = entry.parent.name
+                    if parent_name != kind:
+                        continue
 
                 ext = entry.suffix.lower()
                 if self._supported_extensions and ext and ext not in self._supported_extensions:
@@ -616,11 +637,25 @@ class DocumentService:
 
     def list_uploaded_files_with_metadata(self) -> List[Dict[str, Any]]:
         """List uploaded files with complete metadata for FileListResponse."""
-        return self._list_files_for_api(self.upload_dir, kind="uploaded")
+        if settings.use_hierarchical_storage:
+            # When hierarchical storage is enabled, scan from the root to include all org/shared files
+            # Files are stored in: /files/shared/adhoc/uploaded/ and /files/organizations/*/adhoc/uploaded/
+            base_path = Path(settings.files_root)
+            return self._list_files_for_api(base_path, kind="uploaded")
+        else:
+            # Legacy flat storage
+            return self._list_files_for_api(self.upload_dir, kind="uploaded")
 
     def list_processed_files_with_metadata(self) -> List[Dict[str, Any]]:
         """List processed files with complete metadata for FileListResponse."""
-        return self._list_files_for_api(self.processed_dir, kind="processed")
+        if settings.use_hierarchical_storage:
+            # When hierarchical storage is enabled, scan from the root to include all org/shared files
+            # Files are stored in: /files/shared/adhoc/processed/ and /files/organizations/*/adhoc/processed/
+            base_path = Path(settings.files_root)
+            return self._list_files_for_api(base_path, kind="processed")
+        else:
+            # Legacy flat storage
+            return self._list_files_for_api(self.processed_dir, kind="processed")
 
     def list_batch_files_with_metadata(self) -> List[Dict[str, Any]]:
         """List batch files with complete metadata for FileListResponse."""
@@ -694,9 +729,18 @@ class DocumentService:
         """Find the processed markdown file path by document_id."""
         try:
             pattern = f"{document_id}_*.md"
-            for file_path in self.processed_dir.glob(pattern):
-                if file_path.is_file():
-                    return file_path
+
+            if settings.use_hierarchical_storage:
+                # Search recursively from files root when hierarchical storage is enabled
+                base_path = Path(settings.files_root)
+                for file_path in base_path.rglob(pattern):
+                    if file_path.is_file():
+                        return file_path
+            else:
+                # Legacy flat storage - search only in processed_dir
+                for file_path in self.processed_dir.glob(pattern):
+                    if file_path.is_file():
+                        return file_path
         except Exception:
             pass
         return None

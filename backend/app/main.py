@@ -286,6 +286,51 @@ async def startup_event() -> None:
             else:
                 print("   ℹ️  Continuing without database (authentication disabled)")
 
+        # Sync default connections from environment variables
+        try:
+            print("🔗 Syncing default connections from environment variables...")
+            async with database_service.get_session() as session:
+                from .services.connection_service import sync_default_connections_from_env
+                from sqlalchemy import select
+                from .database.models import Organization
+                from uuid import UUID
+
+                # Determine which organization to sync for
+                org_id = None
+                if settings.enable_auth and settings.default_org_id:
+                    # Multi-tenant mode: sync for default org
+                    try:
+                        org_id = UUID(settings.default_org_id)
+                    except (ValueError, AttributeError):
+                        print(f"   ⚠️  Invalid DEFAULT_ORG_ID: {settings.default_org_id}")
+                else:
+                    # Backward compatibility mode: sync for first org
+                    result = await session.execute(select(Organization).limit(1))
+                    org = result.scalar_one_or_none()
+                    if org:
+                        org_id = org.id
+
+                if org_id:
+                    results = await sync_default_connections_from_env(session, org_id)
+
+                    for conn_type, status in results.items():
+                        if status == "error":
+                            print(f"   ⚠️  {conn_type}: failed to sync")
+                        elif status == "created":
+                            print(f"   ✅ {conn_type}: created default connection")
+                        elif status == "updated":
+                            print(f"   🔄 {conn_type}: updated default connection")
+                        elif status == "unchanged":
+                            print(f"   ➡️  {conn_type}: unchanged")
+                        elif status == "skipped":
+                            print(f"   ⏭️  {conn_type}: skipped (env vars not set)")
+                else:
+                    print("   ⚠️  No organization found, skipping connection sync")
+
+        except Exception as e:
+            print(f"   ⚠️  Failed to sync default connections: {e}")
+            # Don't fail startup if connection sync fails
+
         # The DocumentService handles directory creation and validation
         # This is called during service import/initialization
 

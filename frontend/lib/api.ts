@@ -438,11 +438,238 @@ function mapOptionsToV1(options: any): any {
 
 // -------------------- Jobs API --------------------
 export const jobsApi = {
-  async getJob(jobId: string): Promise<any> {
-    const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}`), { cache: 'no-store' })
+  /**
+   * Create a new batch job for processing multiple documents
+   */
+  async createJob(token: string, data: {
+    document_ids: string[]
+    options?: Record<string, any>
+    name?: string
+    description?: string
+    start_immediately?: boolean
+  }): Promise<{
+    id: string
+    organization_id: string
+    user_id?: string
+    name: string
+    status: string
+    total_documents: number
+    created_at: string
+  }> {
+    const res = await fetch(apiUrl('/jobs'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
+      body: JSON.stringify(data),
+    })
     return handleJson(res)
   },
 
+  /**
+   * Start a pending job
+   */
+  async startJob(token: string, jobId: string): Promise<{
+    id: string
+    status: string
+    queued_at?: string
+  }> {
+    const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}/start`), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Cancel a running job
+   */
+  async cancelJob(token: string, jobId: string): Promise<{
+    job_id: string
+    status: string
+    tasks_revoked: number
+    tasks_stopped: number
+    verification_successful: boolean
+    message: string
+  }> {
+    const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}/cancel`), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * List jobs with pagination and filtering
+   */
+  async listJobs(token: string, params?: {
+    status?: string
+    page?: number
+    page_size?: number
+  }): Promise<{
+    jobs: Array<{
+      id: string
+      name: string
+      status: string
+      total_documents: number
+      completed_documents: number
+      failed_documents: number
+      created_at: string
+      started_at?: string
+      completed_at?: string
+    }>
+    total: number
+    page: number
+    page_size: number
+    total_pages: number
+  }> {
+    const url = new URL(apiUrl('/jobs'))
+    if (params?.status) url.searchParams.set('status', params.status)
+    if (params?.page) url.searchParams.set('page', params.page.toString())
+    if (params?.page_size) url.searchParams.set('page_size', params.page_size.toString())
+
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get detailed job information
+   */
+  async getJob(token: string, jobId: string): Promise<{
+    id: string
+    name: string
+    status: string
+    total_documents: number
+    completed_documents: number
+    failed_documents: number
+    created_at: string
+    documents: Array<{
+      id: string
+      document_id: string
+      filename: string
+      status: string
+      conversion_score?: number
+      error_message?: string
+    }>
+    recent_logs: Array<{
+      id: string
+      timestamp: string
+      level: string
+      message: string
+    }>
+    processing_options: Record<string, any>
+    results_summary?: Record<string, any>
+  }> {
+    const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}`), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get job logs with pagination
+   */
+  async getJobLogs(token: string, jobId: string, params?: {
+    page?: number
+    page_size?: number
+  }): Promise<Array<{
+    id: string
+    timestamp: string
+    level: string
+    message: string
+    metadata?: Record<string, any>
+  }>> {
+    const url = new URL(apiUrl(`/jobs/${encodeURIComponent(jobId)}/logs`))
+    if (params?.page) url.searchParams.set('page', params.page.toString())
+    if (params?.page_size) url.searchParams.set('page_size', params.page_size.toString())
+
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get job documents with their processing status
+   */
+  async getJobDocuments(token: string, jobId: string): Promise<Array<{
+    id: string
+    document_id: string
+    filename: string
+    status: string
+    conversion_score?: number
+    quality_scores?: Record<string, any>
+    is_rag_ready?: boolean
+    error_message?: string
+    processing_time_seconds?: number
+  }>> {
+    const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}/documents`), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Delete a job (admin only, terminal states only)
+   */
+  async deleteJob(token: string, jobId: string): Promise<void> {
+    const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}`), {
+      method: 'DELETE',
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    if (!res.ok) {
+      let body: any = undefined
+      try { body = await res.json() } catch {}
+      const msg = (body && (body.detail || body.message)) || res.statusText
+      httpError(res, msg, body)
+    }
+  },
+
+  /**
+   * Get user's job statistics
+   */
+  async getUserStats(token: string): Promise<{
+    user_id: string
+    active_jobs: number
+    queued_jobs: number
+    total_jobs: number
+    completed_jobs: number
+    failed_jobs: number
+    cancelled_jobs: number
+  }> {
+    const res = await fetch(apiUrl('/jobs/stats/user'), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get organization job statistics (admin only)
+   */
+  async getOrgStats(token: string): Promise<{
+    organization_id: string
+    active_jobs: number
+    queued_jobs: number
+    concurrency_limit: number
+    total_jobs: number
+    completed_jobs: number
+    failed_jobs: number
+    cancelled_jobs: number
+    total_documents_processed: number
+  }> {
+    const res = await fetch(apiUrl('/jobs/stats/organization'), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  // Legacy endpoints (backward compatibility)
   async getJobByDocument(documentId: string): Promise<any> {
     const res = await fetch(apiUrl(`/jobs/by-document/${encodeURIComponent(documentId)}`), { cache: 'no-store' })
     return handleJson(res)
@@ -624,6 +851,26 @@ export const connectionsApi = {
     const res = await fetch(apiUrl('/connections/types'), {
       headers,
       cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async testCredentials(token: string, data: {
+    provider: string
+    base_url: string
+    api_key: string
+    [key: string]: any
+  }): Promise<{
+    success: boolean
+    models: string[]
+    message?: string
+    error?: string
+    requires_manual_model?: boolean
+  }> {
+    const res = await fetch(apiUrl('/connections/test-credentials'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
+      body: JSON.stringify(data),
     })
     return handleJson(res)
   },
@@ -832,7 +1079,7 @@ export const usersApi = {
       last_login?: string
     }>
   }> {
-    const res = await fetch(apiUrl('/users'), {
+    const res = await fetch(apiUrl('/organizations/me/users'), {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
@@ -840,7 +1087,7 @@ export const usersApi = {
   },
 
   async getUser(token: string, userId: string): Promise<any> {
-    const res = await fetch(apiUrl(`/users/${userId}`), {
+    const res = await fetch(apiUrl(`/organizations/me/users/${userId}`), {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
@@ -857,7 +1104,7 @@ export const usersApi = {
     user: any
     temporary_password?: string
   }> {
-    const res = await fetch(apiUrl('/users/invite'), {
+    const res = await fetch(apiUrl('/organizations/me/users'), {
       method: 'POST',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
@@ -875,7 +1122,7 @@ export const usersApi = {
     message: string
     user: any
   }> {
-    const res = await fetch(apiUrl(`/users/${userId}`), {
+    const res = await fetch(apiUrl(`/organizations/me/users/${userId}`), {
       method: 'PUT',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
@@ -886,7 +1133,7 @@ export const usersApi = {
   async deleteUser(token: string, userId: string): Promise<{
     message: string
   }> {
-    const res = await fetch(apiUrl(`/users/${userId}`), {
+    const res = await fetch(apiUrl(`/organizations/me/users/${userId}`), {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -896,7 +1143,7 @@ export const usersApi = {
   async changePassword(token: string, userId: string, newPassword: string): Promise<{
     message: string
   }> {
-    const res = await fetch(apiUrl(`/users/${userId}/password`), {
+    const res = await fetch(apiUrl(`/organizations/me/users/${userId}/password`), {
       method: 'PUT',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify({ new_password: newPassword }),
