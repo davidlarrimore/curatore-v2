@@ -701,6 +701,102 @@ Helper scripts in `scripts/sharepoint/` provide standalone functionality:
 - Pagination support for large folders
 - Automatic OAuth token management
 
+### Job Management Workflow
+
+The job management system provides batch document processing with tracking, concurrency control, and retention policies:
+
+**Key Concepts**:
+- **Job**: A batch of documents processed together with shared options
+- **Job Document**: Individual document within a job with its own status tracking
+- **Job Lifecycle**: PENDING → QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED
+- **Concurrency Limit**: Per-organization limit prevents resource exhaustion (default: 3)
+- **Retention Policy**: Auto-cleanup after configurable days (7/30/90/indefinite)
+
+**Typical Workflow**:
+
+1. **Create Job**: Batch multiple documents into a tracked job
+   ```bash
+   curl -X POST http://localhost:8000/api/v1/jobs \
+     -H "Authorization: Bearer $TOKEN" \
+     -H "Content-Type: application/json" \
+     -d '{
+       "document_ids": ["doc-123", "doc-456", "doc-789"],
+       "options": {
+         "quality_thresholds": {
+           "conversion_threshold": 70.0,
+           "clarity_threshold": 7.0
+         },
+         "ocr_settings": {
+           "enabled": true,
+           "language": "eng"
+         }
+       },
+       "name": "Q4 Report Processing",
+       "description": "Process Q4 financial reports",
+       "start_immediately": true
+     }'
+   ```
+
+   Returns job ID and starts processing immediately if `start_immediately=true`
+
+2. **Monitor Progress**: Poll job status for real-time updates
+   ```bash
+   curl http://localhost:8000/api/v1/jobs/{job_id} \
+     -H "Authorization: Bearer $TOKEN"
+   ```
+
+   Response includes:
+   - Overall job status
+   - Document-level progress (completed/failed counts)
+   - Processing logs
+   - Quality metrics and results
+
+3. **Cancel Job** (if needed): Immediate termination with cleanup
+   ```bash
+   curl -X POST http://localhost:8000/api/v1/jobs/{job_id}/cancel \
+     -H "Authorization: Bearer $TOKEN"
+   ```
+
+   Verification ensures:
+   - Celery tasks revoked
+   - Partial files deleted
+   - Job status updated to CANCELLED
+
+4. **View Organization Stats** (admins only): Org-wide job metrics
+   ```bash
+   curl http://localhost:8000/api/v1/jobs/stats/organization \
+     -H "Authorization: Bearer $TOKEN"
+   ```
+
+   Provides:
+   - Active jobs / concurrency limit
+   - Total jobs (24h/7d/30d)
+   - Average processing time
+   - Success rate percentage
+   - Storage usage
+
+**Frontend Integration**:
+- `/jobs` page: Job list view with filters and pagination
+- `/jobs/[id]` page: Job detail view with real-time updates
+- Create Job Panel: 3-step wizard (Select → Configure → Review)
+- Admin Settings: Concurrency limits and retention policies
+- Status Bar: User job count + org metrics (for admins)
+
+**Configuration**:
+- `DEFAULT_JOB_CONCURRENCY_LIMIT`: Max concurrent jobs per org (default: 3)
+- `DEFAULT_JOB_RETENTION_DAYS`: Days to retain jobs (default: 30)
+- `JOB_CLEANUP_ENABLED`: Enable auto-cleanup (default: true)
+- `JOB_CLEANUP_SCHEDULE_CRON`: Cleanup schedule (default: `0 3 * * *`)
+- `JOB_CANCELLATION_TIMEOUT`: Cancellation verification timeout (default: 30s)
+- `JOB_STATUS_POLL_INTERVAL`: Frontend polling interval (default: 2s)
+
+**Best Practices**:
+- Use descriptive job names for easy identification
+- Set appropriate retention policies based on compliance needs
+- Monitor org concurrency limits during peak usage
+- Cancel stuck jobs promptly to free up capacity
+- Review job logs for failed documents to identify patterns
+
 ## API Endpoints (v1)
 
 Base URL: `http://localhost:8000/api/v1`
@@ -714,8 +810,16 @@ Base URL: `http://localhost:8000/api/v1`
 - `POST /documents/batch/process` - Process multiple documents
 
 **Jobs**:
-- `GET /jobs/{job_id}` - Get job status
-- `GET /jobs/by-document/{document_id}` - Get last job for document
+- `POST /jobs` - Create batch job
+- `GET /jobs` - List jobs (paginated, filtered by status)
+- `GET /jobs/{id}` - Get job details
+- `POST /jobs/{id}/start` - Start job (if not auto-started)
+- `POST /jobs/{id}/cancel` - Cancel job with verification
+- `DELETE /jobs/{id}` - Delete job (admin only, terminal state only)
+- `GET /jobs/{id}/logs` - Get job logs (paginated)
+- `GET /jobs/{id}/documents` - Get job documents with status
+- `GET /jobs/stats/user` - User's job statistics
+- `GET /jobs/stats/organization` - Org job stats (admin only)
 
 **SharePoint**:
 - `POST /sharepoint/inventory` - List SharePoint folder contents with metadata

@@ -20,6 +20,14 @@ Curatore v2 is a multi-tenant document processing system that converts documents
 - **Vector Optimization**: Structure optimization for RAG applications
 - **Batch Processing**: Process multiple documents asynchronously
 
+### Job Management
+- **Batch Jobs**: Process multiple documents as a single tracked job
+- **Concurrency Control**: Per-organization limits prevent resource exhaustion
+- **Real-time Tracking**: Live progress updates and document-level status
+- **Job Retention**: Configurable auto-cleanup policies (7/30/90/indefinite days)
+- **Cancellation**: Immediate job termination with verification and cleanup
+- **Admin Visibility**: Organization-wide job statistics and performance metrics
+
 ### Multi-Tenant Architecture
 - **Organizations**: Complete tenant isolation with separate storage
 - **User Management**: Role-based access control (Admin, Member, Viewer)
@@ -176,6 +184,14 @@ Key configuration options (see `.env.example` for complete list):
 - `ADMIN_EMAIL`: Initial admin user email
 - `ADMIN_PASSWORD`: Initial admin password
 
+### Job Management
+- `DEFAULT_JOB_CONCURRENCY_LIMIT`: Max concurrent jobs per org (default: 3)
+- `DEFAULT_JOB_RETENTION_DAYS`: Days to retain completed jobs (default: 30)
+- `JOB_CLEANUP_ENABLED`: Enable automatic job cleanup (default: `true`)
+- `JOB_CLEANUP_SCHEDULE_CRON`: Job cleanup schedule (default: `0 3 * * *`)
+- `JOB_CANCELLATION_TIMEOUT`: Cancellation verification timeout in seconds (default: 30)
+- `JOB_STATUS_POLL_INTERVAL`: Frontend polling interval in seconds (default: 2)
+
 ### Storage
 - `FILE_DEDUPLICATION_ENABLED`: Enable file deduplication (default: `true`)
 - `FILE_RETENTION_UPLOADED_DAYS`: Retention for uploaded files (default: 7)
@@ -246,6 +262,18 @@ Base URL: `http://localhost:8000/api/v1`
 - `GET /documents/{id}/result` - Get result
 - `GET /documents/{id}/content` - Get markdown
 - `POST /documents/batch/process` - Batch processing
+
+### Jobs
+- `POST /jobs` - Create batch job
+- `GET /jobs` - List jobs (paginated, filtered)
+- `GET /jobs/{id}` - Get job details
+- `POST /jobs/{id}/start` - Start job
+- `POST /jobs/{id}/cancel` - Cancel job
+- `DELETE /jobs/{id}` - Delete job (terminal states only)
+- `GET /jobs/{id}/logs` - Get job logs (paginated)
+- `GET /jobs/{id}/documents` - Get job documents
+- `GET /jobs/stats/user` - User job statistics
+- `GET /jobs/stats/organization` - Org job stats (admin only)
 
 ### Storage
 - `GET /storage/stats` - Storage usage statistics

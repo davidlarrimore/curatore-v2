@@ -274,6 +274,9 @@ class Settings(BaseSettings):
     job_cancellation_timeout: int = Field(
         default=30, description="Timeout (s) for job cancellation verification"
     )
+    job_status_poll_interval: int = Field(
+        default=2, description="Frontend polling interval (s) for job status updates"
+    )
 
     # =========================================================================
     # INITIAL SEEDING (for first-time setup)
