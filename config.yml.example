@@ -1,0 +1,307 @@
+# ============================================================================
+# Curatore v2 - Service Configuration
+# ============================================================================
+# Copy this file to config.yml and customize for your environment.
+#
+# Environment Variable References:
+#   Use ${VAR_NAME} to reference environment variables from .env
+#   Example: api_key: ${OPENAI_API_KEY}
+#
+# Optional Settings:
+#   Settings marked with "(optional)" have sensible defaults
+#   and can be omitted if defaults are acceptable.
+#
+# Configuration Priority:
+#   1. config.yml (if present)
+#   2. Environment variables from .env
+#   3. Built-in defaults
+# ============================================================================
+
+version: "2.0"
+
+# ============================================================================
+# LLM Configuration (optional)
+# ============================================================================
+# Language model for document quality evaluation
+#
+# Supports: OpenAI, Ollama, OpenWebUI, LM Studio, and compatible endpoints
+# If not configured here, falls back to OPENAI_* environment variables
+
+llm:
+  # Provider name (openai, ollama, openwebui, lmstudio)
+  provider: openai
+
+  # API key or authentication token
+  # Recommended: Reference from environment for security
+  api_key: ${OPENAI_API_KEY}
+
+  # API endpoint URL
+  # Examples:
+  #   - OpenAI: https://api.openai.com/v1
+  #   - Ollama: http://localhost:11434/v1
+  #   - OpenWebUI: http://localhost:3000/v1
+  #   - LM Studio: http://localhost:1234/v1
+  base_url: https://api.openai.com/v1
+
+  # Model identifier
+  # Examples:
+  #   - OpenAI: gpt-4o-mini, gpt-4o, gpt-4-turbo
+  #   - Ollama: llama3, mistral, mixtral
+  model: gpt-4o-mini
+
+  # Request timeout in seconds (optional, default: 60)
+  # Increase for slower models or large documents
+  timeout: 60
+
+  # Maximum retry attempts (optional, default: 3)
+  max_retries: 3
+
+  # Generation temperature (optional, default: 0.7)
+  # Range: 0.0 (deterministic) to 2.0 (creative)
+  temperature: 0.7
+
+  # Verify SSL certificates (optional, default: true)
+  # Set to false for self-signed certificates in development
+  verify_ssl: true
+
+  # Provider-specific options (optional)
+  # Pass additional parameters to the LLM provider
+  options:
+    max_tokens: 4096
+    top_p: 1.0
+
+
+# ============================================================================
+# Extraction Service Configuration (optional)
+# ============================================================================
+# Document-to-markdown conversion services
+#
+# Supports multiple extraction engines with priority-based routing
+# If not configured here, falls back to EXTRACTION_* environment variables
+
+extraction:
+  # Extraction strategy (default, docling, auto, none)
+  # - default: Use extraction-service (internal microservice)
+  # - docling: Use Docling Serve (external service for complex PDFs)
+  # - auto: Try Docling first, fallback to extraction-service
+  # - none: Disable extraction (returns placeholder text)
+  priority: default
+
+  # List of extraction services
+  services:
+    # Internal extraction service (recommended, always available)
+    - name: extraction-service
+      url: http://extraction:8010
+      timeout: 300  # 5 minutes (optional, default: 300)
+      enabled: true
+      verify_ssl: true  # (optional, default: true)
+
+    # Docling Serve (optional, for complex PDFs and Office docs)
+    # Enable by setting ENABLE_DOCLING_SERVICE=true in .env
+    - name: docling
+      url: http://docling:5001
+      timeout: 600  # 10 minutes (optional, default: 600)
+      enabled: false  # Set to true if using Docling
+      verify_ssl: true
+
+
+# ============================================================================
+# Microsoft SharePoint Configuration (optional)
+# ============================================================================
+# Microsoft Graph API integration for SharePoint document retrieval
+#
+# Requires:
+#   - Azure AD app registration with client credentials
+#   - Microsoft Graph API permissions: Sites.Read.All or Files.Read.All
+#   - Admin consent granted for the application
+#
+# If not configured here, falls back to MS_* environment variables
+
+sharepoint:
+  # Enable SharePoint integration (optional, default: true)
+  enabled: true
+
+  # Azure AD tenant ID (GUID format)
+  # Recommended: Reference from environment for security
+  tenant_id: ${MS_TENANT_ID}
+
+  # Azure AD app registration client ID
+  client_id: ${MS_CLIENT_ID}
+
+  # Azure AD app registration client secret
+  # CRITICAL: Keep this secret! Reference from environment.
+  client_secret: ${MS_CLIENT_SECRET}
+
+  # OAuth scope (optional, default: https://graph.microsoft.com/.default)
+  graph_scope: https://graph.microsoft.com/.default
+
+  # Microsoft Graph API base URL (optional)
+  graph_base_url: https://graph.microsoft.com/v1.0
+
+  # Request timeout in seconds (optional, default: 60)
+  timeout: 60
+
+  # Maximum retry attempts (optional, default: 3)
+  max_retries: 3
+
+
+# ============================================================================
+# Email Service Configuration (optional)
+# ============================================================================
+# Email delivery for user notifications (verification, password reset, etc.)
+#
+# Supported backends:
+#   - console: Log emails to console (development/testing)
+#   - smtp: Send via SMTP server (production)
+#   - sendgrid: Send via SendGrid API
+#   - ses: Send via AWS Simple Email Service
+#
+# If not configured here, falls back to EMAIL_* environment variables
+
+email:
+  # Email backend (console, smtp, sendgrid, ses)
+  backend: console  # Change to 'smtp' for production
+
+  # From email address
+  # Should be a verified domain in production
+  from_address: noreply@curatore.app
+
+  # From display name
+  from_name: Curatore
+
+  # -----------------------------------------------------------------------------
+  # SMTP Configuration (required if backend=smtp)
+  # -----------------------------------------------------------------------------
+  smtp:
+    # SMTP server hostname
+    # Examples:
+    #   - Gmail: smtp.gmail.com
+    #   - Outlook: smtp.office365.com
+    #   - SendGrid: smtp.sendgrid.net
+    host: ${SMTP_HOST}
+
+    # SMTP server port (optional, default: 587)
+    # - 587: TLS/STARTTLS (recommended)
+    # - 465: SSL
+    # - 25: Unencrypted (not recommended)
+    port: 587
+
+    # SMTP authentication username (optional)
+    # Usually your email address
+    username: ${SMTP_USERNAME}
+
+    # SMTP authentication password (optional)
+    # For Gmail: Use app-specific password, not your regular password
+    # CRITICAL: Keep this secret! Reference from environment.
+    password: ${SMTP_PASSWORD}
+
+    # Use TLS encryption (optional, default: true)
+    use_tls: true
+
+    # Connection timeout in seconds (optional, default: 30)
+    timeout: 30
+
+  # -----------------------------------------------------------------------------
+  # SendGrid Configuration (required if backend=sendgrid)
+  # -----------------------------------------------------------------------------
+  # sendgrid:
+  #   api_key: ${SENDGRID_API_KEY}
+
+  # -----------------------------------------------------------------------------
+  # AWS SES Configuration (required if backend=ses)
+  # -----------------------------------------------------------------------------
+  # aws_ses:
+  #   region: us-east-1
+  #   access_key_id: ${AWS_ACCESS_KEY_ID}  # Optional, uses IAM role if not provided
+  #   secret_access_key: ${AWS_SECRET_ACCESS_KEY}  # Optional
+
+
+# ============================================================================
+# Storage Configuration (optional)
+# ============================================================================
+# File storage management settings with defaults
+
+storage:
+  # Use hierarchical organization-based file structure (optional, default: true)
+  # - true: organizations/{org_id}/batches|adhoc structure
+  # - false: Flat uploaded_files/ and processed_files/ structure
+  hierarchical: true
+
+  # File deduplication settings
+  deduplication:
+    # Enable duplicate file detection (optional, default: true)
+    enabled: true
+
+    # Deduplication strategy (optional, default: symlink)
+    # - symlink: Create symbolic links (recommended, space efficient)
+    # - copy: Copy files from dedupe storage (compatible, uses more space)
+    # - reference: Store only reference (most efficient, requires lookup)
+    strategy: symlink
+
+    # Hash algorithm (optional, default: sha256)
+    # Options: md5, sha1, sha256, sha512
+    hash_algorithm: sha256
+
+    # Minimum file size to deduplicate in bytes (optional, default: 1024)
+    # Files smaller than this are not deduplicated (overhead not worth it)
+    min_file_size: 1024
+
+  # File retention policies (days/hours)
+  retention:
+    # Days to retain uploaded files (optional, default: 7)
+    uploaded_days: 7
+
+    # Days to retain processed markdown files (optional, default: 30)
+    processed_days: 30
+
+    # Days to retain batch files and metadata (optional, default: 14)
+    batch_days: 14
+
+    # Hours to retain temporary processing files (optional, default: 24)
+    temp_hours: 24
+
+  # Automatic cleanup settings
+  cleanup:
+    # Enable automatic file cleanup (optional, default: true)
+    enabled: true
+
+    # Cleanup schedule in cron format (optional, default: "0 2 * * *")
+    # Format: "minute hour day month day_of_week"
+    # Examples:
+    #   - "0 2 * * *": Daily at 2 AM
+    #   - "0 */6 * * *": Every 6 hours
+    #   - "0 0 * * 0": Weekly on Sunday at midnight
+    schedule_cron: "0 2 * * *"
+
+    # Files to process per cleanup batch (optional, default: 1000)
+    # Higher = faster cleanup but more memory usage
+    batch_size: 1000
+
+    # Run cleanup in dry-run mode (optional, default: false)
+    # - true: Log what would be deleted without actually deleting
+    # - false: Actually delete expired files
+    dry_run: false
+
+
+# ============================================================================
+# Queue Configuration (optional)
+# ============================================================================
+# Celery background job processing settings
+
+queue:
+  # Redis URL for task queue broker (optional, default: redis://redis:6379/0)
+  broker_url: redis://redis:6379/0
+
+  # Redis URL for storing task results (optional, default: redis://redis:6379/1)
+  result_backend: redis://redis:6379/1
+
+  # Default queue name (optional, default: processing)
+  default_queue: processing
+
+  # Worker concurrency level (optional, default: 4)
+  # Number of worker processes per container
+  worker_concurrency: 4
+
+  # Task timeout in seconds (optional, default: 3600)
+  # Maximum time a task can run before being terminated
+  task_timeout: 3600

@@ -19,6 +19,8 @@ services:
       - ./files:/app/files
       # Database persistence
       - ./backend/data:/app/data
+      # YAML configuration (optional, falls back to env vars if not present)
+      - ./config.yml:/app/config.yml:ro
     environment:
       - PYTHONUNBUFFERED=1
       - DEBUG=${DEBUG:-false}
@@ -111,6 +113,8 @@ services:
       - ./files:/app/files
       # Database persistence (shared with backend)
       - ./backend/data:/app/data
+      # YAML configuration (optional, falls back to env vars if not present)
+      - ./config.yml:/app/config.yml:ro
     depends_on:
       - redis
 

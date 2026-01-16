@@ -10,6 +10,7 @@ __pycache__/
 *.egg-info/
 .eggs/
 .env
+config.yml
 .venv/
 **/.venv/
 

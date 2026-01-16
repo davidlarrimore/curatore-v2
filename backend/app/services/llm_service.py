@@ -30,6 +30,7 @@
 
 import json
 import re
+import logging
 from typing import Optional, Dict, Any
 from uuid import UUID
 from openai import OpenAI
@@ -40,6 +41,9 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from ..config import settings
 from ..models import LLMEvaluation, LLMConnectionStatus
 from ..utils.text_utils import clean_llm_response
+from ..services.config_loader import config_loader
+
+logger = logging.getLogger(__name__)
 
 
 class LLMService:
@@ -86,45 +90,69 @@ class LLMService:
     
     def _initialize_client(self) -> None:
         """
-        Initialize OpenAI client with configuration from settings.
-        
+        Initialize OpenAI client with configuration from config.yml or settings.
+
         Creates an OpenAI client with custom HTTP client configuration for
         SSL verification control and timeout management. This method is
         called during service initialization and can be called again to
         reinitialize the client if settings change.
-        
-        Configuration Sources:
-            - settings.openai_api_key: API key for authentication
-            - settings.openai_base_url: Custom endpoint URL (for local LLMs)
-            - settings.openai_verify_ssl: SSL verification control
-            - settings.openai_timeout: Request timeout in seconds
-            - settings.openai_max_retries: Maximum retry attempts
-        
+
+        Configuration Sources (priority order):
+            1. config.yml (if present) via config_loader.get_llm_config()
+            2. Environment variables via settings (backward compatibility)
+
+        Configuration Parameters:
+            - api_key: API key for authentication
+            - base_url: Custom endpoint URL (for local LLMs)
+            - verify_ssl: SSL verification control
+            - timeout: Request timeout in seconds
+            - max_retries: Maximum retry attempts
+
         Error Handling:
             - Missing API key: Client set to None, no error raised
             - Network/SSL issues: Client set to None, warning printed
             - Configuration errors: Client set to None, exception details logged
         """
-        if not settings.openai_api_key:
+        # Try loading from config.yml first
+        llm_config = config_loader.get_llm_config()
+
+        if llm_config:
+            logger.info("Loading LLM configuration from config.yml")
+            api_key = llm_config.api_key
+            base_url = llm_config.base_url
+            timeout = llm_config.timeout
+            max_retries = llm_config.max_retries
+            verify_ssl = llm_config.verify_ssl
+        else:
+            # Fallback to environment variables
+            logger.info("Loading LLM configuration from environment variables")
+            api_key = settings.openai_api_key
+            base_url = settings.openai_base_url
+            timeout = settings.openai_timeout
+            max_retries = settings.openai_max_retries
+            verify_ssl = settings.openai_verify_ssl
+
+        if not api_key:
+            logger.warning("No LLM API key configured (checked config.yml and environment)")
             self._client = None
             return
-        
+
         try:
             # Disable SSL warnings if SSL verification is disabled
-            if not settings.openai_verify_ssl:
+            if not verify_ssl:
                 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
-            
+
             # Create HTTP client configuration
             http_client = httpx.Client(
-                verify=settings.openai_verify_ssl,
-                timeout=settings.openai_timeout
+                verify=verify_ssl,
+                timeout=timeout
             )
-            
+
             self._client = OpenAI(
-                api_key=settings.openai_api_key,
-                base_url=settings.openai_base_url,
+                api_key=api_key,
+                base_url=base_url,
                 http_client=http_client,
-                max_retries=settings.openai_max_retries
+                max_retries=max_retries
             )
             
         except Exception as e:

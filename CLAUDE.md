@@ -581,6 +581,332 @@ Key environment variables (see `.env.example` for full list):
 - `DEFAULT_ORG_NAME`: Default organization name
 - `DEFAULT_ORG_SLUG`: Default organization slug
 
+## YAML Configuration System
+
+Curatore v2 supports YAML-based service configuration as the recommended approach (v2.1+). Services automatically load from `config.yml` with fallback to environment variables for backward compatibility.
+
+### Configuration Priority
+
+1. **config.yml** (if present) - Structured YAML at project root
+2. **Environment variables** - From `.env` or system environment
+3. **Built-in defaults** - Sensible defaults in Pydantic models
+
+### Quick Setup
+
+```bash
+# Copy example configuration
+cp config.yml.example config.yml
+
+# Edit with your service credentials
+# Use ${VAR_NAME} to reference secrets from .env
+
+# Validate configuration
+python -m app.commands.validate_config
+
+# Start services (config.yml is mounted read-only)
+docker-compose up -d
+```
+
+### Configuration Structure
+
+**File**: `config.yml` (project root)
+
+```yaml
+version: "2.0"
+
+# LLM Service Configuration
+llm:
+  provider: openai  # openai | ollama | openwebui | lmstudio
+  api_key: ${OPENAI_API_KEY}  # Reference from .env
+  base_url: https://api.openai.com/v1
+  model: gpt-4o-mini
+  timeout: 60
+  max_retries: 3
+  temperature: 0.7
+  verify_ssl: true
+
+# Extraction Service Configuration
+extraction:
+  priority: default  # default | docling | auto | none
+  services:
+    - name: extraction-service
+      url: http://extraction:8010
+      timeout: 300
+      enabled: true
+    - name: docling
+      url: http://docling:5001
+      timeout: 600
+      enabled: false
+
+# Microsoft SharePoint Configuration
+sharepoint:
+  enabled: true
+  tenant_id: ${MS_TENANT_ID}
+  client_id: ${MS_CLIENT_ID}
+  client_secret: ${MS_CLIENT_SECRET}
+  graph_scope: https://graph.microsoft.com/.default
+  graph_base_url: https://graph.microsoft.com/v1.0
+
+# Email Service Configuration
+email:
+  backend: smtp  # console | smtp | sendgrid | ses
+  from_address: noreply@curatore.example.com
+  from_name: Curatore
+  smtp:
+    host: smtp.gmail.com
+    port: 587
+    username: ${SMTP_USERNAME}
+    password: ${SMTP_PASSWORD}
+    use_tls: true
+
+# Storage Configuration
+storage:
+  hierarchical: true
+  deduplication:
+    enabled: true
+    strategy: symlink  # symlink | copy | reference
+  retention:
+    uploaded_days: 7
+    processed_days: 30
+  cleanup:
+    enabled: true
+    schedule_cron: "0 2 * * *"
+
+# Queue Configuration
+queue:
+  broker_url: redis://redis:6379/0
+  result_backend: redis://redis:6379/1
+  default_queue: processing
+  worker_concurrency: 4
+```
+
+### Environment Variable References
+
+Use `${VAR_NAME}` syntax to reference secrets from `.env`:
+
+```yaml
+llm:
+  api_key: ${OPENAI_API_KEY}  # Resolves from .env or environment
+
+sharepoint:
+  tenant_id: ${MS_TENANT_ID}
+  client_secret: ${MS_CLIENT_SECRET}
+```
+
+**Benefits:**
+- Keep secrets in `.env` (not committed to Git)
+- Share `config.yml` structure across environments
+- Override specific values per environment
+
+### Using Config Loader in Services
+
+**File**: `backend/app/services/config_loader.py`
+
+```python
+from app.services.config_loader import config_loader
+
+# Load configuration
+config = config_loader.get_config()
+
+# Get typed configuration
+llm_config = config_loader.get_llm_config()  # Returns LLMConfig | None
+extraction_config = config_loader.get_extraction_config()
+sharepoint_config = config_loader.get_sharepoint_config()
+
+# Get value by dot notation
+api_key = config_loader.get("llm.api_key", default="fallback")
+timeout = config_loader.get("llm.timeout", default=60)
+
+# Reload configuration (without restart)
+config_loader.reload()
+```
+
+### Service Integration Pattern
+
+Services should try loading from config.yml first, then fall back to environment variables:
+
+```python
+# Example: backend/app/services/llm_service.py
+import logging
+from ..services.config_loader import config_loader
+
+logger = logging.getLogger(__name__)
+
+def _initialize_client(self):
+    # Try loading from config.yml first
+    llm_config = config_loader.get_llm_config()
+
+    if llm_config:
+        logger.info("Loading LLM configuration from config.yml")
+        api_key = llm_config.api_key
+        base_url = llm_config.base_url
+        timeout = llm_config.timeout
+    else:
+        # Fallback to environment variables
+        logger.info("Loading LLM configuration from environment variables")
+        api_key = settings.openai_api_key
+        base_url = settings.openai_base_url
+        timeout = settings.openai_timeout
+
+    # Initialize client...
+```
+
+**Benefits:**
+- Backward compatibility (existing .env still works)
+- Clear logging of configuration source
+- Graceful degradation
+
+### Configuration Validation
+
+Validate configuration before starting services:
+
+```bash
+# Validate config.yml
+python -m app.commands.validate_config
+
+# Output:
+✓ config.yml found and readable
+✓ YAML syntax valid
+✓ Schema validation passed
+✓ Environment variables resolved
+✓ LLM configuration valid
+✓ Extraction configuration valid
+✓ SharePoint configuration valid
+✓ Email configuration valid
+✓ All services reachable
+
+Configuration is valid!
+
+# Skip connectivity tests
+python -m app.commands.validate_config --skip-connectivity
+
+# Specify custom config file
+python -m app.commands.validate_config --config-path config.dev.yml
+```
+
+### Migrating from .env to config.yml
+
+Automated migration script:
+
+```bash
+# Generate config.yml from .env
+python scripts/migrate_env_to_yaml.py
+
+# Output:
+Reading .env file: .env
+Found 25 environment variables
+
+Generated config.yml with:
+  ✓ LLM configuration (OpenAI)
+  ✓ Extraction services (2 services)
+  ✓ SharePoint configuration
+  ✓ Email configuration (SMTP)
+  ✓ Storage configuration
+  ✓ Queue configuration
+
+Successfully created config.yml
+
+# Dry-run mode (print without writing)
+python scripts/migrate_env_to_yaml.py --dry-run
+
+# Custom paths
+python scripts/migrate_env_to_yaml.py --env-file .env.prod --output config.prod.yml
+```
+
+**Migration process:**
+1. Parses `.env` file
+2. Infers provider types from URLs
+3. Generates structured YAML
+4. Uses `${VAR_NAME}` for sensitive values
+5. Preserves secrets in `.env`
+
+### Configuration Models
+
+**File**: `backend/app/models/config_models.py`
+
+Pydantic v2 models provide type-safe validation:
+
+```python
+from app.models.config_models import (
+    AppConfig,      # Root configuration
+    LLMConfig,      # LLM service
+    ExtractionConfig,
+    SharePointConfig,
+    EmailConfig,
+    StorageConfig,
+    QueueConfig,
+)
+
+# Load and validate from YAML
+config = AppConfig.from_yaml("config.yml")
+
+# Access typed values
+if config.llm:
+    print(f"LLM Provider: {config.llm.provider}")
+    print(f"Model: {config.llm.model}")
+    print(f"Timeout: {config.llm.timeout}s")
+
+# Validation errors are raised on invalid config
+```
+
+**Model features:**
+- Type validation with Pydantic Field validators
+- Default values for optional settings
+- Environment variable resolution
+- Extra field prevention (strict mode)
+- Comprehensive error messages
+
+### Multiple Environments
+
+Use different config files per environment:
+
+```bash
+# Development
+cp config.yml.example config.dev.yml
+export CONFIG_PATH=config.dev.yml
+
+# Production
+cp config.yml.example config.prod.yml
+export CONFIG_PATH=config.prod.yml
+
+# Validate specific config
+python -m app.commands.validate_config --config-path config.prod.yml
+
+# Mount in Docker
+docker run -v ./config.prod.yml:/app/config.yml:ro curatore-backend
+```
+
+### Testing Configuration
+
+**File**: `backend/tests/test_config_loader.py`
+
+Test coverage includes:
+- Valid configuration loading
+- Environment variable resolution
+- Missing environment variables
+- Invalid YAML syntax
+- Schema validation
+- Typed getters
+- Configuration reload
+- Optional service configs
+
+```bash
+# Run config tests
+pytest backend/tests/test_config_loader.py -v
+```
+
+### Documentation
+
+Complete configuration reference: **[docs/CONFIGURATION.md](./docs/CONFIGURATION.md)**
+
+Includes:
+- Getting started guide
+- Complete service configuration reference
+- Environment variable references
+- Troubleshooting guide
+- Migration guide
+- Advanced topics (hot reloading, multiple environments)
+
 ## Common Development Tasks
 
 ### Database Setup and Seeding
