@@ -84,11 +84,11 @@ export function TopNavigation({
       const friendlyNames: Record<string, string> = {
         'process': 'Processing',
         'settings': 'Settings',
+        'settings-admin': 'Admin Settings',
         'connections': 'Connections',
         'login': 'Login',
         'analytics': 'Analytics',
-        'batch': 'Batch Processing',
-        'health': 'System Health'
+        'batch': 'Batch Processing'
       }
       
       breadcrumbs.push({ 
@@ -174,9 +174,9 @@ export function TopNavigation({
           <Button
             variant="ghost"
             size="sm"
-            onClick={() => router.push('/health')}
-            title="System Health"
-            aria-label="View system health"
+            onClick={() => router.push('/connections')}
+            title="Connections"
+            aria-label="View connections"
             className={`${
               systemStatus.health === 'healthy'
                 ? 'text-green-600 hover:text-green-700 hover:bg-green-50'

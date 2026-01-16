@@ -8,6 +8,15 @@ const nextConfig = {
   eslint: {
     ignoreDuringBuilds: false,
   },
+  async redirects() {
+    return [
+      {
+        source: '/health',
+        destination: '/connections',
+        permanent: true,
+      },
+    ]
+  },
 }
 
 export default nextConfig

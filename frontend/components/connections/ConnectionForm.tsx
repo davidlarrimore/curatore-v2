@@ -12,7 +12,7 @@ interface Connection {
   config: Record<string, any>
   is_default: boolean
   is_active: boolean
-  is_managed: boolean
+  is_managed?: boolean
   managed_by?: string
 }
 

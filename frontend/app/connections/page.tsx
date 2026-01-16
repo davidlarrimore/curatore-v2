@@ -1,11 +1,12 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { connectionsApi } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
+import { RefreshCw } from 'lucide-react'
 import ConnectionForm from '@/components/connections/ConnectionForm'
 import ConnectionCard from '@/components/connections/ConnectionCard'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
@@ -17,8 +18,10 @@ interface Connection {
   config: Record<string, any>
   is_default: boolean
   is_active: boolean
+  is_managed?: boolean
+  managed_by?: string
   last_tested_at?: string
-  health_status?: 'healthy' | 'unhealthy' | 'unknown'
+  health_status?: 'healthy' | 'unhealthy' | 'unknown' | 'checking'
   created_at: string
   updated_at: string
 }
@@ -39,9 +42,58 @@ function ConnectionsContent() {
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editingConnection, setEditingConnection] = useState<Connection | null>(null)
+  const [checkingConnections, setCheckingConnections] = useState<Set<string>>(new Set())
+  const [isRefreshingAll, setIsRefreshingAll] = useState(false)
+
+  // Test a single connection's health
+  const testConnectionHealth = useCallback(async (connectionId: string) => {
+    if (!token) return
+
+    // Mark as checking
+    setCheckingConnections(prev => new Set(prev).add(connectionId))
+
+    try {
+      const result = await connectionsApi.testConnection(token, connectionId)
+      // Update the connection's health status
+      setConnections(prev => prev.map(conn =>
+        conn.id === connectionId
+          ? {
+              ...conn,
+              health_status: result.success ? 'healthy' : 'unhealthy',
+              last_tested_at: new Date().toISOString()
+            }
+          : conn
+      ))
+    } catch (err) {
+      // Mark as unhealthy on error
+      setConnections(prev => prev.map(conn =>
+        conn.id === connectionId
+          ? { ...conn, health_status: 'unhealthy', last_tested_at: new Date().toISOString() }
+          : conn
+      ))
+    } finally {
+      setCheckingConnections(prev => {
+        const next = new Set(prev)
+        next.delete(connectionId)
+        return next
+      })
+    }
+  }, [token])
+
+  // Test all connections' health
+  const testAllConnectionsHealth = useCallback(async (conns: Connection[]) => {
+    if (!token || conns.length === 0) return
+
+    // Mark all as checking
+    const allIds = new Set(conns.map(c => c.id))
+    setCheckingConnections(allIds)
+
+    // Test all in parallel
+    await Promise.all(conns.map(conn => testConnectionHealth(conn.id)))
+  }, [token, testConnectionHealth])
 
   // Load connections
-  const loadConnections = async () => {
+  const loadConnections = async (autoTest = true) => {
     if (!token) return
 
     setIsLoading(true)
@@ -49,12 +101,33 @@ function ConnectionsContent() {
 
     try {
       const response = await connectionsApi.listConnections(token)
-      setConnections(response.connections)
+      // Set all to 'checking' initially if we're going to auto-test
+      const connectionsWithCheckingStatus = autoTest
+        ? response.connections.map((c: Connection) => ({ ...c, health_status: 'checking' as const }))
+        : response.connections
+      setConnections(connectionsWithCheckingStatus)
+
+      // Auto-test all connections after loading
+      if (autoTest && response.connections.length > 0) {
+        // Use setTimeout to allow UI to render first
+        setTimeout(() => {
+          testAllConnectionsHealth(response.connections)
+        }, 100)
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to load connections')
     } finally {
       setIsLoading(false)
     }
+  }
+
+  // Refresh all connections
+  const handleRefreshAll = async () => {
+    setIsRefreshingAll(true)
+    // Set all to checking state
+    setConnections(prev => prev.map(c => ({ ...c, health_status: 'checking' as const })))
+    await testAllConnectionsHealth(connections)
+    setIsRefreshingAll(false)
   }
 
   useEffect(() => {
@@ -79,22 +152,14 @@ function ConnectionsContent() {
 
     try {
       await connectionsApi.deleteConnection(token, connectionId)
-      await loadConnections()
+      await loadConnections(false)
     } catch (err: any) {
       alert(`Failed to delete connection: ${err.message}`)
     }
   }
 
   const handleTestConnection = async (connectionId: string) => {
-    if (!token) return
-
-    try {
-      const result = await connectionsApi.testConnection(token, connectionId)
-      alert(result.success ? '✅ Connection test successful!' : `❌ Connection test failed: ${result.message}`)
-      await loadConnections()
-    } catch (err: any) {
-      alert(`Failed to test connection: ${err.message}`)
-    }
+    await testConnectionHealth(connectionId)
   }
 
   const handleSetDefault = async (connectionId: string) => {
@@ -102,7 +167,7 @@ function ConnectionsContent() {
 
     try {
       await connectionsApi.setDefaultConnection(token, connectionId)
-      await loadConnections()
+      await loadConnections(false)
     } catch (err: any) {
       alert(`Failed to set default connection: ${err.message}`)
     }
@@ -143,9 +208,22 @@ function ConnectionsContent() {
             Manage your LLM providers, SharePoint, and extraction service connections
           </p>
         </div>
-        <Button onClick={handleCreateConnection}>
-          + New Connection
-        </Button>
+        <div className="flex items-center space-x-3">
+          {connections.length > 0 && (
+            <Button
+              variant="secondary"
+              onClick={handleRefreshAll}
+              disabled={isRefreshingAll || checkingConnections.size > 0}
+              className="flex items-center space-x-2"
+            >
+              <RefreshCw className={`w-4 h-4 ${isRefreshingAll || checkingConnections.size > 0 ? 'animate-spin' : ''}`} />
+              <span>Refresh All</span>
+            </Button>
+          )}
+          <Button onClick={handleCreateConnection}>
+            + New Connection
+          </Button>
+        </div>
       </div>
 
       {error && (
@@ -187,6 +265,7 @@ function ConnectionsContent() {
                   <ConnectionCard
                     key={connection.id}
                     connection={connection}
+                    isChecking={checkingConnections.has(connection.id)}
                     onEdit={() => handleEditConnection(connection)}
                     onDelete={() => handleDeleteConnection(connection.id)}
                     onTest={() => handleTestConnection(connection.id)}
