@@ -169,10 +169,6 @@ def generate_config_yaml(env_vars: Dict[str, str]) -> str:
         yaml_lines.append("# ============================================================================")
         yaml_lines.append("extraction:")
 
-        # Priority
-        priority = env_vars.get('EXTRACTION_PRIORITY', 'default')
-        yaml_lines.append(f"  priority: {priority}")
-
         yaml_lines.append("  services:")
 
         # Extraction service

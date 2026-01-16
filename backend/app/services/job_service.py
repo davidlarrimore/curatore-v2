@@ -28,11 +28,73 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from ..database.models import Job, JobDocument, JobLog
 from .database_service import database_service
+from .path_service import path_service
 
 
 def get_redis_client() -> redis.Redis:
     url = os.getenv("JOB_REDIS_URL") or os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
     return redis.Redis.from_url(url)
+
+
+def _get_original_filename(document_id: str, organization_id: Optional[uuid.UUID] = None) -> str:
+    """
+    Get the original filename for a document by searching the file system.
+
+    Files are stored as {document_id}_{original_filename} in the uploaded directory.
+    This function extracts the original_filename portion.
+
+    Args:
+        document_id: The document UUID
+        organization_id: Optional organization UUID for hierarchical storage
+
+    Returns:
+        Original filename if found, otherwise returns document_id as fallback
+    """
+    from ..config import settings
+
+    try:
+        # Check shared/adhoc/uploaded directory (for individual document uploads)
+        if settings.use_hierarchical_storage:
+            shared_adhoc = Path(settings.files_root) / "shared" / "adhoc" / "uploaded"
+            if shared_adhoc.exists():
+                for file in shared_adhoc.iterdir():
+                    if file.is_file() and file.name.startswith(f"{document_id}_"):
+                        return file.name[len(document_id) + 1:]
+
+        # Check organization-specific adhoc directory if using hierarchical storage
+        if organization_id and settings.use_hierarchical_storage:
+            org_adhoc = Path(settings.files_root) / "organizations" / str(organization_id) / "adhoc" / "uploaded"
+            if org_adhoc.exists():
+                for file in org_adhoc.iterdir():
+                    if file.is_file() and file.name.startswith(f"{document_id}_"):
+                        return file.name[len(document_id) + 1:]
+
+        # Check organization-specific batch directory if using hierarchical storage
+        if organization_id and settings.use_hierarchical_storage:
+            org_batch_dir = Path(settings.files_root) / "organizations" / str(organization_id) / "batches"
+            if org_batch_dir.exists():
+                for batch_path in org_batch_dir.iterdir():
+                    if batch_path.is_dir():
+                        uploaded_dir = batch_path / "uploaded"
+                        if uploaded_dir.exists():
+                            for file in uploaded_dir.iterdir():
+                                if file.name.startswith(f"{document_id}_"):
+                                    return file.name[len(document_id) + 1:]
+
+        # Check flat batch directory
+        batch_dir = Path(settings.batch_files_dir)
+        if batch_dir.exists():
+            for file in batch_dir.iterdir():
+                if file.is_file() and file.name.startswith(f"{document_id}_"):
+                    return file.name[len(document_id) + 1:]
+
+    except Exception as e:
+        logging.getLogger("curatore.jobs").debug(
+            f"Could not find original filename for {document_id}: {e}"
+        )
+
+    # Fallback to document_id if we can't find the file
+    return document_id
 
 
 JOB_KEY = "job:{job_id}"
@@ -264,11 +326,14 @@ async def create_batch_job(
         # Create job_documents entries (bulk)
         job_documents = []
         for doc_id in document_ids:
+            # Look up original filename from file system
+            original_filename = _get_original_filename(doc_id, organization_id)
+
             job_doc = JobDocument(
                 id=uuid.uuid4(),
                 job_id=job.id,
                 document_id=doc_id,
-                filename=f"{doc_id}",  # Will be updated when task starts
+                filename=original_filename,  # Use original filename
                 file_path="",  # Will be updated when task starts
                 status="PENDING",
             )

@@ -1,6 +1,6 @@
 # backend/app/api/v1/routers/system.py
 from datetime import datetime
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Depends
 import os
 from typing import Dict, Any, Optional, List
 import json
@@ -14,8 +14,9 @@ from ....services.zip_service import zip_service
 from ....services.job_service import get_redis_client
 from ....services.database_service import database_service
 from ....celery_app import app as celery_app
+from ....dependencies import get_current_user
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 @router.get("/health", response_model=HealthStatus, tags=["System"])
 async def health_check():
@@ -145,7 +146,13 @@ async def get_extraction_services() -> Dict[str, Any]:
         return await document_service.available_extraction_services()
     except Exception as e:
         # Return a best-effort structure even on error
-        return {"active": getattr(document_service, "extractor_engine", "default"), "services": [], "error": str(e)}
+        if getattr(document_service, 'extract_base', ''):
+            active = "extraction-service"
+        elif getattr(document_service, 'docling_base', ''):
+            active = "docling"
+        else:
+            active = None
+        return {"active": active, "services": [], "error": str(e)}
 
 @router.get("/items", tags=["Legacy"])
 def list_items():

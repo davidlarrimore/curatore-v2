@@ -306,8 +306,9 @@ async def get_current_user(
     """
     Extract and validate user from either JWT token or API key.
 
-    Tries JWT Bearer token first, then falls back to X-API-Key header.
-    Returns 401 if neither authentication method is provided or both are invalid.
+    When ENABLE_AUTH=false (backward compatibility mode), returns the first user
+    in the database without requiring credentials. When ENABLE_AUTH=true, requires
+    JWT Bearer token or X-API-Key header.
 
     Args:
         credentials: HTTP Bearer token from Authorization header (optional)
@@ -317,7 +318,8 @@ async def get_current_user(
         User: Current authenticated user
 
     Raises:
-        HTTPException: 401 if authentication fails
+        HTTPException: 401 if authentication fails (when auth is enabled)
+        HTTPException: 500 if no user found (when auth is disabled)
 
     Example:
         @router.get("/protected")
@@ -326,9 +328,27 @@ async def get_current_user(
             return {"user_id": str(user.id)}
 
     Priority:
-        1. JWT Bearer token (if provided)
-        2. X-API-Key header (if JWT not provided)
+        1. Check if authentication is disabled (ENABLE_AUTH=false) -> return default user
+        2. JWT Bearer token (if provided)
+        3. X-API-Key header (if JWT not provided)
     """
+    # Backward compatibility mode: if auth is disabled, return first user
+    if not settings.enable_auth:
+        async with database_service.get_session() as session:
+            result = await session.execute(select(User).limit(1))
+            user = result.scalar_one_or_none()
+
+            if not user:
+                logger.error("No users found in database for backward compatibility mode")
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="No users found. Please run database seed: python -m app.commands.seed --create-admin",
+                )
+
+            logger.debug(f"Backward compatibility mode: using default user {user.email}")
+            return user
+
+    # Authentication enabled: require credentials
     # Try JWT first
     if credentials:
         try:

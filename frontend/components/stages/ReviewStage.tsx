@@ -501,12 +501,7 @@ export function ReviewStage({
                   <div className="flex items-center flex-wrap gap-2">
                     {/* Extraction Engine Label */}
                     {selectedResult.conversion_result?.extraction_engine && (
-                      <span className={`px-3 py-1 rounded-full text-sm font-medium ${
-                        selectedResult.conversion_result.extraction_failover
-                          ? 'bg-orange-100 text-orange-800'
-                          : 'bg-blue-100 text-blue-800'
-                      }`}>
-                        {selectedResult.conversion_result.extraction_failover && '🔄 '}
+                      <span className="px-3 py-1 rounded-full text-sm font-medium bg-blue-100 text-blue-800">
                         {/* Show simplified extraction engine name */}
                         {selectedResult.conversion_result.extraction_engine.includes('docling')
                           ? 'Docling'

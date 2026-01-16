@@ -10,6 +10,8 @@ This document summarizes the authentication flow improvements implemented to str
 2. ✅ **Session expiration redirects to login** - Automatic redirect with return URL storage
 3. ✅ **Unauthenticated access protection** - All pages except login require authentication
 4. ✅ **Redirect loop prevention** - Multiple safeguards implemented
+5. ✅ **Session expiry warnings** - Toast warning before logout
+6. ✅ **Unauthorized API handling** - Global 401 event handling
 
 ## Files Modified
 
@@ -36,6 +38,7 @@ This document summarizes the authentication flow improvements implemented to str
   - Enhanced `logout()` with reason tracking and return URL storage
   - Redirect loop prevention with `isRedirecting` ref
   - Path-aware logout (stores current page for return)
+  - Session expiry warning + auto-logout timers
 - **Comments**: Detailed documentation of anti-loop measures
 
 ### 4. `/components/auth/ProtectedRoute.tsx` (UPDATED)
@@ -54,7 +57,14 @@ This document summarizes the authentication flow improvements implemented to str
   - Minimal layout for `/login` (no chrome)
   - Full layout for authenticated pages
   - Uses `usePathname()` to detect current route
+  - Guards layout with `ProtectedRoute`
 - **Comments**: Clear separation between minimal and full layouts
+
+### 6. `/lib/api.ts` (UPDATED)
+- **Purpose**: Centralized API access with auth support
+- **Key Changes**:
+  - Adds `Authorization` headers automatically for protected endpoints
+  - Dispatches a global `auth:unauthorized` event on 401 responses
 
 ## Anti-Redirect-Loop Mechanisms
 

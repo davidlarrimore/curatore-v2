@@ -460,6 +460,7 @@ class ExtractionConfigSchema(BaseModel):
     service_url: str = Field(..., description="Extraction service URL")
     timeout: int = Field(default=60, ge=1, le=600, description="Request timeout in seconds")
     api_key: Optional[str] = Field(None, description="Optional API key for authentication")
+    verify_ssl: bool = Field(default=True, description="Verify SSL certificates")
 
 
 class ExtractionConnectionType(BaseConnectionType):
@@ -512,36 +513,60 @@ class ExtractionConnectionType(BaseConnectionType):
             service_url = config["service_url"].rstrip("/")
             timeout = config.get("timeout", 60)
             api_key = config.get("api_key")
+            verify_ssl = config.get("verify_ssl", settings.extraction_service_verify_ssl)
 
             headers = {}
             if api_key:
                 headers["X-API-Key"] = api_key
 
-            # Test health endpoint
-            async with httpx.AsyncClient(timeout=float(timeout)) as client:
-                response = await client.get(
-                    f"{service_url}/api/v1/system/health",
-                    headers=headers
-                )
+            candidate_paths = [
+                "/api/v1/system/health",
+                "/health",
+                "/v1/health",
+                "/healthz",
+                "",
+            ]
+            last_error = None
+            last_status = None
 
-                if response.status_code == 200:
-                    health_data = response.json()
-                    return ConnectionTestResult(
-                        success=True,
-                        status="healthy",
-                        message="Extraction service is responding",
-                        details={
-                            "url": service_url,
-                            "status": health_data.get("status", "unknown")
-                        }
-                    )
-                else:
-                    return ConnectionTestResult(
-                        success=False,
-                        status="unhealthy",
-                        message="Extraction service returned error",
-                        error=f"HTTP {response.status_code}"
-                    )
+            async with httpx.AsyncClient(timeout=float(timeout), verify=verify_ssl) as client:
+                for path in candidate_paths:
+                    url = f"{service_url}{path}"
+                    try:
+                        response = await client.get(url, headers=headers)
+                    except httpx.RequestError as e:
+                        last_error = str(e)
+                        continue
+
+                    if response.status_code == 200:
+                        health_data: Dict[str, Any] = {}
+                        try:
+                            health_data = response.json()
+                        except Exception:
+                            health_data = {}
+                        return ConnectionTestResult(
+                            success=True,
+                            status="healthy",
+                            message="Extraction service is responding",
+                            details={
+                                "url": url,
+                                "status": health_data.get("status", "unknown")
+                                if isinstance(health_data, dict)
+                                else "unknown",
+                            },
+                        )
+
+                    last_status = response.status_code
+
+            error_message = last_error or (
+                f"HTTP {last_status}" if last_status is not None else "No response"
+            )
+            return ConnectionTestResult(
+                success=False,
+                status="unhealthy",
+                message="Extraction service returned error",
+                error=error_message,
+            )
 
         except httpx.TimeoutException:
             return ConnectionTestResult(
@@ -779,6 +804,7 @@ async def sync_default_connections_from_env(
     from sqlalchemy import select
     from ..database.models import Connection
     from ..config import settings
+    from ..services.config_loader import config_loader
 
     logger = logging.getLogger("curatore.connection_sync")
     results: Dict[str, str] = {}
@@ -914,67 +940,199 @@ async def sync_default_connections_from_env(
         logger.error(f"Failed to sync LLM connection: {e}")
 
     # -------------------------------------------------------------------------
-    # Extraction Service Connection
+    # Extraction Service Connection(s)
     # -------------------------------------------------------------------------
     try:
-        service_url = settings.extraction_service_url
+        extraction_config = None
+        try:
+            extraction_config = config_loader.get_extraction_config()
+        except Exception as e:
+            logger.warning("Failed to load extraction config from config.yml: %s", e)
 
-        if service_url:
-            config = {
-                "service_url": service_url,
-                "timeout": int(settings.extraction_service_timeout),
-            }
+        if extraction_config is None:
+            try:
+                import os
+                import yaml
+                from ..models.config_models import ExtractionConfig
 
-            # Add API key if present
-            if settings.extraction_service_api_key:
-                config["api_key"] = settings.extraction_service_api_key
+                def _resolve_extraction_env(obj: Any) -> Any:
+                    if isinstance(obj, dict):
+                        return {k: _resolve_extraction_env(v) for k, v in obj.items()}
+                    if isinstance(obj, list):
+                        return [_resolve_extraction_env(item) for item in obj]
+                    if isinstance(obj, str) and obj.startswith("${") and obj.endswith("}"):
+                        var_name = obj[2:-1]
+                        value = os.getenv(var_name)
+                        return value
+                    return obj
 
-            # Add verify_ssl setting
-            config["verify_ssl"] = settings.extraction_service_verify_ssl
-
-            # Query for existing managed extraction connection
-            result = await session.execute(
-                select(Connection).where(
-                    Connection.organization_id == organization_id,
-                    Connection.connection_type == "extraction",
-                    Connection.is_managed == True,
+                config_path = config_loader.config_path
+                if os.path.exists(config_path):
+                    with open(config_path, "r") as f:
+                        raw_config = yaml.safe_load(f) or {}
+                    extraction_raw = raw_config.get("extraction")
+                    if extraction_raw:
+                        resolved = _resolve_extraction_env(extraction_raw)
+                        extraction_config = ExtractionConfig(**resolved)
+            except Exception as e:
+                logger.warning(
+                    "Failed to parse extraction config from config.yml: %s", e
                 )
-            )
-            existing = result.scalar_one_or_none()
 
-            if existing:
-                # Update if config changed
-                if existing.config != config:
-                    existing.config = config
-                    existing.updated_at = datetime.utcnow()
-                    await session.commit()
-                    results["extraction"] = "updated"
-                    logger.info("Updated managed Extraction Service connection")
+        managed_result = await session.execute(
+            select(Connection).where(
+                Connection.organization_id == organization_id,
+                Connection.connection_type == "extraction",
+                Connection.is_managed == True,
+            )
+        )
+        managed_connections = managed_result.scalars().all()
+
+        created = 0
+        updated = 0
+        unchanged = 0
+
+        def _normalize_url(value: Optional[str]) -> str:
+            return (value or "").rstrip("/")
+
+        default_url = _normalize_url(settings.extraction_service_url)
+
+        if extraction_config and extraction_config.services:
+            for service in extraction_config.services:
+                if service.enabled is False:
+                    continue
+
+                service_url = _normalize_url(service.url)
+                if not service_url:
+                    continue
+
+                config: Dict[str, Any] = {
+                    "service_url": service_url,
+                    "timeout": int(service.timeout),
+                }
+                if service.api_key:
+                    config["api_key"] = service.api_key
+                config["verify_ssl"] = service.verify_ssl
+
+                existing = next(
+                    (
+                        conn
+                        for conn in managed_connections
+                        if conn.name.lower() == service.name.lower()
+                        or _normalize_url(conn.config.get("service_url")) == service_url
+                    ),
+                    None,
+                )
+
+                is_default = False
+                if default_url and service_url == default_url:
+                    is_default = True
+                elif service.name.lower() in {"extraction-service", "default"}:
+                    is_default = True
+                if existing:
+                    config_changed = existing.config != config
+                    default_changed = existing.is_default != is_default
+                    name_changed = existing.name != service.name
+
+                    if config_changed or default_changed or name_changed:
+                        existing.config = config
+                        existing.is_default = is_default
+                        existing.name = service.name
+                        existing.updated_at = datetime.utcnow()
+                        await session.commit()
+                        updated += 1
+                        logger.info(
+                            "Updated managed extraction connection: %s", service.name
+                        )
+                    else:
+                        unchanged += 1
                 else:
-                    results["extraction"] = "unchanged"
-            else:
-                # Create new managed connection
-                new_connection = Connection(
-                    organization_id=organization_id,
-                    name="Default Extraction Service",
-                    description="Auto-managed extraction service connection from environment variables",
-                    connection_type="extraction",
-                    config=config,
-                    is_active=True,
-                    is_default=True,
-                    is_managed=True,
-                    managed_by="Environment variables: EXTRACTION_SERVICE_URL",
-                    scope="organization",
-                )
-                session.add(new_connection)
-                await session.commit()
+                    new_connection = Connection(
+                        organization_id=organization_id,
+                        name=service.name,
+                        description="Auto-managed extraction service connection from config.yml",
+                        connection_type="extraction",
+                        config=config,
+                        is_active=True,
+                        is_default=is_default,
+                        is_managed=True,
+                        managed_by="config.yml: extraction.services",
+                        scope="organization",
+                    )
+                    session.add(new_connection)
+                    await session.commit()
+                    created += 1
+                    logger.info(
+                        "Created managed extraction connection: %s", service.name
+                    )
+
+            if updated:
+                results["extraction"] = "updated"
+            elif created:
                 results["extraction"] = "created"
-                logger.info("Created managed Extraction Service connection")
+            elif unchanged:
+                results["extraction"] = "unchanged"
+            else:
+                results["extraction"] = "skipped"
         else:
-            results["extraction"] = "skipped"
-            logger.debug(
-                "Skipping extraction connection sync - missing EXTRACTION_SERVICE_URL"
-            )
+            service_url = settings.extraction_service_url
+
+            if service_url:
+                config = {
+                    "service_url": service_url,
+                    "timeout": int(settings.extraction_service_timeout),
+                }
+
+                # Add API key if present
+                if settings.extraction_service_api_key:
+                    config["api_key"] = settings.extraction_service_api_key
+
+                # Add verify_ssl setting
+                config["verify_ssl"] = settings.extraction_service_verify_ssl
+
+                # Query for existing managed extraction connection
+                result = await session.execute(
+                    select(Connection).where(
+                        Connection.organization_id == organization_id,
+                        Connection.connection_type == "extraction",
+                        Connection.is_managed == True,
+                    )
+                )
+                existing = result.scalar_one_or_none()
+
+                if existing:
+                    # Update if config changed
+                    if existing.config != config:
+                        existing.config = config
+                        existing.updated_at = datetime.utcnow()
+                        await session.commit()
+                        results["extraction"] = "updated"
+                        logger.info("Updated managed Extraction Service connection")
+                    else:
+                        results["extraction"] = "unchanged"
+                else:
+                    # Create new managed connection
+                    new_connection = Connection(
+                        organization_id=organization_id,
+                        name="Default Extraction Service",
+                        description="Auto-managed extraction service connection from environment variables",
+                        connection_type="extraction",
+                        config=config,
+                        is_active=True,
+                        is_default=True,
+                        is_managed=True,
+                        managed_by="Environment variables: EXTRACTION_SERVICE_URL",
+                        scope="organization",
+                    )
+                    session.add(new_connection)
+                    await session.commit()
+                    results["extraction"] = "created"
+                    logger.info("Created managed Extraction Service connection")
+            else:
+                results["extraction"] = "skipped"
+                logger.debug(
+                    "Skipping extraction connection sync - missing EXTRACTION_SERVICE_URL"
+                )
 
     except Exception as e:
         results["extraction"] = "error"

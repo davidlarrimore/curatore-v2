@@ -52,8 +52,18 @@ class ConfigLoader:
         """
         if config_path is None:
             # Default to config.yml in project root (parent of backend/)
-            backend_dir = Path(__file__).parent.parent.parent
-            config_path = str(backend_dir.parent / "config.yml")
+            backend_dir = Path(__file__).resolve().parent.parent.parent
+            candidate_paths = [
+                backend_dir.parent / "config.yml",
+                Path("/app/config.yml"),
+                Path("/config.yml"),
+                Path.cwd() / "config.yml",
+            ]
+            config_path = str(candidate_paths[0])
+            for candidate in candidate_paths:
+                if candidate.exists():
+                    config_path = str(candidate)
+                    break
 
         self.config_path = config_path
         self._config: Optional[AppConfig] = None

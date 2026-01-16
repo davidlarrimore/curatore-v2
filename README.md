@@ -15,7 +15,7 @@ Curatore v2 is a multi-tenant document processing system that converts documents
 
 ### Document Processing
 - **Multi-format Support**: PDF, DOCX, PPTX, TXT, Images with OCR
-- **Intelligent Conversion**: MarkItDown and Tesseract OCR with Docling fallback
+- **Intelligent Conversion**: MarkItDown, Tesseract OCR, and optional Docling
 - **Quality Assessment**: LLM-powered document evaluation and scoring
 - **Vector Optimization**: Structure optimization for RAG applications
 - **Batch Processing**: Process multiple documents asynchronously
@@ -249,7 +249,6 @@ Key environment variables (see `.env.example` for complete list):
 - `OPENAI_BASE_URL`: API endpoint (supports Ollama, OpenWebUI, etc.)
 
 #### Extraction
-- `EXTRACTION_PRIORITY`: `default` | `docling` | `none`
 - `EXTRACTION_SERVICE_URL`: Extraction service endpoint
 - `DOCLING_SERVICE_URL`: Docling service endpoint (when enabled)
 

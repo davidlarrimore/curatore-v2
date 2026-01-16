@@ -83,6 +83,30 @@ export function OptionsEditor({ options, onChange }: OptionsEditorProps) {
         </div>
       </div>
 
+      {/* Extraction Engine Selection */}
+      <div className="flex items-center justify-between p-4 bg-gray-50 border border-gray-200 rounded-lg">
+        <div className="flex items-center gap-2">
+          <label htmlFor="extraction-engine" className="text-sm font-medium text-gray-900">
+            Extraction Engine
+          </label>
+          <div className="group relative">
+            <HelpCircle className="w-4 h-4 text-gray-400 cursor-help" />
+            <div className="absolute right-0 bottom-full mb-2 hidden group-hover:block w-64 p-2 bg-gray-900 text-white text-xs rounded shadow-lg z-10">
+              Choose which extractor to use for this job. The selected engine is used exclusively.
+            </div>
+          </div>
+        </div>
+        <select
+          id="extraction-engine"
+          value={options.extraction_engine ?? 'extraction-service'}
+          onChange={(e) => onChange({ ...options, extraction_engine: e.target.value })}
+          className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+        >
+          <option value="extraction-service">Extraction Service</option>
+          <option value="docling">Docling</option>
+        </select>
+      </div>
+
       {/* Quality Thresholds */}
       <div>
         <h4 className="text-sm font-semibold text-gray-900 mb-3">Quality Thresholds</h4>

@@ -46,7 +46,8 @@ export function CreateJobPanel({ isOpen, onClose, onJobCreated }: CreateJobPanel
       chunk_overlap: 200,
       max_retries: 3
     },
-    auto_optimize: true
+    auto_optimize: true,
+    extraction_engine: 'extraction-service'
   })
   const [isCreating, setIsCreating] = useState(false)
 
@@ -306,6 +307,12 @@ export function CreateJobPanel({ isOpen, onClose, onJobCreated }: CreateJobPanel
                         <span className="text-sm text-gray-600">Auto-optimize:</span>
                         <span className="text-sm font-medium text-gray-900">
                           {processingOptions.auto_optimize ? 'Enabled' : 'Disabled'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between">
+                        <span className="text-sm text-gray-600">Extraction Engine:</span>
+                        <span className="text-sm font-medium text-gray-900">
+                          {processingOptions.extraction_engine ?? 'extraction-service'}
                         </span>
                       </div>
                       <div className="flex justify-between">

@@ -93,7 +93,6 @@ llm:
 Configure document extraction engines.
 
 **Required:**
-- `extraction.priority`: Extraction strategy (default, docling, auto, none)
 - `extraction.services`: List of extraction service configs
 
 **Service Configuration:**
@@ -106,7 +105,6 @@ Configure document extraction engines.
 **Example:**
 ```yaml
 extraction:
-  priority: default
   services:
     - name: extraction-service
       url: http://extraction:8010
@@ -463,7 +461,6 @@ llm:
   max_retries: 3
 
 extraction:
-  priority: default
   services:
     - name: extraction-service
       url: http://extraction:8010

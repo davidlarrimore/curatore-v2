@@ -16,6 +16,7 @@ import type {
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 export const API_PATH_VERSION = 'v1' as const
+const ACCESS_TOKEN_KEY = 'curatore_access_token'
 
 const jsonHeaders: HeadersInit = { 'Content-Type': 'application/json' }
 
@@ -24,10 +25,23 @@ function apiUrl(path: string): string {
   return `${API_BASE_URL}/api/${API_PATH_VERSION}${normalized}`
 }
 
+function getAccessToken(): string | null {
+  if (typeof window === 'undefined') return null
+  return localStorage.getItem(ACCESS_TOKEN_KEY)
+}
+
+function authHeaders(token?: string): HeadersInit {
+  const resolvedToken = token || getAccessToken()
+  return resolvedToken ? { Authorization: `Bearer ${resolvedToken}` } : {}
+}
+
 function httpError(res: Response, message?: string, detail?: any): never {
   const err = new Error(message || res.statusText || `Request failed with ${res.status}`)
   ;(err as any).status = res.status
   if (detail !== undefined) (err as any).detail = detail
+  if (res.status === 401 && typeof window !== 'undefined') {
+    window.dispatchEvent(new CustomEvent('auth:unauthorized'))
+  }
   throw err
 }
 
@@ -53,12 +67,12 @@ async function handleBlob(res: Response): Promise<Blob> {
 // -------------------- System API --------------------
 export const systemApi = {
   async getHealth(): Promise<{ status: string; llm_connected: boolean; version: string } & Record<string, any>> {
-    const res = await fetch(apiUrl('/health'), { cache: 'no-store' })
+    const res = await fetch(apiUrl('/health'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getSupportedFormats(): Promise<{ supported_extensions: string[]; max_file_size: number }> {
-    const res = await fetch(apiUrl('/config/supported-formats'), { cache: 'no-store' })
+    const res = await fetch(apiUrl('/config/supported-formats'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
@@ -67,46 +81,46 @@ export const systemApi = {
     ocr_settings: { language: string; psm: number }
     auto_optimize: boolean
   }> {
-    const res = await fetch(apiUrl('/config/defaults'), { cache: 'no-store' })
+    const res = await fetch(apiUrl('/config/defaults'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getLLMStatus(): Promise<LLMConnectionStatus> {
-    const res = await fetch(apiUrl('/llm/status'), { cache: 'no-store' })
+    const res = await fetch(apiUrl('/llm/status'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async resetSystem(): Promise<{ success: boolean; message?: string }> {
-    const res = await fetch(apiUrl('/system/reset'), { method: 'POST' })
+    const res = await fetch(apiUrl('/system/reset'), { method: 'POST', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getQueueHealth(): Promise<{ pending: number; running: number; processed: number; total: number } & Record<string, any>> {
-    const res = await fetch(apiUrl('/system/queues'), { cache: 'no-store' })
+    const res = await fetch(apiUrl('/system/queues'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getQueueSummaryByJobs(jobIds: string[]): Promise<{ queued: number; running: number; done: number; total: number } & Record<string, any>> {
     const url = new URL(apiUrl('/system/queues/summary'))
     url.searchParams.set('job_ids', jobIds.join(','))
-    const res = await fetch(url.toString(), { cache: 'no-store' })
+    const res = await fetch(url.toString(), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getQueueSummaryByBatch(batchId: string): Promise<{ queued: number; running: number; done: number; total: number } & Record<string, any>> {
     const url = new URL(apiUrl('/system/queues/summary'))
     url.searchParams.set('batch_id', batchId)
-    const res = await fetch(url.toString(), { cache: 'no-store' })
+    const res = await fetch(url.toString(), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getComprehensiveHealth(): Promise<any> {
-    const res = await fetch(apiUrl('/system/health/comprehensive'), { cache: 'no-store' })
+    const res = await fetch(apiUrl('/system/health/comprehensive'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getComponentHealth(component: 'backend' | 'database' | 'redis' | 'celery' | 'extraction' | 'docling' | 'llm' | 'sharepoint'): Promise<any> {
-    const res = await fetch(apiUrl(`/system/health/${component}`), { cache: 'no-store' })
+    const res = await fetch(apiUrl(`/system/health/${component}`), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 }
@@ -114,29 +128,29 @@ export const systemApi = {
 // -------------------- File API --------------------
 export const fileApi = {
   async listUploadedFiles(): Promise<{ files: FileInfo[]; count: number }> {
-    const res = await fetch(apiUrl('/documents/uploaded'), { cache: 'no-store' })
+    const res = await fetch(apiUrl('/documents/uploaded'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async listBatchFiles(): Promise<{ files: FileInfo[]; count: number }> {
-    const res = await fetch(apiUrl('/documents/batch'), { cache: 'no-store' })
+    const res = await fetch(apiUrl('/documents/batch'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async uploadFile(file: File): Promise<{ document_id: string; filename: string; file_size: number; upload_time: string }> {
     const form = new FormData()
     form.append('file', file)
-    const res = await fetch(apiUrl('/documents/upload'), { method: 'POST', body: form })
+    const res = await fetch(apiUrl('/documents/upload'), { method: 'POST', body: form, headers: authHeaders() })
     return handleJson(res)
   },
 
   async downloadDocument(documentId: string): Promise<Blob> {
-    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/download`))
+    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/download`), { headers: authHeaders() })
     return handleBlob(res)
   },
 
   async deleteDocument(documentId: string): Promise<{ success: boolean; message?: string }> {
-    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}`), { method: 'DELETE' })
+    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}`), { method: 'DELETE', headers: authHeaders() })
     return handleJson(res)
   },
 
@@ -159,7 +173,7 @@ export const fileApi = {
     }
     const res = await fetch(apiUrl('/documents/download/bulk'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders() },
       body: JSON.stringify(body),
     })
     return handleBlob(res)
@@ -169,7 +183,7 @@ export const fileApi = {
     const url = new URL(apiUrl('/documents/download/rag-ready'))
     if (zipName) url.searchParams.set('zip_name', zipName)
     url.searchParams.set('include_summary', 'true')
-    const res = await fetch(url.toString())
+    const res = await fetch(url.toString(), { headers: authHeaders() })
     return handleBlob(res)
   },
 }
@@ -184,7 +198,7 @@ export const processingApi = {
     const payload = mapOptionsToV1(options)
     const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/process`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders() },
       body: JSON.stringify(payload),
     })
     return handleJson(res)
@@ -198,14 +212,14 @@ export const processingApi = {
     }
     const res = await fetch(apiUrl('/documents/batch/process'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders() },
       body: JSON.stringify(payload),
     })
     return handleJson(res)
   },
 
   async getProcessingResult(documentId: string): Promise<ProcessingResult> {
-    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/result`), { cache: 'no-store' })
+    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/result`), { cache: 'no-store', headers: authHeaders() })
     const raw = await handleJson<any>(res)
     return mapV1ResultToFrontend(raw)
   },
@@ -218,7 +232,7 @@ export const processingApi = {
 
     const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/process`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders() },
       body: JSON.stringify(v1Options),
     })
     const raw = await handleJson<any>(res)
@@ -237,21 +251,38 @@ export const processingApi = {
 
 // -------------------- Content API --------------------
 export const contentApi = {
-  async getDocumentContent(documentId: string): Promise<{ content: string }> {
-    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/content`), { cache: 'no-store' })
+  async getDocumentContent(documentId: string, token?: string): Promise<{ content: string }> {
+    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/content`), {
+      cache: 'no-store',
+      headers: authHeaders(token)
+    })
     return handleJson(res)
   },
 
   async updateDocumentContent(
     documentId: string,
     content: string,
+    token?: string,
   ): Promise<{ job_id: string; document_id: string; status: string; enqueued_at?: string }> {
     const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/content`), {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ content }),
     })
-    return handleJson(res)
+    if (!res.ok) {
+      let body: any = undefined
+      try { body = await res.json() } catch {}
+      const msg = (body && (body.detail || body.message)) || res.statusText
+      // Preserve 409 status for conflict handling
+      if (res.status === 409) {
+        const err: any = new Error(msg)
+        err.status = 409
+        err.detail = body
+        throw err
+      }
+      httpError(res, msg, body)
+    }
+    return res.json()
   },
 }
 
@@ -415,11 +446,15 @@ function mapV1ResultToFrontend(raw: any): ProcessingResult {
 
 /**
  * Map frontend options to v1 API format
- * Aligns with backend V1ProcessingOptions: { auto_optimize, quality_thresholds: { conversion, clarity, completeness, relevance, markdown } }
+ * Aligns with backend V1ProcessingOptions: { auto_optimize, extraction_engine, quality_thresholds: { conversion, clarity, completeness, relevance, markdown } }
  */
 function mapOptionsToV1(options: any): any {
   const v1: any = {
     auto_optimize: options?.auto_optimize ?? true,
+  }
+
+  if (options?.extraction_engine) {
+    v1.extraction_engine = options.extraction_engine
   }
 
   const qt = options?.quality_thresholds
@@ -486,9 +521,10 @@ export const jobsApi = {
     job_id: string
     status: string
     tasks_revoked: number
-    tasks_stopped: number
-    verification_successful: boolean
-    message: string
+    tasks_verified_stopped: number
+    verification_timeout: boolean
+    cancelled_at?: string
+    message?: string
   }> {
     const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}/cancel`), {
       method: 'POST',
@@ -633,13 +669,11 @@ export const jobsApi = {
    * Get user's job statistics
    */
   async getUserStats(token: string): Promise<{
-    user_id: string
     active_jobs: number
-    queued_jobs: number
-    total_jobs: number
-    completed_jobs: number
-    failed_jobs: number
-    cancelled_jobs: number
+    total_jobs_24h: number
+    total_jobs_7d: number
+    completed_jobs_24h: number
+    failed_jobs_24h: number
   }> {
     const res = await fetch(apiUrl('/jobs/stats/user'), {
       headers: { Authorization: `Bearer ${token}` },
@@ -670,8 +704,15 @@ export const jobsApi = {
   },
 
   // Legacy endpoints (backward compatibility)
-  async getJobByDocument(documentId: string): Promise<any> {
-    const res = await fetch(apiUrl(`/jobs/by-document/${encodeURIComponent(documentId)}`), { cache: 'no-store' })
+  async getJobByDocument(documentId: string, token?: string): Promise<any> {
+    const res = await fetch(apiUrl(`/jobs/by-document/${encodeURIComponent(documentId)}`), {
+      cache: 'no-store',
+      headers: authHeaders(token)
+    })
+    if (!res.ok && res.status === 404) {
+      // Document may not have an associated job
+      return null
+    }
     return handleJson(res)
   },
 }
@@ -727,6 +768,18 @@ export const authApi = {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify({ refresh_token: refreshToken }),
+    })
+    return handleJson(res)
+  },
+
+  async extendSession(token: string): Promise<{
+    access_token: string
+    refresh_token: string
+    token_type: string
+  }> {
+    const res = await fetch(apiUrl('/auth/extend-session'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
     })
     return handleJson(res)
   },

@@ -662,6 +662,26 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
               </select>
             </div>
 
+            {/* Extraction Engine Selection */}
+            <div className="flex items-center space-x-2">
+              <span className="text-sm font-medium text-gray-700 relative inline-flex items-center group cursor-help">
+                Extraction Engine
+                <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Choose which extractor to use for this job. The selected engine is used exclusively.</span>
+              </span>
+              <select
+                value={processingOptions.extraction_engine ?? 'extraction-service'}
+                onChange={(e) => onProcessingOptionsChange({
+                  ...processingOptions,
+                  extraction_engine: e.target.value
+                })}
+                className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+              >
+                <option value="extraction-service">Extraction Service</option>
+                <option value="docling">Docling</option>
+              </select>
+            </div>
+
             {/* OCR Language Quick Setting removed: use Advanced Language Code field */}
           </div>
 

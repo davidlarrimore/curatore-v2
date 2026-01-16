@@ -25,6 +25,7 @@ Security:
 """
 
 import logging
+from datetime import datetime, timedelta
 from typing import List, Optional
 from uuid import UUID
 
@@ -143,7 +144,7 @@ async def create_job(
             enqueue_result = await enqueue_job(job.id)
             logger.info(
                 f"Job enqueued: {job.id} "
-                f"({enqueue_result['tasks_created']} tasks created)"
+                f"({enqueue_result['task_count']} tasks created)"
             )
 
         return JobResponse(
@@ -249,7 +250,7 @@ async def start_job(
         enqueue_result = await enqueue_job(job.id)
         logger.info(
             f"Job enqueued: {job.id} "
-            f"({enqueue_result['tasks_created']} tasks created)"
+            f"({enqueue_result['task_count']} tasks created)"
         )
 
         # Refresh job to get updated status
@@ -330,11 +331,11 @@ async def cancel_job_endpoint(
         return CancelJobResponse(
             job_id=job_id,
             status=cancel_result["status"],
-            tasks_revoked=cancel_result["tasks_revoked"],
-            tasks_stopped=cancel_result.get("tasks_stopped", 0),
-            verification_successful=cancel_result.get("verification_successful", False),
+            tasks_revoked=cancel_result.get("tasks_revoked", 0),
+            tasks_verified_stopped=cancel_result.get("tasks_verified_stopped", 0),
+            verification_timeout=cancel_result.get("verification_timeout", False),
+            cancelled_at=cancel_result.get("cancelled_at"),
             message=cancel_result.get("message", "Job cancelled"),
-            details=cancel_result.get("details"),
         )
 
     except ValueError as e:
@@ -395,14 +396,18 @@ async def list_jobs(
     # Calculate offset
     offset = (page - 1) * page_size
 
-    # Get jobs (service handles org/user filtering based on role)
+    # Get jobs for organization
     jobs, total = await get_organization_jobs(
-        organization_id=current_user.organization_id,
-        user_id=current_user.id if current_user.role != "org_admin" else None,
-        status_filter=status_filter,
+        org_id=current_user.organization_id,
+        status=status_filter,
         limit=page_size,
         offset=offset,
     )
+
+    # Filter by user if not admin
+    if current_user.role != "org_admin":
+        jobs = [job for job in jobs if job.user_id == current_user.id]
+        total = len(jobs)
 
     logger.info(f"Returning {len(jobs)} jobs (total: {total})")
 
@@ -417,9 +422,7 @@ async def list_jobs(
                 user_id=str(job.user_id) if job.user_id else None,
                 name=job.name,
                 description=job.description,
-                job_type=job.job_type,
                 status=job.status,
-                celery_batch_id=job.celery_batch_id,
                 total_documents=job.total_documents,
                 completed_documents=job.completed_documents,
                 failed_documents=job.failed_documents,
@@ -429,7 +432,6 @@ async def list_jobs(
                 completed_at=job.completed_at,
                 cancelled_at=job.cancelled_at,
                 expires_at=job.expires_at,
-                error_message=job.error_message,
             )
             for job in jobs
         ],
@@ -838,70 +840,70 @@ async def get_user_stats(
 
         Response:
         {
-            "user_id": "123e4567-e89b-12d3-a456-426614174000",
             "active_jobs": 2,
-            "queued_jobs": 1,
-            "total_jobs": 45,
-            "completed_jobs": 38,
-            "failed_jobs": 3,
-            "cancelled_jobs": 2
+            "total_jobs_24h": 5,
+            "total_jobs_7d": 18,
+            "completed_jobs_24h": 3,
+            "failed_jobs_24h": 0
         }
     """
     logger.info(f"User job stats requested by {current_user.email}")
 
-    # Get active jobs for user
+    # Get active jobs for user (QUEUED or RUNNING)
     active_jobs_list = await get_user_active_jobs(current_user.id)
 
     async with database_service.get_session() as session:
-        # Count jobs by status
+        now = datetime.utcnow()
+        last_24h = now - timedelta(hours=24)
+        last_7d = now - timedelta(days=7)
+
+        # Base query for user's jobs
         base_query = select(Job).where(Job.user_id == current_user.id)
 
-        # Total jobs
-        total_result = await session.execute(
-            select(func.count()).select_from(base_query.subquery())
-        )
-        total_jobs = total_result.scalar() or 0
-
-        # Completed jobs
-        completed_result = await session.execute(
+        # Total jobs in last 24 hours
+        total_24h_result = await session.execute(
             select(func.count()).select_from(
-                base_query.where(Job.status == "COMPLETED").subquery()
+                base_query.where(Job.created_at >= last_24h).subquery()
             )
         )
-        completed_jobs = completed_result.scalar() or 0
+        total_jobs_24h = total_24h_result.scalar() or 0
 
-        # Failed jobs
-        failed_result = await session.execute(
+        # Total jobs in last 7 days
+        total_7d_result = await session.execute(
             select(func.count()).select_from(
-                base_query.where(Job.status == "FAILED").subquery()
+                base_query.where(Job.created_at >= last_7d).subquery()
             )
         )
-        failed_jobs = failed_result.scalar() or 0
+        total_jobs_7d = total_7d_result.scalar() or 0
 
-        # Cancelled jobs
-        cancelled_result = await session.execute(
+        # Completed jobs in last 24 hours
+        completed_24h_result = await session.execute(
             select(func.count()).select_from(
-                base_query.where(Job.status == "CANCELLED").subquery()
+                base_query.where(
+                    Job.status == "COMPLETED",
+                    Job.completed_at >= last_24h
+                ).subquery()
             )
         )
-        cancelled_jobs = cancelled_result.scalar() or 0
+        completed_jobs_24h = completed_24h_result.scalar() or 0
 
-        # Queued jobs
-        queued_result = await session.execute(
+        # Failed jobs in last 24 hours
+        failed_24h_result = await session.execute(
             select(func.count()).select_from(
-                base_query.where(Job.status == "QUEUED").subquery()
+                base_query.where(
+                    Job.status == "FAILED",
+                    Job.completed_at >= last_24h
+                ).subquery()
             )
         )
-        queued_jobs = queued_result.scalar() or 0
+        failed_jobs_24h = failed_24h_result.scalar() or 0
 
         return UserJobStatsResponse(
-            user_id=str(current_user.id),
             active_jobs=len(active_jobs_list),
-            queued_jobs=queued_jobs,
-            total_jobs=total_jobs,
-            completed_jobs=completed_jobs,
-            failed_jobs=failed_jobs,
-            cancelled_jobs=cancelled_jobs,
+            total_jobs_24h=total_jobs_24h,
+            total_jobs_7d=total_jobs_7d,
+            completed_jobs_24h=completed_jobs_24h,
+            failed_jobs_24h=failed_jobs_24h,
         )
 
 
@@ -935,15 +937,15 @@ async def get_org_stats(
 
         Response:
         {
-            "organization_id": "123e4567-e89b-12d3-a456-426614174000",
-            "active_jobs": 5,
-            "queued_jobs": 3,
-            "concurrency_limit": 10,
-            "total_jobs": 245,
-            "completed_jobs": 220,
-            "failed_jobs": 15,
-            "cancelled_jobs": 5,
-            "total_documents_processed": 15340
+            "active_jobs": 3,
+            "concurrency_limit": 5,
+            "total_jobs_24h": 12,
+            "total_jobs_7d": 45,
+            "total_jobs_30d": 180,
+            "completed_jobs_24h": 10,
+            "failed_jobs_24h": 1,
+            "avg_processing_time_minutes": 15.5,
+            "success_rate_7d": 0.96
         }
     """
     logger.info(f"Organization job stats requested by {current_user.email}")
@@ -952,67 +954,106 @@ async def get_org_stats(
     active_count = await get_active_job_count(current_user.organization_id)
 
     async with database_service.get_session() as session:
-        # Count jobs by status
+        now = datetime.utcnow()
+        last_24h = now - timedelta(hours=24)
+        last_7d = now - timedelta(days=7)
+        last_30d = now - timedelta(days=30)
+
+        # Base query for organization's jobs
         base_query = select(Job).where(Job.organization_id == current_user.organization_id)
 
-        # Total jobs
-        total_result = await session.execute(
-            select(func.count()).select_from(base_query.subquery())
-        )
-        total_jobs = total_result.scalar() or 0
-
-        # Completed jobs
-        completed_result = await session.execute(
+        # Total jobs in different time periods
+        total_24h_result = await session.execute(
             select(func.count()).select_from(
-                base_query.where(Job.status == "COMPLETED").subquery()
+                base_query.where(Job.created_at >= last_24h).subquery()
             )
         )
-        completed_jobs = completed_result.scalar() or 0
+        total_jobs_24h = total_24h_result.scalar() or 0
 
-        # Failed jobs
-        failed_result = await session.execute(
+        total_7d_result = await session.execute(
             select(func.count()).select_from(
-                base_query.where(Job.status == "FAILED").subquery()
+                base_query.where(Job.created_at >= last_7d).subquery()
             )
         )
-        failed_jobs = failed_result.scalar() or 0
+        total_jobs_7d = total_7d_result.scalar() or 0
 
-        # Cancelled jobs
-        cancelled_result = await session.execute(
+        total_30d_result = await session.execute(
             select(func.count()).select_from(
-                base_query.where(Job.status == "CANCELLED").subquery()
+                base_query.where(Job.created_at >= last_30d).subquery()
             )
         )
-        cancelled_jobs = cancelled_result.scalar() or 0
+        total_jobs_30d = total_30d_result.scalar() or 0
 
-        # Queued jobs
-        queued_result = await session.execute(
+        # Completed jobs in last 24 hours
+        completed_24h_result = await session.execute(
             select(func.count()).select_from(
-                base_query.where(Job.status == "QUEUED").subquery()
+                base_query.where(
+                    Job.status == "COMPLETED",
+                    Job.completed_at >= last_24h
+                ).subquery()
             )
         )
-        queued_jobs = queued_result.scalar() or 0
+        completed_jobs_24h = completed_24h_result.scalar() or 0
 
-        # Total documents processed (sum of completed_documents across all jobs)
-        docs_result = await session.execute(
-            select(func.sum(Job.completed_documents)).select_from(base_query.subquery())
+        # Failed jobs in last 24 hours
+        failed_24h_result = await session.execute(
+            select(func.count()).select_from(
+                base_query.where(
+                    Job.status == "FAILED",
+                    Job.completed_at >= last_24h
+                ).subquery()
+            )
         )
-        total_documents = docs_result.scalar() or 0
+        failed_jobs_24h = failed_24h_result.scalar() or 0
+
+        # Calculate average processing time for completed jobs in last 7 days
+        avg_time_result = await session.execute(
+            select(func.avg(
+                func.julianday(Job.completed_at) - func.julianday(Job.started_at)
+            )).where(
+                Job.organization_id == current_user.organization_id,
+                Job.status == "COMPLETED",
+                Job.completed_at >= last_7d,
+                Job.started_at.isnot(None),
+                Job.completed_at.isnot(None)
+            )
+        )
+        avg_days = avg_time_result.scalar()
+        avg_processing_time_minutes = (avg_days * 24 * 60) if avg_days else None
+
+        # Calculate success rate for last 7 days
+        total_7d_completed_result = await session.execute(
+            select(func.count()).where(
+                Job.organization_id == current_user.organization_id,
+                Job.status.in_(["COMPLETED", "FAILED"]),
+                Job.completed_at >= last_7d
+            )
+        )
+        total_completed_or_failed = total_7d_completed_result.scalar() or 0
+
+        success_7d_result = await session.execute(
+            select(func.count()).where(
+                Job.organization_id == current_user.organization_id,
+                Job.status == "COMPLETED",
+                Job.completed_at >= last_7d
+            )
+        )
+        success_count = success_7d_result.scalar() or 0
+
+        success_rate_7d = (success_count / total_completed_or_failed) if total_completed_or_failed > 0 else None
 
         # Get concurrency limit from organization settings
-        # TODO: This should come from organization.settings once that's implemented
-        # For now, use environment variable default
         from app.config import settings
         concurrency_limit = int(settings.default_job_concurrency_limit)
 
         return OrganizationJobStatsResponse(
-            organization_id=str(current_user.organization_id),
             active_jobs=active_count,
-            queued_jobs=queued_jobs,
             concurrency_limit=concurrency_limit,
-            total_jobs=total_jobs,
-            completed_jobs=completed_jobs,
-            failed_jobs=failed_jobs,
-            cancelled_jobs=cancelled_jobs,
-            total_documents_processed=total_documents,
+            total_jobs_24h=total_jobs_24h,
+            total_jobs_7d=total_jobs_7d,
+            total_jobs_30d=total_jobs_30d,
+            completed_jobs_24h=completed_jobs_24h,
+            failed_jobs_24h=failed_jobs_24h,
+            avg_processing_time_minutes=avg_processing_time_minutes,
+            success_rate_7d=success_rate_7d,
         )

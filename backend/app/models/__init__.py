@@ -181,6 +181,7 @@ class ProcessingOptions(BaseModel):
         vector_optimize: Optimize content for vector databases
         quality_thresholds: Quality assessment thresholds
         ocr_settings: OCR configuration for image processing
+        extraction_engine: Extraction engine to use for this job
         
     Example:
         options = ProcessingOptions(
@@ -205,6 +206,10 @@ class ProcessingOptions(BaseModel):
     ocr_settings: Optional[OCRSettings] = Field(
         default_factory=OCRSettings,
         description="OCR configuration for image processing"
+    )
+    extraction_engine: Optional[str] = Field(
+        default="extraction-service",
+        description="Extraction engine to use (e.g., 'extraction-service', 'docling')",
     )
 
 
@@ -303,7 +308,7 @@ class ConversionResult(BaseModel):
     # Extraction engine metadata
     extraction_engine: Optional[str] = Field(
         default=None,
-        description="Extraction engine used (e.g., 'extraction-service', 'docling', 'docling->extraction-service')"
+        description="Extraction engine used (e.g., 'extraction-service', 'docling')"
     )
     extraction_attempts: Optional[int] = Field(
         default=None,
@@ -312,7 +317,7 @@ class ConversionResult(BaseModel):
     )
     extraction_failover: Optional[bool] = Field(
         default=None,
-        description="Whether extraction failed over to alternate service"
+        description="Deprecated: extraction failover is no longer used"
     )
 
 

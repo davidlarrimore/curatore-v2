@@ -23,7 +23,7 @@ Usage:
 from pathlib import Path
 from typing import List, Optional
 
-from pydantic import AliasChoices, Field
+from pydantic import Field
 from pydantic_settings import BaseSettings
 
 
@@ -144,15 +144,6 @@ class Settings(BaseSettings):
     extraction_service_timeout: float = Field(default=60.0, description="Timeout (s) for extraction requests")
     extraction_service_api_key: Optional[str] = Field(default=None, description="Bearer token for extraction service")
     extraction_service_verify_ssl: bool = Field(default=True, description="Verify SSL for extraction service calls")
-
-    # =========================================================================
-    # EXTRACTION PRIORITY (default | docling | none)
-    # =========================================================================
-    extraction_priority: str = Field(
-        default="default",
-        description="Which extractor to prioritize: default | docling | none",
-        validation_alias=AliasChoices("EXTRACTION_PRIORITY", "CONTENT_EXTRACTOR"),
-    )
 
     # Docling-specific configuration
     docling_service_url: Optional[str] = Field(default=None, description="Base URL for Docling service")

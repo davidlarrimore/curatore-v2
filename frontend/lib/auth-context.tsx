@@ -25,6 +25,7 @@
 
 import React, { createContext, useContext, useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
+import toast from 'react-hot-toast'
 import { authApi } from './api'
 
 interface User {
@@ -41,12 +42,14 @@ interface User {
 interface AuthContextType {
   user: User | null
   token: string | null
+  accessToken: string | null
   isLoading: boolean
   isAuthenticated: boolean
   login: (emailOrUsername: string, password: string) => Promise<void>
   logout: (reason?: string) => void
   refreshUserData: () => Promise<void>
   handleUnauthorized: () => void
+  extendSession: () => Promise<boolean>
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -55,6 +58,7 @@ const TOKEN_KEY = 'curatore_access_token'
 const REFRESH_TOKEN_KEY = 'curatore_refresh_token'
 const RETURN_URL_KEY = 'auth_return_url'
 const TOKEN_REFRESH_INTERVAL = 50 * 60 * 1000 // 50 minutes (tokens expire in 60)
+const SESSION_WARNING_THRESHOLD = 5 * 60 * 1000 // 5 minutes before expiry
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -65,6 +69,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   // Track if we're currently redirecting to prevent loops
   const isRedirecting = useRef(false)
+  const warningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const logoutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
+  const getTokenExpiry = (accessToken: string): number | null => {
+    try {
+      const payload = JSON.parse(atob(accessToken.split('.')[1]))
+      if (payload?.exp) {
+        return payload.exp * 1000
+      }
+    } catch (error) {
+      console.warn('Unable to parse token expiry:', error)
+    }
+    return null
+  }
+
+  const clearSessionTimers = useCallback(() => {
+    if (warningTimeoutRef.current) {
+      clearTimeout(warningTimeoutRef.current)
+      warningTimeoutRef.current = null
+    }
+    if (logoutTimeoutRef.current) {
+      clearTimeout(logoutTimeoutRef.current)
+      logoutTimeoutRef.current = null
+    }
+  }, [])
 
   // Load user data from token
   const loadUserFromToken = useCallback(async (accessToken: string) => {
@@ -118,6 +147,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [loadUserFromToken])
 
+  const extendSession = useCallback(async () => {
+    if (!token) return false
+
+    try {
+      const response = await authApi.extendSession(token)
+      localStorage.setItem(TOKEN_KEY, response.access_token)
+      localStorage.setItem(REFRESH_TOKEN_KEY, response.refresh_token)
+      await loadUserFromToken(response.access_token)
+      return true
+    } catch (error: any) {
+      console.error('Failed to extend session:', error)
+      return false
+    }
+  }, [token, loadUserFromToken])
+
   // Initialize auth state on mount
   useEffect(() => {
     const initAuth = async () => {
@@ -164,8 +208,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const response = await authApi.login(emailOrUsername, password)
       localStorage.setItem(TOKEN_KEY, response.access_token)
       localStorage.setItem(REFRESH_TOKEN_KEY, response.refresh_token)
-      setUser(response.user as User)
       setToken(response.access_token)
+      if (response.user) {
+        setUser(response.user as User)
+      }
+      try {
+        const userData = await authApi.getCurrentUser(response.access_token)
+        setUser(userData)
+      } catch (error) {
+        console.warn('Unable to hydrate user after login:', error)
+      }
     } catch (error) {
       console.error('Login failed:', error)
       throw error
@@ -179,6 +231,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
    */
   const logout = useCallback((reason?: string) => {
     console.log('Logging out:', reason || 'user action')
+
+    clearSessionTimers()
 
     // Clear tokens and user state
     localStorage.removeItem(TOKEN_KEY)
@@ -202,7 +256,69 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         isRedirecting.current = false
       }, 1000)
     }
-  }, [pathname, router])
+  }, [pathname, router, clearSessionTimers])
+
+  // Warn and logout when access token expires
+  useEffect(() => {
+    clearSessionTimers()
+
+    if (!token) return
+
+    const expiry = getTokenExpiry(token)
+    if (!expiry) return
+
+    const timeUntilExpiry = expiry - Date.now()
+    if (timeUntilExpiry <= 0) {
+      logout('session_expired')
+      return
+    }
+
+    const warningDelay = Math.max(timeUntilExpiry - SESSION_WARNING_THRESHOLD, 0)
+
+    warningTimeoutRef.current = setTimeout(() => {
+      toast((toastInstance) => (
+        <div className="flex flex-col gap-3">
+          <div>
+            <p className="text-sm font-medium text-slate-900">Session expiring soon</p>
+            <p className="text-sm text-slate-600">Your session will expire soon. Save your work or extend it.</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+              onClick={async () => {
+                toast.dismiss(toastInstance.id)
+                const success = await extendSession()
+                if (success) {
+                  toast.success('Session extended')
+                } else {
+                  toast.error('Unable to extend session')
+                }
+              }}
+              type="button"
+            >
+              Extend session
+            </button>
+            <button
+              className="px-3 py-1.5 text-xs font-medium text-slate-600 rounded-md hover:text-slate-900 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 focus-visible:ring-offset-2"
+              onClick={() => toast.dismiss(toastInstance.id)}
+              type="button"
+            >
+              Dismiss
+            </button>
+          </div>
+        </div>
+      ), {
+        icon: '⚠️',
+        duration: 8000,
+      })
+    }, warningDelay)
+
+    logoutTimeoutRef.current = setTimeout(() => {
+      logout('session_expired')
+    }, timeUntilExpiry)
+
+    return clearSessionTimers
+  }, [token, logout, clearSessionTimers, extendSession])
 
   /**
    * Handle unauthorized (401) errors from API calls.
@@ -229,6 +345,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   }, [logout, pathname])
 
+  useEffect(() => {
+    const handleUnauthorizedEvent = () => handleUnauthorized()
+    window.addEventListener('auth:unauthorized', handleUnauthorizedEvent)
+    return () => window.removeEventListener('auth:unauthorized', handleUnauthorizedEvent)
+  }, [handleUnauthorized])
+
   const refreshUserData = async () => {
     if (!token) return
     await loadUserFromToken(token)
@@ -237,12 +359,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const value: AuthContextType = {
     user,
     token,
+    accessToken: token,
     isLoading,
     isAuthenticated: !!user && !!token,
     login,
     logout,
     refreshUserData,
     handleUnauthorized,
+    extendSession,
   }
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>

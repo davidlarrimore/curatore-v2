@@ -3,7 +3,10 @@
 import { useEffect, useState } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { jobsApi } from '@/lib/api'
+import { jobsApi, utils } from '@/lib/api'
+import toast from 'react-hot-toast'
+import { JobReviewPanel } from '@/components/jobs/JobReviewPanel'
+import { JobExportPanel } from '@/components/jobs/JobExportPanel'
 
 interface JobDocument {
   id: string
@@ -53,7 +56,8 @@ export default function JobDetailPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
-  const [activeTab, setActiveTab] = useState<'documents' | 'logs'>('documents')
+  const [activeTab, setActiveTab] = useState<'documents' | 'logs' | 'review' | 'export'>('documents')
+  const [currentTime, setCurrentTime] = useState(Date.now()) // For duration updates
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -62,7 +66,7 @@ export default function JobDetailPage() {
     }
   }, [isLoading, isAuthenticated, router])
 
-  // Load job details
+  // Load job details initially
   useEffect(() => {
     if (!accessToken || !isAuthenticated || !jobId) return
 
@@ -81,16 +85,36 @@ export default function JobDetailPage() {
     }
 
     loadJob()
+  }, [accessToken, isAuthenticated, jobId])
 
-    // Poll for updates every 2 seconds if job is active
-    const interval = setInterval(() => {
-      if (job && ['PENDING', 'QUEUED', 'RUNNING'].includes(job.status)) {
-        loadJob()
+  // Polling effect - separate from initial load
+  useEffect(() => {
+    if (!accessToken || !isAuthenticated || !jobId || !job) return
+
+    // Only poll if job is active
+    const isActive = ['PENDING', 'QUEUED', 'RUNNING'].includes(job.status)
+    if (!isActive) return
+
+    const interval = setInterval(async () => {
+      try {
+        const jobData = await jobsApi.getJob(accessToken, jobId)
+        setJob(jobData as JobDetail)
+      } catch (err: any) {
+        console.error('Failed to poll job:', err)
       }
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [accessToken, isAuthenticated, jobId])
+  }, [accessToken, isAuthenticated, jobId, job?.status])
+
+  // Update current time every second for duration calculation
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentTime(Date.now())
+    }, 1000)
+
+    return () => clearInterval(timer)
+  }, [])
 
   const handleCancelJob = async () => {
     if (!accessToken || !jobId || !job) return
@@ -114,6 +138,20 @@ export default function JobDetailPage() {
       alert(`Failed to cancel job: ${err.message}`)
     } finally {
       setCancelling(false)
+    }
+  }
+
+  const handleDocumentUpdate = async (documentId: string) => {
+    if (!accessToken || !jobId) return
+
+    try {
+      // Refresh job data to get updated scores
+      const refreshed = await jobsApi.getJob(accessToken, jobId)
+      setJob(refreshed as JobDetail)
+      toast.success('Document updated successfully')
+    } catch (err: any) {
+      console.error('Failed to refresh job data:', err)
+      toast.error('Failed to refresh job data')
     }
   }
 
@@ -143,8 +181,27 @@ export default function JobDetailPage() {
   const formatDuration = (start?: string, end?: string) => {
     if (!start) return 'N/A'
     const startDate = new Date(start)
-    const endDate = end ? new Date(end) : new Date()
+
+    // Validate the start date is valid
+    if (isNaN(startDate.getTime())) {
+      return 'N/A'
+    }
+
+    // Use currentTime for live updates, or end date if job is complete
+    const endDate = end ? new Date(end) : new Date(currentTime)
+
+    // Validate end date
+    if (isNaN(endDate.getTime())) {
+      return 'N/A'
+    }
+
     const diff = endDate.getTime() - startDate.getTime()
+
+    // If difference is negative, job hasn't started yet or dates are invalid
+    if (diff < 0) {
+      return '0s'
+    }
+
     const seconds = Math.floor(diff / 1000)
     const minutes = Math.floor(seconds / 60)
     const hours = Math.floor(minutes / 60)
@@ -157,6 +214,17 @@ export default function JobDetailPage() {
   const calculateProgress = () => {
     if (!job || job.total_documents === 0) return 0
     return Math.round((job.completed_documents / job.total_documents) * 100)
+  }
+
+  const getDocumentDisplayName = (doc: JobDocument): string => {
+    const displayName = utils.getDisplayFilename(doc.filename)
+
+    // If filename is just a hash (32 hex chars with no extension), use document_id as fallback
+    if (/^[0-9a-f]{32}$/i.test(displayName)) {
+      return `Document ${doc.document_id.substring(0, 8)}...`
+    }
+
+    return displayName
   }
 
   if (isLoading || !isAuthenticated) {
@@ -325,6 +393,26 @@ export default function JobDetailPage() {
               >
                 Logs ({job.recent_logs.length})
               </button>
+              <button
+                onClick={() => setActiveTab('review')}
+                className={`px-6 py-3 text-sm font-medium ${
+                  activeTab === 'review'
+                    ? 'border-b-2 border-blue-500 text-blue-600'
+                    : 'text-gray-600 hover:text-gray-900 hover:border-gray-300'
+                }`}
+              >
+                Review & Edit
+              </button>
+              <button
+                onClick={() => setActiveTab('export')}
+                className={`px-6 py-3 text-sm font-medium ${
+                  activeTab === 'export'
+                    ? 'border-b-2 border-blue-500 text-blue-600'
+                    : 'text-gray-600 hover:text-gray-900 hover:border-gray-300'
+                }`}
+              >
+                Export
+              </button>
             </nav>
           </div>
 
@@ -356,7 +444,7 @@ export default function JobDetailPage() {
                     {job.documents.map((doc) => (
                       <tr key={doc.id} className="hover:bg-gray-50">
                         <td className="px-6 py-4">
-                          <div className="text-sm font-medium text-gray-900">{doc.filename}</div>
+                          <div className="text-sm font-medium text-gray-900">{getDocumentDisplayName(doc)}</div>
                           <div className="text-sm text-gray-500">{doc.document_id}</div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
@@ -397,7 +485,7 @@ export default function JobDetailPage() {
                   </div>
                 )}
               </div>
-            ) : (
+            ) : activeTab === 'logs' ? (
               <div className="space-y-2 max-h-96 overflow-y-auto">
                 {job.recent_logs.map((log) => (
                   <div
@@ -427,7 +515,20 @@ export default function JobDetailPage() {
                   </div>
                 )}
               </div>
-            )}
+            ) : activeTab === 'review' ? (
+              <JobReviewPanel
+                jobId={jobId}
+                documents={job.documents}
+                onDocumentUpdate={handleDocumentUpdate}
+                accessToken={accessToken || ''}
+              />
+            ) : activeTab === 'export' ? (
+              <JobExportPanel
+                jobId={jobId}
+                documents={job.documents}
+                accessToken={accessToken || ''}
+              />
+            ) : null}
           </div>
         </div>
       </div>

@@ -20,11 +20,10 @@ interface Job {
 
 interface JobStats {
   active_jobs: number
-  queued_jobs: number
-  total_jobs: number
-  completed_jobs: number
-  failed_jobs: number
-  cancelled_jobs: number
+  total_jobs_24h: number
+  total_jobs_7d: number
+  completed_jobs_24h: number
+  failed_jobs_24h: number
 }
 
 export default function JobsPage() {
@@ -82,7 +81,7 @@ export default function JobsPage() {
 
     // Poll for updates every 5 seconds when there are active jobs
     const interval = setInterval(() => {
-      if (stats && (stats.active_jobs > 0 || stats.queued_jobs > 0)) {
+      if (stats && stats.active_jobs > 0) {
         loadData()
       }
     }, 5000)
@@ -160,30 +159,26 @@ export default function JobsPage() {
 
           {/* Stats Bar */}
           {stats && (
-            <div className="mt-6 grid grid-cols-2 md:grid-cols-6 gap-4">
+            <div className="mt-6 grid grid-cols-2 md:grid-cols-5 gap-4">
               <div className="bg-gray-50 p-4 rounded-lg">
                 <div className="text-2xl font-bold text-gray-900">{stats.active_jobs}</div>
                 <div className="text-sm text-gray-600">Active</div>
               </div>
               <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-2xl font-bold text-gray-900">{stats.queued_jobs}</div>
-                <div className="text-sm text-gray-600">Queued</div>
+                <div className="text-2xl font-bold text-gray-900">{stats.total_jobs_24h}</div>
+                <div className="text-sm text-gray-600">Last 24h</div>
               </div>
               <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-2xl font-bold text-gray-900">{stats.total_jobs}</div>
-                <div className="text-sm text-gray-600">Total</div>
+                <div className="text-2xl font-bold text-gray-900">{stats.total_jobs_7d}</div>
+                <div className="text-sm text-gray-600">Last 7d</div>
               </div>
               <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-2xl font-bold text-green-600">{stats.completed_jobs}</div>
-                <div className="text-sm text-gray-600">Completed</div>
+                <div className="text-2xl font-bold text-green-600">{stats.completed_jobs_24h}</div>
+                <div className="text-sm text-gray-600">Completed (24h)</div>
               </div>
               <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-2xl font-bold text-red-600">{stats.failed_jobs}</div>
-                <div className="text-sm text-gray-600">Failed</div>
-              </div>
-              <div className="bg-gray-50 p-4 rounded-lg">
-                <div className="text-2xl font-bold text-gray-600">{stats.cancelled_jobs}</div>
-                <div className="text-sm text-gray-600">Cancelled</div>
+                <div className="text-2xl font-bold text-red-600">{stats.failed_jobs_24h}</div>
+                <div className="text-sm text-gray-600">Failed (24h)</div>
               </div>
             </div>
           )}

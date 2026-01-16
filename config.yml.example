@@ -76,25 +76,32 @@ llm:
 # ============================================================================
 # Document-to-markdown conversion services
 #
-# Supports multiple extraction engines with priority-based routing
+# Supports multiple extraction engines
 # If not configured here, falls back to EXTRACTION_* environment variables
 
 extraction:
-  # Extraction strategy (default, docling, auto, none)
-  # - default: Use extraction-service (internal microservice)
-  # - docling: Use Docling Serve (external service for complex PDFs)
-  # - auto: Try Docling first, fallback to extraction-service
-  # - none: Disable extraction (returns placeholder text)
-  priority: default
-
   # List of extraction services
   services:
     # Internal extraction service (recommended, always available)
+    # Uses MarkItDown + Tesseract OCR for document conversion
     - name: extraction-service
       url: http://extraction:8010
       timeout: 300  # 5 minutes (optional, default: 300)
       enabled: true
       verify_ssl: true  # (optional, default: true)
+
+      # OCR settings (Tesseract-specific, optional)
+      # These settings are specific to the extraction-service implementation
+      ocr:
+        # Tesseract OCR language code (optional, default: eng)
+        # Examples: eng, spa, fra, deu, or combinations like "eng+spa"
+        language: eng
+
+        # Page Segmentation Mode (optional, default: 3)
+        # 3 = Fully automatic page segmentation (recommended)
+        # 6 = Uniform block of text
+        # 11 = Sparse text (find as much text as possible)
+        psm: 3
 
     # Docling Serve (optional, for complex PDFs and Office docs)
     # Enable by setting ENABLE_DOCLING_SERVICE=true in .env

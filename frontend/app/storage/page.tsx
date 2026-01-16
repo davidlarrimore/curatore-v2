@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { Fragment, useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { storageApi } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
@@ -371,8 +371,8 @@ function StorageContent() {
               </thead>
               <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                 {duplicates.duplicates.map((dup: any) => (
-                  <>
-                    <tr key={dup.hash} className="hover:bg-gray-50 dark:hover:bg-gray-900">
+                  <Fragment key={dup.hash}>
+                    <tr className="hover:bg-gray-50 dark:hover:bg-gray-900">
                       <td className="px-6 py-4 whitespace-nowrap">
                         <code className="text-xs text-gray-600 dark:text-gray-400 font-mono">
                           {dup.hash.substring(0, 12)}...
@@ -425,7 +425,7 @@ function StorageContent() {
                         </td>
                       </tr>
                     )}
-                  </>
+                  </Fragment>
                 ))}
               </tbody>
             </table>

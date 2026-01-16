@@ -62,6 +62,27 @@ class LLMConfig(BaseModel):
     )
 
 
+class OCRConfig(BaseModel):
+    """
+    OCR configuration (Tesseract-specific for extraction-service).
+
+    These settings are specific to the extraction-service implementation
+    that uses Tesseract OCR for image-based PDFs and scanned documents.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    language: str = Field(
+        default="eng",
+        description="Tesseract OCR language code (e.g., eng, spa, fra, or 'eng+spa')"
+    )
+    psm: int = Field(
+        default=3,
+        ge=0,
+        le=13,
+        description="Page Segmentation Mode (0-13, 3=auto recommended)"
+    )
+
+
 class ExtractionServiceConfig(BaseModel):
     """Configuration for a single extraction service."""
     model_config = ConfigDict(extra='forbid')
@@ -90,19 +111,16 @@ class ExtractionServiceConfig(BaseModel):
         default=None,
         description="Optional API key for authentication"
     )
+    ocr: Optional[OCRConfig] = Field(
+        default=None,
+        description="OCR settings (specific to extraction-service implementation)"
+    )
 
 
 class ExtractionConfig(BaseModel):
-    """
-    Document extraction service configuration.
-
-    Supports multiple extraction engines with priority-based routing.
-    """
+    """Document extraction service configuration."""
     model_config = ConfigDict(extra='forbid')
 
-    priority: Literal["default", "docling", "auto", "none"] = Field(
-        description="Extraction strategy (default, docling, auto, none)"
-    )
     services: List[ExtractionServiceConfig] = Field(
         description="List of extraction service configurations"
     )

@@ -519,12 +519,17 @@ class V1ProcessingOptions(BaseModel):
 
     auto_optimize: bool = Field(default=True, description="Optimize for vector DB")
     quality_thresholds: Optional[V1QualityThresholds] = None
+    extraction_engine: Optional[str] = Field(
+        default="extraction-service",
+        description="Extraction engine to use (e.g., 'extraction-service', 'docling')",
+    )
 
     def to_domain(self) -> ProcessingOptions:
         return ProcessingOptions(
             auto_improve=self.auto_optimize,
             vector_optimize=self.auto_optimize,
             quality_thresholds=self.quality_thresholds.to_domain() if self.quality_thresholds else None,
+            extraction_engine=self.extraction_engine,
         )
 
 

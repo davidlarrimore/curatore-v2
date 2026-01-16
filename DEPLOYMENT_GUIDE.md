@@ -408,9 +408,6 @@ HASH_ALGORITHM="sha256"
 #### Extraction Configuration
 
 ```bash
-# Extraction Engine Priority
-EXTRACTION_PRIORITY="default"       # default, docling, none
-
 # Extraction Service
 EXTRACTION_SERVICE_URL="http://extraction:8010"
 

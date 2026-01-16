@@ -9,6 +9,7 @@ Endpoints:
     POST /auth/register - Register new user
     POST /auth/login - Login and receive tokens
     POST /auth/refresh - Refresh access token
+    POST /auth/extend-session - Extend session (new tokens)
     POST /auth/logout - Logout (client-side token discard)
     GET /auth/me - Get current user profile
 
@@ -518,6 +519,43 @@ async def refresh_token(request: TokenRefreshRequest) -> TokenResponse:
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid or expired refresh token",
         )
+
+
+@router.post(
+    "/extend-session",
+    response_model=TokenResponse,
+    summary="Extend session",
+    description="Issue new tokens for an authenticated user to extend session timeout.",
+)
+async def extend_session(user: User = Depends(get_current_user)) -> TokenResponse:
+    """
+    Extend session by issuing new access and refresh tokens.
+
+    Args:
+        user: Current authenticated user
+
+    Returns:
+        TokenResponse: New JWT tokens
+    """
+    access_token = auth_service.create_access_token(
+        user_id=str(user.id),
+        organization_id=str(user.organization_id),
+        role=user.role,
+    )
+
+    refresh_token = auth_service.create_refresh_token(
+        user_id=str(user.id),
+        organization_id=str(user.organization_id),
+    )
+
+    logger.info(f"Session extended for user: {user.email}")
+
+    return TokenResponse(
+        access_token=access_token,
+        refresh_token=refresh_token,
+        token_type="bearer",
+        expires_in=settings.jwt_access_token_expire_minutes * 60,
+    )
 
 
 @router.post(

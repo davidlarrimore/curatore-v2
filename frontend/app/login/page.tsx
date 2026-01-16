@@ -16,12 +16,13 @@
  * - Does not redirect to /login as return URL
  */
 
-import { useState, FormEvent, useEffect } from 'react'
+import { useState, FormEvent, useEffect, useCallback, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { Button } from '@/components/ui/Button'
 
 const RETURN_URL_KEY = 'auth_return_url'
+type LoginStage = 'idle' | 'submitting' | 'finalizing'
 
 export default function LoginPage() {
   const router = useRouter()
@@ -30,7 +31,21 @@ export default function LoginPage() {
   const [emailOrUsername, setEmailOrUsername] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
-  const [isLoading, setIsLoading] = useState(false)
+  const [loginStage, setLoginStage] = useState<LoginStage>('idle')
+  const hasRedirected = useRef(false)
+
+  const resolveReturnUrl = useCallback(() => {
+    const returnUrl = sessionStorage.getItem(RETURN_URL_KEY) || '/'
+    return returnUrl !== '/login' ? returnUrl : '/'
+  }, [])
+
+  const redirectToReturnUrl = useCallback(() => {
+    if (hasRedirected.current) return
+    hasRedirected.current = true
+    const returnUrl = resolveReturnUrl()
+    sessionStorage.removeItem(RETURN_URL_KEY)
+    router.replace(returnUrl)
+  }, [resolveReturnUrl, router])
 
   // Store return URL from query parameter or retrieve from session storage
   useEffect(() => {
@@ -43,48 +58,32 @@ export default function LoginPage() {
   // Redirect if already authenticated (but only after auth loading is complete)
   useEffect(() => {
     if (!authLoading && isAuthenticated) {
-      // Get return URL from session storage, default to home
-      const returnUrl = sessionStorage.getItem(RETURN_URL_KEY) || '/'
-
-      // Clear the return URL to prevent future redirects
-      sessionStorage.removeItem(RETURN_URL_KEY)
-
-      // Prevent redirect loop: never redirect back to login
-      if (returnUrl !== '/login') {
-        router.push(returnUrl)
-      } else {
-        router.push('/')
-      }
+      setLoginStage('finalizing')
+      redirectToReturnUrl()
     }
-  }, [isAuthenticated, authLoading, router])
+  }, [isAuthenticated, authLoading, redirectToReturnUrl])
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
     setError('')
-    setIsLoading(true)
+    setLoginStage('submitting')
 
     try {
       await login(emailOrUsername, password)
-
-      // Get return URL from session storage
-      const returnUrl = sessionStorage.getItem(RETURN_URL_KEY) || '/'
-
-      // Clear the return URL
-      sessionStorage.removeItem(RETURN_URL_KEY)
-
-      // Redirect to return URL (or home if no return URL)
-      // Prevent redirect loop: never redirect back to login
-      if (returnUrl !== '/login') {
-        router.push(returnUrl)
-      } else {
-        router.push('/')
+      setLoginStage('finalizing')
+      if (isAuthenticated) {
+        redirectToReturnUrl()
       }
     } catch (err: any) {
       setError(err.message || 'Login failed. Please check your credentials.')
-    } finally {
-      setIsLoading(false)
+      setLoginStage('idle')
     }
   }
+
+  const isLoading = loginStage !== 'idle'
+  const statusMessage = loginStage === 'finalizing'
+    ? 'Finishing your sign-in and preparing your workspace...'
+    : 'Signing you in. This may take a moment...'
 
   // Show loading state during auth check
   if (authLoading) {
@@ -92,7 +91,7 @@ export default function LoginPage() {
       <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600 dark:text-gray-400">Loading...</p>
+          <p className="text-gray-600 dark:text-gray-400">Checking your session...</p>
         </div>
       </div>
     )
@@ -119,6 +118,15 @@ export default function LoginPage() {
           {error && (
             <div className="rounded-md bg-red-50 dark:bg-red-900/20 p-4">
               <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+            </div>
+          )}
+
+          {isLoading && (
+            <div className="rounded-md bg-blue-50 dark:bg-blue-900/20 p-4 border border-blue-200 dark:border-blue-800">
+              <div className="flex items-center gap-3">
+                <div className="h-4 w-4 animate-spin rounded-full border-2 border-blue-600 border-t-transparent"></div>
+                <p className="text-sm text-blue-800 dark:text-blue-100">{statusMessage}</p>
+              </div>
             </div>
           )}
 
@@ -166,7 +174,7 @@ export default function LoginPage() {
               disabled={isLoading}
               className="w-full"
             >
-              {isLoading ? 'Signing in...' : 'Sign in'}
+              {loginStage === 'finalizing' ? 'Finishing...' : isLoading ? 'Signing in...' : 'Sign in'}
             </Button>
           </div>
 

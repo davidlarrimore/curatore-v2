@@ -37,7 +37,7 @@ class DocumentService:
     Responsibilities:
     - File management: upload, list, find, delete, and clear runtime artifacts.
     - Extraction: convert various input formats to Markdown (via Docling or the
-      default extraction microservice), with automatic fallbacks and rich logging.
+      default extraction microservice) based on per-job selection.
     - Processing: score conversion quality, optionally run LLM evaluation, and
       persist results for RAG readiness checks and downloads.
 
@@ -46,9 +46,9 @@ class DocumentService:
        - Uploaded files are saved under a UUID-prefixed filename to avoid collisions.
        - Batch files live in a separate directory and are discoverable by name.
     2) Extraction dispatch
-       - _extract_content() chooses an extractor based on `EXTRACTION_PRIORITY`.
-         It calls _extract_via_docling() or _extract_via_extraction_service(),
-         and sets `_last_extraction_info` for downstream reporting.
+       - _extract_content() chooses an extractor based on the job's
+         ProcessingOptions.extraction_engine, then calls _extract_via_docling()
+         or _extract_via_extraction_service(), and sets `_last_extraction_info`.
     3) Processing pipeline
        - process_document() invokes extraction, computes conversion metrics,
          optionally evaluates with an LLM, writes Markdown to `processed_dir`,
@@ -83,9 +83,6 @@ class DocumentService:
 
         self._supported_extensions: Set[str] = self._load_supported_extensions()
 
-        # Extractor selection and service configuration
-        self.extractor_engine: str = getattr(settings, "extraction_priority", "default").strip().lower()
-
         # Existing custom extraction service (legacy/default)
         self.extract_base: str = str(getattr(settings, "extraction_service_url", "")).rstrip("/")
         self.extract_timeout: float = float(getattr(settings, "extraction_service_timeout", 60))
@@ -100,8 +97,7 @@ class DocumentService:
         self._last_extraction_info: Dict[str, Any] = {}
         try:
             self._logger.debug(
-                "Extractor config: engine=%s, extraction_service_url=%s, docling_service_url=%s",
-                self.extractor_engine,
+                "Extractor config: extraction_service_url=%s, docling_service_url=%s",
                 self.extract_base or "",
                 self.docling_base or "",
             )
@@ -191,15 +187,22 @@ class DocumentService:
         if self.batch_dir is not None:
             self.batch_dir.mkdir(parents=True, exist_ok=True)
 
-    async def extractor_health(self) -> Dict[str, Any]:
-        """Check connectivity to the configured extraction engine (best-effort).
+    async def extractor_health(self, engine: Optional[str] = None) -> Dict[str, Any]:
+        """Check connectivity to a specific extraction engine (best-effort).
 
         Returns a lightweight status object containing:
           { engine, connected, endpoint, response|error }
         For Docling, probes /health with fallbacks to /v1/health or /healthz.
-        For the default extraction-service, probes /api/v1/system/health.
+        For the extraction-service, probes /api/v1/system/health.
         """
-        engine = getattr(self, "extractor_engine", "default")
+        engine = (engine or "").strip().lower()
+        if not engine:
+            if getattr(self, 'extract_base', ''):
+                engine = "extraction-service"
+            elif getattr(self, 'docling_base', ''):
+                engine = "docling"
+            else:
+                engine = "none"
         try:
             if engine == "docling":
                 base = getattr(self, "docling_base", "")
@@ -239,7 +242,7 @@ class DocumentService:
                     return err
 
             # Default/legacy extraction service check (only for expected engine values)
-            if engine in {"default", "extraction", "auto", "legacy"}:
+            if engine in {"default", "extraction", "extraction-service", "legacy"}:
                 base = getattr(self, 'extract_base', '')
                 if not base:
                     return {"engine": engine, "connected": False, "endpoint": None, "error": "not_configured"}
@@ -260,16 +263,21 @@ class DocumentService:
     async def available_extraction_services(self) -> Dict[str, Any]:
         """Report availability of supported extraction services.
 
-        Returns a dict with a list of services and the currently active engine:
+        Returns a dict with a list of services and the default engine suggestion:
           {
-            "active": "docling"|"default",
+            "active": "docling"|"extraction-service"|null,
             "services": [
                {"id": "default", "name": "Default Extraction Service", "url": str|None, "available": bool},
                {"id": "docling", "name": "Docling", "url": str|None, "available": bool}
             ]
           }
         """
-        active = getattr(self, "extractor_engine", "default")
+        if getattr(self, 'extract_base', ''):
+            active = "extraction-service"
+        elif getattr(self, 'docling_base', ''):
+            active = "docling"
+        else:
+            active = None
 
         # Default/legacy extraction-service status
         default_url = None
@@ -1124,7 +1132,10 @@ class DocumentService:
         try:
             # Step 1: Extract text/markdown from the document
             # This could be done via external service or built-in conversion
-            markdown_content = await self._extract_content(file_path)
+            markdown_content = await self._extract_content(
+                file_path,
+                engine=getattr(options, "extraction_engine", None),
+            )
             
             # Step 2: Score the conversion quality
             original_text = file_path.read_text(encoding='utf-8', errors='ignore') if file_path.suffix.lower() == '.txt' else None
@@ -1132,15 +1143,8 @@ class DocumentService:
 
             # Extract metadata from _last_extraction_info
             extraction_info = getattr(self, '_last_extraction_info', {})
-            engine_used = extraction_info.get('engine', 'unknown')
+            engine_used = extraction_info.get('engine', extraction_info.get('requested_engine', 'unknown'))
             extraction_attempts = extraction_info.get('attempts', 1)
-            extraction_failover = extraction_info.get('failover', False)
-
-            # Build extraction engine display name
-            if extraction_failover and extraction_info.get('primary_engine'):
-                engine_display = f"{extraction_info['primary_engine']}→{engine_used}"
-            else:
-                engine_display = engine_used
 
             # Step 3: Create conversion result with extraction metadata
             conversion_result = ConversionResult(
@@ -1152,9 +1156,9 @@ class DocumentService:
                 extracted_characters=len(markdown_content),
                 processing_time=time.time() - start_time,
                 conversion_notes=[conversion_notes],
-                extraction_engine=engine_display,
+                extraction_engine=engine_used,
                 extraction_attempts=extraction_attempts,
-                extraction_failover=extraction_failover
+                extraction_failover=None
             )
             
             # Step 4: LLM evaluation (gate on LLM availability and auto_improve intent)
@@ -1454,7 +1458,7 @@ class DocumentService:
 
         return None
 
-    async def _extract_via_extraction_service(self, file_path: Path, fallback_from_docling: bool = False, max_retries: int = 2) -> Optional[str]:
+    async def _extract_via_extraction_service(self, file_path: Path, max_retries: int = 2) -> Optional[str]:
         """Extract content via the default extraction-service with retry logic.
 
         High-level: Streams a multipart upload to the internal extraction
@@ -1463,8 +1467,6 @@ class DocumentService:
 
         Args:
             file_path: Absolute path to the source document on disk.
-            fallback_from_docling: True when this invocation is a fallback
-                after a Docling attempt failed; recorded in diagnostics.
             max_retries: Maximum number of retry attempts (default: 2)
 
         Returns:
@@ -1473,7 +1475,7 @@ class DocumentService:
 
         Side effects:
             - Populates `self._last_extraction_info` with engine, URL, ok flag,
-              whether this was a fallback call, and retry metadata.
+              and retry metadata.
             - Logs request target and warnings on error.
         """
         if not getattr(self, 'extract_base', None):
@@ -1488,10 +1490,7 @@ class DocumentService:
 
             try:
                 if attempt == 0:
-                    if fallback_from_docling:
-                        self._logger.info("Falling back to extraction-service: %s (timeout: %.0fs)", url, current_timeout)
-                    else:
-                        self._logger.info("Using extraction-service: %s (timeout: %.0fs)", url, current_timeout)
+                    self._logger.info("Using extraction-service: %s (timeout: %.0fs)", url, current_timeout)
                 else:
                     self._logger.info("Retrying extraction-service (attempt %d/%d, timeout: %.0fs): %s",
                                     attempt + 1, max_retries + 1, current_timeout, file_path.name)
@@ -1516,7 +1515,6 @@ class DocumentService:
                                 "engine": "extraction-service",
                                 "url": url,
                                 "ok": True,
-                                "fallback": fallback_from_docling,
                                 "attempts": attempt + 1,
                                 "timeout_used": current_timeout
                             }
@@ -1527,7 +1525,6 @@ class DocumentService:
                             "engine": "extraction-service",
                             "url": url,
                             "ok": True,
-                            "fallback": fallback_from_docling,
                             "attempts": attempt + 1,
                             "timeout_used": current_timeout
                         }
@@ -1575,29 +1572,25 @@ class DocumentService:
 
         return None
 
-    async def _extract_content(self, file_path: Path) -> str:
-        """Dispatch content extraction for a given file with retry and failover logic.
+    async def _extract_content(self, file_path: Path, engine: Optional[str] = None) -> str:
+        """Dispatch content extraction for a given file using the selected engine.
 
         Behavior:
           - For `.txt`, `.md`, or `.csv` files, reads the file as UTF-8.
-          - Otherwise, routes to the configured extractor with retry/failover:
-              - `EXTRACTION_PRIORITY=docling`: try Docling first (with retries); on failure,
-                fall back to extraction-service (with retries) when available.
-              - `EXTRACTION_PRIORITY=default`: try extraction-service (with retries); on failure,
-                fall back to Docling (with retries) when available.
-              - `EXTRACTION_PRIORITY=auto`: prioritize non-default engine; if both enabled,
-                try primary then failover to secondary.
-          - If all extractors fail after retries, returns a placeholder Markdown.
+          - Otherwise, routes to the selected extractor with retry support.
+          - If the selected extractor is unavailable or fails after retries,
+            returns a placeholder Markdown.
 
         Args:
             file_path: Absolute path to the source document on disk.
+            engine: Selected extraction engine (e.g., 'extraction-service', 'docling').
 
         Returns:
             Markdown content extracted or a placeholder string.
 
         Notes:
             This method updates `self._last_extraction_info` to reflect the
-            attempt details (engine selection, outcome, retries, failover) so the caller can
+            attempt details (engine selection, outcome, retries) so the caller can
             surface it in processing metadata and logs.
         """
         suffix = file_path.suffix.lower()
@@ -1605,103 +1598,49 @@ class DocumentService:
             self._last_extraction_info = {"engine": "text-file", "ok": True}
             return file_path.read_text(encoding='utf-8', errors='ignore')
 
-        engine = getattr(self, "extractor_engine", "default")
+        engine = (engine or "").strip().lower() or "extraction-service"
         self._last_extraction_info = {"requested_engine": engine, "ok": False}
 
         # Check which extraction services are available
         has_extraction_service = bool(getattr(self, 'extract_base', None))
         has_docling = bool(getattr(self, 'docling_base', None))
 
-        # Track failover for metadata
-        used_failover = False
-        primary_engine = None
-        failover_engine = None
-
         # Route based on engine configuration
         if engine == "docling":
-            # Primary: Docling, Failover: extraction-service
-            primary_engine = "docling"
-            if has_docling:
+            if not has_docling:
+                self._last_extraction_info = {
+                    "engine": "docling",
+                    "ok": False,
+                    "error": "not_configured"
+                }
+            else:
                 md = await self._extract_via_docling(file_path)
                 if md:
                     return md
-
-            # Docling failed or unavailable, try extraction-service as failover
-            if has_extraction_service:
-                failover_engine = "extraction-service"
-                used_failover = True
-                try:
-                    self._logger.info("Docling extraction failed for %s, failing over to extraction-service", file_path.name)
-                except Exception:
-                    pass
-                md2 = await self._extract_via_extraction_service(file_path, fallback_from_docling=True)
-                if md2:
-                    # Update metadata to reflect failover success
-                    if self._last_extraction_info.get("ok"):
-                        self._last_extraction_info["primary_engine"] = primary_engine
-                        self._last_extraction_info["failover"] = True
-                    return md2
-
         elif engine in {"default", "extraction", "extraction-service"}:
-            # Primary: extraction-service, Failover: Docling
-            primary_engine = "extraction-service"
-            if has_extraction_service:
+            if not has_extraction_service:
+                self._last_extraction_info = {
+                    "engine": "extraction-service",
+                    "ok": False,
+                    "error": "not_configured"
+                }
+            else:
                 md = await self._extract_via_extraction_service(file_path)
                 if md:
                     return md
-
-            # extraction-service failed or unavailable, try Docling as failover
-            if has_docling:
-                failover_engine = "docling"
-                used_failover = True
-                try:
-                    self._logger.info("Extraction-service failed for %s, failing over to Docling", file_path.name)
-                except Exception:
-                    pass
-                md2 = await self._extract_via_docling(file_path)
-                if md2:
-                    # Update metadata to reflect failover success
-                    if self._last_extraction_info.get("ok"):
-                        self._last_extraction_info["primary_engine"] = primary_engine
-                        self._last_extraction_info["failover"] = True
-                    return md2
-
-        elif engine == "auto":
-            # Auto mode: prioritize Docling if available, then extraction-service
-            if has_docling:
-                primary_engine = "docling"
-                md = await self._extract_via_docling(file_path)
-                if md:
-                    return md
-                # Try extraction-service as failover
-                if has_extraction_service:
-                    failover_engine = "extraction-service"
-                    used_failover = True
-                    md2 = await self._extract_via_extraction_service(file_path, fallback_from_docling=True)
-                    if md2:
-                        if self._last_extraction_info.get("ok"):
-                            self._last_extraction_info["primary_engine"] = primary_engine
-                            self._last_extraction_info["failover"] = True
-                        return md2
-            elif has_extraction_service:
-                primary_engine = "extraction-service"
-                md = await self._extract_via_extraction_service(file_path)
-                if md:
-                    return md
+        elif engine == "none":
+            self._last_extraction_info = {"engine": "none", "ok": False, "error": "not_configured"}
+        else:
+            self._last_extraction_info = {"engine": engine, "ok": False, "error": "unsupported"}
 
         # Final fallback placeholder
         try:
             self._logger.info("No extractor configured or all failed; returning placeholder for %s", file_path.name)
         except Exception:
             pass
-        self._last_extraction_info = {
-            "engine": "none",
-            "ok": False,
-            "primary_engine": primary_engine,
-            "failover_attempted": used_failover,
-            "failover_engine": failover_engine
-        }
-        return f"# {file_path.stem}\n\n*Content extraction failed after all retry attempts and failover options.*\n\nFile: {file_path.name}"
+        if not self._last_extraction_info.get("engine"):
+            self._last_extraction_info = {"engine": engine, "ok": False}
+        return f"# {file_path.stem}\n\n*Content extraction failed after all retry attempts.*\n\nFile: {file_path.name}"
 
     async def _evaluate_with_llm(
         self,

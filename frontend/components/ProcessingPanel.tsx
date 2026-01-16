@@ -110,11 +110,9 @@ export function ProcessingPanel({
   const resolveExtractorBadge = (raw?: string) => {
     if (!raw) return null;
 
-    // Preserve the chain for the label (e.g., "docling→extraction-service (fallback)")
     const chain = raw.replace(/->/g, "→").trim();
     const finalSegment = chain.split("→").pop()?.trim() || chain;
     const normalized = finalSegment.toLowerCase();
-    const isFallback = /fallback/i.test(chain);
 
     const isDocling = normalized.includes('docling');
     const isDefault = normalized.includes('extraction') || normalized.includes('default');
@@ -122,7 +120,7 @@ export function ProcessingPanel({
     if (!isDocling && !isDefault) return null;
 
     return {
-      label: isDocling ? (isFallback ? 'Docling → fallback' : 'Docling') : (isFallback ? 'Extraction → fallback' : 'Extraction'),
+      label: isDocling ? 'Docling' : 'Extraction',
       className: isDocling
         ? 'bg-indigo-900 text-indigo-200 border border-indigo-700'
         : 'bg-gray-800 text-gray-200 border border-gray-600',
@@ -475,18 +473,11 @@ export function ProcessingPanel({
             const msg = typeof backendLogs[i].message === 'string' ? backendLogs[i].message : '';
 
             // Check for initial extractor selection from tasks.py job logs
-            // These are logged at the start: "Extractor: Auto mode (Docling → extraction-service fallback)"
             if (msg.startsWith('Extractor:')) {
               const extractorText = msg.substring('Extractor:'.length).trim();
 
               // Simplify the message for display
-              if (extractorText.includes('Auto mode')) {
-                if (extractorText.includes('Docling')) {
-                  extractorInfo = 'Docling';
-                } else {
-                  extractorInfo = 'Extraction';
-                }
-              } else if (extractorText.includes('Docling')) {
+              if (extractorText.includes('Docling')) {
                 extractorInfo = 'Docling';
               } else if (extractorText.includes('extraction-service')) {
                 extractorInfo = 'Extraction';
@@ -502,12 +493,7 @@ export function ProcessingPanel({
 
             // Check for extractor completion messages
             if (msg.includes('Extractor used:')) {
-              // e.g., "Extractor used: extraction-service (fallback) - http://..."
-              if (msg.includes('extraction-service (fallback)')) {
-                extractorInfo = 'Extraction (fallback)';
-              } else if (msg.includes('docling (fallback)')) {
-                extractorInfo = 'Docling (fallback)';
-              } else if (msg.includes('extraction-service')) {
+              if (msg.includes('extraction-service')) {
                 extractorInfo = 'Extraction';
               } else if (msg.includes('docling')) {
                 extractorInfo = 'Docling';

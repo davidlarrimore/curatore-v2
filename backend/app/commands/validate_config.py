@@ -324,7 +324,7 @@ def main():
             print(f"  LLM: {config.llm.provider} ({config.llm.model})")
         if config.extraction:
             enabled_services = [s.name for s in config.extraction.services if s.enabled]
-            print(f"  Extraction: {config.extraction.priority} ({', '.join(enabled_services)})")
+            print(f"  Extraction: {', '.join(enabled_services)}")
         if config.sharepoint and config.sharepoint.enabled:
             print(f"  SharePoint: Enabled")
         if config.email:

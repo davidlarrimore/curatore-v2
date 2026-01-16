@@ -163,9 +163,9 @@ python scripts/sharepoint/sharepoint_process.py
 The backend follows a service-oriented architecture with clear separation of concerns:
 
 - **`document_service.py`**: Core document processing pipeline
-  - Multi-format conversion with intelligent fallback strategies
+  - Multi-format conversion using selected extraction engines
   - OCR integration for image-based content extraction
-  - Delegates to extraction service or Docling based on `EXTRACTION_PRIORITY` setting
+  - Delegates to extraction service or Docling based on per-job selection
   - Quality assessment and scoring algorithms
   - File management with UUID-based organization
 
@@ -194,7 +194,6 @@ The backend follows a service-oriented architecture with clear separation of con
 
 - **`extraction_client.py`**: HTTP client for extraction service
   - Handles communication with extraction-service or Docling
-  - Automatic fallback on failures
 
 - **`sharepoint_service.py`**: Microsoft SharePoint integration
   - Connects to SharePoint via Microsoft Graph API
@@ -285,11 +284,10 @@ Documents are processed asynchronously to avoid blocking the API:
 
 ### Extraction Engines
 
-Curatore supports multiple extraction engines via the `EXTRACTION_PRIORITY` environment variable:
+Curatore supports multiple extraction engines selected per job:
 
-- **`default`**: Uses the internal extraction-service microservice (recommended)
+- **`extraction-service`**: Uses the internal extraction-service microservice (recommended)
 - **`docling`**: Uses Docling Serve for rich PDFs and Office documents
-- **`none`**: Disables external extraction (fallback only)
 
 **Extraction Service** (`extraction-service/`):
 - Standalone FastAPI microservice on port 8010
@@ -443,7 +441,7 @@ frontend/
 
 2. **Extraction Service** (`extraction-service/app/services/extraction_service.py`):
    - Low-level conversion using MarkItDown and Tesseract
-   - Maintains fallback chains for different file types
+   - Handles supported file types and OCR
 
 3. **Worker Task** (`backend/app/tasks.py`):
    - Celery task wrapper that orchestrates the pipeline
@@ -520,7 +518,6 @@ Key environment variables (see `.env.example` for full list):
 - `OPENAI_BASE_URL`: API endpoint (supports Ollama, OpenWebUI, LM Studio)
 
 **Extraction**:
-- `EXTRACTION_PRIORITY`: `default` | `docling` | `none`
 - `EXTRACTION_SERVICE_URL`: Default extraction service URL
 - `DOCLING_SERVICE_URL`: Docling service URL (when using Docling)
 

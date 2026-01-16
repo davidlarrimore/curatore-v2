@@ -45,9 +45,7 @@ services:
       - EXTRACTION_SERVICE_URL=http://extraction:8010
       - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-180}
       - EXTRACTION_SERVICE_VERIFY_SSL=true
-      # Content extractor switch: default | docling | none
-      - EXTRACTION_PRIORITY=${EXTRACTION_PRIORITY:-default}
-      # Docling configuration (when EXTRACTION_PRIORITY=docling)
+      # Docling configuration
       - DOCLING_SERVICE_URL=http://docling:5001
       # Docling extract path is fixed per API (/v1/extract)
       - DOCLING_TIMEOUT=${DOCLING_TIMEOUT:-300}
@@ -96,8 +94,7 @@ services:
       - EXTRACTION_SERVICE_URL=http://extraction:8010
       - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-180}
       - EXTRACTION_SERVICE_VERIFY_SSL=true
-      # Content extractor switch and Docling (match backend)
-      - EXTRACTION_PRIORITY=${EXTRACTION_PRIORITY:-default}
+      # Docling (match backend)
       - DOCLING_SERVICE_URL=http://docling:5001
       # Docling extract path is fixed per API (/v1/extract)
       - DOCLING_TIMEOUT=${DOCLING_TIMEOUT:-300}

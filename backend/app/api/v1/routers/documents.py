@@ -24,7 +24,7 @@ from ..models import (
 )
 from ....models import FileListResponse
 from ....database.models import User
-from ....dependencies import get_current_user_optional
+from ....dependencies import get_current_user
 from ....services.document_service import document_service
 from ....models import BatchProcessingResult
 from ....services.job_service import (
@@ -39,7 +39,7 @@ from ....tasks import process_document_task
 from ....services.storage_service import storage_service
 from ....services.zip_service import zip_service
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
 @router.get("/documents/uploaded", tags=["Documents"], response_model=FileListResponse)
@@ -141,7 +141,7 @@ async def process_document(
     options: Optional[V1ProcessingOptions] = None,
     request: Request = None,
     sync: bool = Query(False, description="Run synchronously (for tests only)"),
-    user: Optional[User] = Depends(get_current_user_optional),
+    user: User = Depends(get_current_user),
 ):
     """
     Enqueue processing for a single document (Celery) or run sync when requested.
@@ -178,22 +178,13 @@ async def process_document(
     # Synchronous path (optional)
     if sync and os.getenv("ALLOW_SYNC_PROCESS", "false").lower() in {"1", "true", "yes"}:
         domain_options = options.to_domain() if options else ProcessingOptions()
-        organization_id = user.organization_id if user else None
-
-        if organization_id:
-            async with database_service.get_session() as session:
-                result = await document_service.process_document(
-                    document_id,
-                    file_path,
-                    domain_options,
-                    organization_id=organization_id,
-                    session=session
-                )
-        else:
+        async with database_service.get_session() as session:
             result = await document_service.process_document(
                 document_id,
                 file_path,
-                domain_options
+                domain_options,
+                organization_id=user.organization_id,
+                session=session
             )
 
         storage_service.save_processing_result(result)
@@ -201,7 +192,7 @@ async def process_document(
 
     # NEW: If authentication is enabled and user exists, create database-backed job
     # Otherwise fall back to legacy Redis-based tracking
-    if settings.enable_auth and user:
+    if settings.enable_auth:
         from ....services.job_service import create_batch_job, enqueue_job, check_concurrency_limit
 
         # Check concurrency limit

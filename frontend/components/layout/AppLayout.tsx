@@ -29,6 +29,8 @@ import { LeftSidebar } from './LeftSidebar'
 import { StatusBar } from './StatusBar'
 import JobStatusBar from '@/components/jobs/JobStatusBar'
 import { systemApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth-context'
+import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import toast, { Toaster } from 'react-hot-toast'
 
 interface SystemStatus {
@@ -46,6 +48,7 @@ interface AppLayoutProps {
 
 export function AppLayout({ children }: AppLayoutProps) {
   const pathname = usePathname()
+  const { isAuthenticated } = useAuth()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
@@ -69,12 +72,14 @@ export function AppLayout({ children }: AppLayoutProps) {
 
   // Load system status on mount and set up refresh interval
   useEffect(() => {
+    if (!isAuthenticated) return
+
     loadSystemStatus()
-    
+
     // Refresh system status every 30 seconds
     const interval = setInterval(loadSystemStatus, 30000)
     return () => clearInterval(interval)
-  }, [])
+  }, [isAuthenticated])
 
   const loadSystemStatus = async () => {
     try {
@@ -233,81 +238,83 @@ export function AppLayout({ children }: AppLayoutProps) {
    * and responsive behavior.
    */
   return (
-    <div className="h-full flex flex-col" style={{
-      '--sidebar-width': sidebarCollapsed ? '4rem' : '16rem'
-    } as React.CSSProperties}>
-      {/* Toast notifications with custom styling */}
-      <Toaster
-        position="top-right"
-        toastOptions={{
-          duration: 4000,
-          className: 'text-sm',
-          style: {
-            background: '#fff',
-            border: '1px solid #e5e7eb',
-            borderRadius: '0.5rem',
-            boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
-            maxWidth: '400px'
-          },
-          success: {
-            iconTheme: {
-              primary: '#10b981',
-              secondary: '#fff',
+    <ProtectedRoute>
+      <div className="h-full flex flex-col" style={{
+        '--sidebar-width': sidebarCollapsed ? '4rem' : '16rem'
+      } as React.CSSProperties}>
+        {/* Toast notifications with custom styling */}
+        <Toaster
+          position="top-right"
+          toastOptions={{
+            duration: 4000,
+            className: 'text-sm',
+            style: {
+              background: '#fff',
+              border: '1px solid #e5e7eb',
+              borderRadius: '0.5rem',
+              boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1), 0 4px 6px -4px rgb(0 0 0 / 0.1)',
+              maxWidth: '400px'
             },
-          },
-          error: {
-            iconTheme: {
-              primary: '#ef4444',
-              secondary: '#fff',
+            success: {
+              iconTheme: {
+                primary: '#10b981',
+                secondary: '#fff',
+              },
             },
-          },
-          loading: {
-            iconTheme: {
-              primary: '#3b82f6',
-              secondary: '#fff',
+            error: {
+              iconTheme: {
+                primary: '#ef4444',
+                secondary: '#fff',
+              },
             },
-          },
-        }}
-      />
-
-      {/* Top Navigation - Pass sidebar state */}
-      <TopNavigation
-        onMenuClick={() => setSidebarOpen(true)}
-        systemStatus={systemStatus}
-        onStatusRefresh={loadSystemStatus}
-        sidebarCollapsed={sidebarCollapsed} // Pass sidebar state
-      />
-
-      <div className="flex-1 flex overflow-hidden">
-        {/* Left Sidebar */}
-        <LeftSidebar
-          open={sidebarOpen}
-          collapsed={sidebarCollapsed}
-          onOpenChange={setSidebarOpen}
-          onCollapsedChange={handleSidebarCollapsedChange}
-          systemStatus={systemStatus}
-          onStatusRefresh={loadSystemStatus}
+            loading: {
+              iconTheme: {
+                primary: '#3b82f6',
+                secondary: '#fff',
+              },
+            },
+          }}
         />
 
-        {/* Main Content Area - Adjust margin based on sidebar state */}
-        <main className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ${
-          sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'
-        }`}>
-          <div className="flex-1 overflow-auto">
-            {children}
-          </div>
-        </main>
+        {/* Top Navigation - Pass sidebar state */}
+        <TopNavigation
+          onMenuClick={() => setSidebarOpen(true)}
+          systemStatus={systemStatus}
+          onStatusRefresh={loadSystemStatus}
+          sidebarCollapsed={sidebarCollapsed} // Pass sidebar state
+        />
+
+        <div className="flex-1 flex overflow-hidden">
+          {/* Left Sidebar */}
+          <LeftSidebar
+            open={sidebarOpen}
+            collapsed={sidebarCollapsed}
+            onOpenChange={setSidebarOpen}
+            onCollapsedChange={handleSidebarCollapsedChange}
+            systemStatus={systemStatus}
+            onStatusRefresh={loadSystemStatus}
+          />
+
+          {/* Main Content Area - Adjust margin based on sidebar state */}
+          <main className={`flex-1 flex flex-col overflow-hidden transition-all duration-300 ${
+            sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'
+          }`}>
+            <div className="flex-1 overflow-auto">
+              {children}
+            </div>
+          </main>
+        </div>
+
+        {/* Status Bar - Higher z-index to stay above processing panel */}
+        <StatusBar
+          systemStatus={systemStatus}
+          sidebarCollapsed={sidebarCollapsed}
+        />
+
+        {/* Job Status Bar - Floating widget for active jobs */}
+        <JobStatusBar />
       </div>
-
-      {/* Status Bar - Higher z-index to stay above processing panel */}
-      <StatusBar
-        systemStatus={systemStatus}
-        sidebarCollapsed={sidebarCollapsed}
-      />
-
-      {/* Job Status Bar - Floating widget for active jobs */}
-      <JobStatusBar />
-    </div>
+    </ProtectedRoute>
   )
 }
 

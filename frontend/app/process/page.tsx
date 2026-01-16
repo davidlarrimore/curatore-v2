@@ -77,7 +77,8 @@ export default function ProcessingPage() {
         chunk_overlap: 200,
         max_retries: 3
       },
-      auto_optimize: true
+      auto_optimize: true,
+      extraction_engine: 'extraction-service'
     },
     resetCounter: 0
   })
