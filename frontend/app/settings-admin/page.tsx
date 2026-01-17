@@ -7,6 +7,17 @@ import { Button } from '@/components/ui/Button'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import { JobStatsWidget } from '@/components/admin/JobStatsWidget'
 import InfrastructureHealthPanel from '@/components/admin/InfrastructureHealthPanel'
+import {
+  Settings,
+  Building2,
+  User,
+  Briefcase,
+  Server,
+  Info,
+  Loader2,
+  ChevronDown,
+  ChevronUp
+} from 'lucide-react'
 
 export default function SettingsAdminPage() {
   return (
@@ -147,7 +158,7 @@ function SettingsAdminContent() {
             type="checkbox"
             checked={value}
             onChange={(e) => onChange(key, e.target.checked)}
-            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+            className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 bg-white dark:bg-gray-800"
           />
           <span className="text-sm text-gray-700 dark:text-gray-300">{key}</span>
         </label>
@@ -164,7 +175,7 @@ function SettingsAdminContent() {
           type={isNumber ? 'number' : 'text'}
           value={value}
           onChange={(e) => onChange(key, isNumber ? Number(e.target.value) : e.target.value)}
-          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+          className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
         />
       </div>
     )
@@ -172,75 +183,94 @@ function SettingsAdminContent() {
 
   if (isLoading) {
     return (
-      <div className="flex items-center justify-center min-h-screen">
-        <p className="text-gray-600 dark:text-gray-400">Loading settings...</p>
+      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
+        <div className="text-center">
+          <Loader2 className="h-12 w-12 text-indigo-600 dark:text-indigo-400 animate-spin mx-auto" />
+          <p className="mt-4 text-gray-600 dark:text-gray-400">Loading settings...</p>
+        </div>
       </div>
     )
   }
 
   return (
-    <div className="container mx-auto px-4 py-8 max-w-5xl">
-      <div className="mb-8">
-        <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Settings Management</h1>
-        <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-          Configure organization-wide and user-specific settings
-        </p>
-      </div>
-
-      {error && (
-        <div className="mb-6 rounded-md bg-red-50 dark:bg-red-900/20 p-4">
-          <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+    <div className="h-full flex flex-col bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
+      {/* Header */}
+      <div className="bg-white dark:bg-gray-900 border-b border-gray-200 dark:border-gray-800">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          <div className="flex items-center space-x-4">
+            <div className="p-2.5 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-xl shadow-lg shadow-indigo-500/25">
+              <Settings className="h-6 w-6 text-white" />
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Settings Management</h1>
+              <p className="mt-0.5 text-sm text-gray-600 dark:text-gray-400">
+                Configure organization-wide and user-specific settings
+              </p>
+            </div>
+          </div>
         </div>
-      )}
-
-      {/* Tabs */}
-      <div className="mb-6 border-b border-gray-200 dark:border-gray-700">
-        <nav className="flex space-x-8">
-          <button
-            onClick={() => setActiveTab('organization')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
-              activeTab === 'organization'
-                ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-            }`}
-          >
-            Organization Settings
-          </button>
-          <button
-            onClick={() => setActiveTab('user')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
-              activeTab === 'user'
-                ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-            }`}
-          >
-            User Settings
-          </button>
-          <button
-            onClick={() => setActiveTab('jobs')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
-              activeTab === 'jobs'
-                ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-            }`}
-          >
-            Job Management
-          </button>
-          <button
-            onClick={() => setActiveTab('infrastructure')}
-            className={`py-4 px-1 border-b-2 font-medium text-sm ${
-              activeTab === 'infrastructure'
-                ? 'border-blue-500 text-blue-600 dark:text-blue-400'
-                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-            }`}
-          >
-            Infrastructure
-          </button>
-        </nav>
       </div>
 
-      {/* Settings Content */}
-      <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 p-6">
+      <div className="flex-1 overflow-auto">
+        <div className="max-w-5xl mx-auto px-4 sm:px-6 lg:px-8 py-6">
+          {error && (
+            <div className="mb-6 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 p-4">
+              <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
+            </div>
+          )}
+
+          {/* Tabs */}
+          <div className="mb-6 border-b border-gray-200 dark:border-gray-700">
+            <nav className="flex space-x-8">
+              <button
+                onClick={() => setActiveTab('organization')}
+                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'organization'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                <Building2 className="w-4 h-4 mr-2" />
+                Organization
+              </button>
+              <button
+                onClick={() => setActiveTab('user')}
+                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'user'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                <User className="w-4 h-4 mr-2" />
+                User Settings
+              </button>
+              <button
+                onClick={() => setActiveTab('jobs')}
+                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'jobs'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                <Briefcase className="w-4 h-4 mr-2" />
+                Job Management
+              </button>
+              <button
+                onClick={() => setActiveTab('infrastructure')}
+                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'infrastructure'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                <Server className="w-4 h-4 mr-2" />
+                Infrastructure
+              </button>
+            </nav>
+          </div>
+
+          {/* Settings Content */}
+          <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-6">
         {activeTab === 'organization' && (
           <div className="space-y-6">
             <div>
@@ -332,7 +362,7 @@ function SettingsAdminContent() {
                   id="job-concurrency"
                   value={jobConcurrencyLimit}
                   onChange={(e) => setJobConcurrencyLimit(Number(e.target.value))}
-                  className="w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  className="w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                 >
                   {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(num => (
                     <option key={num} value={num}>{num}</option>
@@ -352,7 +382,7 @@ function SettingsAdminContent() {
                   id="job-retention"
                   value={jobRetentionDays}
                   onChange={(e) => setJobRetentionDays(Number(e.target.value))}
-                  className="w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  className="w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
                 >
                   <option value={7}>7 days</option>
                   <option value={30}>30 days</option>
@@ -365,18 +395,16 @@ function SettingsAdminContent() {
               </div>
 
               {/* Info Box */}
-              <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4">
+              <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800/50 rounded-lg p-4">
                 <div className="flex">
                   <div className="flex-shrink-0">
-                    <svg className="h-5 w-5 text-blue-400" viewBox="0 0 20 20" fill="currentColor">
-                      <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
-                    </svg>
+                    <Info className="h-5 w-5 text-indigo-500 dark:text-indigo-400" />
                   </div>
                   <div className="ml-3">
-                    <h3 className="text-sm font-medium text-blue-800 dark:text-blue-200">
+                    <h3 className="text-sm font-medium text-indigo-800 dark:text-indigo-200">
                       About Job Management
                     </h3>
-                    <div className="mt-2 text-sm text-blue-700 dark:text-blue-300">
+                    <div className="mt-2 text-sm text-indigo-700 dark:text-indigo-300">
                       <ul className="list-disc list-inside space-y-1">
                         <li>Concurrent job limit prevents resource exhaustion</li>
                         <li>Job retention helps maintain storage efficiency</li>
@@ -400,30 +428,42 @@ function SettingsAdminContent() {
           </div>
         )}
 
-        {activeTab === 'infrastructure' && (
-          <InfrastructureHealthPanel />
-        )}
-      </div>
-
-      {/* Merged Settings Preview */}
-      <div className="mt-6">
-        <button
-          onClick={() => setShowMergedPreview(!showMergedPreview)}
-          className="text-sm text-blue-600 dark:text-blue-400 hover:underline"
-        >
-          {showMergedPreview ? 'Hide' : 'Show'} Merged Settings Preview
-        </button>
-
-        {showMergedPreview && (
-          <div className="mt-4 bg-gray-50 dark:bg-gray-900 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
-            <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
-              Effective Settings (Organization + User Overrides)
-            </h3>
-            <pre className="text-xs text-gray-700 dark:text-gray-300 overflow-auto">
-              {JSON.stringify(getMergedSettings(), null, 2)}
-            </pre>
+            {activeTab === 'infrastructure' && (
+              <InfrastructureHealthPanel />
+            )}
           </div>
-        )}
+
+          {/* Merged Settings Preview */}
+          <div className="mt-6">
+            <button
+              onClick={() => setShowMergedPreview(!showMergedPreview)}
+              className="inline-flex items-center text-sm text-indigo-600 dark:text-indigo-400 hover:underline"
+            >
+              {showMergedPreview ? (
+                <>
+                  <ChevronUp className="w-4 h-4 mr-1" />
+                  Hide Merged Settings Preview
+                </>
+              ) : (
+                <>
+                  <ChevronDown className="w-4 h-4 mr-1" />
+                  Show Merged Settings Preview
+                </>
+              )}
+            </button>
+
+            {showMergedPreview && (
+              <div className="mt-4 bg-gray-50 dark:bg-gray-800/50 rounded-lg p-4 border border-gray-200 dark:border-gray-700">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-2">
+                  Effective Settings (Organization + User Overrides)
+                </h3>
+                <pre className="text-xs text-gray-700 dark:text-gray-300 overflow-auto">
+                  {JSON.stringify(getMergedSettings(), null, 2)}
+                </pre>
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   )

@@ -10,6 +10,7 @@ import { X, ArrowLeft, ArrowRight, CheckCircle } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { FileSelector } from './FileSelector'
 import { OptionsEditor } from './OptionsEditor'
+import { getDefaultJobName } from '@/lib/job-naming'
 
 interface CreateJobPanelProps {
   isOpen: boolean
@@ -70,6 +71,9 @@ export function CreateJobPanel({ isOpen, onClose, onJobCreated }: CreateJobPanel
         toast.error('Please select at least one document')
         return
       }
+      if (!jobName.trim()) {
+        setJobName(getDefaultJobName(selectedFiles))
+      }
       setCurrentStep('configure')
     } else if (currentStep === 'configure') {
       setCurrentStep('review')
@@ -102,7 +106,7 @@ export function CreateJobPanel({ isOpen, onClose, onJobCreated }: CreateJobPanel
       const job = await jobsApi.createJob(accessToken, {
         document_ids: documentIds,
         options: processingOptions,
-        name: jobName || `Process ${selectedFiles.length} documents`,
+        name: jobName.trim() || getDefaultJobName(selectedFiles),
         description: jobDescription || undefined,
         start_immediately: true
       })
@@ -136,6 +140,8 @@ export function CreateJobPanel({ isOpen, onClose, onJobCreated }: CreateJobPanel
         return ''
     }
   }
+
+  const defaultJobName = getDefaultJobName(selectedFiles)
 
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto">
@@ -228,7 +234,7 @@ export function CreateJobPanel({ isOpen, onClose, onJobCreated }: CreateJobPanel
                     type="text"
                     value={jobName}
                     onChange={(e) => setJobName(e.target.value)}
-                    placeholder={`Process ${selectedFiles.length} documents`}
+                    placeholder={defaultJobName}
                     className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
                   />
                 </div>
@@ -274,7 +280,7 @@ export function CreateJobPanel({ isOpen, onClose, onJobCreated }: CreateJobPanel
                       <div className="flex justify-between">
                         <span className="text-sm text-gray-600">Name:</span>
                         <span className="text-sm font-medium text-gray-900">
-                          {jobName || `Process ${selectedFiles.length} documents`}
+                          {jobName.trim() || defaultJobName}
                         </span>
                       </div>
                       {jobDescription && (

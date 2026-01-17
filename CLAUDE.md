@@ -430,6 +430,366 @@ frontend/
 - Quality score monitoring and thresholds
 - Batch processing and bulk downloads
 
+### Frontend Design System
+
+The frontend follows a modern enterprise design system. Use these patterns when updating or creating new pages to maintain visual consistency.
+
+#### Reference Implementation
+
+The **Connections page** (`frontend/app/connections/page.tsx`) serves as the reference implementation for the design system. When updating other pages, use this as the template.
+
+**Key files demonstrating the design system:**
+- `frontend/app/connections/page.tsx` - Page layout, headers, empty states, section organization
+- `frontend/components/connections/ConnectionCard.tsx` - Card components with status indicators
+- `frontend/components/connections/ConnectionForm.tsx` - Multi-step forms, input styling
+
+#### Color Palette
+
+**Primary Colors (Indigo/Purple theme):**
+```
+Primary gradient:     from-indigo-500 to-purple-600
+Primary solid:        indigo-600 (buttons, active states)
+Primary light:        indigo-50 (backgrounds), indigo-100 (hover)
+Primary text:         indigo-600 (light mode), indigo-400 (dark mode)
+```
+
+**Semantic Colors:**
+```
+Success/Healthy:      emerald-500, emerald-50 (bg), emerald-600/400 (text)
+Error/Unhealthy:      red-500, red-50 (bg), red-600/400 (text)
+Warning/Managed:      amber-500, amber-50 (bg), amber-700/300 (text)
+Info/Checking:        blue-500, blue-50 (bg), blue-600/400 (text)
+Neutral:              gray-400/500, gray-50/800 (bg)
+```
+
+**Type-Specific Gradients:**
+```
+LLM:                  from-violet-500 to-purple-600
+SharePoint:           from-blue-500 to-cyan-500
+Extraction:           from-emerald-500 to-teal-500
+```
+
+#### Typography
+
+```
+Page title:           text-2xl sm:text-3xl font-bold
+Section header:       text-lg font-semibold
+Card title:           text-base font-semibold
+Body text:            text-sm
+Helper/meta text:     text-xs
+Monospace values:     font-mono text-xs
+```
+
+#### Layout Patterns
+
+**Page Container:**
+```tsx
+<div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
+  <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    {/* Page content */}
+  </div>
+</div>
+```
+
+**Page Header with Icon:**
+```tsx
+<div className="flex items-center gap-4">
+  <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25">
+    <Icon className="w-6 h-6" />
+  </div>
+  <div>
+    <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
+      Page Title
+    </h1>
+    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+      Page description
+    </p>
+  </div>
+</div>
+```
+
+**Section Header with Count Badge:**
+```tsx
+<div className="flex items-center gap-4 mb-5">
+  <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${gradient} flex items-center justify-center text-white shadow-lg`}>
+    <Icon className="w-5 h-5" />
+  </div>
+  <div className="flex-1">
+    <div className="flex items-center gap-3">
+      <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+        Section Title
+      </h2>
+      <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400">
+        {count}
+      </span>
+    </div>
+    <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+      Section description
+    </p>
+  </div>
+</div>
+```
+
+**Stats Bar (Pills):**
+```tsx
+<div className="flex flex-wrap items-center gap-4 text-sm">
+  <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
+    <span className="font-medium">{count}</span>
+    <span>total</span>
+  </div>
+  <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400">
+    <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+    <span className="font-medium">{healthyCount}</span>
+    <span>healthy</span>
+  </div>
+</div>
+```
+
+#### Card Components
+
+**Standard Card:**
+```tsx
+<div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 hover:shadow-lg hover:shadow-gray-200/50 dark:hover:shadow-gray-900/50 transition-all duration-200 overflow-hidden">
+  {/* Status bar at top */}
+  <div className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${statusGradient}`} />
+
+  <div className="p-5">
+    {/* Card content */}
+  </div>
+</div>
+```
+
+**Status Badge:**
+```tsx
+<div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${bgColor} ${textColor}`}>
+  <StatusIcon className="w-4 h-4" />
+  <span>{statusLabel}</span>
+</div>
+```
+
+**Config/Value Display:**
+```tsx
+<div className="flex items-center justify-between text-sm">
+  <span className="text-gray-500 dark:text-gray-400">Label</span>
+  <span className="font-mono text-xs text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 px-2 py-0.5 rounded truncate max-w-[180px]">
+    {value}
+  </span>
+</div>
+```
+
+#### Empty States
+
+```tsx
+<div className="relative overflow-hidden rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50 px-6 py-16 text-center">
+  {/* Background decoration */}
+  <div className="absolute inset-0 pointer-events-none">
+    <div className="absolute -top-24 -right-24 w-64 h-64 rounded-full bg-gradient-to-br from-indigo-500/5 to-purple-500/5 blur-3xl"></div>
+    <div className="absolute -bottom-24 -left-24 w-64 h-64 rounded-full bg-gradient-to-br from-blue-500/5 to-cyan-500/5 blur-3xl"></div>
+  </div>
+
+  <div className="relative">
+    <div className="mx-auto w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-xl shadow-indigo-500/25 mb-6">
+      <Icon className="w-10 h-10 text-white" />
+    </div>
+    <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+      No items found
+    </h3>
+    <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto mb-8">
+      Description of what to do next
+    </p>
+    <Button onClick={handleCreate} size="lg" className="gap-2 shadow-lg shadow-blue-500/25">
+      <Plus className="w-5 h-5" />
+      Create first item
+    </Button>
+  </div>
+</div>
+```
+
+#### Form Components
+
+**Form Container (Modal/Panel):**
+```tsx
+<div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl overflow-hidden">
+  {/* Gradient header */}
+  <div className="relative bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-600 px-6 py-5">
+    <h2 className="text-xl font-bold text-white">Form Title</h2>
+    <p className="text-indigo-100 text-sm mt-0.5">Form description</p>
+  </div>
+
+  <div className="p-6">
+    {/* Form content */}
+  </div>
+</div>
+```
+
+**Input Field:**
+```tsx
+<div className="space-y-1.5">
+  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+    Field Label
+  </label>
+  <input
+    type="text"
+    className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
+  />
+</div>
+```
+
+**Toggle Switch:**
+```tsx
+<label className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+  <div>
+    <p className="text-sm font-medium text-gray-900 dark:text-white">Toggle Label</p>
+    <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">Description</p>
+  </div>
+  <div className="relative">
+    <input type="checkbox" className="sr-only peer" />
+    <div className="w-11 h-6 bg-gray-200 peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+  </div>
+</label>
+```
+
+#### Step Indicator (Multi-step Forms)
+
+```tsx
+<div className="flex items-center justify-center mb-8">
+  {steps.map((step, index) => (
+    <div key={step.id} className="flex items-center">
+      <div className="flex flex-col items-center">
+        <div className={`w-9 h-9 rounded-full flex items-center justify-center text-sm font-medium transition-all ${
+          index < currentStepIndex
+            ? 'bg-indigo-600 text-white'
+            : index === currentStepIndex
+            ? 'bg-indigo-600 text-white ring-4 ring-indigo-100 dark:ring-indigo-900/50'
+            : 'bg-gray-100 dark:bg-gray-800 text-gray-400'
+        }`}>
+          {index < currentStepIndex ? <Check className="w-4 h-4" /> : index + 1}
+        </div>
+        <span className={`mt-2 text-xs font-medium ${
+          index <= currentStepIndex ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-400'
+        }`}>
+          {step.label}
+        </span>
+      </div>
+      {index < steps.length - 1 && (
+        <div className={`w-12 sm:w-16 h-0.5 mx-2 ${
+          index < currentStepIndex ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'
+        }`} />
+      )}
+    </div>
+  ))}
+</div>
+```
+
+#### Dropdown Menu
+
+```tsx
+<div className="relative" ref={menuRef}>
+  <button className="p-2 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all">
+    <MoreHorizontal className="w-4 h-4" />
+  </button>
+
+  {showMenu && (
+    <div className="absolute right-0 top-full mt-1 w-40 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 py-1 z-10">
+      <button className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors">
+        <Pencil className="w-4 h-4" />
+        Edit
+      </button>
+      <hr className="my-1 border-gray-200 dark:border-gray-700" />
+      <button className="w-full flex items-center gap-2 px-3 py-2 text-sm text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors">
+        <Trash2 className="w-4 h-4" />
+        Delete
+      </button>
+    </div>
+  )}
+</div>
+```
+
+#### Icons
+
+Use **Lucide React** icons consistently:
+```tsx
+import {
+  // Navigation/Actions
+  Plus, Pencil, Trash2, MoreHorizontal, RefreshCw, X, ChevronRight,
+  // Status
+  CheckCircle, XCircle, AlertCircle, AlertTriangle, Loader2,
+  // Features
+  Link2, Zap, FolderSync, FileText, Star, ExternalLink, Check
+} from 'lucide-react'
+```
+
+#### Loading States
+
+**Spinner:**
+```tsx
+<div className="w-12 h-12 rounded-full border-4 border-gray-200 dark:border-gray-700 border-t-indigo-500 animate-spin"></div>
+```
+
+**Loading Page:**
+```tsx
+<div className="flex flex-col items-center justify-center py-16">
+  <div className="w-12 h-12 rounded-full border-4 border-gray-200 dark:border-gray-700 border-t-indigo-500 animate-spin"></div>
+  <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Loading...</p>
+</div>
+```
+
+#### Error States
+
+```tsx
+<div className="mb-6 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/50 p-4">
+  <div className="flex items-center gap-3">
+    <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+      <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
+    </div>
+    <p className="text-sm font-medium text-red-800 dark:text-red-200">{error}</p>
+  </div>
+</div>
+```
+
+#### Dark Mode
+
+All components must support dark mode using Tailwind's `dark:` prefix. Key patterns:
+- Backgrounds: `bg-white dark:bg-gray-800` or `bg-gray-50 dark:bg-gray-900`
+- Borders: `border-gray-200 dark:border-gray-700`
+- Text: `text-gray-900 dark:text-white` (primary), `text-gray-500 dark:text-gray-400` (secondary)
+- Hover states: `hover:bg-gray-100 dark:hover:bg-gray-700`
+
+#### Responsive Design
+
+- Use mobile-first approach with `sm:`, `md:`, `lg:`, `xl:` breakpoints
+- Hide/show elements: `hidden sm:inline` or `sm:hidden`
+- Responsive grids: `grid-cols-1 md:grid-cols-2 xl:grid-cols-3`
+- Responsive spacing: `px-4 sm:px-6 lg:px-8`
+
+#### Migration Checklist
+
+When updating a page to match the design system:
+
+1. [ ] Update page container with gradient background
+2. [ ] Add page header with gradient icon
+3. [ ] Add stats bar if applicable
+4. [ ] Update section headers with icons and count badges
+5. [ ] Redesign cards with status indicator bars
+6. [ ] Add dropdown menus for card actions
+7. [ ] Update empty states with illustration
+8. [ ] Update forms with gradient headers
+9. [ ] Update input field styling
+10. [ ] Add proper loading and error states
+11. [ ] Verify dark mode support
+12. [ ] Test responsive behavior
+
+**Pages to Update:**
+- [ ] `/` (Dashboard/Home)
+- [ ] `/process` (Document Processing)
+- [ ] `/jobs` (Job List)
+- [ ] `/jobs/[id]` (Job Details)
+- [ ] `/settings` (User Settings)
+- [ ] `/settings-admin` (Admin Settings)
+- [ ] `/users` (User Management)
+- [ ] `/storage` (Storage Management)
+- [x] `/connections` (Reference implementation)
+
 ## Development Patterns
 
 ### Making Changes to the Processing Pipeline

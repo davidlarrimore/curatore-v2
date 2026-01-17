@@ -35,8 +35,7 @@ app/
 - List uploaded files: `GET /api/v1/documents/uploaded`
 - List batch files: `GET /api/v1/documents/batch`
 - Upload file: `POST /api/v1/documents/upload` (multipart)
-- Enqueue processing: `POST /api/v1/documents/{document_id}/process`
-- Batch enqueue: `POST /api/v1/documents/batch/process`
+- Enqueue processing: `POST /api/v1/jobs`
 - Job status: `GET /api/v1/jobs/{job_id}`
 - Latest job by document: `GET /api/v1/jobs/by-document/{document_id}`
 - Result payload: `GET /api/v1/documents/{document_id}/result`

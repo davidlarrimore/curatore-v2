@@ -196,26 +196,38 @@ export const processingApi = {
   ): Promise<{ job_id: string; document_id: string; status: string; enqueued_at?: string }>
   {
     const payload = mapOptionsToV1(options)
-    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/process`), {
-      method: 'POST',
-      headers: { ...jsonHeaders, ...authHeaders() },
-      body: JSON.stringify(payload),
+    const job = await jobsApi.createJob(undefined, {
+      document_ids: [documentId],
+      options: payload,
+      name: `Document ${documentId}`,
+      description: 'Single document processing (job framework)',
+      start_immediately: true,
     })
-    return handleJson(res)
+
+    return {
+      job_id: job.id,
+      document_id: documentId,
+      status: job.status,
+      enqueued_at: job.queued_at || job.created_at,
+    }
   },
 
-  async processBatch(request: { document_ids: string[]; options?: any }): Promise<{ batch_id: string; jobs: any[]; conflicts: any[]; total: number }>
+  async processBatch(request: { document_ids: string[]; options?: any }): Promise<{ job_id: string; document_ids: string[]; status: string }>
   {
-    const payload = {
+    const payload = request.options ? mapOptionsToV1(request.options) : undefined
+    const job = await jobsApi.createJob(undefined, {
       document_ids: request.document_ids,
-      options: request.options ? mapOptionsToV1(request.options) : undefined,
-    }
-    const res = await fetch(apiUrl('/documents/batch/process'), {
-      method: 'POST',
-      headers: { ...jsonHeaders, ...authHeaders() },
-      body: JSON.stringify(payload),
+      options: payload,
+      name: `Batch job (${request.document_ids.length} documents)`,
+      description: 'Batch processing (job framework)',
+      start_immediately: true,
     })
-    return handleJson(res)
+
+    return {
+      job_id: job.id,
+      document_ids: request.document_ids,
+      status: job.status,
+    }
   },
 
   async getProcessingResult(documentId: string): Promise<ProcessingResult> {
@@ -228,15 +240,9 @@ export const processingApi = {
     documentId: string,
     options: { auto_optimize?: boolean; quality_thresholds?: any },
   ): Promise<ProcessingResult> {
-    const v1Options = mapOptionsToV1(options)
-
-    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/process`), {
-      method: 'POST',
-      headers: { ...jsonHeaders, ...authHeaders() },
-      body: JSON.stringify(v1Options),
-    })
-    const raw = await handleJson<any>(res)
-    return mapV1ResultToFrontend(raw)
+    await processingApi.enqueueDocument(documentId, options)
+    const raw = await processingApi.getProcessingResult(documentId)
+    return raw
   },
 
   // Optional helper (not currently used): export results in a simple JSON blob
@@ -476,7 +482,7 @@ export const jobsApi = {
   /**
    * Create a new batch job for processing multiple documents
    */
-  async createJob(token: string, data: {
+  async createJob(token: string | undefined, data: {
     document_ids: string[]
     options?: Record<string, any>
     name?: string
@@ -490,10 +496,11 @@ export const jobsApi = {
     status: string
     total_documents: number
     created_at: string
+    queued_at?: string
   }> {
     const res = await fetch(apiUrl('/jobs'), {
       method: 'POST',
-      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -502,14 +509,14 @@ export const jobsApi = {
   /**
    * Start a pending job
    */
-  async startJob(token: string, jobId: string): Promise<{
+  async startJob(token: string | undefined, jobId: string): Promise<{
     id: string
     status: string
     queued_at?: string
   }> {
     const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}/start`), {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -517,7 +524,7 @@ export const jobsApi = {
   /**
    * Cancel a running job
    */
-  async cancelJob(token: string, jobId: string): Promise<{
+  async cancelJob(token: string | undefined, jobId: string): Promise<{
     job_id: string
     status: string
     tasks_revoked: number
@@ -528,7 +535,7 @@ export const jobsApi = {
   }> {
     const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}/cancel`), {
       method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -536,7 +543,7 @@ export const jobsApi = {
   /**
    * List jobs with pagination and filtering
    */
-  async listJobs(token: string, params?: {
+  async listJobs(token: string | undefined, params?: {
     status?: string
     page?: number
     page_size?: number
@@ -563,7 +570,7 @@ export const jobsApi = {
     if (params?.page_size) url.searchParams.set('page_size', params.page_size.toString())
 
     const res = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       cache: 'no-store',
     })
     return handleJson(res)
@@ -572,7 +579,7 @@ export const jobsApi = {
   /**
    * Get detailed job information
    */
-  async getJob(token: string, jobId: string): Promise<{
+  async getJob(token: string | undefined, jobId: string): Promise<{
     id: string
     name: string
     status: string
@@ -580,6 +587,9 @@ export const jobsApi = {
     completed_documents: number
     failed_documents: number
     created_at: string
+    queued_at?: string
+    started_at?: string
+    completed_at?: string
     documents: Array<{
       id: string
       document_id: string
@@ -587,6 +597,7 @@ export const jobsApi = {
       status: string
       conversion_score?: number
       error_message?: string
+      started_at?: string
     }>
     recent_logs: Array<{
       id: string
@@ -598,7 +609,7 @@ export const jobsApi = {
     results_summary?: Record<string, any>
   }> {
     const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}`), {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       cache: 'no-store',
     })
     return handleJson(res)
@@ -607,7 +618,7 @@ export const jobsApi = {
   /**
    * Get job logs with pagination
    */
-  async getJobLogs(token: string, jobId: string, params?: {
+  async getJobLogs(token: string | undefined, jobId: string, params?: {
     page?: number
     page_size?: number
   }): Promise<Array<{
@@ -622,7 +633,7 @@ export const jobsApi = {
     if (params?.page_size) url.searchParams.set('page_size', params.page_size.toString())
 
     const res = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       cache: 'no-store',
     })
     return handleJson(res)
@@ -631,7 +642,7 @@ export const jobsApi = {
   /**
    * Get job documents with their processing status
    */
-  async getJobDocuments(token: string, jobId: string): Promise<Array<{
+  async getJobDocuments(token: string | undefined, jobId: string): Promise<Array<{
     id: string
     document_id: string
     filename: string
@@ -643,7 +654,7 @@ export const jobsApi = {
     processing_time_seconds?: number
   }>> {
     const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}/documents`), {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       cache: 'no-store',
     })
     return handleJson(res)
@@ -652,10 +663,10 @@ export const jobsApi = {
   /**
    * Delete a job (admin only, terminal states only)
    */
-  async deleteJob(token: string, jobId: string): Promise<void> {
+  async deleteJob(token: string | undefined, jobId: string): Promise<void> {
     const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}`), {
       method: 'DELETE',
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
     })
     if (!res.ok) {
       let body: any = undefined
@@ -668,7 +679,7 @@ export const jobsApi = {
   /**
    * Get user's job statistics
    */
-  async getUserStats(token: string): Promise<{
+  async getUserStats(token: string | undefined): Promise<{
     active_jobs: number
     total_jobs_24h: number
     total_jobs_7d: number
@@ -676,7 +687,7 @@ export const jobsApi = {
     failed_jobs_24h: number
   }> {
     const res = await fetch(apiUrl('/jobs/stats/user'), {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       cache: 'no-store',
     })
     return handleJson(res)
@@ -685,7 +696,7 @@ export const jobsApi = {
   /**
    * Get organization job statistics (admin only)
    */
-  async getOrgStats(token: string): Promise<{
+  async getOrgStats(token: string | undefined): Promise<{
     organization_id: string
     active_jobs: number
     queued_jobs: number
@@ -697,7 +708,7 @@ export const jobsApi = {
     total_documents_processed: number
   }> {
     const res = await fetch(apiUrl('/jobs/stats/organization'), {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       cache: 'no-store',
     })
     return handleJson(res)

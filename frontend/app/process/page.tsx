@@ -12,19 +12,22 @@ import {
 } from '@/types'
 import { systemApi, fileApi, processingApi, jobsApi, utils } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
+import { getDefaultJobName } from '@/lib/job-naming'
 import { UploadSelectStage } from '@/components/stages/UploadSelectStage'
 import { ProcessingPanel } from '@/components/ProcessingPanel'
 import { ReviewStage } from '@/components/stages/ReviewStage'
 import { DownloadStage } from '@/components/stages/DownloadStage'
 import { ProgressBar, ProgressStep, StepStatus } from '@/components/ui/ProgressBar'
-import { 
-  Upload, 
-  Eye, 
-  Download, 
+import {
+  Upload,
+  Eye,
+  Download,
   CheckCircle2,
   Zap,
   FileText,
-  BarChart3
+  BarChart3,
+  AlertTriangle,
+  ArrowRight
 } from 'lucide-react'
 
 type AppStage = 'upload' | 'review' | 'download'
@@ -227,9 +230,10 @@ export default function ProcessingPage() {
       )
 
       if (createJob) {
+        const defaultJobName = getDefaultJobName(state.selectedFiles)
         const jobName = window.prompt(
           'Enter a name for this job:',
-          `Process ${state.selectedFiles.length} documents`
+          defaultJobName
         )
 
         if (jobName === null) {
@@ -247,7 +251,7 @@ export default function ProcessingPage() {
           const job = await jobsApi.createJob(accessToken, {
             document_ids: documentIds,
             options: state.processingOptions,
-            name: jobName || `Process ${state.selectedFiles.length} documents`,
+            name: jobName || defaultJobName,
             description: `Processing ${state.selectedFiles.length} documents from ${state.sourceType}`,
             start_immediately: true
           })
@@ -343,29 +347,33 @@ export default function ProcessingPage() {
   const stats = utils.calculateStats(state.processingResults)
 
   return (
-    <div className="h-full flex flex-col">
-      {/* Deprecation Notice */}
+    <div className="h-full flex flex-col bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
+      {/* Deprecation Notice - Enterprise Style */}
       {isAuthenticated && (
-        <div className="bg-yellow-50 border-b border-yellow-200 px-4 py-3">
-          <div className="max-w-7xl mx-auto flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="flex-shrink-0">
-                <svg className="h-5 w-5 text-yellow-600" viewBox="0 0 20 20" fill="currentColor">
-                  <path fillRule="evenodd" d="M8.257 3.099c.765-1.36 2.722-1.36 3.486 0l5.58 9.92c.75 1.334-.213 2.98-1.742 2.98H4.42c-1.53 0-2.493-1.646-1.743-2.98l5.58-9.92zM11 13a1 1 0 11-2 0 1 1 0 012 0zm-1-8a1 1 0 00-1 1v3a1 1 0 002 0V6a1 1 0 00-1-1z" clipRule="evenodd" />
-                </svg>
+        <div className="bg-gradient-to-r from-amber-50 to-orange-50 dark:from-amber-900/20 dark:to-orange-900/20 border-b border-amber-200 dark:border-amber-800/50">
+          <div className="max-w-7xl mx-auto px-4 py-3">
+            <div className="flex items-center justify-between gap-4">
+              <div className="flex items-center gap-3 min-w-0">
+                <div className="flex-shrink-0 p-2 bg-amber-100 dark:bg-amber-900/30 rounded-lg">
+                  <AlertTriangle className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-sm text-amber-800 dark:text-amber-200">
+                    <span className="font-semibold">Migration Notice:</span>{' '}
+                    <span className="text-amber-700 dark:text-amber-300">
+                      This page will be deprecated. Use the new Jobs page for improved batch processing with real-time tracking.
+                    </span>
+                  </p>
+                </div>
               </div>
-              <div className="flex-1">
-                <p className="text-sm text-yellow-800">
-                  <strong>Notice:</strong> This page will be deprecated soon. We recommend using the new <strong>Jobs</strong> page for batch document processing with better tracking and management.
-                </p>
-              </div>
+              <button
+                onClick={() => router.push('/jobs')}
+                className="flex-shrink-0 inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white text-sm font-medium rounded-lg shadow-lg shadow-amber-500/25 transition-all hover:shadow-xl hover:shadow-amber-500/30"
+              >
+                Try Jobs Page
+                <ArrowRight className="w-4 h-4" />
+              </button>
             </div>
-            <button
-              onClick={() => router.push('/jobs')}
-              className="flex-shrink-0 px-4 py-2 bg-yellow-600 text-white text-sm font-medium rounded-md hover:bg-yellow-700 transition-colors"
-            >
-              Try Jobs Page
-            </button>
           </div>
         </div>
       )}
@@ -382,7 +390,7 @@ export default function ProcessingPage() {
 
       {/* Main Content Area */}
       <div className="flex-1 overflow-auto">
-        <div className="max-w-8xl mx-auto p-4">
+        <div className="max-w-8xl mx-auto p-4 lg:p-6">
           {/* Stage Content */}
           {state.currentStage === 'upload' && !isLoadingConfig && (
             <UploadSelectStage
@@ -397,7 +405,7 @@ export default function ProcessingPage() {
               onProcessingOptionsChange={handleProcessingOptionsChange}
               supportedFormats={config.supportedFormats}
               maxFileSize={config.maxFileSize}
-              processingPanelState={processingPanelState} // NEW: Pass processing panel state
+              processingPanelState={processingPanelState}
             />
           )}
 
@@ -416,7 +424,7 @@ export default function ProcessingPage() {
               }}
               isProcessingComplete={state.processingComplete}
               isProcessing={state.isProcessing}
-              processingPanelState={processingPanelState} // NEW: Pass processing panel state
+              processingPanelState={processingPanelState}
             />
           )}
 
@@ -424,7 +432,7 @@ export default function ProcessingPage() {
             <DownloadStage
               processingResults={state.processingResults}
               onRestart={handleReset}
-              processingPanelState={processingPanelState} // NEW: Pass processing panel state
+              processingPanelState={processingPanelState}
             />
           )}
         </div>
@@ -444,7 +452,7 @@ export default function ProcessingPage() {
           setState(prev => ({ ...prev, isProcessing: false }))
         }}
         resetTrigger={state.resetCounter}
-        onPanelStateChange={handleProcessingPanelStateChange} // NEW: Handle panel state changes
+        onPanelStateChange={handleProcessingPanelStateChange}
       />
     </div>
   )

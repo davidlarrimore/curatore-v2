@@ -268,7 +268,9 @@ file: (binary data)
 - `413 Payload Too Large`: File exceeds maximum size
 
 #### POST `/documents/{document_id}/process`
-Enqueue document for asynchronous processing.
+Enqueue a single document for asynchronous processing.
+
+**Deprecated**: Use `POST /jobs` with `document_ids` instead. This endpoint remains for backward compatibility but will be removed in a future release.
 
 **Request**:
 ```http
@@ -359,34 +361,71 @@ Download markdown file.
 
 ### Jobs
 
+#### POST `/jobs`
+Create a new batch job for one or more documents.
+
+**Request**:
+```json
+{
+  "document_ids": ["doc-123", "doc-456"],
+  "options": {
+    "apply_llm_evaluation": true,
+    "quality_thresholds": {
+      "conversion_threshold": 70,
+      "clarity_threshold": 7
+    }
+  },
+  "name": "Q1 Report Processing",
+  "start_immediately": true
+}
+```
+
+**Response**:
+```json
+{
+  "id": "job-uuid",
+  "name": "Q1 Report Processing",
+  "status": "QUEUED",
+  "total_documents": 2,
+  "created_at": "2026-01-13T12:00:00Z",
+  "queued_at": "2026-01-13T12:00:01Z"
+}
+```
+
 #### GET `/jobs/{job_id}`
 Get job status and details.
 
 **Response**:
 ```json
 {
-  "job_id": "job-uuid",
-  "document_id": "doc-uuid",
-  "status": "SUCCESS",
+  "id": "job-uuid",
+  "name": "Q1 Report Processing",
+  "status": "RUNNING",
+  "total_documents": 2,
+  "completed_documents": 1,
+  "failed_documents": 0,
   "created_at": "2026-01-13T12:00:00Z",
-  "started_at": "2026-01-13T12:00:01Z",
-  "completed_at": "2026-01-13T12:00:04Z",
-  "progress": 100,
-  "logs": [
-    {"timestamp": "2026-01-13T12:00:01Z", "level": "INFO", "message": "Starting conversion"},
-    {"timestamp": "2026-01-13T12:00:03Z", "level": "INFO", "message": "Conversion complete"}
+  "started_at": "2026-01-13T12:00:05Z",
+  "documents": [
+    {"document_id": "doc-123", "filename": "report.pdf", "status": "COMPLETED"},
+    {"document_id": "doc-456", "filename": "summary.pdf", "status": "RUNNING"}
   ],
-  "error": null
+  "recent_logs": [
+    {"timestamp": "2026-01-13T12:00:06Z", "level": "INFO", "message": "Document processing started: doc-123"}
+  ]
 }
 ```
 
 **Job Status Values**:
-- `PENDING`: Queued, waiting for worker
-- `STARTED`: Currently processing
-- `SUCCESS`: Completed successfully
-- `FAILURE`: Processing failed
-- `RETRY`: Retrying after failure
-- `REVOKED`: Cancelled by user
+- `PENDING`: Created, not yet queued
+- `QUEUED`: Tasks enqueued, waiting for workers
+- `RUNNING`: At least one document is processing
+- `COMPLETED`: All documents completed successfully
+- `FAILED`: One or more documents failed
+- `CANCELLED`: Job cancelled
+
+**Document Status Values**:
+- `PENDING`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`
 
 ---
 
@@ -908,17 +947,21 @@ with open("report.pdf", "rb") as f:
 document_id = response.json()["document_id"]
 print(f"Uploaded: {document_id}")
 
-# 2. Start processing
+# 2. Start processing (jobs framework)
 response = requests.post(
-    f"{API_BASE}/documents/{document_id}/process",
+    f"{API_BASE}/jobs",
     headers=headers,
     json={
-        "optimize_for_rag": True,
-        "evaluate_quality": True
+        "document_ids": [document_id],
+        "options": {
+            "optimize_for_rag": True,
+            "evaluate_quality": True
+        },
+        "start_immediately": True
     }
 )
-job_id = response.json()["job_id"]
-print(f"Processing: {job_id}")
+job_id = response.json()["id"]
+print(f"Processing job: {job_id}")
 
 # 3. Poll for completion
 while True:
@@ -929,13 +972,13 @@ while True:
     status = response.json()["status"]
     print(f"Status: {status}")
 
-    if status in ["SUCCESS", "FAILURE"]:
+    if status in ["COMPLETED", "FAILED", "CANCELLED"]:
         break
 
     time.sleep(2)
 
 # 4. Get result
-if status == "SUCCESS":
+if status == "COMPLETED":
     response = requests.get(
         f"{API_BASE}/documents/{document_id}/result",
         headers=headers
@@ -980,13 +1023,20 @@ response = requests.post(
 )
 print(f"Downloaded {response.json()['downloaded_files']} files")
 
-# 3. Process batch
-response = requests.post(
-    f"{API_BASE}/documents/batch/process",
+# 3. Create a processing job for downloaded documents
+batch_files = requests.get(
+    f"{API_BASE}/documents/batch",
     headers=headers
+).json()["files"]
+document_ids = [f["document_id"] for f in batch_files]
+
+response = requests.post(
+    f"{API_BASE}/jobs",
+    headers=headers,
+    json={"document_ids": document_ids, "start_immediately": True}
 )
-batch_id = response.json()["batch_id"]
-print(f"Processing batch: {batch_id}")
+job_id = response.json()["id"]
+print(f"Processing job: {job_id}")
 ```
 
 ### Connection Management

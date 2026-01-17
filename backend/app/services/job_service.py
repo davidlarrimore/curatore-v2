@@ -746,6 +746,117 @@ async def verify_tasks_stopped(task_ids: List[str], timeout: int = 30) -> bool:
     return False
 
 
+async def delete_job(
+    job_id: uuid.UUID,
+    organization_id: uuid.UUID,
+    delete_files: bool = True,
+) -> Dict[str, Any]:
+    """
+    Delete a job and optionally its associated files.
+
+    This method:
+    1. Verifies the job exists and belongs to the organization
+    2. Ensures the job is in a terminal state
+    3. Counts documents and logs for the response
+    4. Deletes processed files from disk (if delete_files=True)
+    5. Deletes the job (cascades to job_documents and job_logs)
+
+    Args:
+        job_id: Job UUID to delete
+        organization_id: Organization UUID (for authorization)
+        delete_files: Whether to delete processed files from disk (default: True)
+
+    Returns:
+        Dict with deletion statistics:
+            {
+                "job_id": str,
+                "job_name": str,
+                "documents_deleted": int,
+                "files_deleted": int,
+                "logs_deleted": int,
+                "deleted_at": str
+            }
+
+    Raises:
+        ValueError: If job not found or not in terminal state
+    """
+    logger.info(f"Deleting job {job_id} for organization {organization_id}")
+
+    deleted_files = 0
+    terminal_states = ["COMPLETED", "FAILED", "CANCELLED"]
+
+    async with database_service.get_session() as session:
+        # Get job with authorization check
+        result = await session.execute(
+            select(Job).where(
+                and_(
+                    Job.id == job_id,
+                    Job.organization_id == organization_id,
+                )
+            )
+        )
+        job = result.scalar_one_or_none()
+
+        if not job:
+            raise ValueError(f"Job {job_id} not found")
+
+        if job.status not in terminal_states:
+            raise ValueError(
+                f"Job cannot be deleted: status is {job.status}. "
+                "Only terminal states (COMPLETED, FAILED, CANCELLED) can be deleted."
+            )
+
+        job_name = job.name or str(job_id)
+
+        # Count documents
+        doc_count_result = await session.execute(
+            select(func.count(JobDocument.id)).where(JobDocument.job_id == job_id)
+        )
+        documents_count = doc_count_result.scalar() or 0
+
+        # Count logs
+        log_count_result = await session.execute(
+            select(func.count(JobLog.id)).where(JobLog.job_id == job_id)
+        )
+        logs_count = log_count_result.scalar() or 0
+
+        # Delete processed files if requested
+        if delete_files:
+            doc_result = await session.execute(
+                select(JobDocument).where(JobDocument.job_id == job_id)
+            )
+            job_documents = doc_result.scalars().all()
+
+            for doc in job_documents:
+                if doc.processed_file_path:
+                    try:
+                        file_path = Path(doc.processed_file_path)
+                        if file_path.exists():
+                            file_path.unlink()
+                            deleted_files += 1
+                            logger.debug(f"Deleted file: {doc.processed_file_path}")
+                    except Exception as e:
+                        logger.error(f"Failed to delete file {doc.processed_file_path}: {e}")
+
+        # Delete job (cascades to job_documents and job_logs)
+        await session.delete(job)
+        await session.commit()
+
+        logger.info(
+            f"Job deleted: {job_name} (id: {job_id}) - "
+            f"{documents_count} documents, {deleted_files} files, {logs_count} logs"
+        )
+
+        return {
+            "job_id": str(job_id),
+            "job_name": job_name,
+            "documents_deleted": documents_count,
+            "files_deleted": deleted_files,
+            "logs_deleted": logs_count,
+            "deleted_at": datetime.utcnow().isoformat(),
+        }
+
+
 async def cleanup_expired_jobs() -> Dict[str, Any]:
     """
     Clean up expired jobs based on retention policy.

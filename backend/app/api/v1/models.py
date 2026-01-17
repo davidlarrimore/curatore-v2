@@ -966,3 +966,27 @@ class OrganizationJobStatsResponse(BaseModel):
                 "success_rate_7d": 0.96
             }
         }
+
+
+class DeleteJobResponse(BaseModel):
+    """Response from job deletion."""
+    job_id: str = Field(..., description="Job UUID")
+    job_name: str = Field(..., description="Name of deleted job")
+    documents_deleted: int = Field(..., description="Number of job documents deleted")
+    files_deleted: int = Field(..., description="Number of processed files deleted from disk")
+    logs_deleted: int = Field(..., description="Number of job log entries deleted")
+    deleted_at: datetime = Field(..., description="Deletion timestamp")
+    message: str = Field(..., description="Deletion summary message")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "job_id": "123e4567-e89b-12d3-a456-426614174000",
+                "job_name": "Q4 Report Processing",
+                "documents_deleted": 5,
+                "files_deleted": 4,
+                "logs_deleted": 12,
+                "deleted_at": "2026-01-16T10:30:00",
+                "message": "Job deleted successfully. 5 documents and 4 processed files removed."
+            }
+        }

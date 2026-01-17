@@ -5,8 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { connectionsApi } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
-import { Badge } from '@/components/ui/Badge'
-import { RefreshCw } from 'lucide-react'
+import { RefreshCw, Plus, Link2, Zap, FolderSync, FileText, ArrowRight } from 'lucide-react'
 import ConnectionForm from '@/components/connections/ConnectionForm'
 import ConnectionCard from '@/components/connections/ConnectionCard'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
@@ -193,90 +192,232 @@ function ConnectionsContent() {
     return acc
   }, {} as Record<string, Connection[]>)
 
-  const typeDisplayNames: Record<string, string> = {
-    llm: 'LLM Providers',
-    sharepoint: 'SharePoint',
-    extraction: 'Extraction Services'
+  const typeConfig: Record<string, { name: string; description: string; icon: React.ReactNode; gradient: string }> = {
+    llm: {
+      name: 'LLM Providers',
+      description: 'AI language models for document processing and optimization',
+      icon: <Zap className="w-5 h-5" />,
+      gradient: 'from-violet-500 to-purple-600'
+    },
+    sharepoint: {
+      name: 'SharePoint',
+      description: 'Microsoft SharePoint document libraries and sites',
+      icon: <FolderSync className="w-5 h-5" />,
+      gradient: 'from-blue-500 to-cyan-500'
+    },
+    extraction: {
+      name: 'Extraction Services',
+      description: 'Document conversion and text extraction engines',
+      icon: <FileText className="w-5 h-5" />,
+      gradient: 'from-emerald-500 to-teal-500'
+    }
   }
 
+  // Calculate health stats
+  const healthStats = connections.reduce(
+    (acc, conn) => {
+      if (conn.health_status === 'healthy') acc.healthy++
+      else if (conn.health_status === 'unhealthy') acc.unhealthy++
+      else acc.unknown++
+      return acc
+    },
+    { healthy: 0, unhealthy: 0, unknown: 0 }
+  )
+
   return (
-    <div className="container mx-auto px-4 py-8 max-w-7xl">
-      <div className="flex justify-between items-center mb-8">
-        <div>
-          <h1 className="text-3xl font-bold text-gray-900 dark:text-white">Connections</h1>
-          <p className="mt-2 text-sm text-gray-600 dark:text-gray-400">
-            Manage your LLM providers, SharePoint, and extraction service connections
-          </p>
-        </div>
-        <div className="flex items-center space-x-3">
-          {connections.length > 0 && (
-            <Button
-              variant="secondary"
-              onClick={handleRefreshAll}
-              disabled={isRefreshingAll || checkingConnections.size > 0}
-              className="flex items-center space-x-2"
-            >
-              <RefreshCw className={`w-4 h-4 ${isRefreshingAll || checkingConnections.size > 0 ? 'animate-spin' : ''}`} />
-              <span>Refresh All</span>
-            </Button>
-          )}
-          <Button onClick={handleCreateConnection}>
-            + New Connection
-          </Button>
-        </div>
-      </div>
-
-      {error && (
-        <div className="mb-6 rounded-md bg-red-50 dark:bg-red-900/20 p-4">
-          <p className="text-sm text-red-800 dark:text-red-200">{error}</p>
-        </div>
-      )}
-
-      {showForm && (
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Header */}
         <div className="mb-8">
-          <ConnectionForm
-            connection={editingConnection}
-            onSuccess={handleFormSuccess}
-            onCancel={handleFormCancel}
-          />
-        </div>
-      )}
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25">
+                <Link2 className="w-6 h-6" />
+              </div>
+              <div>
+                <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
+                  Connections
+                </h1>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                  Manage integrations with external services
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-3">
+              {connections.length > 0 && (
+                <Button
+                  variant="secondary"
+                  onClick={handleRefreshAll}
+                  disabled={isRefreshingAll || checkingConnections.size > 0}
+                  className="gap-2"
+                >
+                  <RefreshCw className={`w-4 h-4 ${isRefreshingAll || checkingConnections.size > 0 ? 'animate-spin' : ''}`} />
+                  <span className="hidden sm:inline">Refresh All</span>
+                </Button>
+              )}
+              <Button onClick={handleCreateConnection} className="gap-2 shadow-lg shadow-blue-500/25">
+                <Plus className="w-4 h-4" />
+                <span>New Connection</span>
+              </Button>
+            </div>
+          </div>
 
-      {isLoading ? (
-        <div className="text-center py-12">
-          <p className="text-gray-600 dark:text-gray-400">Loading connections...</p>
+          {/* Stats Bar */}
+          {connections.length > 0 && !isLoading && (
+            <div className="mt-6 flex flex-wrap items-center gap-4 text-sm">
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
+                <span className="font-medium">{connections.length}</span>
+                <span>total</span>
+              </div>
+              {healthStats.healthy > 0 && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                  <span className="font-medium">{healthStats.healthy}</span>
+                  <span>healthy</span>
+                </div>
+              )}
+              {healthStats.unhealthy > 0 && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400">
+                  <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                  <span className="font-medium">{healthStats.unhealthy}</span>
+                  <span>unhealthy</span>
+                </div>
+              )}
+            </div>
+          )}
         </div>
-      ) : connections.length === 0 ? (
-        <div className="text-center py-12 bg-gray-50 dark:bg-gray-800 rounded-lg border-2 border-dashed border-gray-300 dark:border-gray-600">
-          <p className="text-gray-600 dark:text-gray-400 mb-4">No connections configured yet</p>
-          <Button onClick={handleCreateConnection}>
-            Create your first connection
-          </Button>
-        </div>
-      ) : (
-        <div className="space-y-8">
-          {Object.entries(connectionsByType).map(([type, conns]) => (
-            <div key={type}>
-              <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-4">
-                {typeDisplayNames[type] || type}
-              </h2>
-              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                {conns.map((connection) => (
-                  <ConnectionCard
-                    key={connection.id}
-                    connection={connection}
-                    isChecking={checkingConnections.has(connection.id)}
-                    onEdit={() => handleEditConnection(connection)}
-                    onDelete={() => handleDeleteConnection(connection.id)}
-                    onTest={() => handleTestConnection(connection.id)}
-                    onSetDefault={() => handleSetDefault(connection.id)}
-                  />
+
+        {/* Error State */}
+        {error && (
+          <div className="mb-6 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/50 p-4">
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                <svg className="w-5 h-5 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                </svg>
+              </div>
+              <p className="text-sm font-medium text-red-800 dark:text-red-200">{error}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Form */}
+        {showForm && (
+          <div className="mb-8">
+            <ConnectionForm
+              connection={editingConnection}
+              onSuccess={handleFormSuccess}
+              onCancel={handleFormCancel}
+            />
+          </div>
+        )}
+
+        {/* Content */}
+        {isLoading ? (
+          <div className="flex flex-col items-center justify-center py-16">
+            <div className="w-12 h-12 rounded-full border-4 border-gray-200 dark:border-gray-700 border-t-indigo-500 animate-spin"></div>
+            <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Loading connections...</p>
+          </div>
+        ) : connections.length === 0 ? (
+          /* Empty State */
+          <div className="relative overflow-hidden rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50 px-6 py-16 text-center">
+            {/* Background decoration */}
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute -top-24 -right-24 w-64 h-64 rounded-full bg-gradient-to-br from-indigo-500/5 to-purple-500/5 blur-3xl"></div>
+              <div className="absolute -bottom-24 -left-24 w-64 h-64 rounded-full bg-gradient-to-br from-blue-500/5 to-cyan-500/5 blur-3xl"></div>
+            </div>
+
+            <div className="relative">
+              <div className="mx-auto w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-xl shadow-indigo-500/25 mb-6">
+                <Link2 className="w-10 h-10 text-white" />
+              </div>
+              <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+                No connections configured
+              </h3>
+              <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto mb-8">
+                Connect your LLM providers, SharePoint, and extraction services to start processing documents.
+              </p>
+
+              <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                <Button onClick={handleCreateConnection} size="lg" className="gap-2 shadow-lg shadow-blue-500/25">
+                  <Plus className="w-5 h-5" />
+                  Create your first connection
+                </Button>
+              </div>
+
+              {/* Quick start hints */}
+              <div className="mt-12 grid grid-cols-1 sm:grid-cols-3 gap-4 max-w-2xl mx-auto">
+                {Object.entries(typeConfig).map(([type, config]) => (
+                  <button
+                    key={type}
+                    onClick={handleCreateConnection}
+                    className="group flex flex-col items-center p-4 rounded-xl bg-gray-50 dark:bg-gray-800 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
+                  >
+                    <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${config.gradient} flex items-center justify-center text-white mb-3 group-hover:scale-110 transition-transform`}>
+                      {config.icon}
+                    </div>
+                    <span className="text-sm font-medium text-gray-900 dark:text-white">{config.name}</span>
+                    <ArrowRight className="w-4 h-4 mt-2 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 group-hover:translate-x-1 transition-all" />
+                  </button>
                 ))}
               </div>
             </div>
-          ))}
-        </div>
-      )}
+          </div>
+        ) : (
+          /* Connection List by Type */
+          <div className="space-y-10">
+            {Object.entries(connectionsByType).map(([type, conns]) => {
+              const config = typeConfig[type] || {
+                name: type,
+                description: '',
+                icon: <Link2 className="w-5 h-5" />,
+                gradient: 'from-gray-500 to-gray-600'
+              }
+
+              return (
+                <section key={type}>
+                  {/* Section Header */}
+                  <div className="flex items-center gap-4 mb-5">
+                    <div className={`w-10 h-10 rounded-xl bg-gradient-to-br ${config.gradient} flex items-center justify-center text-white shadow-lg`}>
+                      {config.icon}
+                    </div>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3">
+                        <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                          {config.name}
+                        </h2>
+                        <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400">
+                          {conns.length}
+                        </span>
+                      </div>
+                      {config.description && (
+                        <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                          {config.description}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Connection Cards Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+                    {conns.map((connection) => (
+                      <ConnectionCard
+                        key={connection.id}
+                        connection={connection}
+                        isChecking={checkingConnections.has(connection.id)}
+                        onEdit={() => handleEditConnection(connection)}
+                        onDelete={() => handleDeleteConnection(connection.id)}
+                        onTest={() => handleTestConnection(connection.id)}
+                        onSetDefault={() => handleSetDefault(connection.id)}
+                      />
+                    ))}
+                  </div>
+                </section>
+              )
+            })}
+          </div>
+        )}
+      </div>
     </div>
   )
 }

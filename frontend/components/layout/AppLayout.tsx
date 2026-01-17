@@ -27,7 +27,6 @@ import { usePathname } from 'next/navigation'
 import { TopNavigation } from './TopNavigation'
 import { LeftSidebar } from './LeftSidebar'
 import { StatusBar } from './StatusBar'
-import JobStatusBar from '@/components/jobs/JobStatusBar'
 import { systemApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
@@ -82,12 +81,14 @@ export function AppLayout({ children }: AppLayoutProps) {
   }, [isAuthenticated])
 
   const loadSystemStatus = async () => {
-    try {
-      const [healthStatus, formatsData] = await Promise.all([
-        systemApi.getHealth(),
-        systemApi.getSupportedFormats()
-      ])
+    const [healthResult, formatsResult] = await Promise.allSettled([
+      systemApi.getHealth(),
+      systemApi.getSupportedFormats()
+    ])
 
+    if (healthResult.status === 'fulfilled' && formatsResult.status === 'fulfilled') {
+      const healthStatus = healthResult.value
+      const formatsData = formatsResult.value
       setSystemStatus({
         health: healthStatus.status,
         llmConnected: healthStatus.llm_connected,
@@ -96,18 +97,25 @@ export function AppLayout({ children }: AppLayoutProps) {
         maxFileSize: formatsData.max_file_size,
         backendVersion: healthStatus.version
       })
-    } catch (error) {
-      console.error('Failed to load system status:', error)
-      setSystemStatus(prev => ({ 
-        ...prev, 
-        isLoading: false,
-        health: 'error'
-      }))
-      
-      // Only show error toast on initial load failure, not on refresh failures
-      if (systemStatus.health === 'checking') {
-        toast.error('Failed to load system status')
-      }
+      return
+    }
+
+    if (healthResult.status === 'rejected') {
+      console.warn('Failed to load system health:', healthResult.reason)
+    }
+    if (formatsResult.status === 'rejected') {
+      console.warn('Failed to load supported formats:', formatsResult.reason)
+    }
+
+    setSystemStatus(prev => ({
+      ...prev,
+      isLoading: false,
+      health: 'error'
+    }))
+
+    // Only show error toast on initial load failure, not on refresh failures
+    if (systemStatus.health === 'checking') {
+      toast.error('Failed to load system status')
     }
   }
 
@@ -310,9 +318,6 @@ export function AppLayout({ children }: AppLayoutProps) {
           systemStatus={systemStatus}
           sidebarCollapsed={sidebarCollapsed}
         />
-
-        {/* Job Status Bar - Floating widget for active jobs */}
-        <JobStatusBar />
       </div>
     </ProtectedRoute>
   )

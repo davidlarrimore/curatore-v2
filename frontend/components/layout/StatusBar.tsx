@@ -2,9 +2,11 @@
 'use client'
 
 import { useState, useEffect, useRef } from 'react'
-import { Activity, Zap, HardDrive, Clock, Server, Wifi } from 'lucide-react'
-import { Badge } from '@/components/ui/Badge'
-import { utils, API_PATH_VERSION, systemApi } from '@/lib/api'
+import { useRouter } from 'next/navigation'
+import { Activity, Clock, Briefcase, ChevronRight, CheckCircle, XCircle, Loader2 } from 'lucide-react'
+import { API_PATH_VERSION, jobsApi } from '@/lib/api'
+import { useAuth } from '@/lib/auth-context'
+import clsx from 'clsx'
 
 interface SystemStatus {
   health: string
@@ -17,24 +19,25 @@ interface SystemStatus {
 
 interface StatusBarProps {
   systemStatus: SystemStatus
-  sidebarCollapsed: boolean // NEW: Track sidebar state
+  sidebarCollapsed: boolean
 }
 
 export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
+  const router = useRouter()
+  const { accessToken, isAuthenticated } = useAuth()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [currentTime, setCurrentTime] = useState<Date | null>(null)
-  const [connectionCount, setConnectionCount] = useState(0)
-  const [runningCount, setRunningCount] = useState(0)
-  const [processedCount, setProcessedCount] = useState(0)
-  const [totalCount, setTotalCount] = useState(0)
+  const [activeJobs, setActiveJobs] = useState(0)
+  const [totalJobs24h, setTotalJobs24h] = useState(0)
+  const [completedJobs24h, setCompletedJobs24h] = useState(0)
+  const [failedJobs24h, setFailedJobs24h] = useState(0)
   const [isClient, setIsClient] = useState(false)
 
   // Fix hydration issue by only showing time after client-side hydration
   useEffect(() => {
     setIsClient(true)
     setCurrentTime(new Date())
-    
-    // Update time every second only after hydration
+
     const timer = setInterval(() => {
       setCurrentTime(new Date())
     }, 1000)
@@ -42,72 +45,45 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
     return () => clearInterval(timer)
   }, [])
 
-  // Poll queue health to display number of jobs in the queue
+  // Poll job stats from the authenticated jobs API
   useEffect(() => {
+    if (!accessToken || !isAuthenticated) return
+
     let mounted = true
     const poll = async () => {
       try {
-        // Try to read active job group from localStorage and fetch group summary
-        let usedGroup = false;
-        try {
-          const raw = localStorage.getItem('curatore:active_jobs');
-          if (raw) {
-            const g = JSON.parse(raw);
-            if (g && Array.isArray(g.job_ids) && g.job_ids.length > 0) {
-              const s = await systemApi.getQueueSummaryByJobs(g.job_ids);
-              if (!mounted) return;
-              setConnectionCount(s.queued ?? 0);
-              setRunningCount(s.running ?? 0);
-              setProcessedCount(s.done ?? 0);
-              setTotalCount(s.total ?? 0);
-              usedGroup = true;
-            } else if (g && g.batch_id) {
-              const s = await systemApi.getQueueSummaryByBatch(g.batch_id);
-              if (!mounted) return;
-              setConnectionCount(s.queued ?? 0);
-              setRunningCount(s.running ?? 0);
-              setProcessedCount(s.done ?? 0);
-              setTotalCount(s.total ?? 0);
-              usedGroup = true;
-            }
-          }
-        } catch {}
-        if (!usedGroup) {
-          const q = await systemApi.getQueueHealth();
-          if (!mounted) return;
-          setConnectionCount(q?.pending ?? 0);
-          setRunningCount(q?.running ?? 0);
-          setProcessedCount(q?.processed ?? 0);
-          setTotalCount(q?.total ?? 0);
-        }
+        const stats = await jobsApi.getUserStats(accessToken)
+        if (!mounted) return
+        setActiveJobs(stats.active_jobs ?? 0)
+        setTotalJobs24h(stats.total_jobs_24h ?? 0)
+        setCompletedJobs24h(stats.completed_jobs_24h ?? 0)
+        setFailedJobs24h(stats.failed_jobs_24h ?? 0)
       } catch {
         // ignore transient errors
       }
     }
     poll()
-    const interval = setInterval(poll, Number(process.env.NEXT_PUBLIC_JOB_POLL_INTERVAL_MS || 5000))
+    const interval = setInterval(poll, Number(process.env.NEXT_PUBLIC_JOB_POLL_INTERVAL_MS || 10000))
     return () => { mounted = false; clearInterval(interval) }
-  }, [])
+  }, [accessToken, isAuthenticated])
 
   const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], { 
-      hour: '2-digit', 
+    return date.toLocaleTimeString([], {
+      hour: '2-digit',
       minute: '2-digit',
       second: '2-digit'
     })
   }
 
   const getUptimeDisplay = () => {
-    // In a real app, you'd track actual uptime
-    if (!isClient) return '0h 0m' // Prevent hydration mismatch
-    
-    const uptime = Math.floor(Date.now() / 1000) % 86400 // Simulated daily reset
+    if (!isClient) return '0h 0m'
+    const uptime = Math.floor(Date.now() / 1000) % 86400
     const hours = Math.floor(uptime / 3600)
     const minutes = Math.floor((uptime % 3600) / 60)
     return `${hours}h ${minutes}m`
   }
 
-  // Measure and expose status bar height as a CSS variable for precise panel positioning
+  // Measure and expose status bar height as a CSS variable
   useEffect(() => {
     const el = rootRef.current
     if (!el) return
@@ -117,7 +93,7 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
       const offset = Math.ceil(window.innerHeight - rect.top)
       const cs = window.getComputedStyle(el)
       const borderTop = Math.ceil(parseFloat(cs.borderTopWidth || '0') || 0)
-      const safeOffset = offset + borderTop + 2 // extra 2px buffer for sub-pixel rounding/shadow
+      const safeOffset = offset + borderTop + 2
       document.documentElement.style.setProperty('--statusbar-height', `${height}px`)
       document.documentElement.style.setProperty('--statusbar-offset', `${offset}px`)
       document.documentElement.style.setProperty('--statusbar-safe-offset', `${safeOffset}px`)
@@ -125,7 +101,6 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
     setVar()
     const onResize = () => setVar()
     window.addEventListener('resize', onResize)
-    // Light polling in case dynamic content changes height without resize
     const interval = setInterval(setVar, 1000)
     return () => {
       window.removeEventListener('resize', onResize)
@@ -134,73 +109,128 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
   }, [])
 
   return (
-    <div ref={rootRef} className={`bg-gray-50 border-t border-gray-200 px-4 py-2 flex items-center justify-between text-xs text-gray-600 transition-all duration-300 z-60 relative ${
-      // Adjust margin based on sidebar state - only on desktop
-      `lg:ml-${sidebarCollapsed ? '16' : '64'}`
-    }`}>
-      <div className="flex items-center space-x-6">
-        {/* API Health Status */}
-        <div className="flex items-center space-x-1">
-          <Activity className="w-3 h-3" />
-          <span>API:</span>
-          <Badge 
-            variant={systemStatus.health === 'healthy' ? 'success' : 'error'} 
-            className="text-xs py-0 px-1"
-          >
-            {systemStatus.health}
-          </Badge>
-        </div>
-        
-        {/* LLM Connection Status */}
-        <div className="flex items-center space-x-1">
-          <Zap className="w-3 h-3" />
-          <span>LLM:</span>
-          <Badge 
-            variant={systemStatus.llmConnected ? 'success' : 'error'} 
-            className="text-xs py-0 px-1"
-          >
-            {systemStatus.llmConnected ? 'Connected' : 'Disconnected'}
-          </Badge>
+    <div
+      ref={rootRef}
+      className={clsx(
+        "bg-white dark:bg-gray-900 border-t border-gray-200 dark:border-gray-800 px-4 lg:px-6 py-2 flex items-center justify-between transition-all duration-300 z-60 relative",
+        sidebarCollapsed ? 'lg:ml-16' : 'lg:ml-64'
+      )}
+    >
+      {/* Left section */}
+      <div className="flex items-center gap-4">
+        {/* API Status */}
+        <div className={clsx(
+          "flex items-center gap-2 px-3 py-1 rounded-lg text-xs font-medium transition-colors",
+          systemStatus.health === 'healthy'
+            ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400"
+            : "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400"
+        )}>
+          <span className={clsx(
+            "w-1.5 h-1.5 rounded-full",
+            systemStatus.health === 'healthy' ? 'bg-emerald-500' : 'bg-red-500'
+          )} />
+          <span className="hidden sm:inline">API</span>
+          <span>{systemStatus.health === 'healthy' ? 'Healthy' : 'Error'}</span>
         </div>
 
-        {/* Active Jobs in Queue */}
-        <div className="hidden lg:flex items-center space-x-1">
-          <Wifi className="w-3 h-3" />
-          <span>Job Queue:</span>
-          <span className="font-mono">{connectionCount}</span>
-          <span className="mx-1">•</span>
-          <span>Running:</span>
-          <span className="font-mono">{runningCount}</span>
-          <span className="mx-1">•</span>
-          <span>Done:</span>
-          <span className="font-mono">{processedCount}/{totalCount}</span>
-        </div>
+        {/* Divider */}
+        <div className="hidden lg:block w-px h-4 bg-gray-200 dark:bg-gray-700"></div>
+
+        {/* Jobs Button */}
+        <button
+          onClick={() => router.push('/jobs')}
+          className={clsx(
+            "hidden lg:flex items-center gap-3 px-3 py-1.5 rounded-lg transition-all group",
+            activeJobs > 0
+              ? "bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/30"
+              : "hover:bg-gray-100 dark:hover:bg-gray-800"
+          )}
+        >
+          <div className="flex items-center gap-2">
+            <Briefcase className={clsx(
+              "w-4 h-4",
+              activeJobs > 0 ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-500 dark:text-gray-400'
+            )} />
+            <span className={clsx(
+              "text-xs font-medium",
+              activeJobs > 0 ? 'text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-300'
+            )}>
+              Jobs
+            </span>
+          </div>
+
+          {/* Job stats */}
+          <div className="flex items-center gap-2 text-xs">
+            {activeJobs > 0 ? (
+              <div className="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400">
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+                </span>
+                <span className="font-mono font-medium">{activeJobs}</span>
+                <span className="text-indigo-500 dark:text-indigo-400">active</span>
+              </div>
+            ) : totalJobs24h > 0 ? (
+              <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
+                <div className="flex items-center gap-1">
+                  <CheckCircle className="w-3 h-3 text-emerald-500" />
+                  <span className="font-mono text-emerald-600 dark:text-emerald-400">{completedJobs24h}</span>
+                </div>
+                {failedJobs24h > 0 && (
+                  <>
+                    <span className="text-gray-300 dark:text-gray-600">|</span>
+                    <div className="flex items-center gap-1">
+                      <XCircle className="w-3 h-3 text-red-500" />
+                      <span className="font-mono text-red-600 dark:text-red-400">{failedJobs24h}</span>
+                    </div>
+                  </>
+                )}
+                <span className="text-gray-400">today</span>
+              </div>
+            ) : (
+              <span className="text-gray-400 dark:text-gray-500">No recent jobs</span>
+            )}
+          </div>
+
+          <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors" />
+        </button>
       </div>
 
-      <div className="flex items-center space-x-6">
-        {/* System Uptime */}
-        <div className="hidden md:flex items-center space-x-1">
-          <span>Uptime:</span>
+      {/* Right section */}
+      <div className="flex items-center gap-4 text-xs">
+        {/* Uptime */}
+        <div className="hidden md:flex items-center gap-1.5 text-gray-500 dark:text-gray-400">
+          <Activity className="w-3 h-3" />
           <span className="font-mono">{getUptimeDisplay()}</span>
         </div>
-        
-        {/* Current Time - Only show after hydration */}
-        <div className="flex items-center space-x-1">
-          <Clock className="w-3 h-3" />
-          <span className="font-mono">
+
+        {/* Divider */}
+        <div className="hidden md:block w-px h-4 bg-gray-200 dark:bg-gray-700"></div>
+
+        {/* Time */}
+        <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300">
+          <Clock className="w-3 h-3 text-gray-400 dark:text-gray-500" />
+          <span className="font-mono font-medium">
             {isClient && currentTime ? formatTime(currentTime) : '--:--:--'}
           </span>
         </div>
-        
-        {/* Versions */}
-        <div className="flex items-center space-x-2">
-          <div className="flex items-center space-x-1">
-            <span className="text-gray-400">Backend</span>
-            <span className="font-mono text-gray-500">{systemStatus.backendVersion || 'unknown'}</span>
+
+        {/* Divider */}
+        <div className="hidden sm:block w-px h-4 bg-gray-200 dark:bg-gray-700"></div>
+
+        {/* Version info */}
+        <div className="hidden sm:flex items-center gap-3 text-gray-400 dark:text-gray-500">
+          <div className="flex items-center gap-1">
+            <span>Backend</span>
+            <span className="font-mono text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">
+              {systemStatus.backendVersion || '?'}
+            </span>
           </div>
-          <div className="flex items-center space-x-1">
-            <span className="text-gray-400">API</span>
-            <span className="font-mono text-gray-500">{API_PATH_VERSION.toUpperCase()}</span>
+          <div className="flex items-center gap-1">
+            <span>API</span>
+            <span className="font-mono text-gray-500 dark:text-gray-400 bg-gray-100 dark:bg-gray-800 px-1.5 py-0.5 rounded">
+              {API_PATH_VERSION.toUpperCase()}
+            </span>
           </div>
         </div>
       </div>

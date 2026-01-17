@@ -33,9 +33,9 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
   variant = 'default'
 }) => {
   const isSlim = variant === 'slim'
-  
+
   return (
-    <div className={`bg-gradient-to-r from-slate-50 to-slate-100 border-b border-slate-200 ${className}`}>
+    <div className={`bg-gradient-to-r from-gray-50 via-white to-gray-50 dark:from-gray-900 dark:via-gray-800 dark:to-gray-900 border-b border-gray-200 dark:border-gray-700 ${className}`}>
       <div className={`${isSlim ? 'px-6 py-2' : 'px-6 py-4'}`}>
         <nav aria-label="Progress" className="w-full">
           <div className="flex items-center justify-center">
@@ -66,29 +66,29 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
                         ${stepIdx === 0 ? (isSlim ? 'pl-4' : 'pl-6') : ''}
                         ${stepIdx === steps.length - 1 ? (isSlim ? 'pr-4' : 'pr-6') : (isSlim ? 'pr-8' : 'pr-12')}
                         ${isClickable ? 'cursor-pointer hover:scale-[1.01]' : 'cursor-default'}
-                        ${isCurrent 
-                          ? 'bg-gradient-to-r from-blue-600 to-blue-700 text-white shadow-lg z-30 scale-[1.01]' 
+                        ${isCurrent
+                          ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg shadow-indigo-500/25 z-30 scale-[1.01]'
                           : isCompleted
-                            ? 'bg-gradient-to-r from-emerald-500 to-emerald-600 text-white shadow-md z-20'
+                            ? 'bg-gradient-to-r from-emerald-500 to-teal-500 text-white shadow-md shadow-emerald-500/20 z-20'
                             : isClickable
-                              ? 'bg-white text-slate-600 shadow-sm hover:shadow-md border border-slate-200 z-10'
-                              : 'bg-slate-100 text-slate-400 border border-slate-200 z-10'
+                              ? 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-300 shadow-sm hover:shadow-md border border-gray-200 dark:border-gray-700 z-10'
+                              : 'bg-gray-100 dark:bg-gray-800/50 text-gray-400 dark:text-gray-500 border border-gray-200 dark:border-gray-700 z-10'
                         }
                       `}
                     >
                       {/* Chevron decoration */}
                       {stepIdx < steps.length - 1 && (
                         <div className={`
-                          absolute right-0 top-1/2 transform -translate-y-1/2 translate-x-1/2 
+                          absolute right-0 top-1/2 transform -translate-y-1/2 translate-x-1/2
                           w-0 h-0 border-y-transparent z-40
                           ${isSlim ? 'border-l-[12px] border-y-[18px]' : 'border-l-[16px] border-y-[24px]'}
-                          ${isCurrent 
-                            ? 'border-l-blue-700' 
+                          ${isCurrent
+                            ? 'border-l-purple-600'
                             : isCompleted
-                              ? 'border-l-emerald-600'
+                              ? 'border-l-teal-500'
                               : isClickable
-                                ? 'border-l-white'
-                                : 'border-l-slate-100'
+                                ? 'border-l-white dark:border-l-gray-800'
+                                : 'border-l-gray-100 dark:border-l-gray-800/50'
                           }
                         `} />
                       )}
@@ -100,10 +100,10 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
                           <div className={`
                             rounded-full flex items-center justify-center transition-all duration-300
                             ${isSlim ? 'w-5 h-5' : 'w-6 h-6'}
-                            ${isCompleted 
-                              ? 'bg-white text-emerald-600' 
+                            ${isCompleted
+                              ? 'bg-white/90 text-emerald-600'
                               : isCurrent
-                                ? 'bg-white text-blue-600'
+                                ? 'bg-white/90 text-indigo-600'
                                 : 'opacity-80'
                             }
                           `}>
@@ -113,11 +113,11 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
                               <IconComponent className={isSlim ? 'w-3.5 h-3.5' : 'w-4 h-4'} />
                             )}
                           </div>
-                          
+
                           {/* Processing pulse indicator */}
                           {isCurrent && (
                             <div className="absolute -inset-1">
-                              <div className={`border-2 border-white border-opacity-40 rounded-full animate-pulse ${
+                              <div className={`border-2 border-white/40 rounded-full animate-pulse ${
                                 isSlim ? 'w-7 h-7' : 'w-8 h-8'
                               }`}></div>
                             </div>
@@ -153,8 +153,8 @@ export const ProgressBar: React.FC<ProgressBarProps> = ({
                       h-0.5 transition-colors duration-500 -mx-1 z-10
                       ${isSlim ? 'w-8' : 'w-12'}
                       ${isCompleted && getStepStatus(steps[stepIdx + 1].id) !== 'pending'
-                        ? 'bg-gradient-to-r from-emerald-400 to-blue-400' 
-                        : 'bg-slate-300'
+                        ? 'bg-gradient-to-r from-emerald-400 to-indigo-400'
+                        : 'bg-gray-300 dark:bg-gray-600'
                       }
                     `} />
                   )}

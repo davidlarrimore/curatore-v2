@@ -330,10 +330,9 @@ Base URL: `http://localhost:8000/api/v1`
 
 ### Documents
 - `POST /documents/upload` - Upload document
-- `POST /documents/{id}/process` - Process document
 - `GET /documents/{id}/result` - Get result
 - `GET /documents/{id}/content` - Get markdown
-- `POST /documents/batch/process` - Batch processing
+- Use `POST /jobs` to process one or more document IDs
 
 ### Jobs
 - `POST /jobs` - Create batch job

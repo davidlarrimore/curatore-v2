@@ -325,105 +325,35 @@ export function ProcessingPanel({
       addLog('warning', 'Proceeding without health confirmation.');
     }
 
-    // 1) Enqueue jobs
-    const idToName: Record<string, string> = Object.fromEntries(selectedFiles.map(f => [f.document_id, f.filename]));
+    // 1) Enqueue a job for all selected documents
     const docIds = selectedFiles.map(f => f.document_id);
-    let batchResp: any = null;
-    // job map is shared by both the batch path and the fallback path
     const jobMap: Record<string, { job_id: string; filename: string }> = {};
-    // Track last-seen backend log index per job to avoid duplicate log entries
     const logSeen: Record<string, number> = {};
-    if (sourceType === 'upload') {
-      // For uploaded files, do not use batch endpoint; enqueue per-file directly
-      addLog('info', 'Detected upload source. Enqueueing files individually…');
-      const perFileMap: Record<string, { job_id: string; filename: string }> = {};
-      for (const f of selectedFiles) {
-        try {
-          const resp = await processingApi.enqueueDocument(
-            f.document_id,
-            processingOptions as any
-          );
-          perFileMap[f.document_id] = { job_id: resp.job_id, filename: f.filename };
-        } catch (e: any) {
-          addLog('error', `Failed to enqueue ${f.filename}: ${e?.message || 'enqueue failed'}`);
-        }
-      }
-      const totalJobs = Object.keys(perFileMap).length;
-      if (totalJobs === 0) {
-        setIsProcessing(false);
-        setProcessingComplete(true);
-        return;
-      }
-      Object.assign(jobMap, perFileMap);
-    } else {
-      // Local (pre-seeded) files: try batch first
-      try {
-        batchResp = await processingApi.processBatch({
-          document_ids: docIds,
-          options: processingOptions
-        } as any);
-      } catch (err: any) {
-        const status = err?.status;
-        addLog('error', `Failed to enqueue batch: ${err?.message || 'unknown error'}`);
-        // Fallback: if the batch endpoint is unavailable (e.g., 404), enqueue per-file
-        if (status === 404) {
-          addLog('info', 'Batch endpoint not found. Falling back to per-file enqueue…');
-          const fallbackJobMap: Record<string, { job_id: string; filename: string }> = {};
-          for (const f of selectedFiles) {
-            try {
-              const resp = await processingApi.enqueueDocument(
-                f.document_id,
-                processingOptions as any
-              );
-              fallbackJobMap[f.document_id] = { job_id: resp.job_id, filename: f.filename };
-            } catch (e: any) {
-              addLog('error', `Failed to enqueue ${f.filename}: ${e?.message || 'enqueue failed'}`);
-            }
-          }
-          // Replace job map and continue polling
-          const totalJobs = Object.keys(fallbackJobMap).length;
-          if (totalJobs === 0) {
-            setIsProcessing(false);
-            setProcessingComplete(true);
-            return;
-          }
-          // merge fallback map into jobMap for downstream polling logic
-          Object.assign(jobMap, fallbackJobMap);
-        } else {
-          toast.error('Failed to enqueue batch');
-          setIsProcessing(false);
-          return;
-        }
-      }
+
+    let jobId: string | null = null;
+    try {
+      const job = await jobsApi.createJob(undefined, {
+        document_ids: docIds,
+        options: processingOptions as any,
+        name: `${sourceType === 'upload' ? 'Upload' : 'Batch'} processing (${docIds.length} documents)`,
+        description: `Processing ${docIds.length} documents from ${sourceType}`,
+        start_immediately: true,
+      });
+      jobId = job.id;
+      addLog('success', `Job created: ${job.name || job.id}`);
+    } catch (err: any) {
+      addLog('error', `Failed to create job: ${err?.message || 'unknown error'}`);
+      toast.error('Failed to create job');
+      setIsProcessing(false);
+      return;
     }
 
-    // If batch enqueue succeeded, populate job map and report conflicts
-    if (batchResp) {
-      const jobs = Array.isArray(batchResp?.jobs) ? batchResp.jobs : [];
-      const conflicts = Array.isArray(batchResp?.conflicts) ? batchResp.conflicts : [];
-      for (const j of jobs) {
-        if (j.document_id && j.job_id) {
-          jobMap[j.document_id] = { job_id: j.job_id, filename: idToName[j.document_id] || j.document_id };
-        }
-      }
-      if (conflicts.length > 0) {
-        for (const c of conflicts) {
-          const fname = idToName[c.document_id] || c.document_id;
-          if (c?.status === 'conflict') {
-            addLog('warning', `⚠️ ${fname} already running (job ${(c.active_job_id || '').slice(0,8)}…)`);
-          } else if (c?.error) {
-            addLog('error', `${fname} - ${c.error}`);
-          }
-        }
-        const runningCount = conflicts.filter((c: any) => c?.status === 'conflict').length;
-        if (runningCount > 0) {
-          toast(`Some files are already processing (${runningCount}). They will complete under existing jobs.`, { icon: 'ℹ️' });
-        }
-      }
+    for (const f of selectedFiles) {
+      jobMap[f.document_id] = { job_id: jobId, filename: f.filename };
     }
 
     const totalJobs = Object.keys(jobMap).length;
-    if (totalJobs === 0) {
+    if (!jobId || totalJobs === 0) {
       setIsProcessing(false);
       setProcessingComplete(true);
       return;
@@ -443,7 +373,7 @@ export function ProcessingPanel({
 
     // Persist active job group for status bar summary
     try {
-      const group = { batch_id: batchResp?.batch_id || null, job_ids: Object.values(jobMap).map(j => j.job_id), ts: Date.now() };
+      const group = { batch_id: null, job_ids: Object.values(jobMap).map(j => j.job_id), ts: Date.now() };
       localStorage.setItem('curatore:active_jobs', JSON.stringify(group));
     } catch {}
 
@@ -458,87 +388,109 @@ export function ProcessingPanel({
       let completed = 0;
       const newJobStates: Record<string, JobState> = {};
 
-      for (const [docId, { job_id, filename }] of Object.entries(jobMap)) {
-        if (done[docId]) { completed++; continue; }
+      const jobIds = Array.from(new Set(Object.values(jobMap).map(j => j.job_id)));
+
+      for (const job_id of jobIds) {
+        let status: any;
         try {
-          const status = await jobsApi.getJob(job_id);
-          const st = (status.status || '').toUpperCase();
+          status = await jobsApi.getJob(undefined, job_id);
+        } catch {
+          continue;
+        }
 
-          // Extract extractor info from logs
+        const backendLogs = Array.isArray(status.recent_logs)
+          ? [...status.recent_logs].reverse()
+          : Array.isArray(status.logs)
+            ? [...status.logs].reverse()
+            : [];
+
+        const seen = logSeen[job_id] || 0;
+        if (backendLogs.length > seen) {
+          for (let i = seen; i < backendLogs.length; i++) {
+            const entry = backendLogs[i];
+            const rawLevel = ((entry.level || 'info') as string).toLowerCase();
+            const lvl = (['info', 'success', 'warning', 'error'].includes(rawLevel)
+              ? rawLevel
+              : 'info') as ProcessingLog['level'];
+            const rawMsg = typeof entry.message === 'string' ? entry.message : JSON.stringify(entry.message);
+            const docId = entry.document_id as string | undefined;
+            const filename = docId && jobMap[docId]?.filename ? jobMap[docId].filename : 'Job';
+            const msg = `${filename} - ${rawMsg}`;
+            addLog(lvl, msg, entry.timestamp || entry.ts);
+          }
+          logSeen[job_id] = backendLogs.length;
+        }
+
+        const documents = Array.isArray(status.documents) ? status.documents : [];
+        const documentMap: Record<string, any> = {};
+        for (const doc of documents) {
+          if (doc?.document_id) documentMap[doc.document_id] = doc;
+        }
+
+        for (const [docId, { filename }] of Object.entries(jobMap)) {
+          if (jobMap[docId].job_id !== job_id) continue;
+          if (done[docId]) { completed++; continue; }
+
+          const docInfo = documentMap[docId];
+          const rawStatus = (docInfo?.status || '').toUpperCase();
+          const mappedStatus = rawStatus === 'COMPLETED'
+            ? 'SUCCESS'
+            : rawStatus === 'FAILED' || rawStatus === 'CANCELLED'
+              ? 'FAILURE'
+              : rawStatus === 'RUNNING'
+                ? 'STARTED'
+                : rawStatus === 'PENDING' || rawStatus === 'QUEUED'
+                  ? 'PENDING'
+                  : 'UNKNOWN';
+
+          const docLogs = backendLogs.filter((entry: any) => entry.document_id === docId);
           let extractorInfo: string | undefined;
-          const backendLogs = Array.isArray(status.logs) ? status.logs : [];
-
-          // Scan logs from most recent to oldest to get current state
-          for (let i = backendLogs.length - 1; i >= 0; i--) {
-            const msg = typeof backendLogs[i].message === 'string' ? backendLogs[i].message : '';
-
-            // Check for initial extractor selection from tasks.py job logs
+          for (let i = docLogs.length - 1; i >= 0; i--) {
+            const msg = typeof docLogs[i].message === 'string' ? docLogs[i].message : '';
             if (msg.startsWith('Extractor:')) {
               const extractorText = msg.substring('Extractor:'.length).trim();
-
-              // Simplify the message for display
               if (extractorText.includes('Docling')) {
                 extractorInfo = 'Docling';
               } else if (extractorText.includes('extraction-service')) {
                 extractorInfo = 'Extraction';
               }
-              // Don't break - keep scanning for more recent status updates
             }
-
-            // Check for conversion started (indicates extraction is happening)
-            if (msg.includes('Conversion started')) {
-              // Keep the extractor info we found from the "Extractor:" log
-              break;
-            }
-
-            // Check for extractor completion messages
             if (msg.includes('Extractor used:')) {
               if (msg.includes('extraction-service')) {
                 extractorInfo = 'Extraction';
               } else if (msg.includes('docling')) {
                 extractorInfo = 'Docling';
               }
-              break; // Use this final status
+              break;
             }
           }
 
-          // Update job state
           newJobStates[docId] = {
             job_id,
             document_id: docId,
             filename,
-            status: st as any,
-            started_at: status.started_at,
+            status: mappedStatus as any,
+            started_at: docInfo?.started_at || status.started_at,
             extractor_info: extractorInfo,
-            result: st === 'SUCCESS' ? status.result : undefined
           };
 
-          // Stream backend logs (if present)
-          const seen = logSeen[job_id] || 0;
-          if (backendLogs.length > seen) {
-            for (let i = seen; i < backendLogs.length; i++) {
-              const entry = backendLogs[i];
-              const lvl = (entry.level || 'info') as ProcessingLog['level'];
-              const rawMsg = typeof entry.message === 'string' ? entry.message : JSON.stringify(entry.message);
-              // Prefix with filename to create a terminal-like rolling log: "<time> <filename> - <message>"
-              const msg = `${filename} - ${rawMsg}`;
-              addLog(lvl, msg, entry.ts);
+          if (mappedStatus === 'SUCCESS') {
+            try {
+              const res = await processingApi.getProcessingResult(docId);
+              processedResults.push(res);
+              updateResults([...processedResults]);
+              done[docId] = true;
+              completed++;
+            } catch (e) {
+              // Keep polling until result is available
             }
-            logSeen[job_id] = backendLogs.length;
-          }
-          if (st === 'SUCCESS') {
-            const res = status.result as ProcessingResult;
-            processedResults.push(res);
-            updateResults([...processedResults]);
-            done[docId] = true;
-            completed++;
-          } else if (st === 'FAILURE') {
+          } else if (mappedStatus === 'FAILURE') {
             const failedResult: ProcessingResult = {
               document_id: docId,
               filename,
               status: 'failed',
               success: false,
-              message: status.error || 'Processing failed',
+              message: docInfo?.error_message || 'Processing failed',
               conversion_score: 0,
               pass_all_thresholds: false,
               vector_optimized: false
@@ -548,14 +500,6 @@ export function ProcessingPanel({
             done[docId] = true;
             completed++;
           }
-        } catch (e) {
-          // Ignore transient poll errors but keep job state as unknown
-          newJobStates[docId] = {
-            job_id,
-            document_id: docId,
-            filename,
-            status: 'UNKNOWN'
-          };
         }
       }
 
@@ -604,7 +548,7 @@ export function ProcessingPanel({
       addLog('info', `Total time: ${utils.formatDuration(processingTime)}`);
 
       setProcessingComplete(true);
-      try { localStorage.setItem('curatore:active_jobs', JSON.stringify({ batch_id: batchResp?.batch_id || null, job_ids: Object.values(jobMap).map(j => j.job_id), ts: Date.now(), done: true })); } catch {}
+      try { localStorage.setItem('curatore:active_jobs', JSON.stringify({ batch_id: null, job_ids: Object.values(jobMap).map(j => j.job_id), ts: Date.now(), done: true })); } catch {}
       onProcessingComplete(processedResults);
 
       toast.success(

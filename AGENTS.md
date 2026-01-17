@@ -21,6 +21,15 @@
 - Prefer descriptive names for APIs, routes, and components that match domain concepts (e.g., `DocumentBatch`, `ProcessingPanel`).
 - Use `npm run lint` and `npm run type-check` before submitting frontend changes.
 
+## Frontend UI/UX Consistency
+- Base theme is light: use `bg-slate-50`/`bg-white` surfaces with `text-slate-800`/`text-slate-900` and `border-slate-200`.
+- Primary actions use blue (`blue-600` with `hover:blue-700`); statuses use `green-600`, `yellow-500/600`, `red-600`, and info/accents use `indigo-600`/`purple-600` gradients sparingly (e.g., progress steps).
+- Prefer shared UI primitives in `frontend/components/ui` (`Button`, `Badge`, `Accordion`, `ProgressBar`) over bespoke markup.
+- Use global utility classes in `frontend/styles/globals.css` for common patterns: `card`, `card-header`, `card-content`, `metric-card`, `status-*`, `processing-item`, `upload-zone`, `drop-zone`, `file-item`, `file-list`, `data-table`, `loading-*`, `scrollbar-thin`, `focus-ring`.
+- Layout spacing favors `rounded-lg`/`rounded-xl`, `shadow-sm` with `hover:shadow-md`, and `transition-colors`/`transition-all` for interactive elements.
+- Typography hierarchy: `text-sm` for body, `text-xs` for metadata, `font-medium` labels, and muted text in `text-slate-500`/`text-slate-600`.
+- Form controls rely on base styles in `globals.css`; avoid custom input styling unless necessary.
+
 ## Testing Guidelines
 - Backend and extraction service tests use `pytest`; name tests `test_*.py` and keep them near the service they cover.
 - Run backend tests with `pytest backend/tests` and extraction tests with `pytest extraction-service/tests -v`.

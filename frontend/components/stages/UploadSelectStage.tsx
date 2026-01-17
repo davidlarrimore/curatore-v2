@@ -610,12 +610,14 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
 
   return (
     <div className="h-full flex flex-col space-y-6 pb-24">
-      {/* Processing Settings - Now as a horizontal bar */}
-      <div className="bg-white rounded-lg border p-4">
+      {/* Processing Settings - Enterprise Card Style */}
+      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-4">
         <div className="flex items-center justify-between">
           <div className="flex items-center space-x-6">
-            <h3 className="text-lg font-semibold text-gray-900 flex items-center">
-              <Zap className="w-5 h-5 mr-2 text-blue-600" />
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center">
+              <div className="p-1.5 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg mr-2">
+                <Zap className="w-4 h-4 text-white" />
+              </div>
               Processing Configuration
             </h3>
             
@@ -628,20 +630,20 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                   ...processingOptions,
                   auto_optimize: e.target.checked
                 })}
-                className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+                className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 dark:bg-gray-800"
               />
-              <span className="text-sm font-medium text-gray-700 relative inline-flex items-center group cursor-help">
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300 relative inline-flex items-center group cursor-help">
                 Vector DB Optimization
-                <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                <HelpCircle className="w-3 h-3 text-gray-400 dark:text-gray-500 ml-1" />
                 <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Rewrites structure for better chunking and retrieval; can adjust headings and sections.</span>
               </span>
             </label>
 
             {/* Quality Threshold Quick Setting */}
             <div className="flex items-center space-x-2">
-              <span className="text-sm font-medium text-gray-700 relative inline-flex items-center group cursor-help">
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300 relative inline-flex items-center group cursor-help">
                 Quality Threshold
-                <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                <HelpCircle className="w-3 h-3 text-gray-400 dark:text-gray-500 ml-1" />
                 <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Minimum conversion quality (0–100). Documents below this may be flagged or fail conversion.</span>
               </span>
               <select
@@ -653,7 +655,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                     conversion_threshold: parseInt(e.target.value)
                   }
                 })}
-                className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               >
                 <option value={50}>Lenient (50%)</option>
                 <option value={70}>Standard (70%)</option>
@@ -664,9 +666,9 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
 
             {/* Extraction Engine Selection */}
             <div className="flex items-center space-x-2">
-              <span className="text-sm font-medium text-gray-700 relative inline-flex items-center group cursor-help">
+              <span className="text-sm font-medium text-gray-700 dark:text-gray-300 relative inline-flex items-center group cursor-help">
                 Extraction Engine
-                <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
+                <HelpCircle className="w-3 h-3 text-gray-400 dark:text-gray-500 ml-1" />
                 <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Choose which extractor to use for this job. The selected engine is used exclusively.</span>
               </span>
               <select
@@ -675,7 +677,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                   ...processingOptions,
                   extraction_engine: e.target.value
                 })}
-                className="px-2 py-1 border border-gray-300 rounded text-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               >
                 <option value="extraction-service">Extraction Service</option>
                 <option value="docling">Docling</option>
@@ -689,7 +691,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
           <button
             type="button"
             onClick={() => setShowAdvancedSettings(!showAdvancedSettings)}
-            className="flex items-center space-x-2 px-3 py-2 text-sm font-medium text-gray-700 hover:text-gray-900 hover:bg-gray-50 rounded-lg transition-colors"
+            className="flex items-center space-x-2 px-3 py-2 text-sm font-medium text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
           >
             <span>Advanced Settings</span>
             <svg
@@ -705,7 +707,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
 
         {/* Advanced Settings Panel */}
         {showAdvancedSettings && (
-          <div className="mt-4 pt-4 border-t border-gray-200">
+          <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
               {/* Detailed Quality Thresholds */}
               <div className="space-y-3">
@@ -846,24 +848,24 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
         )}
       </div>
 
-      {/* Source Type Switcher - Now more prominent */}
-      <div className="bg-white rounded-lg border p-1">
-        <div className="grid grid-cols-2 gap-1">
+      {/* Source Type Switcher - Enterprise Style Tabs */}
+      <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-1.5">
+        <div className="grid grid-cols-2 gap-1.5">
           <button
             type="button"
             onClick={() => onSourceTypeChange('local')}
             className={`flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
               sourceType === 'local'
-                ? 'bg-blue-600 text-white shadow-md'
-                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg shadow-indigo-500/25'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800'
             }`}
           >
             <Database className="w-5 h-5" />
             <span>Local Batch Files</span>
             <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-              sourceType === 'local' 
-                ? 'bg-white bg-opacity-20 text-white' 
-                : 'bg-gray-200 text-gray-600'
+              sourceType === 'local'
+                ? 'bg-white/20 text-white'
+                : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
             }`}>
               {isInitialLoading && sourceType === 'local' ? '...' : batchFiles.length}
             </span>
@@ -873,16 +875,16 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
             onClick={() => onSourceTypeChange('upload')}
             className={`flex items-center justify-center space-x-2 px-6 py-3 rounded-lg font-medium transition-all ${
               sourceType === 'upload'
-                ? 'bg-blue-600 text-white shadow-md'
-                : 'text-gray-600 hover:text-gray-900 hover:bg-gray-50'
+                ? 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg shadow-indigo-500/25'
+                : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800'
             }`}
           >
             <CheckCircle2 className="w-5 h-5" />
             <span>Uploaded Files</span>
             <span className={`px-2 py-1 rounded-full text-xs font-medium ${
-              sourceType === 'upload' 
-                ? 'bg-white bg-opacity-20 text-white' 
-                : 'bg-gray-200 text-gray-600'
+              sourceType === 'upload'
+                ? 'bg-white/20 text-white'
+                : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
             }`}>
               {isInitialLoading && sourceType === 'upload' ? '...' : uploadedFiles.length}
             </span>
@@ -891,17 +893,17 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
       </div>
 
       {/* Main Content Area - Full width file browser */}
-      <div className="flex-1 bg-white rounded-lg border flex flex-col min-h-0">
+      <div className="flex-1 bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm flex flex-col min-h-0">
         {sourceType === 'upload' && (
           /* Upload Area - Compact when files exist */
-          <div className={`border-b p-6 ${uploadedFiles.length > 0 ? '' : 'flex-1'}`}>
+          <div className={`border-b border-gray-200 dark:border-gray-800 p-6 ${uploadedFiles.length > 0 ? '' : 'flex-1'}`}>
             <div
-              className={`relative border-2 border-dashed rounded-lg transition-all ${
+              className={`relative border-2 border-dashed rounded-xl transition-all ${
                 uploadedFiles.length > 0 ? 'p-4' : 'p-12'
               } text-center ${
                 dragActive
-                  ? 'border-blue-400 bg-blue-50'
-                  : 'border-gray-300 hover:border-gray-400'
+                  ? 'border-indigo-400 bg-indigo-50 dark:bg-indigo-900/20'
+                  : 'border-gray-300 dark:border-gray-700 hover:border-indigo-400 dark:hover:border-indigo-500'
               }`}
               onDragEnter={handleDrag}
               onDragLeave={handleDrag}
@@ -917,24 +919,26 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                 disabled={isUploading}
               />
-              
+
               <div className={`space-y-2 ${uploadedFiles.length > 0 ? 'text-sm' : ''}`}>
-                <div className={uploadedFiles.length > 0 ? 'text-2xl' : 'text-6xl'}>📄</div>
+                <div className={`${uploadedFiles.length > 0 ? 'text-2xl' : 'text-5xl'}`}>
+                  <FileText className={`mx-auto ${uploadedFiles.length > 0 ? 'w-8 h-8' : 'w-16 h-16'} text-gray-400 dark:text-gray-500`} />
+                </div>
                 <div>
-                  <p className={`font-medium text-gray-700 ${uploadedFiles.length > 0 ? 'text-sm' : 'text-lg'}`}>
+                  <p className={`font-medium text-gray-700 dark:text-gray-300 ${uploadedFiles.length > 0 ? 'text-sm' : 'text-lg'}`}>
                     {isUploading ? 'Uploading files...' : uploadedFiles.length > 0 ? 'Drop more files or click to browse' : 'Drop files here or click to browse'}
                   </p>
-                  <p className={`text-gray-500 mt-1 ${uploadedFiles.length > 0 ? 'text-xs' : 'text-sm'}`}>
+                  <p className={`text-gray-500 dark:text-gray-400 mt-1 ${uploadedFiles.length > 0 ? 'text-xs' : 'text-sm'}`}>
                     {supportedFormats.join(', ')} • Max: {utils.formatFileSize(maxFileSize)}
                   </p>
                 </div>
               </div>
 
               {isUploading && (
-                <div className="absolute inset-0 bg-white bg-opacity-90 flex items-center justify-center rounded-lg">
+                <div className="absolute inset-0 bg-white/90 dark:bg-gray-900/90 flex items-center justify-center rounded-xl">
                   <div className="flex items-center space-x-3">
-                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-blue-600"></div>
-                    <span className="text-blue-600 font-medium">Uploading files...</span>
+                    <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-indigo-600"></div>
+                    <span className="text-indigo-600 dark:text-indigo-400 font-medium">Uploading files...</span>
                   </div>
                 </div>
               )}
@@ -959,8 +963,8 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
       {/* Fixed Action Button - Bottom Right with Processing Panel Awareness */}
       {processingPanelState !== 'fullscreen' && (
         <div className={`fixed right-6 z-40 transition-all duration-300 ${
-          processingPanelState === 'normal' 
-            ? 'bottom-[424px]'  // Above normal processing panel: 360px panel + 52px (status + gap) + 12px margin = 424px  
+          processingPanelState === 'normal'
+            ? 'bottom-[424px]'  // Above normal processing panel: 360px panel + 52px (status + gap) + 12px margin = 424px
             : processingPanelState === 'minimized'
             ? 'bottom-[92px]'   // Above minimized panel: 40px panel + 40px (status) + 12px margin = 92px
             : 'bottom-16'       // Above status bar only: 52px (status + gap) + 12px margin = 64px (bottom-16)
@@ -969,15 +973,15 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
             type="button"
             onClick={handleProcess}
             disabled={selectedFiles.length === 0 || isProcessing}
-            className={`px-6 py-3 rounded-full font-medium text-sm transition-all shadow-lg hover:shadow-xl ${
+            className={`px-6 py-3 rounded-full font-medium text-sm transition-all ${
               selectedFiles.length === 0 || isProcessing
-                ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                : 'bg-blue-600 text-white hover:bg-blue-700 hover:-translate-y-1'
+                ? 'bg-gray-300 dark:bg-gray-700 text-gray-500 dark:text-gray-400 cursor-not-allowed'
+                : 'bg-gradient-to-r from-indigo-600 to-purple-600 text-white shadow-lg shadow-indigo-500/25 hover:shadow-xl hover:shadow-indigo-500/30 hover:-translate-y-1'
             }`}
           >
             {isProcessing ? (
               <span className="flex items-center space-x-2">
-                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-gray-400"></div>
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white/50"></div>
                 <span>Processing {selectedFiles.length} files...</span>
               </span>
             ) : (

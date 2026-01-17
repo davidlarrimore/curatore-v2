@@ -35,6 +35,7 @@ from sqlalchemy import func, select
 from app.api.v1.models import (
     CancelJobResponse,
     CreateJobRequest,
+    DeleteJobResponse,
     JobDetailResponse,
     JobDocumentResponse,
     JobListResponse,
@@ -50,6 +51,7 @@ from app.services.job_service import (
     cancel_job,
     check_concurrency_limit,
     create_batch_job,
+    delete_job,
     enqueue_job,
     get_active_job_count,
     get_organization_jobs,
@@ -745,68 +747,96 @@ async def get_job_documents(
 
 @router.delete(
     "/{job_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
+    response_model=DeleteJobResponse,
     summary="Delete job",
-    description="Delete a job and its associated data. Requires org_admin role and terminal state."
+    description="Delete a job, its associated data, and processed files. Requires confirmation parameter."
 )
-async def delete_job(
+async def delete_job_endpoint(
     job_id: str,
+    confirm: bool = Query(
+        ...,
+        description="Must be true to confirm deletion. This action is irreversible."
+    ),
     current_user: User = Depends(require_org_admin),
-) -> None:
+) -> DeleteJobResponse:
     """
-    Delete job.
+    Delete job with confirmation.
 
-    Permanently deletes a job and all associated data (documents, logs).
+    Permanently deletes a job and all associated data:
+    - Job database record
+    - JobDocument records (via cascade)
+    - JobLog records (via cascade)
+    - Processed markdown files from disk
+
     Only allowed for jobs in terminal states (COMPLETED, FAILED, CANCELLED).
+    Requires the `confirm=true` query parameter to prevent accidental deletion.
 
     Args:
         job_id: Job UUID
+        confirm: Must be true to confirm deletion
         current_user: Current user (must be org_admin)
 
+    Returns:
+        DeleteJobResponse: Deletion summary with counts
+
     Raises:
+        HTTPException: 400 if confirm is not true
         HTTPException: 403 if user is not org_admin
         HTTPException: 404 if job not found
         HTTPException: 409 if job is not in terminal state
 
     Example:
-        DELETE /api/v1/jobs/123e4567-e89b-12d3-a456-426614174000
+        DELETE /api/v1/jobs/123e4567-e89b-12d3-a456-426614174000?confirm=true
         Authorization: Bearer <token>
 
     Warning:
-        This permanently deletes the job and all associated data.
-        Files are not deleted (managed by separate cleanup task).
+        This permanently deletes the job, all associated data, and processed files.
+        This action cannot be undone.
     """
+    # Require explicit confirmation
+    if not confirm:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Deletion requires confirmation. Set confirm=true to proceed."
+        )
+
     logger.info(f"Job deletion requested for {job_id} by {current_user.email}")
 
-    async with database_service.get_session() as session:
-        # Get job
-        result = await session.execute(
-            select(Job)
-            .where(Job.id == UUID(job_id))
-            .where(Job.organization_id == current_user.organization_id)
+    try:
+        result = await delete_job(
+            job_id=UUID(job_id),
+            organization_id=current_user.organization_id,
+            delete_files=True,
         )
-        job = result.scalar_one_or_none()
 
-        if not job:
+        return DeleteJobResponse(
+            job_id=result["job_id"],
+            job_name=result["job_name"],
+            documents_deleted=result["documents_deleted"],
+            files_deleted=result["files_deleted"],
+            logs_deleted=result["logs_deleted"],
+            deleted_at=datetime.fromisoformat(result["deleted_at"]),
+            message=f"Job deleted successfully. {result['documents_deleted']} documents and "
+                    f"{result['files_deleted']} processed files removed."
+        )
+
+    except ValueError as e:
+        error_msg = str(e)
+        if "not found" in error_msg.lower():
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Job not found"
             )
-
-        # Check terminal state
-        terminal_states = ["COMPLETED", "FAILED", "CANCELLED"]
-        if job.status not in terminal_states:
+        elif "cannot be deleted" in error_msg.lower():
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Job cannot be deleted: status is {job.status}. "
-                       "Only terminal states (COMPLETED, FAILED, CANCELLED) can be deleted."
+                detail=error_msg
             )
-
-        # Delete job (cascades to job_documents and job_logs)
-        await session.delete(job)
-        await session.commit()
-
-        logger.info(f"Job deleted: {job.name} (id: {job_id})")
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=error_msg
+            )
 
 
 # =========================================================================
