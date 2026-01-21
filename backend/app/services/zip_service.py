@@ -39,6 +39,11 @@ from ..config import settings
 from .storage_service import storage_service
 from ..models import ProcessingResult, DownloadType
 
+# Import document_service lazily to avoid circular imports
+def _get_document_service():
+    from .document_service import document_service
+    return document_service
+
 
 class ZipService:
     """
@@ -144,19 +149,13 @@ class ZipService:
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             # Add processed documents
             for doc_id in document_ids:
-                # Prefer manifest path from storage; fallback to glob
-                manifest_path = storage_service.get_processed_path(doc_id) if hasattr(storage_service, 'get_processed_path') else None
-                candidate_paths = []
-                if manifest_path:
-                    candidate_paths.append(Path(manifest_path))
-                # Files are saved as: {document_id}_{original_stem}.md
-                candidate_paths.extend(self.processed_dir.glob(f"{doc_id}_*.md"))
-                for file_path in candidate_paths:
-                    if file_path.exists():
-                        original_name = file_path.name.split('_', 1)[-1] if '_' in file_path.name else file_path.name
-                        zipf.write(file_path, f"processed_documents/{original_name}")
-                        file_count += 1
-                        break
+                # Use document_service's file finder which handles hierarchical storage
+                file_path = self._find_processed_file(doc_id)
+                if file_path and file_path.exists():
+                    # Get original filename from processing result if available
+                    original_name = self._get_original_filename(doc_id, file_path)
+                    zipf.write(file_path, f"processed_documents/{original_name}")
+                    file_count += 1
             
             # Add summary file if requested
             if include_summary and file_count > 0:
@@ -282,66 +281,59 @@ class ZipService:
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
             # Add individual processed documents
             for doc_id in document_ids:
-                # Prefer manifest path from storage; fallback to glob
-                manifest_path = storage_service.get_processed_path(doc_id) if hasattr(storage_service, 'get_processed_path') else None
-                candidate_paths = []
-                if manifest_path:
-                    candidate_paths.append(Path(manifest_path))
-                # Files are saved as: {document_id}_{original_stem}.md
-                candidate_paths.extend(self.processed_dir.glob(f"{doc_id}_*.md"))
-                for file_path in candidate_paths:
-                    if file_path.exists():
-                        # Read content for combined file
-                        try:
-                            content = file_path.read_text(encoding="utf-8")
-                            result = next((r for r in results if r.document_id == doc_id), None)
+                # Use document_service's file finder which handles hierarchical storage
+                file_path = self._find_processed_file(doc_id)
+                if file_path and file_path.exists():
+                    # Read content for combined file
+                    try:
+                        content = file_path.read_text(encoding="utf-8")
+                        result = next((r for r in results if r.document_id == doc_id), None)
 
-                            # Add section header using result metadata when available
-                            section_title = None
-                            if result and getattr(result, 'filename', None):
-                                section_title = result.filename
-                            else:
-                                # Use original filename from path as fallback
-                                section_title = file_path.name.split('_', 1)[-1] if '_' in file_path.name else file_path.name
-                            combined_sections.append(f"# {section_title}")
+                        # Add section header using result metadata when available
+                        section_title = None
+                        if result and getattr(result, 'filename', None):
+                            section_title = result.filename
+                        else:
+                            # Use original filename from path as fallback
+                            section_title = file_path.name.split('_', 1)[-1] if '_' in file_path.name else file_path.name
+                        combined_sections.append(f"# {section_title}")
 
-                            # Optional metadata when result is available
-                            if result:
-                                if result.document_summary:
-                                    combined_sections.extend(["", f"*{result.document_summary}*"])
+                        # Optional metadata when result is available
+                        if result:
+                            if result.document_summary:
+                                combined_sections.extend(["", f"*{result.document_summary}*"])
 
-                                status_emoji = "✅" if rag_flag(result) else "⚠️"
-                                optimized_emoji = " 🎯" if result.vector_optimized else ""
+                            status_emoji = "✅" if rag_flag(result) else "⚠️"
+                            optimized_emoji = " 🎯" if result.vector_optimized else ""
 
-                                combined_sections.extend([
-                                    "",
-                                    f"**Processing Status:** {status_emoji} {'RAG Ready' if rag_flag(result) else 'Needs Improvement'}{optimized_emoji}",
-                                    f"**Conversion Score:** {result.conversion_score}/100",
-                                ])
+                            combined_sections.extend([
+                                "",
+                                f"**Processing Status:** {status_emoji} {'RAG Ready' if rag_flag(result) else 'Needs Improvement'}{optimized_emoji}",
+                                f"**Conversion Score:** {result.conversion_score}/100",
+                            ])
 
-                                if result.llm_evaluation:
-                                    scores = [
-                                        f"Clarity: {result.llm_evaluation.clarity_score or 'N/A'}/10",
-                                        f"Completeness: {result.llm_evaluation.completeness_score or 'N/A'}/10",
-                                        f"Relevance: {result.llm_evaluation.relevance_score or 'N/A'}/10",
-                                        f"Markdown: {result.llm_evaluation.markdown_score or 'N/A'}/10",
-                                    ]
-                                    combined_sections.append(f"**Quality Scores:** {', '.join(scores)}")
+                            if result.llm_evaluation:
+                                scores = [
+                                    f"Clarity: {result.llm_evaluation.clarity_score or 'N/A'}/10",
+                                    f"Completeness: {result.llm_evaluation.completeness_score or 'N/A'}/10",
+                                    f"Relevance: {result.llm_evaluation.relevance_score or 'N/A'}/10",
+                                    f"Markdown: {result.llm_evaluation.markdown_score or 'N/A'}/10",
+                                ]
+                                combined_sections.append(f"**Quality Scores:** {', '.join(scores)}")
 
-                            combined_sections.extend(["", "---", ""])
+                        combined_sections.extend(["", "---", ""])
 
-                            # Adjust markdown hierarchy for combined document
-                            adjusted_content = self._adjust_markdown_hierarchy(content)
-                            combined_sections.extend([adjusted_content, "", "", "---", ""])
-                        
-                        except Exception as e:
-                            print(f"Error reading {file_path}: {e}")
-                        
-                        # Add to ZIP as individual file
-                        original_name = file_path.name.split('_', 1)[-1] if '_' in file_path.name else file_path.name
-                        zipf.write(file_path, f"individual_files/{original_name}")
-                        file_count += 1
-                        break
+                        # Adjust markdown hierarchy for combined document
+                        adjusted_content = self._adjust_markdown_hierarchy(content)
+                        combined_sections.extend([adjusted_content, "", "", "---", ""])
+
+                    except Exception as e:
+                        print(f"Error reading {file_path}: {e}")
+
+                    # Add to ZIP as individual file using original filename
+                    original_name = self._get_original_filename(doc_id, file_path, result)
+                    zipf.write(file_path, f"individual_files/{original_name}")
+                    file_count += 1
             
             # Add combined markdown file
             if combined_sections:
@@ -356,7 +348,91 @@ class ZipService:
                 zipf.writestr(summary_filename, summary_content)
         
         return zip_path, file_count
-    
+
+    def _find_processed_file(self, doc_id: str) -> Optional[Path]:
+        """
+        Find the processed markdown file for a document ID.
+
+        Uses multiple fallback strategies to locate the file:
+        1. Storage service manifest path (if available in memory)
+        2. Document service's get_processed_markdown_path (handles hierarchical storage)
+        3. Direct glob in processed_dir (legacy fallback)
+
+        Args:
+            doc_id: The document ID to find the processed file for
+
+        Returns:
+            Path to the processed file if found, None otherwise
+        """
+        # Try storage service first (for in-memory cached paths)
+        if hasattr(storage_service, 'get_processed_path'):
+            manifest_path = storage_service.get_processed_path(doc_id)
+            if manifest_path:
+                path = Path(manifest_path)
+                if path.exists():
+                    return path
+
+        # Use document_service's method which handles hierarchical storage correctly
+        try:
+            doc_svc = _get_document_service()
+            path = doc_svc.get_processed_markdown_path(doc_id)
+            if path and path.exists():
+                return path
+        except Exception:
+            pass
+
+        # Final fallback: direct glob in processed_dir
+        for file_path in self.processed_dir.glob(f"{doc_id}_*.md"):
+            if file_path.exists():
+                return file_path
+
+        return None
+
+    def _get_original_filename(
+        self,
+        doc_id: str,
+        file_path: Path,
+        result: Optional[ProcessingResult] = None
+    ) -> str:
+        """
+        Get the original filename for a document, with .md extension for export.
+
+        Attempts to retrieve the original filename from multiple sources:
+        1. Provided ProcessingResult (if available)
+        2. Storage service processing result
+        3. Fall back to extracting from the file path
+
+        Args:
+            doc_id: The document ID
+            file_path: Path to the processed file
+            result: Optional ProcessingResult with original filename
+
+        Returns:
+            Original filename with .md extension (e.g., "My Report.md")
+        """
+        original_filename = None
+
+        # Try to get from provided result first
+        if result and getattr(result, 'filename', None):
+            original_filename = result.filename
+
+        # Try storage service if not found
+        if not original_filename:
+            stored_result = storage_service.get_processing_result(doc_id)
+            if stored_result and getattr(stored_result, 'filename', None):
+                original_filename = stored_result.filename
+
+        # If we found an original filename, change extension to .md
+        if original_filename:
+            stem = Path(original_filename).stem
+            return f"{stem}.md"
+
+        # Fall back to extracting from file path (remove document_id prefix)
+        if '_' in file_path.name:
+            return file_path.name.split('_', 1)[-1]
+
+        return file_path.name
+
     def _adjust_markdown_hierarchy(self, content: str) -> str:
         """
         Adjust markdown header hierarchy by adding one level of nesting.

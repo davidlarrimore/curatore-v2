@@ -21,6 +21,7 @@ interface Connection {
   managed_by?: string
   last_tested_at?: string
   health_status?: 'healthy' | 'unhealthy' | 'unknown' | 'checking'
+  test_result?: Record<string, any> | null
   created_at: string
   updated_at: string
 }
@@ -59,7 +60,13 @@ function ConnectionsContent() {
           ? {
               ...conn,
               health_status: result.success ? 'healthy' : 'unhealthy',
-              last_tested_at: new Date().toISOString()
+              last_tested_at: new Date().toISOString(),
+              test_result: {
+                success: result.success,
+                message: result.message,
+                details: result.details,
+                error: result.error,
+              }
             }
           : conn
       ))
@@ -67,7 +74,15 @@ function ConnectionsContent() {
       // Mark as unhealthy on error
       setConnections(prev => prev.map(conn =>
         conn.id === connectionId
-          ? { ...conn, health_status: 'unhealthy', last_tested_at: new Date().toISOString() }
+          ? {
+              ...conn,
+              health_status: 'unhealthy',
+              last_tested_at: new Date().toISOString(),
+              test_result: {
+                success: false,
+                message: 'Connection test failed',
+              }
+            }
           : conn
       ))
     } finally {

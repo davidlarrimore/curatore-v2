@@ -35,6 +35,13 @@
 - Run backend tests with `pytest backend/tests` and extraction tests with `pytest extraction-service/tests -v`.
 - Use `./scripts/api_smoke_test.sh` and `./scripts/queue_health.sh` for quick runtime checks.
 
+## Configuration Consistency Checklist
+- When updating extraction connection settings, verify alignment across:
+  - `config.yml` / `config.yml.example` extraction engine entries
+  - Connection sync and schema in `backend/app/services/connection_service.py`
+  - Engine resolution in `backend/app/services/document_service.py`
+  - Frontend connection form/schema usage in `frontend/components/connections/ConnectionForm.tsx`
+
 ## Commit & Pull Request Guidelines
 - Recent commits mix imperative summaries and Conventional Commits (e.g., `feat(auth): implement email verification`).
 - Keep commit subjects short and action-oriented; use `feat(scope): ...` for new user-facing features.

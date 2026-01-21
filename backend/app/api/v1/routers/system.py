@@ -13,6 +13,7 @@ from ....services.storage_service import storage_service
 from ....services.zip_service import zip_service
 from ....services.job_service import get_redis_client
 from ....services.database_service import database_service
+from ....services.config_loader import config_loader
 from ....celery_app import app as celery_app
 from ....dependencies import get_current_user
 
@@ -153,6 +154,68 @@ async def get_extraction_services() -> Dict[str, Any]:
         else:
             active = None
         return {"active": active, "services": [], "error": str(e)}
+
+@router.get("/config/extraction-engines", tags=["Configuration"])
+async def get_extraction_engines() -> Dict[str, Any]:
+    """List extraction engines configured in config.yml.
+
+    These are system-default engines that can be used when no custom
+    connections are configured. Returns enabled engines with their
+    configuration details.
+
+    Returns:
+        {
+            "engines": [
+                {
+                    "id": "extraction-service",  # Use as connection_id
+                    "name": "extraction-service",
+                    "display_name": "Internal Extraction Service",
+                    "description": "Built-in extraction...",
+                    "engine_type": "extraction-service",
+                    "service_url": "http://extraction:8010",
+                    "timeout": 300,
+                    "is_default": true,  # Computed from default_engine setting
+                    "is_system": true  # Indicates this is from config.yml
+                }
+            ],
+            "default_engine": "extraction-service"
+        }
+    """
+    try:
+        enabled_engines = config_loader.get_enabled_extraction_engines()
+        default_engine = config_loader.get_default_extraction_engine()
+
+        # Convert engines to dict format
+        engines_list = []
+        for engine in enabled_engines:
+            # Determine if this engine is the default based on default_engine setting
+            is_default = (default_engine and engine.name.lower() == default_engine.name.lower())
+
+            engines_list.append({
+                "id": engine.name,  # Use name as ID for config.yml engines
+                "name": engine.name,
+                "display_name": engine.display_name,
+                "description": engine.description,
+                "engine_type": engine.engine_type,
+                "service_url": engine.service_url,
+                "timeout": engine.timeout,
+                "is_default": is_default,
+                "is_system": True  # Mark as system engine from config.yml
+            })
+
+        return {
+            "engines": engines_list,
+            "default_engine": default_engine.name if default_engine else None,
+            "default_engine_source": "config.yml" if config_loader.has_default_engine_in_config() else None
+        }
+    except Exception as e:
+        # Return empty list if config.yml not found or invalid
+        return {
+            "engines": [],
+            "default_engine": None,
+            "default_engine_source": None,
+            "error": str(e)
+        }
 
 @router.get("/items", tags=["Legacy"])
 def list_items():

@@ -12,6 +12,7 @@ interface Connection {
   managed_by?: string
   last_tested_at?: string
   health_status?: 'healthy' | 'unhealthy' | 'unknown' | 'checking'
+  test_result?: Record<string, any> | null
   created_at: string
   updated_at: string
 }
@@ -132,6 +133,12 @@ export default function ConnectionCard({
   const getConfigSummary = () => {
     const { connection_type, config } = connection
 
+    type SummaryItem = {
+      label: string
+      value: string
+      hint?: string
+    }
+
     if (connection_type === 'llm') {
       return [
         { label: 'Model', value: config.model || 'Not set' },
@@ -147,10 +154,29 @@ export default function ConnectionCard({
     }
 
     if (connection_type === 'extraction') {
-      return [
+      // Determine engine type label
+      const engineType = config.engine_type || 'unknown'
+      const engineLabel = engineType === 'extraction-service'
+        ? 'Internal Service'
+        : engineType === 'docling'
+        ? 'Docling'
+        : engineType === 'tika'
+        ? 'Apache Tika'
+        : engineType.charAt(0).toUpperCase() + engineType.slice(1)
+
+      const doclingVersion = connection.test_result?.details?.docling_api_version
+
+      const summary: SummaryItem[] = [
+        { label: 'Engine', value: engineLabel },
         { label: 'URL', value: config.service_url?.replace(/^https?:\/\//, '') || 'Not set' },
         { label: 'Timeout', value: `${config.timeout || 30}s` }
       ]
+
+      if (engineType === 'docling' && doclingVersion) {
+        summary.push({ label: 'Docling API', value: doclingVersion, hint: 'Detected from Docling openapi.json' })
+      }
+
+      return summary
     }
 
     return []
@@ -290,7 +316,9 @@ export default function ConnectionCard({
         <div className="space-y-2 mb-4">
           {configSummary.map((item, index) => (
             <div key={index} className="flex items-center justify-between text-sm">
-              <span className="text-gray-500 dark:text-gray-400">{item.label}</span>
+              <span className="text-gray-500 dark:text-gray-400" title={item.hint || undefined}>
+                {item.label}
+              </span>
               <span className="font-mono text-xs text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 px-2 py-0.5 rounded truncate max-w-[180px]" title={item.value}>
                 {item.value}
               </span>

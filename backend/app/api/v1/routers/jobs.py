@@ -1087,3 +1087,148 @@ async def get_org_stats(
             avg_processing_time_minutes=avg_processing_time_minutes,
             success_rate_7d=success_rate_7d,
         )
+
+
+# =========================================================================
+# JOB RECONCILIATION
+# =========================================================================
+
+
+@router.post(
+    "/{job_id}/reconcile",
+    response_model=JobResponse,
+    summary="Reconcile job status",
+    description="Reconcile job counters and status by counting actual document statuses."
+)
+async def reconcile_job(
+    job_id: str,
+    current_user: User = Depends(get_current_user),
+) -> JobResponse:
+    """
+    Reconcile job counters and status.
+
+    Fixes stuck jobs by counting actual document statuses and updating
+    job counters and status accordingly. Useful when race conditions
+    cause counter mismatches.
+
+    Args:
+        job_id: Job UUID
+        current_user: Current authenticated user
+
+    Returns:
+        JobResponse: Updated job summary
+
+    Raises:
+        HTTPException: 404 if job not found
+        HTTPException: 403 if not authorized
+
+    Example:
+        POST /api/v1/jobs/123e4567-e89b-12d3-a456-426614174000/reconcile
+        Authorization: Bearer <token>
+    """
+    logger.info(f"Job reconciliation requested for {job_id} by {current_user.email}")
+
+    async with database_service.get_session() as session:
+        # Get job and verify ownership
+        result = await session.execute(
+            select(Job)
+            .where(Job.id == UUID(job_id))
+            .where(Job.organization_id == current_user.organization_id)
+        )
+        job = result.scalar_one_or_none()
+
+        if not job:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Job not found"
+            )
+
+        # Verify job owner (or admin)
+        if job.user_id and job.user_id != current_user.id and current_user.role != "org_admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Permission denied: not job owner"
+            )
+
+        # Count actual document statuses
+        completed_result = await session.execute(
+            select(func.count(JobDocument.id)).where(
+                JobDocument.job_id == job.id,
+                JobDocument.status == "COMPLETED"
+            )
+        )
+        actual_completed = completed_result.scalar() or 0
+
+        failed_result = await session.execute(
+            select(func.count(JobDocument.id)).where(
+                JobDocument.job_id == job.id,
+                JobDocument.status == "FAILED"
+            )
+        )
+        actual_failed = failed_result.scalar() or 0
+
+        # Log if reconciliation is needed
+        if job.completed_documents != actual_completed or job.failed_documents != actual_failed:
+            logger.warning(
+                f"Job {job_id} reconciliation: "
+                f"counters=({job.completed_documents}/{job.failed_documents}), "
+                f"actual=({actual_completed}/{actual_failed})"
+            )
+
+        # Update counters
+        job.completed_documents = actual_completed
+        job.failed_documents = actual_failed
+
+        # Check if job should be marked complete
+        total_done = actual_completed + actual_failed
+        if total_done >= job.total_documents and job.status in ["QUEUED", "RUNNING"]:
+            if actual_failed > 0 and actual_completed == 0:
+                job.status = "FAILED"
+                job.error_message = f"All {actual_failed} documents failed"
+            elif actual_failed > 0:
+                job.status = "COMPLETED"
+                job.error_message = f"{actual_failed}/{job.total_documents} documents failed"
+            else:
+                job.status = "COMPLETED"
+
+            job.completed_at = datetime.utcnow()
+
+            # Add log entry
+            import uuid as uuid_module
+            log_entry = JobLog(
+                id=uuid_module.uuid4(),
+                job_id=job.id,
+                level="INFO",
+                message=f"Job reconciled and marked {job.status}: {actual_completed} succeeded, {actual_failed} failed",
+                log_metadata={
+                    "reconciled_by": str(current_user.id),
+                    "previous_status": "RUNNING",
+                },
+            )
+            session.add(log_entry)
+
+        await session.commit()
+        await session.refresh(job)
+
+        logger.info(f"Job {job_id} reconciled: status={job.status}, completed={job.completed_documents}, failed={job.failed_documents}")
+
+        return JobResponse(
+            id=str(job.id),
+            organization_id=str(job.organization_id),
+            user_id=str(job.user_id) if job.user_id else None,
+            name=job.name,
+            description=job.description,
+            job_type=job.job_type,
+            status=job.status,
+            celery_batch_id=job.celery_batch_id,
+            total_documents=job.total_documents,
+            completed_documents=job.completed_documents,
+            failed_documents=job.failed_documents,
+            created_at=job.created_at,
+            queued_at=job.queued_at,
+            started_at=job.started_at,
+            completed_at=job.completed_at,
+            cancelled_at=job.cancelled_at,
+            expires_at=job.expires_at,
+            error_message=job.error_message,
+        )

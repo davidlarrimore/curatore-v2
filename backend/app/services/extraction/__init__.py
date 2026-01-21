@@ -1,0 +1,50 @@
+"""
+Extraction engine abstraction layer.
+
+This package provides a clean abstraction for document extraction engines,
+making it easy to integrate multiple extraction services and add new ones.
+
+Usage:
+    from app.services.extraction import ExtractionEngineFactory
+
+    # Create engine from configuration
+    config = {
+        "engine_type": "docling",
+        "name": "docling-prod",
+        "service_url": "http://docling:5001",
+        "timeout": 300
+    }
+    engine = ExtractionEngineFactory.from_config(config)
+
+    # Extract document
+    result = await engine.extract(file_path)
+    if result.success:
+        print(result.content)
+    else:
+        print(f"Error: {result.error}")
+
+Available Engines:
+    - extraction-service: Internal MarkItDown + Tesseract OCR
+    - docling: IBM Docling for complex PDFs and Office documents
+    - tika: Apache Tika (stub - not yet implemented)
+"""
+
+from .base import BaseExtractionEngine, ExtractionResult
+from .extraction_service import ExtractionServiceEngine
+from .docling import DoclingEngine
+from .tika import TikaEngine
+from .factory import ExtractionEngineFactory
+
+__all__ = [
+    # Base classes
+    "BaseExtractionEngine",
+    "ExtractionResult",
+    # Concrete engines
+    "ExtractionServiceEngine",
+    "DoclingEngine",
+    "TikaEngine",
+    # Factory
+    "ExtractionEngineFactory",
+]
+
+__version__ = "1.0.0"

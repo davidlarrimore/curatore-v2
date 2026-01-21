@@ -219,7 +219,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.warn('Unable to hydrate user after login:', error)
       }
     } catch (error) {
-      console.error('Login failed:', error)
+      const status = (error as { status?: number } | null)?.status
+      if (status !== 401 && status !== 403) {
+        console.error('Login failed:', error)
+      }
       throw error
     }
   }

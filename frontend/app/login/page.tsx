@@ -20,6 +20,7 @@ import { useState, FormEvent, useEffect, useCallback, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { Button } from '@/components/ui/Button'
+import toast from 'react-hot-toast'
 
 const RETURN_URL_KEY = 'auth_return_url'
 type LoginStage = 'idle' | 'submitting' | 'finalizing'
@@ -33,6 +34,16 @@ export default function LoginPage() {
   const [error, setError] = useState('')
   const [loginStage, setLoginStage] = useState<LoginStage>('idle')
   const hasRedirected = useRef(false)
+
+  const getLoginErrorMessage = (err: unknown) => {
+    if (err && typeof err === 'object') {
+      const error = err as { message?: string; detail?: any }
+      if (typeof error.detail === 'string') return error.detail
+      if (error.detail && typeof error.detail.detail === 'string') return error.detail.detail
+      if (typeof error.message === 'string' && error.message.trim()) return error.message
+    }
+    return 'Invalid email/username or password.'
+  }
 
   const resolveReturnUrl = useCallback(() => {
     const returnUrl = sessionStorage.getItem(RETURN_URL_KEY) || '/'
@@ -75,7 +86,9 @@ export default function LoginPage() {
         redirectToReturnUrl()
       }
     } catch (err: any) {
-      setError(err.message || 'Login failed. Please check your credentials.')
+      const message = getLoginErrorMessage(err)
+      setError(message)
+      toast.error(message)
       setLoginStage('idle')
     }
   }

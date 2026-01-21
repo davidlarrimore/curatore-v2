@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { jobsApi, utils } from '@/lib/api'
@@ -71,7 +71,10 @@ export default function JobDetailPage() {
   const [error, setError] = useState<string | null>(null)
   const [cancelling, setCancelling] = useState(false)
   const [activeTab, setActiveTab] = useState<'documents' | 'logs' | 'review' | 'export'>('documents')
-  const [currentTime, setCurrentTime] = useState(Date.now()) // For duration updates
+  const [currentTime, setCurrentTime] = useState<number>(Date.now()) // Updates every second for live timers
+
+  // Track when documents started processing (client-side tracking)
+  const documentStartTimes = useRef<Map<string, number>>(new Map())
 
   // Redirect if not authenticated
   useEffect(() => {
@@ -101,6 +104,23 @@ export default function JobDetailPage() {
     loadJob()
   }, [accessToken, isAuthenticated, jobId])
 
+  // Track document processing start times (client-side)
+  useEffect(() => {
+    if (!job?.documents) return
+
+    const now = Date.now()
+    job.documents.forEach((doc) => {
+      // When a document transitions to RUNNING, record its start time
+      if (doc.status === 'RUNNING' && !documentStartTimes.current.has(doc.document_id)) {
+        documentStartTimes.current.set(doc.document_id, now)
+      }
+      // Clean up completed/failed documents from tracking
+      if (['COMPLETED', 'FAILED', 'CANCELLED'].includes(doc.status)) {
+        documentStartTimes.current.delete(doc.document_id)
+      }
+    })
+  }, [job?.documents])
+
   // Polling effect - separate from initial load
   useEffect(() => {
     if (!accessToken || !isAuthenticated || !jobId || !job) return
@@ -121,14 +141,22 @@ export default function JobDetailPage() {
     return () => clearInterval(interval)
   }, [accessToken, isAuthenticated, jobId, job?.status])
 
-  // Update current time every second for duration calculation
+  // Timer effect - updates currentTime every second for live elapsed time display
   useEffect(() => {
+    const isActive = job && ['PENDING', 'QUEUED', 'RUNNING'].includes(job.status)
+    if (!isActive) {
+      return
+    }
+
+    // Update immediately when job becomes active
+    setCurrentTime(Date.now())
+
     const timer = setInterval(() => {
       setCurrentTime(Date.now())
     }, 1000)
 
     return () => clearInterval(timer)
-  }, [])
+  }, [job?.status])
 
   const handleCancelJob = async () => {
     if (!accessToken || !jobId || !job) return
@@ -192,7 +220,8 @@ export default function JobDetailPage() {
     return new Date(dateString).toLocaleString()
   }
 
-  const formatDuration = (start?: string, end?: string) => {
+  // Format duration - calculates live elapsed time when job is running
+  const formatDuration = (start?: string, end?: string): string => {
     if (!start) return 'N/A'
     const startDate = new Date(start)
 
@@ -201,28 +230,54 @@ export default function JobDetailPage() {
       return 'N/A'
     }
 
-    // Use currentTime for live updates, or end date if job is complete
-    const endDate = end ? new Date(end) : new Date(currentTime)
+    let seconds: number
 
-    // Validate end date
-    if (isNaN(endDate.getTime())) {
-      return 'N/A'
+    if (end) {
+      // Job is complete, calculate from start to end
+      const endDate = new Date(end)
+      if (isNaN(endDate.getTime())) {
+        return 'N/A'
+      }
+      const diff = endDate.getTime() - startDate.getTime()
+      if (diff < 0) {
+        return '0s'
+      }
+      seconds = Math.floor(diff / 1000)
+    } else {
+      // Job is still running, use currentTime state (updates every second)
+      seconds = Math.max(0, Math.floor((currentTime - startDate.getTime()) / 1000))
     }
 
-    const diff = endDate.getTime() - startDate.getTime()
-
-    // If difference is negative, job hasn't started yet or dates are invalid
-    if (diff < 0) {
-      return '0s'
-    }
-
-    const seconds = Math.floor(diff / 1000)
     const minutes = Math.floor(seconds / 60)
     const hours = Math.floor(minutes / 60)
 
     if (hours > 0) return `${hours}h ${minutes % 60}m`
     if (minutes > 0) return `${minutes}m ${seconds % 60}s`
     return `${seconds}s`
+  }
+
+  // Get elapsed time for a document (client-side tracking for RUNNING documents)
+  const getDocumentElapsedTime = (doc: JobDocument): string => {
+    // If document has completed processing, show the final time
+    if (doc.processing_time_seconds !== undefined && doc.processing_time_seconds !== null) {
+      return `${doc.processing_time_seconds.toFixed(1)}s`
+    }
+
+    // If document is RUNNING, show live elapsed time
+    if (doc.status === 'RUNNING') {
+      const startTime = documentStartTimes.current.get(doc.document_id)
+      if (startTime) {
+        const elapsed = Math.max(0, Math.floor((currentTime - startTime) / 1000))
+        const minutes = Math.floor(elapsed / 60)
+        if (minutes > 0) return `${minutes}m ${elapsed % 60}s`
+        return `${elapsed}s`
+      }
+      // RUNNING but no start time tracked yet - just started
+      return '0s'
+    }
+
+    // PENDING or other status - no time to show
+    return '—'
   }
 
   const calculateProgress = () => {
@@ -545,9 +600,9 @@ export default function JobDetailPage() {
                             )}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600 dark:text-gray-400 font-medium tabular-nums">
-                            {doc.processing_time_seconds
-                              ? `${doc.processing_time_seconds.toFixed(1)}s`
-                              : '—'}
+                            <span className={doc.status === 'RUNNING' ? 'text-indigo-600 dark:text-indigo-400' : ''}>
+                              {getDocumentElapsedTime(doc)}
+                            </span>
                           </td>
                         </tr>
                       ))}

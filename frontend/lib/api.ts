@@ -85,6 +85,25 @@ export const systemApi = {
     return handleJson(res)
   },
 
+  async getExtractionEngines(): Promise<{
+    engines: Array<{
+      id: string
+      name: string
+      display_name: string
+      description: string
+      engine_type: string
+      service_url: string
+      timeout: number
+      is_default: boolean
+      is_system: boolean
+    }>
+    default_engine: string | null
+    default_engine_source: string | null
+  }> {
+    const res = await fetch(apiUrl('/config/extraction-engines'), { cache: 'no-store', headers: authHeaders() })
+    return handleJson(res)
+  },
+
   async getLLMStatus(): Promise<LLMConnectionStatus> {
     const res = await fetch(apiUrl('/llm/status'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
@@ -886,6 +905,7 @@ export const connectionsApi = {
     message?: string
     health_status?: 'healthy' | 'unhealthy'
     details?: any
+    error?: string
   }> {
     const res = await fetch(apiUrl(`/connections/${connectionId}/test`), {
       method: 'POST',
@@ -943,11 +963,9 @@ export const connectionsApi = {
 // -------------------- Settings API --------------------
 export const settingsApi = {
   async getOrganizationSettings(token: string): Promise<{
-    organization_id: string
-    organization_name: string
     settings: Record<string, any>
   }> {
-    const res = await fetch(apiUrl('/settings/organization'), {
+    const res = await fetch(apiUrl('/organizations/me/settings'), {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
@@ -955,10 +973,9 @@ export const settingsApi = {
   },
 
   async updateOrganizationSettings(token: string, settings: Record<string, any>): Promise<{
-    message: string
     settings: Record<string, any>
   }> {
-    const res = await fetch(apiUrl('/settings/organization'), {
+    const res = await fetch(apiUrl('/organizations/me/settings'), {
       method: 'PUT',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify({ settings }),
@@ -967,10 +984,9 @@ export const settingsApi = {
   },
 
   async getUserSettings(token: string): Promise<{
-    user_id: string
     settings: Record<string, any>
   }> {
-    const res = await fetch(apiUrl('/settings/user'), {
+    const res = await fetch(apiUrl('/users/me/settings'), {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
@@ -978,10 +994,9 @@ export const settingsApi = {
   },
 
   async updateUserSettings(token: string, settings: Record<string, any>): Promise<{
-    message: string
     settings: Record<string, any>
   }> {
-    const res = await fetch(apiUrl('/settings/user'), {
+    const res = await fetch(apiUrl('/users/me/settings'), {
       method: 'PUT',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify({ settings }),

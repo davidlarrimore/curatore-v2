@@ -83,15 +83,24 @@ class OCRConfig(BaseModel):
     )
 
 
-class ExtractionServiceConfig(BaseModel):
-    """Configuration for a single extraction service."""
+class ExtractionEngineConfig(BaseModel):
+    """Configuration for a single extraction engine."""
     model_config = ConfigDict(extra='forbid')
 
     name: str = Field(
-        description="Service identifier"
+        description="Engine identifier (unique name for this engine instance)"
     )
-    url: str = Field(
-        description="Service endpoint URL"
+    display_name: str = Field(
+        description="Human-readable name shown in UI"
+    )
+    description: str = Field(
+        description="Description of this engine and its use cases"
+    )
+    engine_type: Literal["extraction-service", "docling", "tika"] = Field(
+        description="Engine type identifier (determines extraction logic)"
+    )
+    service_url: str = Field(
+        description="Base URL for the extraction service"
     )
     timeout: int = Field(
         default=300,
@@ -101,7 +110,7 @@ class ExtractionServiceConfig(BaseModel):
     )
     enabled: bool = Field(
         default=True,
-        description="Enable/disable this service"
+        description="Enable/disable this engine"
     )
     verify_ssl: bool = Field(
         default=True,
@@ -111,25 +120,58 @@ class ExtractionServiceConfig(BaseModel):
         default=None,
         description="Optional API key for authentication"
     )
+    docling_ocr_enabled: Optional[bool] = Field(
+        default=None,
+        description="Enable OCR for Docling engines (maps to enable_ocr)"
+    )
     ocr: Optional[OCRConfig] = Field(
         default=None,
         description="OCR settings (specific to extraction-service implementation)"
     )
+    options: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Engine-specific options (e.g., Docling conversion settings)"
+    )
 
 
 class ExtractionConfig(BaseModel):
-    """Document extraction service configuration."""
+    """Document extraction engine configuration."""
     model_config = ConfigDict(extra='forbid')
 
-    services: List[ExtractionServiceConfig] = Field(
-        description="List of extraction service configurations"
+    default_engine: str = Field(
+        default="extraction-service",
+        description="Default engine to use when none specified"
+    )
+    engines: List[ExtractionEngineConfig] = Field(
+        description="List of available extraction engines"
     )
 
-    @validator('services')
-    def validate_services(cls, v):
-        """Ensure at least one service is configured."""
+    @validator('engines')
+    def validate_engines(cls, v):
+        """Ensure at least one enabled engine is configured."""
         if not v:
-            raise ValueError("At least one extraction service must be configured")
+            raise ValueError("At least one extraction engine must be configured")
+
+        enabled_engines = [e for e in v if e.enabled]
+        if not enabled_engines:
+            raise ValueError("At least one extraction engine must be enabled")
+
+        # Ensure engine names are unique
+        names = [e.name for e in v]
+        if len(names) != len(set(names)):
+            raise ValueError("Extraction engine names must be unique")
+
+        return v
+
+    @validator('default_engine')
+    def validate_default_engine(cls, v, values):
+        """Ensure default_engine matches an enabled engine."""
+        if 'engines' in values:
+            engine_names = [e.name for e in values['engines'] if e.enabled]
+            if v not in engine_names:
+                raise ValueError(
+                    f"default_engine '{v}' must match an enabled engine name"
+                )
         return v
 
 

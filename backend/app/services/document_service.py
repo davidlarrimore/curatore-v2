@@ -27,7 +27,14 @@ from .llm_service import llm_service
 from .path_service import path_service
 from .deduplication_service import deduplication_service
 from .metadata_service import metadata_service
+from .config_loader import config_loader
 from ..utils.text_utils import clean_llm_response
+from .extraction import ExtractionEngineFactory, BaseExtractionEngine
+
+
+class ExtractionFailureError(Exception):
+    """Exception raised when document extraction fails permanently (non-retryable)."""
+    pass
 
 
 class DocumentService:
@@ -1135,6 +1142,8 @@ class DocumentService:
             markdown_content = await self._extract_content(
                 file_path,
                 engine=getattr(options, "extraction_engine", None),
+                organization_id=organization_id,
+                session=session,
             )
             
             # Step 2: Score the conversion quality
@@ -1240,8 +1249,30 @@ class DocumentService:
             )
             raise Exception(f"Document processing failed: {e}") from e
 
-    async def _extract_via_docling(self, file_path: Path, max_retries: int = 2) -> Optional[str]:
-        """Extract content via Docling with retry logic.
+    # =========================================================================
+    # DEPRECATED EXTRACTION METHODS
+    # =========================================================================
+    # The following methods (_extract_via_docling, _extract_via_extraction_service)
+    # have been moved to the extraction engine abstraction layer:
+    # - backend/app/services/extraction/docling.py (DoclingEngine class)
+    # - backend/app/services/extraction/extraction_service.py (ExtractionServiceEngine class)
+    #
+    # These methods are kept for reference but are no longer called.
+    # The new abstraction is used via _extract_content() -> _resolve_extraction_connection()
+    # =========================================================================
+
+    async def _extract_via_docling(
+        self,
+        file_path: Path,
+        max_retries: int = 2,
+        base_url: Optional[str] = None,
+        timeout: Optional[float] = None,
+        endpoint_path: Optional[str] = None
+    ) -> Optional[str]:
+        """[DEPRECATED] Extract content via Docling with retry logic.
+
+        This method has been replaced by the DoclingEngine class in
+        backend/app/services/extraction/docling.py
 
         High-level: Sends a multipart upload to Docling Serve's
         `POST /v1/convert/file` endpoint and requests Markdown output.
@@ -1254,6 +1285,9 @@ class DocumentService:
         Args:
             file_path: Absolute path to the source document on disk.
             max_retries: Maximum number of retry attempts (default: 2)
+            base_url: Override base URL for the service (optional)
+            timeout: Override timeout in seconds (optional)
+            endpoint_path: Override endpoint path (optional, defaults to /v1/convert/file)
 
         Returns:
             Markdown string on success; None if the Docling call fails or
@@ -1264,12 +1298,24 @@ class DocumentService:
               including engine, URL, status/errors, options, outcome, and retry metadata.
             - Emits structured logs for success/failure and response details.
         """
-        if not getattr(self, 'docling_base', None):
+        # Use provided base_url or fallback to instance config
+        if base_url:
+            base = base_url.rstrip('/')
+        elif getattr(self, 'docling_base', None):
+            base = self.docling_base.rstrip('/')
+        else:
             return None
-        base = self.docling_base.rstrip('/')
-        url = f"{base}{self.docling_extract_path if getattr(self, 'docling_extract_path', None) else '/v1/convert/file'}"
 
-        base_timeout = float(self.docling_timeout)
+        # Use custom endpoint_path if provided, otherwise use defaults
+        if endpoint_path:
+            path = endpoint_path if endpoint_path.startswith('/') else f'/{endpoint_path}'
+        else:
+            path = getattr(self, 'docling_extract_path', '/v1/convert/file')
+
+        url = f"{base}{path}"
+
+        # Use provided timeout or fallback to instance config
+        base_timeout = float(timeout if timeout is not None else getattr(self, 'docling_timeout', 60))
         timeout_extension = 30.0  # 30 seconds per retry
 
         for attempt in range(max_retries + 1):
@@ -1277,7 +1323,7 @@ class DocumentService:
 
             try:
                 if attempt == 0:
-                    self._logger.info("Using Docling extractor: %s (timeout: %.0fs)", url, current_timeout)
+                    self._logger.info("Using Docling extractor: %s (timeout: %.0fs) for file: %s", url, current_timeout, file_path.name)
                 else:
                     self._logger.info("Retrying Docling (attempt %d/%d, timeout: %.0fs): %s",
                                     attempt + 1, max_retries + 1, current_timeout, file_path.name)
@@ -1323,7 +1369,19 @@ class DocumentService:
                             return await client.post(url, headers=headers, params=params, files=files, data=params)
 
                     resp = await _post_with('files')
-                    if resp.status_code == 422:
+
+                    # Handle specific error codes
+                    if resp.status_code == 404:
+                        # Endpoint not found - log and try with 'file' field
+                        try:
+                            self._logger.warning(
+                                "Docling endpoint returned 404 for field 'files'. URL: %s. Retrying with 'file' field.",
+                                url
+                            )
+                        except Exception:
+                            pass
+                        resp = await _post_with('file')
+                    elif resp.status_code == 422:
                         # retry with 'file' if server asked for it
                         try:
                             body = resp.json() or {}
@@ -1335,6 +1393,7 @@ class DocumentService:
                             needs_file = False
                         if needs_file:
                             resp = await _post_with('file')
+
                     resp.raise_for_status()
 
                     ctype = (resp.headers.get('content-type') or '').lower()
@@ -1458,8 +1517,18 @@ class DocumentService:
 
         return None
 
-    async def _extract_via_extraction_service(self, file_path: Path, max_retries: int = 2) -> Optional[str]:
-        """Extract content via the default extraction-service with retry logic.
+    async def _extract_via_extraction_service(
+        self,
+        file_path: Path,
+        max_retries: int = 2,
+        base_url: Optional[str] = None,
+        timeout: Optional[float] = None,
+        endpoint_path: Optional[str] = None
+    ) -> Optional[str]:
+        """[DEPRECATED] Extract content via the default extraction-service with retry logic.
+
+        This method has been replaced by the ExtractionServiceEngine class in
+        backend/app/services/extraction/extraction_service.py
 
         High-level: Streams a multipart upload to the internal extraction
         microservice (`/api/v1/extract`) and parses its JSON or text response.
@@ -1468,6 +1537,9 @@ class DocumentService:
         Args:
             file_path: Absolute path to the source document on disk.
             max_retries: Maximum number of retry attempts (default: 2)
+            base_url: Override base URL for the service (optional)
+            timeout: Override timeout in seconds (optional)
+            endpoint_path: Override endpoint path (optional, defaults to /api/v1/extract)
 
         Returns:
             Markdown string on success; None if the service call fails or
@@ -1478,11 +1550,24 @@ class DocumentService:
               and retry metadata.
             - Logs request target and warnings on error.
         """
-        if not getattr(self, 'extract_base', None):
+        # Use provided base_url or fallback to instance config
+        if base_url:
+            base = base_url.rstrip('/')
+        elif getattr(self, 'extract_base', None):
+            base = self.extract_base.rstrip('/')
+        else:
             return None
-        url = f"{self.extract_base.rstrip('/')}/api/v1/extract"
 
-        base_timeout = float(self.extract_timeout)
+        # Use custom endpoint_path if provided, otherwise use defaults
+        if endpoint_path:
+            path = endpoint_path if endpoint_path.startswith('/') else f'/{endpoint_path}'
+        else:
+            path = '/api/v1/extract'
+
+        url = f"{base}{path}"
+
+        # Use provided timeout or fallback to instance config
+        base_timeout = float(timeout if timeout is not None else getattr(self, 'extract_timeout', 60))
         timeout_extension = 30.0  # 30 seconds per retry
 
         for attempt in range(max_retries + 1):
@@ -1572,21 +1657,179 @@ class DocumentService:
 
         return None
 
-    async def _extract_content(self, file_path: Path, engine: Optional[str] = None) -> str:
+    async def _resolve_extraction_connection(
+        self,
+        engine: Optional[str],
+        organization_id: Optional[str] = None,
+        session = None
+    ) -> Optional[BaseExtractionEngine]:
+        """Resolve extraction engine connection to an engine instance.
+
+        Args:
+            engine: Engine identifier (connection ID, name, or legacy string)
+            organization_id: Organization ID for connection lookup
+            session: Database session for connection lookup
+
+        Returns:
+            Instantiated extraction engine or None if not configured
+        """
+        # Default to extraction-service if no engine specified
+        if not engine:
+            return ExtractionEngineFactory.create_engine(
+                engine_type="extraction-service",
+                name="default",
+                service_url=self.extract_base,
+                timeout=int(self.extract_timeout)
+            )
+
+        engine_str = str(engine).strip()
+
+        # Check if it's a UUID (connection ID)
+        try:
+            from uuid import UUID
+            UUID(engine_str)
+            is_uuid = True
+        except (ValueError, AttributeError):
+            is_uuid = False
+
+        if is_uuid and organization_id and session:
+            # Resolve connection from database
+            try:
+                from sqlalchemy import select
+                from ..database.models import Connection
+
+                result = await session.execute(
+                    select(Connection)
+                    .where(Connection.id == engine_str)
+                    .where(Connection.organization_id == organization_id)
+                    .where(Connection.is_active == True)
+                )
+                connection = result.scalar_one_or_none()
+
+                if connection and connection.connection_type == "extraction":
+                    config = connection.config
+                    service_url = config.get("service_url", "").rstrip("/")
+
+                    # Get engine_type from config, or infer from service URL
+                    engine_type = config.get("engine_type")
+                    if not engine_type:
+                        # Infer engine type from service URL for backward compatibility
+                        service_url_lower = service_url.lower()
+                        if "docling" in service_url_lower or ":5001" in service_url:
+                            engine_type = "docling"
+                            self._logger.info(
+                                "Inferred engine_type 'docling' from service URL: %s",
+                                service_url
+                            )
+                        else:
+                            engine_type = "extraction-service"
+                            self._logger.info(
+                                "Defaulting to engine_type 'extraction-service' for: %s",
+                                service_url
+                            )
+
+                    options = config.get("options")
+                    if engine_type == "docling":
+                        docling_ocr_enabled = config.get("docling_ocr_enabled")
+                        if docling_ocr_enabled is not None:
+                            options = {**(options or {}), "enable_ocr": bool(docling_ocr_enabled)}
+
+                    # Create engine from database connection config
+                    return ExtractionEngineFactory.from_config({
+                        "engine_type": engine_type,
+                        "name": connection.name,
+                        "service_url": service_url,
+                        "timeout": int(config.get("timeout", 60)),
+                        "verify_ssl": config.get("verify_ssl", True),
+                        "api_key": config.get("api_key"),
+                        "options": options
+                    })
+                else:
+                    self._logger.warning(f"Connection {engine_str} not found or not an extraction type")
+            except Exception as e:
+                self._logger.error(f"Failed to resolve connection {engine_str}: {e}")
+        else:
+            # Not a UUID - check if it's a config.yml engine name
+            try:
+                config_engine = config_loader.get_extraction_engine_by_name(engine_str)
+                if config_engine:
+                    self._logger.info(f"Resolved engine '{engine_str}' from config.yml")
+
+                    options = config_engine.options
+                    if config_engine.engine_type == "docling":
+                        docling_ocr_enabled = getattr(config_engine, "docling_ocr_enabled", None)
+                        if docling_ocr_enabled is not None:
+                            options = {**(options or {}), "enable_ocr": bool(docling_ocr_enabled)}
+
+                    # Create engine from config.yml
+                    return ExtractionEngineFactory.from_config({
+                        "engine_type": config_engine.engine_type,
+                        "name": config_engine.name,
+                        "service_url": config_engine.service_url,
+                        "timeout": config_engine.timeout,
+                        "verify_ssl": config_engine.verify_ssl,
+                        "api_key": config_engine.api_key,
+                        "options": options
+                    })
+            except Exception as e:
+                self._logger.debug(f"Engine '{engine_str}' not found in config.yml: {e}")
+
+        # Legacy string-based engines (fallback to environment variables)
+        engine_lower = engine_str.lower()
+        if engine_lower == "docling":
+            if not self.docling_base:
+                self._logger.warning("Docling engine requested but not configured")
+                return None
+            return ExtractionEngineFactory.create_engine(
+                engine_type="docling",
+                name="legacy-docling",
+                service_url=self.docling_base,
+                timeout=int(self.docling_timeout)
+            )
+        elif engine_lower in {"default", "extraction", "extraction-service"}:
+            return ExtractionEngineFactory.create_engine(
+                engine_type="extraction-service",
+                name="legacy-extraction-service",
+                service_url=self.extract_base,
+                timeout=int(self.extract_timeout)
+            )
+        elif engine_lower == "none":
+            return None
+
+        # Unknown engine, default to extraction-service
+        self._logger.warning(f"Unknown engine '{engine_str}', defaulting to extraction-service")
+        return ExtractionEngineFactory.create_engine(
+            engine_type="extraction-service",
+            name="default",
+            service_url=self.extract_base,
+            timeout=int(self.extract_timeout)
+        )
+
+    async def _extract_content(
+        self,
+        file_path: Path,
+        engine: Optional[str] = None,
+        organization_id: Optional[str] = None,
+        session = None
+    ) -> str:
         """Dispatch content extraction for a given file using the selected engine.
 
         Behavior:
           - For `.txt`, `.md`, or `.csv` files, reads the file as UTF-8.
-          - Otherwise, routes to the selected extractor with retry support.
-          - If the selected extractor is unavailable or fails after retries,
-            returns a placeholder Markdown.
+          - Otherwise, uses the extraction engine abstraction layer with retry support.
+          - If the selected extractor is unavailable or fails after retries, raises an exception.
 
         Args:
             file_path: Absolute path to the source document on disk.
-            engine: Selected extraction engine (e.g., 'extraction-service', 'docling').
+            engine: Selected extraction engine (connection ID, name, or legacy string).
+            organization_id: Organization ID for connection lookup.
+            session: Database session for connection lookup.
 
         Returns:
-            Markdown content extracted or a placeholder string.
+            Markdown content extracted.
+
+        Raises:
+            ExtractionFailureError: If extraction fails permanently.
 
         Notes:
             This method updates `self._last_extraction_info` to reflect the
@@ -1598,49 +1841,71 @@ class DocumentService:
             self._last_extraction_info = {"engine": "text-file", "ok": True}
             return file_path.read_text(encoding='utf-8', errors='ignore')
 
-        engine = (engine or "").strip().lower() or "extraction-service"
-        self._last_extraction_info = {"requested_engine": engine, "ok": False}
+        # Resolve connection to get engine instance
+        extraction_engine = await self._resolve_extraction_connection(
+            engine, organization_id, session
+        )
 
-        # Check which extraction services are available
-        has_extraction_service = bool(getattr(self, 'extract_base', None))
-        has_docling = bool(getattr(self, 'docling_base', None))
+        if not extraction_engine:
+            self._last_extraction_info = {
+                "requested_engine": engine,
+                "engine": "none",
+                "ok": False,
+                "error": "not_configured"
+            }
+            raise ExtractionFailureError("No extraction engine configured")
 
-        # Route based on engine configuration
-        if engine == "docling":
-            if not has_docling:
-                self._last_extraction_info = {
-                    "engine": "docling",
-                    "ok": False,
-                    "error": "not_configured"
-                }
-            else:
-                md = await self._extract_via_docling(file_path)
-                if md:
-                    return md
-        elif engine in {"default", "extraction", "extraction-service"}:
-            if not has_extraction_service:
-                self._last_extraction_info = {
-                    "engine": "extraction-service",
-                    "ok": False,
-                    "error": "not_configured"
-                }
-            else:
-                md = await self._extract_via_extraction_service(file_path)
-                if md:
-                    return md
-        elif engine == "none":
-            self._last_extraction_info = {"engine": "none", "ok": False, "error": "not_configured"}
-        else:
-            self._last_extraction_info = {"engine": engine, "ok": False, "error": "unsupported"}
+        # Log resolved engine
+        self._last_extraction_info = {
+            "requested_engine": engine,
+            "resolved_engine": extraction_engine.engine_type,
+            "engine_name": extraction_engine.name,
+            "ok": False
+        }
 
-        # Final fallback placeholder
         try:
-            self._logger.info("No extractor configured or all failed; returning placeholder for %s", file_path.name)
-        except Exception:
-            pass
-        if not self._last_extraction_info.get("engine"):
-            self._last_extraction_info = {"engine": engine, "ok": False}
-        return f"# {file_path.stem}\n\n*Content extraction failed after all retry attempts.*\n\nFile: {file_path.name}"
+            # Use the engine's extract method
+            result = await extraction_engine.extract(file_path)
+
+            if result.success and result.content:
+                # Update extraction info with success
+                self._last_extraction_info = {
+                    "engine": extraction_engine.engine_type,
+                    "engine_name": extraction_engine.name,
+                    "url": extraction_engine.full_url,
+                    "ok": True,
+                    "metadata": result.metadata
+                }
+                return result.content
+            else:
+                # Extraction failed
+                self._last_extraction_info = {
+                    "engine": extraction_engine.engine_type,
+                    "engine_name": extraction_engine.name,
+                    "url": extraction_engine.full_url,
+                    "ok": False,
+                    "error": result.error or "unknown error",
+                    "metadata": result.metadata
+                }
+                raise ExtractionFailureError(f"Extraction failed: {result.error}")
+
+        except ExtractionFailureError:
+            # Re-raise extraction failures
+            raise
+        except Exception as e:
+            # Catch any other exceptions and convert to extraction failure
+            self._last_extraction_info = {
+                "engine": extraction_engine.engine_type,
+                "engine_name": extraction_engine.name,
+                "url": extraction_engine.full_url,
+                "ok": False,
+                "error": str(e)
+            }
+            self._logger.error(
+                "Unexpected error during extraction for %s: %s",
+                file_path.name, str(e)
+            )
+            raise ExtractionFailureError(f"Extraction error: {str(e)}")
 
     async def _evaluate_with_llm(
         self,

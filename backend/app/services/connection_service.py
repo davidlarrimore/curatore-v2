@@ -51,7 +51,7 @@ Version: 2.0.0
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Type
+from typing import Any, Dict, List, Optional, Type, Literal
 from uuid import UUID
 
 import httpx
@@ -458,9 +458,21 @@ class ExtractionConfigSchema(BaseModel):
     """Extraction service configuration schema."""
 
     service_url: str = Field(..., description="Extraction service URL")
+    engine_type: Literal["extraction-service", "docling"] = Field(
+        default="extraction-service",
+        description="Type of extraction engine"
+    )
+    endpoint_path: Optional[str] = Field(
+        default="",
+        description="Custom endpoint path override"
+    )
     timeout: int = Field(default=60, ge=1, le=600, description="Request timeout in seconds")
     api_key: Optional[str] = Field(None, description="Optional API key for authentication")
     verify_ssl: bool = Field(default=True, description="Verify SSL certificates")
+    docling_ocr_enabled: Optional[bool] = Field(
+        default=None,
+        description="Enable OCR for Docling extraction"
+    )
 
 
 class ExtractionConnectionType(BaseConnectionType):
@@ -470,6 +482,26 @@ class ExtractionConnectionType(BaseConnectionType):
     display_name = "Extraction Service"
     description = "Connect to document extraction service for file conversion"
 
+    async def _detect_docling_version(
+        self,
+        client: httpx.AsyncClient,
+        service_url: str
+    ) -> Optional[str]:
+        """Detect Docling API version from OpenAPI metadata."""
+        try:
+            response = await client.get(f"{service_url}/openapi.json")
+            if response.status_code != 200:
+                return None
+            payload = response.json()
+            paths = payload.get("paths", {}) if isinstance(payload, dict) else {}
+            if "/v1/convert/file" in paths:
+                return "v1"
+            if "/v1alpha/convert/file" in paths:
+                return "v1alpha"
+        except Exception:
+            return None
+        return None
+
     def get_config_schema(self) -> Dict[str, Any]:
         """Get JSON schema for extraction service configuration."""
         return {
@@ -478,8 +510,27 @@ class ExtractionConnectionType(BaseConnectionType):
                 "service_url": {
                     "type": "string",
                     "title": "Service URL",
-                    "description": "Extraction service endpoint URL",
+                    "description": "Base URL for extraction service (e.g., http://extraction:8010 or http://docling:5001)",
                     "default": "http://extraction:8010"
+                },
+                "engine_type": {
+                    "type": "string",
+                    "title": "Engine Type",
+                    "description": "Type of extraction engine",
+                    "enum": ["extraction-service", "docling"],
+                    "default": "extraction-service"
+                },
+                "docling_ocr_enabled": {
+                    "type": "boolean",
+                    "title": "Enable OCR (Docling)",
+                    "description": "Enable OCR when using Docling (maps to do_ocr).",
+                    "default": True
+                },
+                "endpoint_path": {
+                    "type": "string",
+                    "title": "Endpoint Path (optional)",
+                    "description": "Custom endpoint path (e.g., /v1/convert/file for docling, /api/v1/extract for extraction-service). Leave empty to use defaults.",
+                    "default": ""
                 },
                 "timeout": {
                     "type": "integer",
@@ -496,7 +547,7 @@ class ExtractionConnectionType(BaseConnectionType):
                     "writeOnly": True
                 }
             },
-            "required": ["service_url"]
+            "required": ["service_url", "engine_type"]
         }
 
     def validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
@@ -519,13 +570,25 @@ class ExtractionConnectionType(BaseConnectionType):
             if api_key:
                 headers["X-API-Key"] = api_key
 
-            candidate_paths = [
-                "/api/v1/system/health",
-                "/health",
-                "/v1/health",
-                "/healthz",
-                "",
-            ]
+            # Docling uses /health, extraction-service uses /api/v1/system/health
+            # Detect Docling by engine_type or URL pattern
+            is_docling = config.get("engine_type") == "docling" or "docling" in service_url.lower() or ":5001" in service_url
+            if is_docling:
+                candidate_paths = [
+                    "/health",
+                    "/v1/health",
+                    "/healthz",
+                    "/api/v1/system/health",
+                    "",
+                ]
+            else:
+                candidate_paths = [
+                    "/api/v1/system/health",
+                    "/health",
+                    "/v1/health",
+                    "/healthz",
+                    "",
+                ]
             last_error = None
             last_status = None
 
@@ -544,16 +607,23 @@ class ExtractionConnectionType(BaseConnectionType):
                             health_data = response.json()
                         except Exception:
                             health_data = {}
+
+                        details: Dict[str, Any] = {
+                            "url": url,
+                            "status": health_data.get("status", "unknown")
+                            if isinstance(health_data, dict)
+                            else "unknown",
+                        }
+
+                        if is_docling:
+                            docling_version = await self._detect_docling_version(client, service_url)
+                            if docling_version:
+                                details["docling_api_version"] = docling_version
                         return ConnectionTestResult(
                             success=True,
                             status="healthy",
                             message="Extraction service is responding",
-                            details={
-                                "url": url,
-                                "status": health_data.get("status", "unknown")
-                                if isinstance(health_data, dict)
-                                else "unknown",
-                            },
+                            details=details,
                         )
 
                     last_status = response.status_code
@@ -997,74 +1067,99 @@ async def sync_default_connections_from_env(
 
         default_url = _normalize_url(settings.extraction_service_url)
 
-        if extraction_config and extraction_config.services:
-            for service in extraction_config.services:
-                if service.enabled is False:
-                    continue
-
-                service_url = _normalize_url(service.url)
+        if extraction_config and extraction_config.engines:
+            for engine in extraction_config.engines:
+                service_url = _normalize_url(engine.service_url)
                 if not service_url:
                     continue
 
                 config: Dict[str, Any] = {
+                    "engine_type": engine.engine_type,  # Store engine_type in database
                     "service_url": service_url,
-                    "timeout": int(service.timeout),
+                    "timeout": int(engine.timeout),
+                    "verify_ssl": engine.verify_ssl,
                 }
-                if service.api_key:
-                    config["api_key"] = service.api_key
-                config["verify_ssl"] = service.verify_ssl
+                docling_ocr_enabled = getattr(engine, "docling_ocr_enabled", None)
+                if engine.engine_type == "docling" and docling_ocr_enabled is not None:
+                    config["docling_ocr_enabled"] = bool(docling_ocr_enabled)
+                if engine.api_key:
+                    config["api_key"] = engine.api_key
+                if engine.options:
+                    config["options"] = engine.options
 
+                # Find existing connection by name or URL (case-insensitive name matching)
                 existing = next(
                     (
                         conn
                         for conn in managed_connections
-                        if conn.name.lower() == service.name.lower()
+                        if conn.name.lower().replace(" ", "-") == engine.name.lower().replace(" ", "-")
                         or _normalize_url(conn.config.get("service_url")) == service_url
                     ),
                     None,
                 )
 
+                # Determine if this engine is the default based on top-level default_engine setting
+                # The default_engine setting in config.yml specifies the engine name to use as default
                 is_default = False
-                if default_url and service_url == default_url:
+                if extraction_config.default_engine:
+                    # Match by name (case-insensitive)
+                    is_default = engine.name.lower() == extraction_config.default_engine.lower()
+                elif default_url and service_url == default_url:
+                    # Legacy fallback: match by URL from env var
                     is_default = True
-                elif service.name.lower() in {"extraction-service", "default"}:
+                elif engine.name.lower() in {"extraction-service", "default"}:
+                    # Ultimate fallback: extraction-service is default
                     is_default = True
+
+                # Sync enabled/disabled state from config.yml
+                is_active = engine.enabled
+
                 if existing:
                     config_changed = existing.config != config
                     default_changed = existing.is_default != is_default
-                    name_changed = existing.name != service.name
+                    active_changed = existing.is_active != is_active
+                    name_changed = existing.name != engine.name
 
-                    if config_changed or default_changed or name_changed:
+                    if config_changed or default_changed or active_changed or name_changed:
                         existing.config = config
                         existing.is_default = is_default
-                        existing.name = service.name
+                        existing.is_active = is_active
+                        existing.name = engine.name
                         existing.updated_at = datetime.utcnow()
                         await session.commit()
                         updated += 1
+                        status = "enabled" if is_active else "disabled"
                         logger.info(
-                            "Updated managed extraction connection: %s", service.name
+                            "Updated managed extraction connection: %s (engine_type: %s, %s)",
+                            engine.name,
+                            engine.engine_type,
+                            status
                         )
                     else:
                         unchanged += 1
                 else:
-                    new_connection = Connection(
-                        organization_id=organization_id,
-                        name=service.name,
-                        description="Auto-managed extraction service connection from config.yml",
-                        connection_type="extraction",
-                        config=config,
-                        is_active=True,
-                        is_default=is_default,
-                        is_managed=True,
-                        managed_by="config.yml: extraction.services",
-                        scope="organization",
-                    )
-                    session.add(new_connection)
-                    await session.commit()
-                    created += 1
-                    logger.info(
-                        "Created managed extraction connection: %s", service.name
-                    )
+                    # Only create new connections for enabled engines
+                    if engine.enabled:
+                        new_connection = Connection(
+                            organization_id=organization_id,
+                            name=engine.name,
+                            description=f"Auto-managed {engine.engine_type} connection from config.yml",
+                            connection_type="extraction",
+                            config=config,
+                            is_active=is_active,
+                            is_default=is_default,
+                            is_managed=True,
+                            managed_by="config.yml: extraction.engines",
+                            scope="organization",
+                        )
+                        session.add(new_connection)
+                        await session.commit()
+                        created += 1
+                        logger.info(
+                            "Created managed extraction connection: %s (engine_type: %s)",
+                            engine.name,
+                            engine.engine_type
+                        )
 
             if updated:
                 results["extraction"] = "updated"

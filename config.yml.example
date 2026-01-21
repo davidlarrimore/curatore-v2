@@ -72,44 +72,149 @@ llm:
 
 
 # ============================================================================
-# Extraction Service Configuration (optional)
+# Extraction Engine Configuration (optional)
 # ============================================================================
-# Document-to-markdown conversion services
+# Document-to-markdown conversion engines
 #
-# Supports multiple extraction engines
+# Curatore supports multiple extraction engines for document conversion.
+# Enable/disable engines as needed for your use case.
+#
+# Available engines:
+#   - extraction-service: Internal service using MarkItDown + Tesseract OCR
+#   - docling: IBM Docling for complex PDFs and Office documents
+#   - tika: Apache Tika (coming soon)
+#
 # If not configured here, falls back to EXTRACTION_* environment variables
 
 extraction:
-  # List of extraction services
-  services:
-    # Internal extraction service (recommended, always available)
-    # Uses MarkItDown + Tesseract OCR for document conversion
+  # Default engine to use when none specified (optional, default: extraction-service)
+  # IMPORTANT: This must match the 'name' field of one of the enabled engines below
+  # Options: extraction-service, docling, tika
+  default_engine: extraction-service
+
+  # List of available extraction engines
+  # Users can select these when creating jobs via Connections UI
+  engines:
+    # -------------------------------------------------------------------------
+    # Internal Extraction Service (Recommended)
+    # -------------------------------------------------------------------------
+    # Built-in service using MarkItDown + Tesseract OCR
+    # Best for: General documents, PDFs, Office files, images with text
+    # API Endpoint: /api/v1/extract (automatically used based on engine_type)
     - name: extraction-service
-      url: http://extraction:8010
-      timeout: 300  # 5 minutes (optional, default: 300)
+      display_name: "Internal Extraction Service"
+      description: "Built-in extraction using MarkItDown and Tesseract OCR"
+
+      # Engine type identifier (required)
+      # This determines which extraction logic and API endpoint to use
+      # API endpoints are predefined per engine_type and cannot be overridden
+      engine_type: extraction-service
+
+      # Service base URL (required)
+      service_url: http://extraction:8010
+
+      # Request timeout in seconds (optional, default: 300)
+      timeout: 300
+
+      # Enable this engine (required)
+      # Set to false to disable without removing configuration
       enabled: true
-      verify_ssl: true  # (optional, default: true)
+
+      # Verify SSL certificates (optional, default: true)
+      verify_ssl: true
+
+      # Docling OCR toggle (optional, default: true)
+      # When set, this maps to Docling's enable_ocr option.
+      docling_ocr_enabled: true
 
       # OCR settings (Tesseract-specific, optional)
-      # These settings are specific to the extraction-service implementation
+      # These settings apply to the extraction-service's OCR processing
       ocr:
         # Tesseract OCR language code (optional, default: eng)
         # Examples: eng, spa, fra, deu, or combinations like "eng+spa"
+        # See: https://github.com/tesseract-ocr/tesseract/blob/main/doc/tesseract.1.asc#languages
         language: eng
 
         # Page Segmentation Mode (optional, default: 3)
         # 3 = Fully automatic page segmentation (recommended)
         # 6 = Uniform block of text
         # 11 = Sparse text (find as much text as possible)
+        # See: https://github.com/tesseract-ocr/tesseract/blob/main/doc/tesseract.1.asc#options
         psm: 3
 
-    # Docling Serve (optional, for complex PDFs and Office docs)
-    # Enable by setting ENABLE_DOCLING_SERVICE=true in .env
+    # -------------------------------------------------------------------------
+    # Docling (IBM Research)
+    # -------------------------------------------------------------------------
+    # Advanced extraction engine for complex PDFs and Office documents
+    # Best for: Academic papers, technical documents, complex layouts
+    # Requires: Docling service running (see docker-compose.yml)
+    # API Endpoint: /v1/convert/file (automatically used based on engine_type)
     - name: docling
-      url: http://docling:5001
-      timeout: 600  # 10 minutes (optional, default: 600)
-      enabled: false  # Set to true if using Docling
+      display_name: "Docling (IBM Research)"
+      description: "Advanced extraction for complex PDFs and Office documents"
+
+      # Engine type identifier (required)
+      # This determines which extraction logic and API endpoint to use
+      # API endpoints are predefined per engine_type and cannot be overridden
+      engine_type: docling
+
+      # Docling service URL (required)
+      # Note: Docling typically runs on port 5001
+      service_url: http://docling:5001
+
+      # Request timeout in seconds (optional, default: 600)
+      # Docling can be slower for complex documents
+      timeout: 600
+
+      # Enable this engine (required)
+      # Set to true to enable Docling extraction
+      # Requires: ENABLE_DOCLING_SERVICE=true in docker-compose
+      enabled: false
+
+      # Verify SSL certificates (optional, default: true)
       verify_ssl: true
+
+      # Docling-specific options (optional)
+      # These are passed as query parameters to Docling's /v1/convert/file endpoint
+      # See: https://deepwiki.com/docling-project/docling-serve/4.1-conversion-endpoints
+      options:
+        # Output format (required, default: markdown)
+        output_format: markdown
+
+        # Image export mode (optional, default: placeholder)
+        # Options: placeholder, embedded, none
+        image_export_mode: placeholder
+
+        # Pipeline type (optional, default: standard)
+        # Options: standard, fast, accurate
+        pipeline_type: standard
+
+        # Enable OCR for scanned documents (optional, default: true)
+        enable_ocr: true
+
+        # OCR engine (optional, default: auto)
+        # Options: auto, tesseract, easyocr
+        ocr_engine: auto
+
+        # Table extraction mode (optional, default: accurate)
+        # Options: accurate, fast, none
+        table_mode: accurate
+
+    # -------------------------------------------------------------------------
+    # Apache Tika (Coming Soon)
+    # -------------------------------------------------------------------------
+    # Popular open-source content analysis toolkit
+    # Best for: Wide format support, metadata extraction
+    # Status: Not yet implemented - configuration shown for reference
+    # - name: tika
+    #   display_name: "Apache Tika"
+    #   description: "Open-source content analysis and extraction"
+    #   engine_type: tika
+    #   service_url: http://tika:9998
+    #   endpoint_path: /tika
+    #   timeout: 300
+    #   enabled: false
+    #   verify_ssl: true
 
 
 # ============================================================================

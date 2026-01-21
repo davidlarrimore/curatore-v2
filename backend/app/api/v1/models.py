@@ -175,7 +175,8 @@ class ConnectionTestResponse(BaseModel):
                 "message": "Successfully connected to gpt-4",
                 "details": {
                     "model": "gpt-4",
-                    "endpoint": "https://api.openai.com/v1"
+                    "endpoint": "https://api.openai.com/v1",
+                    "docling_api_version": "v1"
                 },
                 "tested_at": "2026-01-13T01:00:00"
             }

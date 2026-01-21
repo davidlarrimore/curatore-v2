@@ -93,27 +93,38 @@ llm:
 Configure document extraction engines.
 
 **Required:**
-- `extraction.services`: List of extraction service configs
+- `extraction.engines`: List of extraction engine configs
 
-**Service Configuration:**
-- `name`: Service identifier
-- `url`: Service endpoint URL
-- `enabled`: Enable/disable service (default: true)
+**Engine Configuration:**
+- `name`: Engine identifier
+- `engine_type`: `extraction-service` or `docling`
+- `service_url`: Service endpoint URL
+- `enabled`: Enable/disable engine (default: true)
 - `timeout`: Request timeout in seconds (default: 300)
 - `verify_ssl`: Verify SSL certificates (default: true)
+
+**Docling OCR Settings:**
+- `docling_ocr_enabled`: Toggle OCR for Docling (maps to Docling `enable_ocr`)
+- `options.ocr_engine`: `auto`, `tesseract`, or `easyocr` (use `auto` for detection)
+- Docling endpoints are auto-detected (`/v1/convert/file` vs `/v1alpha/convert/file`)
 
 **Example:**
 ```yaml
 extraction:
-  services:
+  engines:
     - name: extraction-service
-      url: http://extraction:8010
+      engine_type: extraction-service
+      service_url: http://extraction:8010
       timeout: 300
       enabled: true
     - name: docling
-      url: http://docling:5001
+      engine_type: docling
+      service_url: http://docling:5001
       timeout: 600
       enabled: false  # Enable if using Docling
+      docling_ocr_enabled: true
+      options:
+        ocr_engine: auto
 ```
 
 ---

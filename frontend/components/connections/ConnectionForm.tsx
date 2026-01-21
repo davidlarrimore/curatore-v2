@@ -268,6 +268,37 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
     const value = config[key] || ''
     const fieldType = schema.type === 'string' ? 'text' : schema.type === 'integer' || schema.type === 'number' ? 'number' : 'text'
     const isSecret = key.toLowerCase().includes('secret') || key.toLowerCase().includes('password') || key.toLowerCase().includes('key')
+    const isDoclingOcrField = key === 'docling_ocr_enabled'
+    const isDoclingSelected = config.engine_type === 'docling'
+
+    if (schema.type === 'boolean') {
+      const checked = typeof config[key] === 'boolean' ? config[key] : Boolean(schema.default)
+      const isDisabled = isDoclingOcrField && !isDoclingSelected
+
+      return (
+        <div key={key} className="space-y-1.5">
+          <div className="flex items-center gap-2">
+            <input
+              id={key}
+              type="checkbox"
+              checked={checked}
+              disabled={isDisabled}
+              onChange={(e) => handleConfigChange(key, e.target.checked)}
+              className="h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 disabled:opacity-60"
+            />
+            <label htmlFor={key} className="text-sm font-medium text-gray-700 dark:text-gray-300">
+              {schema.title || key}
+            </label>
+          </div>
+          {schema.description && (
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              {schema.description}
+              {isDoclingOcrField && !isDoclingSelected ? ' (Docling only)' : ''}
+            </p>
+          )}
+        </div>
+      )
+    }
 
     return (
       <div key={key} className="space-y-1.5">

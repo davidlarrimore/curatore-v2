@@ -26,6 +26,7 @@ from app.models.config_models import (
     AppConfig,
     LLMConfig,
     ExtractionConfig,
+    ExtractionEngineConfig,
     SharePointConfig,
     EmailConfig,
     StorageConfig,
@@ -321,6 +322,83 @@ class ConfigLoader:
     def has_email_config(self) -> bool:
         """Check if email configuration is available."""
         return self.get_email_config() is not None
+
+    # -------------------------------------------------------------------------
+    # Extraction engine convenience methods
+    # -------------------------------------------------------------------------
+
+    def get_enabled_extraction_engines(self) -> List:
+        """
+        Get list of enabled extraction engines from config.yml.
+
+        Returns:
+            List of ExtractionEngineConfig instances that are enabled
+            Empty list if no extraction config or no enabled engines
+        """
+        extraction_config = self.get_extraction_config()
+        if extraction_config is None:
+            return []
+
+        return [engine for engine in extraction_config.engines if engine.enabled]
+
+    def get_default_extraction_engine(self):
+        """
+        Get the default extraction engine from config.yml.
+
+        Uses the top-level 'default_engine' setting to determine which engine is the default.
+
+        Returns:
+            ExtractionEngineConfig instance for the default engine
+            None if no extraction config or default engine not found
+        """
+        extraction_config = self.get_extraction_config()
+        if extraction_config is None:
+            return None
+
+        # Try to find engine matching default_engine name (case-insensitive)
+        if extraction_config.default_engine:
+            for engine in extraction_config.engines:
+                if engine.enabled and engine.name.lower() == extraction_config.default_engine.lower():
+                    return engine
+
+        # Fallback to first enabled engine
+        enabled = self.get_enabled_extraction_engines()
+        return enabled[0] if enabled else None
+
+    def has_default_engine_in_config(self) -> bool:
+        """
+        Check if default_engine is explicitly set in config.yml.
+
+        Returns:
+            True if extraction.default_engine is set in config.yml
+            False if not set or no extraction config exists
+        """
+        extraction_config = self.get_extraction_config()
+        if extraction_config is None:
+            return False
+
+        # Check if default_engine is set (not None and not empty string)
+        return bool(extraction_config.default_engine)
+
+    def get_extraction_engine_by_name(self, name: str):
+        """
+        Get a specific extraction engine by name.
+
+        Args:
+            name: Engine name to look up
+
+        Returns:
+            ExtractionEngineConfig instance or None if not found or not enabled
+        """
+        extraction_config = self.get_extraction_config()
+        if extraction_config is None:
+            return None
+
+        for engine in extraction_config.engines:
+            if engine.name == name and engine.enabled:
+                return engine
+
+        return None
 
 
 # Global configuration loader instance

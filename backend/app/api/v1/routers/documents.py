@@ -402,15 +402,23 @@ async def download_document(document_id: str):
         if not path or not path.exists():
             raise HTTPException(status_code=404, detail="Processed file not found")
 
-        # Determine a sensible download filename
+        # Determine a sensible download filename (strip document_id prefix)
         download_name = None
         try:
             if result and getattr(result, 'filename', None):
                 download_name = f"{Path(result.filename).stem}.md"
             else:
-                download_name = Path(path.name).name
+                # Files are stored as {document_id}_{original_name}.md
+                # Strip the document_id prefix to get the original filename
+                filename = path.name
+                if '_' in filename:
+                    download_name = filename.split('_', 1)[1]  # Get everything after first underscore
+                else:
+                    download_name = filename
         except Exception:
-            download_name = Path(path.name).name
+            # Fallback: try to strip prefix, otherwise use full name
+            filename = path.name
+            download_name = filename.split('_', 1)[1] if '_' in filename else filename
 
         return FileResponse(
             path=str(path),

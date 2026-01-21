@@ -48,7 +48,7 @@ export function CreateJobPanel({ isOpen, onClose, onJobCreated }: CreateJobPanel
       max_retries: 3
     },
     auto_optimize: true,
-    extraction_engine: 'extraction-service'
+    extraction_engine: '' // Will be set by OptionsEditor from available connections
   })
   const [isCreating, setIsCreating] = useState(false)
 

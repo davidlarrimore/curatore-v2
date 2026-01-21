@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
-import { settingsApi } from '@/lib/api'
+import { settingsApi, systemApi } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import { JobStatsWidget } from '@/components/admin/JobStatsWidget'
@@ -16,7 +16,9 @@ import {
   Info,
   Loader2,
   ChevronDown,
-  ChevronUp
+  ChevronUp,
+  FileText,
+  Lock
 } from 'lucide-react'
 
 export default function SettingsAdminPage() {
@@ -43,6 +45,17 @@ function SettingsAdminContent() {
   const [jobConcurrencyLimit, setJobConcurrencyLimit] = useState(3)
   const [jobRetentionDays, setJobRetentionDays] = useState(30)
 
+  // Extraction engine settings
+  const [availableEngines, setAvailableEngines] = useState<Array<{
+    id: string
+    name: string
+    display_name: string
+    description: string
+  }>>([])
+  const [defaultEngine, setDefaultEngine] = useState<string>('')
+  const [defaultEngineSource, setDefaultEngineSource] = useState<string | null>(null)
+  const [isEngineFromConfig, setIsEngineFromConfig] = useState(false)
+
   useEffect(() => {
     if (token) {
       loadSettings()
@@ -56,10 +69,19 @@ function SettingsAdminContent() {
     setError('')
 
     try {
-      const [orgData, userData] = await Promise.all([
+      // Load organization settings and extraction engines
+      const [orgData, enginesData] = await Promise.all([
         settingsApi.getOrganizationSettings(token),
-        settingsApi.getUserSettings(token),
+        systemApi.getExtractionEngines(),
       ])
+
+      // Try to load user settings, but don't fail if endpoint doesn't exist
+      let userData = { settings: {} }
+      try {
+        userData = await settingsApi.getUserSettings(token)
+      } catch (userErr: any) {
+        console.warn('User settings not available:', userErr.message)
+      }
 
       setOrgSettings(orgData.settings || {})
       setEditedOrgSettings(orgData.settings || {})
@@ -71,7 +93,26 @@ function SettingsAdminContent() {
         setJobConcurrencyLimit(orgData.settings.job_concurrency_limit || 3)
         setJobRetentionDays(orgData.settings.job_retention_days || 30)
       }
+
+      // Load extraction engine settings
+      if (enginesData && Array.isArray(enginesData.engines)) {
+        console.log('Loaded engines:', enginesData.engines)
+        setAvailableEngines(enginesData.engines)
+        setDefaultEngineSource(enginesData.default_engine_source)
+        setIsEngineFromConfig(enginesData.default_engine_source === 'config.yml')
+
+        // If default is from config.yml, use that; otherwise use org setting
+        if (enginesData.default_engine_source === 'config.yml') {
+          setDefaultEngine(enginesData.default_engine || '')
+        } else {
+          setDefaultEngine(orgData.settings?.default_extraction_engine || enginesData.default_engine || '')
+        }
+      } else {
+        console.warn('No engines data or invalid format:', enginesData)
+        setAvailableEngines([])
+      }
     } catch (err: any) {
+      console.error('Failed to load settings:', err)
       setError(err.message || 'Failed to load settings')
     } finally {
       setIsLoading(false)
@@ -138,6 +179,28 @@ function SettingsAdminContent() {
       alert('✅ Job management settings saved successfully!')
     } catch (err: any) {
       setError(err.message || 'Failed to save job settings')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const handleSaveExtractionEngine = async () => {
+    if (!token) return
+
+    setIsSaving(true)
+    setError('')
+
+    try {
+      const updatedSettings = {
+        ...editedOrgSettings,
+        default_extraction_engine: defaultEngine
+      }
+      await settingsApi.updateOrganizationSettings(token, updatedSettings)
+      setOrgSettings(updatedSettings)
+      setEditedOrgSettings(updatedSettings)
+      alert('✅ Default extraction engine saved successfully!')
+    } catch (err: any) {
+      setError(err.message || 'Failed to save extraction engine')
     } finally {
       setIsSaving(false)
     }
@@ -282,8 +345,89 @@ function SettingsAdminContent() {
               </p>
             </div>
 
+            {/* Default Extraction Engine Section */}
+            <div className="border-b border-gray-200 dark:border-gray-700 pb-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white shadow-lg">
+                  <FileText className="w-5 h-5" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-base font-semibold text-gray-900 dark:text-white">
+                    Default Extraction Engine
+                  </h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                    Choose which engine to use for document extraction by default
+                  </p>
+                </div>
+              </div>
+
+              {isEngineFromConfig && (
+                <div className="mb-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-lg p-4">
+                  <div className="flex">
+                    <div className="flex-shrink-0">
+                      <Lock className="h-5 w-5 text-amber-500 dark:text-amber-400" />
+                    </div>
+                    <div className="ml-3">
+                      <h4 className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                        Configured in config.yml
+                      </h4>
+                      <div className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                        The default extraction engine is set in <code className="bg-amber-100 dark:bg-amber-900/50 px-1 py-0.5 rounded">config.yml</code> and cannot be changed here.
+                        To change it, update the <code className="bg-amber-100 dark:bg-amber-900/50 px-1 py-0.5 rounded">extraction.default_engine</code> setting in your configuration file.
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <label htmlFor="default-extraction-engine" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                  Extraction Engine
+                </label>
+                <select
+                  id="default-extraction-engine"
+                  value={defaultEngine}
+                  onChange={(e) => setDefaultEngine(e.target.value)}
+                  disabled={isEngineFromConfig || availableEngines.length === 0}
+                  className={`w-full max-w-lg px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${
+                    isEngineFromConfig || availableEngines.length === 0 ? 'opacity-50 cursor-not-allowed' : ''
+                  }`}
+                >
+                  {availableEngines.length === 0 && (
+                    <option value="">Loading engines...</option>
+                  )}
+                  {availableEngines.map((engine) => (
+                    <option key={engine.id} value={engine.name}>
+                      {engine.display_name}
+                    </option>
+                  ))}
+                </select>
+                {defaultEngine && availableEngines.length > 0 && (
+                  <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                    {availableEngines.find((e) => e.name === defaultEngine)?.description}
+                  </p>
+                )}
+                {availableEngines.length === 0 && !isLoading && (
+                  <p className="mt-2 text-sm text-amber-600 dark:text-amber-400">
+                    No extraction engines available. Check your config.yml file.
+                  </p>
+                )}
+              </div>
+
+              {!isEngineFromConfig && (
+                <div className="flex gap-3 pt-4">
+                  <Button onClick={handleSaveExtractionEngine} disabled={isSaving}>
+                    {isSaving ? 'Saving...' : 'Save Extraction Engine'}
+                  </Button>
+                  <Button variant="secondary" onClick={loadSettings}>
+                    Reset
+                  </Button>
+                </div>
+              )}
+            </div>
+
             <div className="space-y-4">
-              {Object.entries(editedOrgSettings).map(([key, value]) => (
+              {Object.entries(editedOrgSettings).filter(([key]) => key !== 'default_extraction_engine' && key !== 'job_concurrency_limit' && key !== 'job_retention_days').map(([key, value]) => (
                 <div key={key}>
                   {renderSettingField(key, value, handleOrgSettingChange)}
                 </div>

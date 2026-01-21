@@ -63,7 +63,7 @@ class BaseTask(Task):
                 clear_active_job(doc_id, task_id)
 
 
-@shared_task(bind=True, base=BaseTask, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+@shared_task(bind=True, base=BaseTask, autoretry_for=(), retry_backoff=True, retry_kwargs={"max_retries": 0})
 def process_document_task(
     self,
     document_id: str,
@@ -158,10 +158,47 @@ def process_document_task(
         append_job_log(self.request.id, "error", "Document file not found")
         raise RuntimeError("Document file not found")
 
-    # Run the existing async pipeline
+    # Get organization_id from job if available (for connection resolution)
+    organization_id = None
+    if job_document_id or job_id:
+        async def _get_organization_id():
+            async with database_service.get_session() as session:
+                if job_document_id:
+                    # Get organization_id from JobDocument -> Job
+                    result = await session.execute(
+                        select(Job.organization_id)
+                        .join(JobDocument, JobDocument.job_id == Job.id)
+                        .where(JobDocument.id == job_document_id)
+                    )
+                    return result.scalar_one_or_none()
+                elif job_id:
+                    # Get organization_id directly from Job
+                    result = await session.execute(
+                        select(Job.organization_id).where(Job.id == job_id)
+                    )
+                    return result.scalar_one_or_none()
+                return None
+
+        try:
+            organization_id = asyncio.run(_get_organization_id())
+        except Exception as e:
+            logging.getLogger("curatore.tasks").warning(f"Failed to get organization_id: {e}")
+
+    # Run the existing async pipeline with organization context
     try:
         append_job_log(self.request.id, "info", "Conversion started")
-        result = asyncio.run(document_service.process_document(document_id, resolved_path, domain_options))
+
+        async def _process_with_session():
+            async with database_service.get_session() as session:
+                return await document_service.process_document(
+                    document_id,
+                    resolved_path,
+                    domain_options,
+                    organization_id=organization_id,
+                    session=session
+                )
+
+        result = asyncio.run(_process_with_session())
         # Post-extraction confirmation log: which extractor actually produced content
         try:
             meta = getattr(result, 'processing_metadata', {}) or {}
@@ -201,15 +238,15 @@ def process_document_task(
         else:
             append_job_log(self.request.id, "warning", "File did not meet quality thresholds")
         append_job_log(self.request.id, "success", "Completed processing")
+
+        # Persist result via storage service (so existing endpoints work)
+        storage_service.save_processing_result(result)
+
+        # Return a JSON-serializable V1ProcessingResult dict
+        return V1ProcessingResult.model_validate(result).model_dump()
     except Exception as e:
         append_job_log(self.request.id, "error", f"Processing error: {str(e)}")
         raise
-
-    # Persist result via storage service (so existing endpoints work)
-    storage_service.save_processing_result(result)
-
-    # Return a JSON-serializable V1ProcessingResult dict
-    return V1ProcessingResult.model_validate(result).model_dump()
 
 
 @shared_task(bind=True, base=BaseTask, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
@@ -582,6 +619,8 @@ async def _update_job_document_success(
         job_document_id: JobDocument UUID
         result: Processing result dict
     """
+    from sqlalchemy import update as sql_update
+
     try:
         async with database_service.get_session() as session:
             result_obj = await session.execute(
@@ -628,19 +667,19 @@ async def _update_job_document_success(
                 )
                 session.add(log_entry)
 
-                # Update job counters
-                job_result = await session.execute(
-                    select(Job).where(Job.id == job_doc.job_id)
-                )
-                job = job_result.scalar_one_or_none()
-                if job:
-                    job.completed_documents += 1
-                    await session.commit()
+                job_id = job_doc.job_id
 
-                    # Check if job is complete
-                    await _check_job_completion(job.id)
-                else:
-                    await session.commit()
+                # Use atomic SQL increment to prevent race conditions
+                # This ensures concurrent workers don't lose increments
+                await session.execute(
+                    sql_update(Job)
+                    .where(Job.id == job_id)
+                    .values(completed_documents=Job.completed_documents + 1)
+                )
+                await session.commit()
+
+                # Check if job is complete
+                await _check_job_completion(job_id)
 
     except Exception as e:
         logging.getLogger("curatore.jobs").error(
@@ -658,6 +697,8 @@ async def _update_job_document_failure(
         job_document_id: JobDocument UUID
         error_message: Error message
     """
+    from sqlalchemy import update as sql_update
+
     try:
         async with database_service.get_session() as session:
             result = await session.execute(
@@ -686,19 +727,19 @@ async def _update_job_document_failure(
                 )
                 session.add(log_entry)
 
-                # Update job counters
-                job_result = await session.execute(
-                    select(Job).where(Job.id == job_doc.job_id)
-                )
-                job = job_result.scalar_one_or_none()
-                if job:
-                    job.failed_documents += 1
-                    await session.commit()
+                job_id = job_doc.job_id
 
-                    # Check if job is complete
-                    await _check_job_completion(job.id)
-                else:
-                    await session.commit()
+                # Use atomic SQL increment to prevent race conditions
+                # This ensures concurrent workers don't lose increments
+                await session.execute(
+                    sql_update(Job)
+                    .where(Job.id == job_id)
+                    .values(failed_documents=Job.failed_documents + 1)
+                )
+                await session.commit()
+
+                # Check if job is complete
+                await _check_job_completion(job_id)
 
     except Exception as e:
         logging.getLogger("curatore.jobs").error(
@@ -742,9 +783,15 @@ async def _check_job_completion(job_id: uuid.UUID) -> None:
     """
     Check if all documents in a job are complete and update job status accordingly.
 
+    Uses actual document status counts rather than relying solely on job counters
+    to handle race conditions and ensure accuracy.
+
     Args:
         job_id: Job UUID
     """
+    from sqlalchemy import func, and_
+    from sqlalchemy import update as sql_update
+
     try:
         async with database_service.get_session() as session:
             # Get job
@@ -754,18 +801,62 @@ async def _check_job_completion(job_id: uuid.UUID) -> None:
             if not job:
                 return
 
-            # Check if all documents are complete
-            total = job.completed_documents + job.failed_documents
-            if total >= job.total_documents:
+            # If job is already in terminal state, skip
+            if job.status in ["COMPLETED", "FAILED", "CANCELLED"]:
+                return
+
+            # Count actual document statuses from job_documents table
+            # This is more reliable than counters in case of race conditions
+            completed_count_result = await session.execute(
+                select(func.count(JobDocument.id)).where(
+                    and_(
+                        JobDocument.job_id == job_id,
+                        JobDocument.status == "COMPLETED"
+                    )
+                )
+            )
+            actual_completed = completed_count_result.scalar() or 0
+
+            failed_count_result = await session.execute(
+                select(func.count(JobDocument.id)).where(
+                    and_(
+                        JobDocument.job_id == job_id,
+                        JobDocument.status == "FAILED"
+                    )
+                )
+            )
+            actual_failed = failed_count_result.scalar() or 0
+
+            # Reconcile counters if they're out of sync
+            if job.completed_documents != actual_completed or job.failed_documents != actual_failed:
+                logging.getLogger("curatore.jobs").warning(
+                    f"Job {job_id} counter mismatch: "
+                    f"counters=({job.completed_documents}/{job.failed_documents}), "
+                    f"actual=({actual_completed}/{actual_failed}). Reconciling."
+                )
+                await session.execute(
+                    sql_update(Job)
+                    .where(Job.id == job_id)
+                    .values(
+                        completed_documents=actual_completed,
+                        failed_documents=actual_failed
+                    )
+                )
+                # Refresh job to get updated values
+                await session.refresh(job)
+
+            # Check if all documents are complete using actual counts
+            total_done = actual_completed + actual_failed
+            if total_done >= job.total_documents:
                 # Job is complete
-                if job.failed_documents > 0 and job.completed_documents == 0:
+                if actual_failed > 0 and actual_completed == 0:
                     # All failed
                     job.status = "FAILED"
-                    job.error_message = f"All {job.failed_documents} documents failed"
-                elif job.failed_documents > 0:
+                    job.error_message = f"All {actual_failed} documents failed"
+                elif actual_failed > 0:
                     # Partial success
                     job.status = "COMPLETED"
-                    job.error_message = f"{job.failed_documents}/{job.total_documents} documents failed"
+                    job.error_message = f"{actual_failed}/{job.total_documents} documents failed"
                 else:
                     # All succeeded
                     job.status = "COMPLETED"
@@ -777,11 +868,11 @@ async def _check_job_completion(job_id: uuid.UUID) -> None:
                     id=uuid.uuid4(),
                     job_id=job.id,
                     level="SUCCESS" if job.status == "COMPLETED" else "ERROR",
-                    message=f"Job completed: {job.completed_documents} succeeded, {job.failed_documents} failed",
+                    message=f"Job completed: {actual_completed} succeeded, {actual_failed} failed",
                     log_metadata={
                         "total_documents": job.total_documents,
-                        "completed_documents": job.completed_documents,
-                        "failed_documents": job.failed_documents,
+                        "completed_documents": actual_completed,
+                        "failed_documents": actual_failed,
                     },
                 )
                 session.add(log_entry)
@@ -789,7 +880,7 @@ async def _check_job_completion(job_id: uuid.UUID) -> None:
                 await session.commit()
 
                 logging.getLogger("curatore.jobs").info(
-                    f"Job {job.id} completed: {job.completed_documents}/{job.total_documents} succeeded"
+                    f"Job {job.id} completed: {actual_completed}/{job.total_documents} succeeded"
                 )
 
     except Exception as e:
