@@ -114,95 +114,25 @@ class OCRSettings(BaseModel):
     )
 
 
-class QualityThresholds(BaseModel):
-    """
-    Configuration model for document quality assessment thresholds.
-    
-    Defines minimum acceptable scores for various quality metrics.
-    Documents must meet all thresholds to be considered "RAG ready".
-    
-    Attributes:
-        conversion_quality: Minimum conversion score (0-100%)
-        clarity_score: Minimum clarity score (1-10)
-        completeness_score: Minimum completeness score (1-10)
-        relevance_score: Minimum relevance score (1-10)
-        markdown_quality: Minimum markdown formatting score (1-10)
-        
-    Example:
-        thresholds = QualityThresholds(
-            conversion_quality=75,
-            clarity_score=7,
-            completeness_score=8,
-            relevance_score=6,
-            markdown_quality=7
-        )
-    """
-    conversion_quality: int = Field(
-        default=70,
-        ge=0,
-        le=100,
-        description="Minimum conversion quality percentage"
-    )
-    clarity_score: int = Field(
-        default=7,
-        ge=1,
-        le=10,
-        description="Minimum clarity score (1-10 scale)"
-    )
-    completeness_score: int = Field(
-        default=7,
-        ge=1,
-        le=10,
-        description="Minimum completeness score (1-10 scale)"
-    )
-    relevance_score: int = Field(
-        default=7,
-        ge=1,
-        le=10,
-        description="Minimum relevance score (1-10 scale)"
-    )
-    markdown_quality: int = Field(
-        default=7,
-        ge=1,
-        le=10,
-        description="Minimum markdown quality score (1-10 scale)"
-    )
+# QualityThresholds class removed - feature deprecated
 
 
 class ProcessingOptions(BaseModel):
     """
     Configuration model for document processing options.
-    
-    Contains all settings that control how documents are processed,
-    including quality thresholds, OCR settings, and optimization flags.
-    
+
+    Contains all settings that control how documents are processed.
+
     Attributes:
-        auto_improve: Enable automatic content improvement
-        vector_optimize: Optimize content for vector databases
-        quality_thresholds: Quality assessment thresholds
         ocr_settings: OCR configuration for image processing
         extraction_engine: Extraction engine to use for this job
-        
+
     Example:
         options = ProcessingOptions(
-            auto_improve=True,
-            vector_optimize=True,
-            quality_thresholds=QualityThresholds(),
-            ocr_settings=OCRSettings()
+            ocr_settings=OCRSettings(),
+            extraction_engine="extraction-service"
         )
     """
-    auto_improve: bool = Field(
-        default=True,
-        description="Enable automatic content improvement using LLM"
-    )
-    vector_optimize: bool = Field(
-        default=True,
-        description="Optimize content structure for vector databases"
-    )
-    quality_thresholds: Optional[QualityThresholds] = Field(
-        default_factory=QualityThresholds,
-        description="Quality assessment thresholds"
-    )
     ocr_settings: Optional[OCRSettings] = Field(
         default_factory=OCRSettings,
         description="OCR configuration for image processing"
@@ -418,32 +348,28 @@ class LLMEvaluation(BaseModel):
 class ProcessingResult(BaseModel):
     """
     Complete result model for document processing operations.
-    
-    Combines conversion results, LLM evaluation, and metadata for
-    a comprehensive processing outcome.
-    
+
+    Combines conversion results and metadata for a comprehensive processing outcome.
+
     Attributes:
         document_id: Unique identifier for the processed document
         filename: Original filename of the processed document
         status: Current processing status
         conversion_result: Results from document conversion
-        llm_evaluation: Results from LLM quality evaluation (optional)
-        is_rag_ready: Whether document meets quality thresholds
+        llm_evaluation: Results from LLM quality evaluation (optional, deprecated)
         processing_time: Total processing time in seconds
         processed_at: Timestamp of processing completion
         file_size: Size of processed markdown file in bytes
         summary: Brief document summary (optional)
         original_path: Local filesystem path to the original file (optional)
         markdown_path: Local filesystem path to the processed markdown (optional)
-        vector_optimized: Whether vector optimization was applied
         processing_metadata: Arbitrary processing metadata map
-        
+
     Example:
         result = ProcessingResult(
             document_id="doc_123",
             filename="report.pdf",
-            status=ProcessingStatus.COMPLETED,
-            is_rag_ready=True
+            status=ProcessingStatus.COMPLETED
         )
     """
     document_id: str = Field(
@@ -461,10 +387,7 @@ class ProcessingResult(BaseModel):
     )
     llm_evaluation: Optional[LLMEvaluation] = Field(
         default=None,
-        description="Results from LLM quality evaluation"
-    )
-    is_rag_ready: bool = Field(
-        description="Whether document meets RAG quality thresholds"
+        description="Results from LLM quality evaluation (deprecated)"
     )
     processing_time: float = Field(
         default=0.0,
@@ -496,10 +419,6 @@ class ProcessingResult(BaseModel):
     markdown_path: Optional[Path] = Field(
         default=None,
         description="Filesystem path to processed markdown file"
-    )
-    vector_optimized: bool = Field(
-        default=False,
-        description="Whether vector optimization was applied"
     )
     processing_metadata: Optional[Dict[str, Any]] = Field(
         default=None,

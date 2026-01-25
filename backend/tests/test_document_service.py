@@ -1,4 +1,18 @@
 # tests/test_document_service.py
+#
+# NOTE: Many tests in this file are DEPRECATED as they test filesystem storage methods
+# that have been removed. These tests need to be updated or removed:
+# - save_uploaded_file() - DELETED
+# - list_uploaded_files_with_metadata() - DELETED
+# - list_batch_files_with_metadata() - DELETED
+# - clear_runtime_files() - DELETED
+# - find_document_file_unified() - DELETED
+#
+# New tests should focus on:
+# - Object storage integration via MinIO
+# - Artifact tracking via artifact_service
+# - Document processing with presigned URLs
+#
 import pytest
 import tempfile
 import os

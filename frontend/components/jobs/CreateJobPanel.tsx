@@ -29,25 +29,10 @@ export function CreateJobPanel({ isOpen, onClose, onJobCreated }: CreateJobPanel
   const [jobName, setJobName] = useState('')
   const [jobDescription, setJobDescription] = useState('')
   const [processingOptions, setProcessingOptions] = useState<ProcessingOptions>({
-    quality_thresholds: {
-      conversion_threshold: 70.0,
-      clarity_threshold: 7.0,
-      completeness_threshold: 8.0,
-      relevance_threshold: 6.0,
-      markdown_threshold: 7.0
-    },
     ocr_settings: {
-      enabled: true,
       language: 'eng',
-      confidence_threshold: 0.8,
       psm: 3
     },
-    processing_settings: {
-      chunk_size: 1000,
-      chunk_overlap: 200,
-      max_retries: 3
-    },
-    auto_optimize: true,
     extraction_engine: '' // Will be set by OptionsEditor from available connections
   })
   const [isCreating, setIsCreating] = useState(false)
@@ -215,7 +200,8 @@ export function CreateJobPanel({ isOpen, onClose, onJobCreated }: CreateJobPanel
             {currentStep === 'select' && (
               <div>
                 <p className="text-sm text-gray-600 mb-4">
-                  Select documents to include in this batch job. You can upload new files or choose from existing documents.
+                  Browse your storage and select documents to include in this batch job.
+                  Need to add files? Visit the Storage page to upload documents first.
                 </p>
                 <FileSelector
                   selectedFiles={selectedFiles}
@@ -304,27 +290,15 @@ export function CreateJobPanel({ isOpen, onClose, onJobCreated }: CreateJobPanel
                     <h3 className="text-lg font-semibold text-gray-900 mb-2">Processing Options</h3>
                     <div className="bg-gray-50 rounded-lg p-4 space-y-2">
                       <div className="flex justify-between">
-                        <span className="text-sm text-gray-600">Conversion Threshold:</span>
-                        <span className="text-sm font-medium text-gray-900">
-                          {processingOptions.quality_thresholds.conversion_threshold}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
-                        <span className="text-sm text-gray-600">Auto-optimize:</span>
-                        <span className="text-sm font-medium text-gray-900">
-                          {processingOptions.auto_optimize ? 'Enabled' : 'Disabled'}
-                        </span>
-                      </div>
-                      <div className="flex justify-between">
                         <span className="text-sm text-gray-600">Extraction Engine:</span>
                         <span className="text-sm font-medium text-gray-900">
                           {processingOptions.extraction_engine ?? 'extraction-service'}
                         </span>
                       </div>
                       <div className="flex justify-between">
-                        <span className="text-sm text-gray-600">OCR:</span>
+                        <span className="text-sm text-gray-600">OCR Language:</span>
                         <span className="text-sm font-medium text-gray-900">
-                          {processingOptions.ocr_settings.enabled ? 'Enabled' : 'Disabled'}
+                          {processingOptions.ocr_settings.language}
                         </span>
                       </div>
                     </div>
@@ -341,7 +315,7 @@ export function CreateJobPanel({ isOpen, onClose, onJobCreated }: CreateJobPanel
                             <li key={file.document_id} className="text-sm text-gray-700">
                               {index + 1}. {file.filename}
                               <span className="text-gray-400 ml-2">
-                                ({(file.size / 1024).toFixed(1)} KB)
+                                ({(file.file_size / 1024).toFixed(1)} KB)
                               </span>
                             </li>
                           ))}

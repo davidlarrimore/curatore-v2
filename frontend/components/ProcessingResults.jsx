@@ -11,16 +11,14 @@ export function ProcessingResults({ documents, onDelete, onRefresh, apiUrl, isLo
 
   const getStatusBadge = (doc) => {
     if (doc.status === 'completed' && doc.success) {
-      return doc.pass_all_thresholds 
-        ? 'bg-green-100 text-green-800' 
-        : 'bg-yellow-100 text-yellow-800'
+      return 'bg-green-100 text-green-800'
     }
     return 'bg-red-100 text-red-800'
   }
 
   const getStatusText = (doc) => {
     if (doc.status === 'completed' && doc.success) {
-      return doc.pass_all_thresholds ? '✅ RAG Ready' : '⚠️ Needs Work'
+      return '✅ Completed'
     }
     return '❌ Failed'
   }
@@ -77,8 +75,6 @@ export function ProcessingResults({ documents, onDelete, onRefresh, apiUrl, isLo
   }
 
   const successfulDocs = documents.filter(doc => doc.success)
-  const ragReadyDocs = successfulDocs.filter(doc => doc.pass_all_thresholds)
-  const vectorOptimizedDocs = successfulDocs.filter(doc => doc.vector_optimized)
 
   return (
     <div className="bg-white rounded-2xl border shadow-sm p-6">
@@ -95,22 +91,18 @@ export function ProcessingResults({ documents, onDelete, onRefresh, apiUrl, isLo
       </div>
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-6">
+      <div className="grid grid-cols-3 gap-4 mb-6">
         <div className="bg-blue-50 p-4 rounded-lg text-center">
           <div className="text-2xl font-bold text-blue-600">{documents.length}</div>
           <div className="text-sm text-blue-800">Total</div>
         </div>
         <div className="bg-green-50 p-4 rounded-lg text-center">
-          <div className="text-2xl font-bold text-green-600">{ragReadyDocs.length}</div>
-          <div className="text-sm text-green-800">RAG Ready</div>
+          <div className="text-2xl font-bold text-green-600">{successfulDocs.length}</div>
+          <div className="text-sm text-green-800">Successful</div>
         </div>
-        <div className="bg-purple-50 p-4 rounded-lg text-center">
-          <div className="text-2xl font-bold text-purple-600">{vectorOptimizedDocs.length}</div>
-          <div className="text-sm text-purple-800">Optimized</div>
-        </div>
-        <div className="bg-gray-50 p-4 rounded-lg text-center">
-          <div className="text-2xl font-bold text-gray-600">{successfulDocs.length}</div>
-          <div className="text-sm text-gray-800">Successful</div>
+        <div className="bg-red-50 p-4 rounded-lg text-center">
+          <div className="text-2xl font-bold text-red-600">{documents.length - successfulDocs.length}</div>
+          <div className="text-sm text-red-800">Failed</div>
         </div>
       </div>
 
@@ -129,7 +121,6 @@ export function ProcessingResults({ documents, onDelete, onRefresh, apiUrl, isLo
                       {doc.conversion_score !== undefined && (
                         <span>📊 {doc.conversion_score}/100</span>
                       )}
-                      {doc.vector_optimized && <span>🎯 Optimized</span>}
                     </div>
                   </div>
                 </div>

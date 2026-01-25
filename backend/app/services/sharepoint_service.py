@@ -42,10 +42,16 @@ def _scope() -> str:
 
 
 def _default_batch_dir() -> Path:
-    candidate = settings.batch_path
-    if str(candidate).startswith("/app") and not os.access(candidate, os.W_OK):
-        return Path.cwd() / "files" / "batch_files"
-    return candidate
+    """
+    Get default batch directory for SharePoint downloads.
+
+    Note: SharePoint service will be updated to upload directly to object storage
+    in a future update. For now, downloads to temp directory.
+    """
+    import tempfile
+    temp_dir = Path(tempfile.gettempdir()) / "sharepoint_downloads"
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    return temp_dir
 
 
 def _normalize_folder_path(folder_path: str) -> str:

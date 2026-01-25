@@ -20,11 +20,8 @@ export interface ProcessingResult {
   llm_evaluation?: LLMEvaluation;
   document_summary?: string;
   conversion_score: number;
-  pass_all_thresholds: boolean;
-  vector_optimized: boolean;
   processing_time?: number;
   processed_at?: number;
-  thresholds_used?: QualityThresholds;
 }
 
 export interface ConversionResult {
@@ -50,13 +47,7 @@ export interface LLMEvaluation {
   pass_recommendation?: string;
 }
 
-export interface QualityThresholds {
-  conversion: number;
-  clarity: number;
-  completeness: number;
-  relevance: number;
-  markdown: number;
-}
+// QualityThresholds removed - feature deprecated
 
 export interface OCRSettings {
   language: string;
@@ -64,9 +55,7 @@ export interface OCRSettings {
 }
 
 export interface ProcessingOptions {
-  auto_optimize: boolean;
   ocr_settings: OCRSettings;
-  quality_thresholds: QualityThresholds;
   extraction_engine?: string;
 }
 
@@ -80,7 +69,6 @@ export interface BatchProcessingResult {
   total_files: number;
   successful: number;
   failed: number;
-  rag_ready: number;
   results: ProcessingResult[];
   processing_time: number;
   started_at: string;
@@ -106,9 +94,7 @@ export interface SystemStatus {
 }
 
 export interface AppConfig {
-  quality_thresholds: QualityThresholds;
   ocr_settings: OCRSettings;
-  auto_optimize: boolean;
 }
 
 export type ProcessingStage = 'upload' | 'process' | 'review' | 'download';

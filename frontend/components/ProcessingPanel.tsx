@@ -214,34 +214,7 @@ export function ProcessingPanel({
     }
   };
 
-  // NEW: Quick download functions for the processing panel
-  const quickDownloadRAGReady = async () => {
-    const ragReadyResults = results.filter(r => r.pass_all_thresholds);
-    if (ragReadyResults.length === 0) {
-      toast.error('No RAG-ready files available yet');
-      return;
-    }
-
-    setQuickDownloadLoading('rag');
-    try {
-      const timestamp = utils.generateTimestamp();
-      const zipName = `curatore_rag_ready_${timestamp}.zip`;
-      
-      const blob = await fileApi.downloadRAGReadyDocuments(zipName);
-      utils.downloadBlob(blob, zipName);
-      
-      addLog('success', `Downloaded ${ragReadyResults.length} RAG-ready files as ZIP`);
-      toast.success(`Downloaded ${ragReadyResults.length} RAG-ready files`, { icon: '🎯' });
-    } catch (error) {
-      console.error('Quick RAG download failed:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Download failed';
-      addLog('error', `Quick RAG download failed: ${errorMessage}`);
-      toast.error('Failed to download RAG-ready files');
-    } finally {
-      setQuickDownloadLoading('');
-    }
-  };
-
+  // Quick download all processed files
   const quickDownloadAll = async () => {
     const successfulResults = results.filter(r => r.success);
     if (successfulResults.length === 0) {
@@ -284,7 +257,6 @@ export function ProcessingPanel({
     setProcessingComplete(false);
 
     addLog('info', `Queueing ${selectedFiles.length} files for background processing...`);
-    addLog('info', `Vector optimization: ${processingOptions.auto_optimize ? 'ON' : 'OFF'}`);
 
     // Quick pre-flight: check backend health with short retries to provide a friendly UX when backend is restarting
     const healthTimeoutMs = 2500;
@@ -491,9 +463,7 @@ export function ProcessingPanel({
               status: 'failed',
               success: false,
               message: docInfo?.error_message || 'Processing failed',
-              conversion_score: 0,
-              pass_all_thresholds: false,
-              vector_optimized: false
+              conversion_score: 0
             };
             processedResults.push(failedResult);
             updateResults([...processedResults]);
@@ -540,11 +510,10 @@ export function ProcessingPanel({
 
       const successful = processedResults.filter(r => r.success).length;
       const failed = processedResults.length - successful;
-      const ragReady = processedResults.filter(r => r.pass_all_thresholds).length;
       const processingTime = (Date.now() - processingStartTime) / 1000;
 
       addLog('success', `Processing complete!`);
-      addLog('info', `Summary: ${successful} successful, ${failed} failed, ${ragReady} RAG-ready`);
+      addLog('info', `Summary: ${successful} successful, ${failed} failed`);
       addLog('info', `Total time: ${utils.formatDuration(processingTime)}`);
 
       setProcessingComplete(true);
@@ -552,7 +521,7 @@ export function ProcessingPanel({
       onProcessingComplete(processedResults);
 
       toast.success(
-        `Processing complete! ${ragReady} of ${successful} files are RAG-ready`,
+        `Processing complete! ${successful} of ${processedResults.length} files processed successfully`,
         { duration: 6000, icon: '🎉' }
       );
     } catch (error) {
@@ -571,7 +540,6 @@ export function ProcessingPanel({
 
   const successful = results.filter(r => r.success).length;
   const failed = results.length - successful;
-  const ragReady = results.filter(r => r.pass_all_thresholds).length;
 
   // Panel positioning and size with proper z-index and sidebar awareness
   const getPanelClasses = () => {
@@ -649,8 +617,6 @@ export function ProcessingPanel({
               <>
                 <span>•</span>
                 <span className="text-green-400">{successful} success</span>
-                <span>•</span>
-                <span className="text-blue-400">{ragReady} RAG-ready</span>
               </>
             )}
             {currentFile && isProcessing && (
@@ -823,15 +789,13 @@ export function ProcessingPanel({
                             <div key={index} className="flex items-center justify-between p-2 hover:bg-gray-700 rounded text-sm">
                               <div className="flex items-center space-x-2 min-w-0 flex-1">
                                 <span className="flex-shrink-0">
-                                  {result.success ? (result.pass_all_thresholds ? '✅' : '⚠️') : '❌'}
+                                  {result.success ? '✅' : '❌'}
                                 </span>
                                 <span className="text-sm font-medium truncate text-gray-200">{utils.getDisplayFilename(result.filename)}</span>
                               </div>
                               <div className="flex items-center space-x-2 flex-shrink-0">
                                 {/* Primary status badge */}
-                                {result.pass_all_thresholds ? (
-                                  <span className="px-2 py-0.5 rounded text-xs bg-blue-900 text-blue-300 border border-blue-700">RAG Ready</span>
-                                ) : result.success ? (
+                                {result.success ? (
                                   <span className="px-2 py-0.5 rounded text-xs bg-green-900 text-green-300 border border-green-700">Successful</span>
                                 ) : (
                                   <span className="px-2 py-0.5 rounded text-xs bg-red-900 text-red-300 border border-red-700">Failed</span>
@@ -844,10 +808,6 @@ export function ProcessingPanel({
                                 )}
                                 {/* Conversion score */}
                                 <span className="px-2 py-0.5 rounded text-xs bg-gray-800 text-gray-300 border border-gray-600">Score: {result.conversion_score}%</span>
-                                {/* Optimization flag */}
-                                {result.vector_optimized && (
-                                  <span className="px-2 py-0.5 rounded text-xs bg-purple-900 text-purple-300 border border-purple-700">Optimized</span>
-                                )}
                               </div>
                             </div>
                           );

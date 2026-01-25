@@ -114,7 +114,7 @@ class DoclingEngine(BaseExtractionEngine):
             # Output format (must be array)
             "to_formats": ["md"],
             # Image handling
-            "image_export_mode": "embedded",
+            "image_export_mode": "placeholder",
             # OCR settings
             "do_ocr": True,
             "ocr_engine": "easyocr",

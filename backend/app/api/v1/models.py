@@ -21,7 +21,6 @@ from ...models import (
     ProcessingStatus,
     DocumentEditRequest,
     ProcessingOptions,
-    QualityThresholds,
     BulkDownloadRequest,
     ZipArchiveInfo,
     HealthStatus,
@@ -493,22 +492,7 @@ class ApiKeyListResponse(BaseModel):
         }
 
 
-class V1QualityThresholds(BaseModel):
-    """Frontend v1-friendly thresholds payload shape."""
-    conversion: int = Field(default=70, ge=0, le=100)
-    clarity: int = Field(default=7, ge=1, le=10)
-    completeness: int = Field(default=7, ge=1, le=10)
-    relevance: int = Field(default=7, ge=1, le=10)
-    markdown: int = Field(default=7, ge=1, le=10)
-
-    def to_domain(self) -> QualityThresholds:
-        return QualityThresholds(
-            conversion_quality=self.conversion,
-            clarity_score=self.clarity,
-            completeness_score=self.completeness,
-            relevance_score=self.relevance,
-            markdown_quality=self.markdown,
-        )
+# V1QualityThresholds removed - feature deprecated
 
 
 class V1ProcessingOptions(BaseModel):
@@ -518,8 +502,6 @@ class V1ProcessingOptions(BaseModel):
     Maps to internal ProcessingOptions. Only common fields are exposed.
     """
 
-    auto_optimize: bool = Field(default=True, description="Optimize for vector DB")
-    quality_thresholds: Optional[V1QualityThresholds] = None
     extraction_engine: Optional[str] = Field(
         default="extraction-service",
         description="Extraction engine to use (e.g., 'extraction-service', 'docling')",
@@ -527,9 +509,6 @@ class V1ProcessingOptions(BaseModel):
 
     def to_domain(self) -> ProcessingOptions:
         return ProcessingOptions(
-            auto_improve=self.auto_optimize,
-            vector_optimize=self.auto_optimize,
-            quality_thresholds=self.quality_thresholds.to_domain() if self.quality_thresholds else None,
             extraction_engine=self.extraction_engine,
         )
 
@@ -610,7 +589,6 @@ __all__ = [
     "LLMConnectionStatus",
     # V1 request wrappers
     "V1ProcessingOptions",
-    "V1QualityThresholds",
     "V1BatchProcessingRequest",
     # V1 response models
     "V1ProcessingResult",
@@ -661,11 +639,8 @@ class V1ProcessingResult(BaseModel):
     llm_evaluation: Optional[LLMEvaluation] = None
     document_summary: Optional[str] = None
     conversion_score: int
-    pass_all_thresholds: bool = Field(validation_alias=AliasChoices('pass_all_thresholds', 'is_rag_ready'))
-    vector_optimized: bool
     processing_time: float
     processed_at: Optional[datetime] = None
-    thresholds_used: Optional[QualityThresholds] = None
 
     class Config:
         from_attributes = True
@@ -696,11 +671,8 @@ class V1ProcessingResult(BaseModel):
                     "llm_evaluation": getattr(v, "llm_evaluation", None),
                     "document_summary": getattr(v, "document_summary", None),
                     "conversion_score": getattr(cr, "conversion_score", None) if cr else None,
-                    "pass_all_thresholds": getattr(v, "is_rag_ready", getattr(v, "pass_all_thresholds", None)),
-                    "vector_optimized": getattr(v, "vector_optimized", False),
                     "processing_time": getattr(v, "processing_time", 0.0),
                     "processed_at": getattr(v, "processed_at", None),
-                    "thresholds_used": getattr(v, "thresholds_used", None),
                 }
         except Exception:
             return v
@@ -712,7 +684,6 @@ class V1BatchProcessingResult(BaseModel):
     total_files: int
     successful: int
     failed: int
-    rag_ready: int
     results: List[V1ProcessingResult]
     processing_time: float
     started_at: datetime
@@ -989,5 +960,392 @@ class DeleteJobResponse(BaseModel):
                 "logs_deleted": 12,
                 "deleted_at": "2026-01-16T10:30:00",
                 "message": "Job deleted successfully. 5 documents and 4 processed files removed."
+            }
+        }
+
+
+# =========================================================================
+# OBJECT STORAGE MODELS
+# =========================================================================
+
+class PresignedUploadRequest(BaseModel):
+    """Request for presigned upload URL."""
+    filename: str = Field(..., min_length=1, max_length=500, description="Original filename")
+    content_type: str = Field(default="application/octet-stream", description="MIME type of the file")
+    file_size: Optional[int] = Field(None, ge=0, description="File size in bytes (optional)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "filename": "report_q4_2025.pdf",
+                "content_type": "application/pdf",
+                "file_size": 1048576
+            }
+        }
+
+
+class PresignedUploadResponse(BaseModel):
+    """Response with presigned upload URL."""
+    document_id: str = Field(..., description="Generated document ID")
+    artifact_id: str = Field(..., description="Artifact UUID for tracking")
+    upload_url: str = Field(..., description="Presigned URL for direct upload to storage")
+    expires_in: int = Field(..., description="URL expiration time in seconds")
+    bucket: str = Field(..., description="Target storage bucket")
+    object_key: str = Field(..., description="Object key/path in bucket")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "document_id": "doc_abc123",
+                "artifact_id": "123e4567-e89b-12d3-a456-426614174000",
+                "upload_url": "https://storage.example.com/curatore-uploads/...",
+                "expires_in": 3600,
+                "bucket": "curatore-uploads",
+                "object_key": "org-uuid/doc-uuid/uploaded/report_q4_2025.pdf"
+            }
+        }
+
+
+class ConfirmUploadRequest(BaseModel):
+    """Request to confirm upload completion."""
+    artifact_id: str = Field(..., description="Artifact UUID from presigned response")
+    document_id: str = Field(..., description="Document ID from presigned response")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "artifact_id": "123e4567-e89b-12d3-a456-426614174000",
+                "document_id": "doc_abc123"
+            }
+        }
+
+
+class ConfirmUploadResponse(BaseModel):
+    """Response confirming upload."""
+    document_id: str = Field(..., description="Document ID")
+    artifact_id: str = Field(..., description="Artifact UUID")
+    status: str = Field(..., description="Artifact status (available)")
+    filename: str = Field(..., description="Original filename")
+    file_size: Optional[int] = Field(None, description="Actual file size in bytes")
+    etag: Optional[str] = Field(None, description="Object ETag from storage")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "document_id": "doc_abc123",
+                "artifact_id": "123e4567-e89b-12d3-a456-426614174000",
+                "status": "available",
+                "filename": "report_q4_2025.pdf",
+                "file_size": 1048576,
+                "etag": "d41d8cd98f00b204e9800998ecf8427e"
+            }
+        }
+
+
+class PresignedDownloadResponse(BaseModel):
+    """Response with presigned download URL."""
+    document_id: str = Field(..., description="Document ID")
+    artifact_id: str = Field(..., description="Artifact UUID")
+    download_url: str = Field(..., description="Presigned URL for direct download")
+    filename: str = Field(..., description="Original filename")
+    content_type: Optional[str] = Field(None, description="Content type")
+    file_size: Optional[int] = Field(None, description="File size in bytes")
+    expires_in: int = Field(..., description="URL expiration time in seconds")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "document_id": "doc_abc123",
+                "artifact_id": "123e4567-e89b-12d3-a456-426614174000",
+                "download_url": "https://storage.example.com/curatore-processed/...",
+                "filename": "report_q4_2025.md",
+                "content_type": "text/markdown",
+                "file_size": 52428,
+                "expires_in": 3600
+            }
+        }
+
+
+class StorageHealthResponse(BaseModel):
+    """Object storage health status."""
+    status: str = Field(..., description="Storage status (healthy, unhealthy, disabled)")
+    enabled: bool = Field(..., description="Whether object storage is enabled")
+    provider_connected: Optional[bool] = Field(None, description="Whether provider is connected")
+    buckets: Optional[List[str]] = Field(None, description="Available buckets")
+    error: Optional[str] = Field(None, description="Error message if unhealthy")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "status": "healthy",
+                "enabled": True,
+                "provider_connected": True,
+                "buckets": ["curatore-uploads", "curatore-processed", "curatore-temp"],
+                "error": None
+            }
+        }
+
+
+class ArtifactResponse(BaseModel):
+    """Artifact details response."""
+    id: str = Field(..., description="Artifact UUID")
+    organization_id: str = Field(..., description="Organization UUID")
+    document_id: str = Field(..., description="Document ID")
+    job_id: Optional[str] = Field(None, description="Associated job UUID")
+    artifact_type: str = Field(..., description="Artifact type (uploaded, processed, temp)")
+    bucket: str = Field(..., description="Storage bucket")
+    object_key: str = Field(..., description="Object key/path")
+    original_filename: str = Field(..., description="Original filename")
+    content_type: Optional[str] = Field(None, description="MIME type")
+    file_size: Optional[int] = Field(None, description="File size in bytes")
+    etag: Optional[str] = Field(None, description="Object ETag")
+    status: str = Field(..., description="Status (pending, available, deleted)")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+    expires_at: Optional[datetime] = Field(None, description="Expiration timestamp")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "organization_id": "04ace7c6-2043-4935-b074-ec0a567d1fd2",
+                "document_id": "doc_abc123",
+                "job_id": None,
+                "artifact_type": "uploaded",
+                "bucket": "curatore-uploads",
+                "object_key": "org-uuid/doc-uuid/uploaded/report.pdf",
+                "original_filename": "report.pdf",
+                "content_type": "application/pdf",
+                "file_size": 1048576,
+                "etag": "d41d8cd98f00b204e9800998ecf8427e",
+                "status": "available",
+                "created_at": "2026-01-20T10:00:00",
+                "updated_at": "2026-01-20T10:00:30",
+                "expires_at": "2026-01-27T10:00:00"
+            }
+        }
+
+
+# =========================================================================
+# STORAGE BROWSE MODELS
+# =========================================================================
+
+class BucketInfo(BaseModel):
+    """Information about a storage bucket."""
+    name: str = Field(..., description="Bucket name")
+    display_name: str = Field(..., description="Human-readable display name")
+    is_protected: bool = Field(..., description="Whether bucket is read-only for users")
+    is_default: bool = Field(..., description="Whether this is the default uploads bucket")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "curatore-uploads",
+                "display_name": "Default Storage",
+                "is_protected": False,
+                "is_default": True
+            }
+        }
+
+
+class StorageObjectInfo(BaseModel):
+    """Information about an object in storage."""
+    key: str = Field(..., description="Object key/path")
+    filename: str = Field(..., description="Filename extracted from key")
+    size: int = Field(..., description="File size in bytes")
+    content_type: Optional[str] = Field(None, description="MIME type")
+    etag: str = Field(..., description="Object ETag")
+    last_modified: datetime = Field(..., description="Last modification timestamp")
+    is_folder: bool = Field(default=False, description="Whether this is a folder marker")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "key": "org_123/workspace/report.pdf",
+                "filename": "report.pdf",
+                "size": 1048576,
+                "content_type": "application/pdf",
+                "etag": "d41d8cd98f00b204e9800998ecf8427e",
+                "last_modified": "2026-01-20T10:00:00",
+                "is_folder": False
+            }
+        }
+
+
+class BrowseResponse(BaseModel):
+    """Response from browsing a bucket/folder."""
+    bucket: str = Field(..., description="Bucket name")
+    prefix: str = Field(..., description="Current prefix/path")
+    folders: List[str] = Field(..., description="Folder names at this level")
+    files: List[StorageObjectInfo] = Field(..., description="Files at this level")
+    is_protected: bool = Field(..., description="Whether this bucket is read-only")
+    parent_path: Optional[str] = Field(None, description="Parent folder path for navigation")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "bucket": "curatore-uploads",
+                "prefix": "org_123/workspace/",
+                "folders": ["reports", "images"],
+                "files": [
+                    {
+                        "key": "org_123/workspace/readme.txt",
+                        "filename": "readme.txt",
+                        "size": 1024,
+                        "content_type": "text/plain",
+                        "etag": "abc123",
+                        "last_modified": "2026-01-20T10:00:00",
+                        "is_folder": False
+                    }
+                ],
+                "is_protected": False,
+                "parent_path": "org_123/"
+            }
+        }
+
+
+class BucketsListResponse(BaseModel):
+    """Response listing all accessible buckets."""
+    buckets: List[BucketInfo] = Field(..., description="List of accessible buckets")
+    default_bucket: str = Field(..., description="Name of the default uploads bucket")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "buckets": [
+                    {"name": "curatore-uploads", "display_name": "Default Storage", "is_protected": False, "is_default": True},
+                    {"name": "curatore-processed", "display_name": "Processed Files", "is_protected": True, "is_default": False}
+                ],
+                "default_bucket": "curatore-uploads"
+            }
+        }
+
+
+class CreateFolderRequest(BaseModel):
+    """Request to create a new folder."""
+    bucket: str = Field(..., description="Bucket name")
+    path: str = Field(..., min_length=1, max_length=500, description="Folder path to create")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "bucket": "curatore-uploads",
+                "path": "org_123/my-workspace/new-folder"
+            }
+        }
+
+
+class CreateFolderResponse(BaseModel):
+    """Response after creating a folder."""
+    success: bool = Field(..., description="Whether folder was created")
+    bucket: str = Field(..., description="Bucket name")
+    path: str = Field(..., description="Full folder path")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "bucket": "curatore-uploads",
+                "path": "org_123/my-workspace/new-folder/"
+            }
+        }
+
+
+class DeleteFolderResponse(BaseModel):
+    """Response after deleting a folder."""
+    success: bool = Field(..., description="Whether deletion was successful")
+    bucket: str = Field(..., description="Bucket name")
+    path: str = Field(..., description="Deleted folder path")
+    deleted_count: int = Field(..., description="Number of objects deleted")
+    failed_count: int = Field(..., description="Number of objects that failed to delete")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "bucket": "curatore-uploads",
+                "path": "org_123/my-workspace/old-folder/",
+                "deleted_count": 5,
+                "failed_count": 0
+            }
+        }
+
+
+class MoveFilesRequest(BaseModel):
+    """Request to move files to a different location."""
+    artifact_ids: List[str] = Field(..., min_length=1, description="List of artifact IDs to move")
+    destination_bucket: str = Field(..., description="Destination bucket")
+    destination_prefix: str = Field(..., description="Destination folder path")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "artifact_ids": ["123e4567-e89b-12d3-a456-426614174000"],
+                "destination_bucket": "curatore-uploads",
+                "destination_prefix": "org_123/archive/"
+            }
+        }
+
+
+class MoveFilesResponse(BaseModel):
+    """Response after moving files."""
+    moved_count: int = Field(..., description="Number of files successfully moved")
+    failed_count: int = Field(..., description="Number of files that failed to move")
+    moved_artifacts: List[str] = Field(..., description="IDs of successfully moved artifacts")
+    failed_artifacts: List[str] = Field(..., description="IDs of artifacts that failed to move")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "moved_count": 3,
+                "failed_count": 0,
+                "moved_artifacts": ["123e4567-e89b-12d3-a456-426614174000"],
+                "failed_artifacts": []
+            }
+        }
+
+
+class RenameFileRequest(BaseModel):
+    """Request to rename a file."""
+    artifact_id: str = Field(..., description="Artifact ID to rename")
+    new_name: str = Field(..., min_length=1, max_length=255, description="New filename")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "artifact_id": "123e4567-e89b-12d3-a456-426614174000",
+                "new_name": "renamed-file.pdf"
+            }
+        }
+
+
+class RenameFileResponse(BaseModel):
+    """Response after renaming a file."""
+    success: bool = Field(..., description="Whether rename was successful")
+    artifact_id: str = Field(..., description="Artifact ID")
+    old_name: str = Field(..., description="Previous filename")
+    new_name: str = Field(..., description="New filename")
+    new_key: str = Field(..., description="New object key")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "artifact_id": "123e4567-e89b-12d3-a456-426614174000",
+                "old_name": "old-file.pdf",
+                "new_name": "renamed-file.pdf",
+                "new_key": "org_123/workspace/renamed-file.pdf"
+            }
+        }
+
+
+class ProtectedBucketsResponse(BaseModel):
+    """Response listing protected bucket names."""
+    protected_buckets: List[str] = Field(..., description="List of protected bucket names")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "protected_buckets": ["curatore-processed", "curatore-temp"]
             }
         }

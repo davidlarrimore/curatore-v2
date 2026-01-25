@@ -130,14 +130,14 @@ export default function ConnectionCard({
     return null
   }
 
-  const getConfigSummary = () => {
-    const { connection_type, config } = connection
+  type SummaryItem = {
+    label: string
+    value: string
+    hint?: string
+  }
 
-    type SummaryItem = {
-      label: string
-      value: string
-      hint?: string
-    }
+  const getConfigSummary = (): SummaryItem[] => {
+    const { connection_type, config } = connection
 
     if (connection_type === 'llm') {
       return [

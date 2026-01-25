@@ -28,8 +28,6 @@ export function DownloadStage({
   const [isRestarting, setIsRestarting] = useState<boolean>(false);
 
   const successfulResults = processingResults.filter(r => r.success);
-  const ragReadyResults = successfulResults.filter(r => r.pass_all_thresholds);
-  const vectorOptimizedResults = successfulResults.filter(r => r.vector_optimized);
 
   const handleFileToggle = (documentId: string, checked: boolean) => {
     const newSelected = new Set(selectedFiles);
@@ -44,21 +42,9 @@ export function DownloadStage({
   const handleSelectAll = (checked: boolean) => {
     if (checked) {
       setSelectedFiles(new Set(successfulResults.map(r => r.document_id)));
-      // Selecting all cancels rag-ready-only selection
       setSelectRagReadyOnly(false);
     } else {
       setSelectedFiles(new Set());
-    }
-  };
-
-  const handleSelectRagReady = (checked: boolean) => {
-    if (checked) {
-      const ragOnly = new Set(ragReadyResults.map(r => r.document_id));
-      setSelectedFiles(ragOnly);
-      setSelectRagReadyOnly(true);
-    } else {
-      setSelectedFiles(new Set());
-      setSelectRagReadyOnly(false);
     }
   };
 
@@ -109,35 +95,6 @@ export function DownloadStage({
     }
   };
 
-  const downloadRAGReadyFiles = async () => {
-    if (ragReadyResults.length === 0) {
-      toast.error('No RAG-ready files available');
-      return;
-    }
-
-    setIsRAGDownloading(true);
-    const loadingToast = toast.loading(`Creating ZIP archive with ${ragReadyResults.length} RAG-ready files...`);
-    
-    try {
-      const timestamp = utils.generateTimestamp();
-      const zipName = `curatore_rag_ready_${timestamp}.zip`;
-      
-      const blob = await fileApi.downloadRAGReadyDocuments(zipName);
-      utils.downloadBlob(blob, zipName);
-      
-      toast.success(`Downloaded ${ragReadyResults.length} RAG-ready files as ZIP archive`, { 
-        id: loadingToast,
-        icon: '🎯'
-      });
-    } catch (error) {
-      console.error('RAG-ready download failed:', error);
-      const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred';
-      toast.error(`RAG-ready download failed: ${errorMessage}`, { id: loadingToast });
-    } finally {
-      setIsRAGDownloading(false);
-    }
-  };
-
   const downloadCombinedArchive = async () => {
     if (successfulResults.length === 0) {
       toast.error('No processed files available');
@@ -181,8 +138,6 @@ export function DownloadStage({
       '',
       '## Overview',
       `- Total Files Processed: ${successfulResults.length}`,
-      `- RAG-Ready Files: ${ragReadyResults.length}`,
-      `- Vector Optimized Files: ${vectorOptimizedResults.length}`,
       `- Selected for Download: ${selectedFiles.size}`,
       '',
       '## Individual File Results',
@@ -190,12 +145,7 @@ export function DownloadStage({
     ];
 
     successfulResults.forEach(result => {
-      const status = result.pass_all_thresholds ? 'RAG Ready ✅' : 'Needs Improvement ⚠️';
-      const optimization = result.vector_optimized ? 'Vector Optimized 🎯' : 'Standard Processing';
-      
       reportLines.push(`### ${utils.getDisplayFilename(result.filename)}`);
-      reportLines.push(`- **Status:** ${status}`);
-      reportLines.push(`- **Processing:** ${optimization}`);
       reportLines.push(`- **Conversion Score:** ${result.conversion_score}/100`);
       
       if (result.llm_evaluation) {
@@ -246,18 +196,10 @@ export function DownloadStage({
     <div className="space-y-6 pb-24">
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-4">
         <div className="bg-blue-50 p-4 rounded-lg text-center">
           <div className="text-2xl font-bold text-blue-600">{successfulResults.length}</div>
           <div className="text-sm text-blue-800">Total Files</div>
-        </div>
-        <div className="bg-green-50 p-4 rounded-lg text-center">
-          <div className="text-2xl font-bold text-green-600">{ragReadyResults.length}</div>
-          <div className="text-sm text-green-800">RAG Ready</div>
-        </div>
-        <div className="bg-purple-50 p-4 rounded-lg text-center">
-          <div className="text-2xl font-bold text-purple-600">{vectorOptimizedResults.length}</div>
-          <div className="text-sm text-purple-800">Optimized</div>
         </div>
         <div className="bg-yellow-50 p-4 rounded-lg text-center">
           <div className="text-2xl font-bold text-yellow-600">{selectedFiles.size}</div>
@@ -285,15 +227,6 @@ export function DownloadStage({
                   className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
                 />
                 <span className="text-sm font-medium text-gray-700">Select All</span>
-              </label>
-              <label className="flex items-center space-x-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={selectRagReadyOnly}
-                  onChange={(e) => handleSelectRagReady(e.target.checked)}
-                  className="rounded border-gray-300 text-green-600 focus:ring-green-500"
-                />
-                <span className="text-sm font-medium text-gray-700">Select RAG Ready</span>
               </label>
             </div>
           </div>
@@ -346,9 +279,7 @@ export function DownloadStage({
                         {/* File Name - Increased from col-span-4 to col-span-5 */}
                         <div className="col-span-5">
                           <div className="flex items-center space-x-2">
-                            <span className="text-gray-400">
-                              {result.vector_optimized ? '🎯' : '📄'}
-                            </span>
+                            <span className="text-gray-400">📄</span>
                             <div className="min-w-0 flex-1">
                               <p className="text-sm font-medium text-gray-900 truncate" title={utils.getDisplayFilename(result.filename)}>
                                 {utils.getDisplayFilename(result.filename)}
@@ -365,17 +296,10 @@ export function DownloadStage({
                         {/* Status */}
                         <div className="col-span-2">
                           <div className="flex items-center space-x-2">
-                            {result.pass_all_thresholds ? (
-                              <div className="flex items-center space-x-1">
-                                <span className="w-2 h-2 bg-green-500 rounded-full"></span>
-                                <span className="text-xs font-medium text-green-700">RAG Ready</span>
-                              </div>
-                            ) : (
-                              <div className="flex items-center space-x-1">
-                                <span className="w-2 h-2 bg-yellow-500 rounded-full"></span>
-                                <span className="text-xs font-medium text-yellow-700">Needs Review</span>
-                              </div>
-                            )}
+                            <div className="flex items-center space-x-1">
+                              <span className="w-2 h-2 bg-green-500 rounded-full"></span>
+                              <span className="text-xs font-medium text-green-700">Processed</span>
+                            </div>
                           </div>
                         </div>
 

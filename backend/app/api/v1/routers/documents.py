@@ -1,5 +1,6 @@
 # backend/app/api/v1/routers/documents.py
 import os
+import re
 import time
 import uuid
 from datetime import datetime
@@ -42,27 +43,16 @@ from ....services.zip_service import zip_service
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
 
-@router.get("/documents/uploaded", tags=["Documents"], response_model=FileListResponse)
-async def list_uploaded_files():
-    """List all uploaded files with complete metadata (v2 parity)."""
-    try:
-        files = document_service.list_uploaded_files_with_metadata()
-        return FileListResponse(files=files, count=len(files))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list files: {str(e)}")
-
-@router.get("/documents/batch", tags=["Documents"], response_model=FileListResponse)
-async def list_batch_files():
-    """List all files in the batch_files directory with complete metadata (v2 parity)."""
-    try:
-        files = document_service.list_batch_files_with_metadata()
-        return FileListResponse(files=files, count=len(files))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list batch files: {str(e)}")
-
-@router.post("/documents/upload", response_model=FileUploadResponse, tags=["Documents"])
+@router.post("/documents/upload", response_model=FileUploadResponse, tags=["Documents"], deprecated=True)
 async def upload_document(file: UploadFile = File(...)):
-    """Upload a document for processing."""
+    """
+    DEPRECATED: Upload a document through the backend (inefficient for large files).
+
+    Use /storage/upload/presigned for direct uploads to object storage instead.
+    This endpoint proxies files through the backend, which is slower and uses more resources.
+
+    Kept for backward compatibility only.
+    """
     if not file.filename:
         raise HTTPException(status_code=400, detail="No filename provided")
     
@@ -72,21 +62,15 @@ async def upload_document(file: UploadFile = File(...)):
             detail=f"Unsupported file type. Supported: {document_service.get_supported_extensions()}"
         )
     
-    content = await file.read()
-    if len(content) > settings.max_file_size:
-        raise HTTPException(
-            status_code=413,
-            detail=f"File too large. Maximum size: {settings.max_file_size} bytes"
-        )
-
-    document_id, file_path, file_hash = await document_service.save_uploaded_file(file.filename, content)
-
-    return FileUploadResponse(
-        document_id=document_id,
-        filename=file.filename,
-        file_size=len(content),
-        upload_time=datetime.now(),
-        message="File uploaded successfully"
+    # This endpoint is deprecated - direct uploads through backend are inefficient
+    # Users should use /storage/upload/presigned for direct object storage uploads
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": "This endpoint is deprecated and no longer supported",
+            "message": "Please use POST /api/v1/storage/upload/presigned for direct uploads to object storage",
+            "migration_guide": "See API documentation for presigned URL upload workflow"
+        }
     )
 
 # Ensure static batch routes are registered before dynamic '{document_id}' routes
@@ -97,17 +81,34 @@ async def process_batch(request: V1BatchProcessingRequest):
     ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
     enqueued = []
     conflicts = []
+
+    # Import artifact service for object storage validation
+    from ....services.artifact_service import artifact_service
+
     for doc_id in request.document_ids:
-        file_path = document_service.find_document_file_unified(doc_id)
-        if not file_path:
-            conflicts.append({"document_id": doc_id, "error": "Document not found"})
+        # Verify artifact exists in object storage
+        try:
+            async with database_service.get_session() as session:
+                artifact = await artifact_service.get_artifact_by_document(
+                    session=session,
+                    document_id=doc_id,
+                    artifact_type="uploaded",
+                )
+                if not artifact:
+                    conflicts.append({"document_id": doc_id, "error": "Document not found in object storage"})
+                    continue
+
+                artifact_id = str(artifact.id)
+        except Exception as e:
+            conflicts.append({"document_id": doc_id, "error": f"Failed to verify document: {str(e)}"})
             continue
+
         opts = (request.options.model_dump() if request.options else {})
         async_result = process_document_task.apply_async(
             kwargs={
                 "document_id": doc_id,
                 "options": opts,
-                "file_path": str(file_path)
+                "artifact_id": artifact_id
             },
             queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
         )
@@ -155,40 +156,43 @@ async def process_document(
     When authentication is enabled, this endpoint creates a single-document batch job
     internally for proper tracking while maintaining backward compatibility.
     """
-    # Validate file exists first (check uploaded and batch locations)
-    file_path = document_service.find_document_file_unified(document_id)
-    if not file_path:
+    # Validate artifact exists in object storage
+    from ....services.artifact_service import artifact_service
+
+    try:
+        async with database_service.get_session() as session:
+            artifact = await artifact_service.get_artifact_by_document(
+                session=session,
+                document_id=document_id,
+                artifact_type="uploaded",
+            )
+            if not artifact:
+                raise HTTPException(status_code=404, detail="Document not found in object storage")
+
+            artifact_id = str(artifact.id)
+    except HTTPException:
+        raise
+    except Exception as e:
         try:
-            # Emit detailed debug info to API logs to help diagnose path issues
+            # Emit detailed debug info to API logs to help diagnose issues
             from ....main import api_logger
             extra = {"request_id": getattr(getattr(request, 'state', object()), 'request_id', '-')}
-            upload_dir = str(getattr(document_service, 'upload_dir', ''))
-            batch_dir = str(getattr(document_service, 'batch_dir', ''))
             api_logger.warning(
-                f"process_document: Document not found id=%s upload_dir=%s batch_dir=%s",
+                f"process_document: Failed to verify document id=%s error=%s",
                 document_id,
-                upload_dir,
-                batch_dir,
+                str(e),
                 extra=extra,
             )
         except Exception:
             pass
         raise HTTPException(status_code=404, detail="Document not found")
 
-    # Synchronous path (optional)
+    # Synchronous path (optional) - NOT SUPPORTED in object storage mode
     if sync and os.getenv("ALLOW_SYNC_PROCESS", "false").lower() in {"1", "true", "yes"}:
-        domain_options = options.to_domain() if options else ProcessingOptions()
-        async with database_service.get_session() as session:
-            result = await document_service.process_document(
-                document_id,
-                file_path,
-                domain_options,
-                organization_id=user.organization_id,
-                session=session
-            )
-
-        storage_service.save_processing_result(result)
-        return V1ProcessingResult.model_validate(result)
+        raise HTTPException(
+            status_code=501,
+            detail="Synchronous processing is not supported with object storage. Use async mode or POST /api/v1/jobs instead."
+        )
 
     # NEW: If authentication is enabled and user exists, create database-backed job
     # Otherwise fall back to legacy Redis-based tracking
@@ -234,7 +238,7 @@ async def process_document(
         kwargs={
             "document_id": document_id,
             "options": opts,
-            "file_path": str(file_path)
+            "artifact_id": artifact_id
         },
         queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
     )
@@ -268,52 +272,25 @@ async def process_document(
         "enqueued_at": datetime.utcnow(),
     }
 
-@router.post("/documents/batch/{filename}/process", tags=["Processing"])
+@router.post("/documents/batch/{filename}/process", tags=["Processing"], deprecated=True)
 async def process_batch_file(
     filename: str,
     options: Optional[V1ProcessingOptions] = None,
 ):
-    """Enqueue processing for a single file from the batch_files directory."""
-    batch_file_path = document_service.find_batch_file(filename)
-    if not batch_file_path:
-        raise HTTPException(status_code=404, detail="Batch file not found")
+    """
+    DEPRECATED: Process a file from the batch_files directory.
 
-    document_id = f"batch_{batch_file_path.stem}"
-
-    opts = (options.model_dump() if options else {})
-    async_result = process_document_task.apply_async(
-        kwargs={
-            "document_id": document_id,
-            "options": opts,
-            "file_path": str(batch_file_path)
-        },
-        queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
+    This endpoint is deprecated because filesystem storage has been replaced with object storage.
+    Use POST /api/v1/jobs to create batch jobs with proper tracking and management.
+    """
+    raise HTTPException(
+        status_code=410,
+        detail={
+            "error": "This endpoint is deprecated and no longer supported",
+            "message": "Batch file processing from filesystem is no longer available",
+            "migration_guide": "Upload files via POST /api/v1/storage/upload/presigned and create jobs via POST /api/v1/jobs"
+        }
     )
-    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
-    if not set_active_job(document_id, async_result.id, ttl):
-        try:
-            celery_app.control.revoke(async_result.id, terminate=False)
-        except Exception:
-            pass
-        active_job = get_active_job_for_document(document_id)
-        raise HTTPException(status_code=409, detail={
-            "error": "Another job is already running for this document",
-            "active_job_id": active_job,
-            "status": "conflict"
-        })
-    record_job_status(async_result.id, {
-        "job_id": async_result.id,
-        "document_id": document_id,
-        "status": "PENDING",
-        "enqueued_at": datetime.utcnow().isoformat(),
-    })
-    append_job_log(async_result.id, "info", f"Queued: {document_id}")
-    return {
-        "job_id": async_result.id,
-        "document_id": document_id,
-        "status": "queued",
-        "enqueued_at": datetime.utcnow(),
-    }
 
 # (moved above to avoid shadowing by dynamic routes)
 
@@ -327,23 +304,59 @@ async def get_processing_result(document_id: str):
 
 @router.get("/documents/{document_id}/content", tags=["Results"])
 async def get_document_content(document_id: str):
-    """Get the content of a processed document (with storage and filesystem fallback)."""
-    try:
-        # Try storage first, then filesystem fallback
-        result = storage_service.get_processing_result(document_id)
-        path: Optional[Path] = None
-        if result and getattr(result, 'markdown_path', None):
-            path = Path(result.markdown_path)
-        if not path or not path.exists():
-            path = document_service.get_processed_markdown_path(document_id)
-        if not path or not path.exists():
-            raise HTTPException(status_code=404, detail="Processed content not found")
+    """Get the content of a processed document (supports both object storage and filesystem)."""
+    import logging
+    logger = logging.getLogger("curatore.api")
 
-        content = path.read_text(encoding='utf-8')
-        return {"content": content}
+    try:
+        # When object storage is enabled, fetch from MinIO
+        if settings.use_object_storage:
+            from ....services.minio_service import get_minio_service
+            from ....services.artifact_service import artifact_service
+
+            minio = get_minio_service()
+            if not minio:
+                raise HTTPException(status_code=503, detail="Object storage not available")
+
+            # Get the processed artifact for this document
+            async with database_service.get_session() as session:
+                artifact = await artifact_service.get_artifact_by_document(
+                    session=session,
+                    document_id=document_id,
+                    artifact_type="processed",
+                )
+
+                if not artifact:
+                    raise HTTPException(status_code=404, detail="Processed content not found in object storage")
+
+            # Download content from object storage
+            try:
+                content_io = minio.get_object(artifact.bucket, artifact.object_key)
+                content = content_io.getvalue().decode('utf-8')
+                return {"content": content}
+            except Exception as e:
+                logger.error(f"Failed to download processed content from object storage: {e}")
+                raise HTTPException(status_code=500, detail=f"Failed to download content: {str(e)}")
+
+        # Filesystem mode: use existing logic
+        else:
+            # Try storage first, then filesystem fallback
+            result = storage_service.get_processing_result(document_id)
+            path: Optional[Path] = None
+            if result and getattr(result, 'markdown_path', None):
+                path = Path(result.markdown_path)
+            if not path or not path.exists():
+                path = document_service.get_processed_markdown_path(document_id)
+            if not path or not path.exists():
+                raise HTTPException(status_code=404, detail="Processed content not found")
+
+            content = path.read_text(encoding='utf-8')
+            return {"content": content}
+
     except HTTPException:
         raise
     except Exception as e:
+        logger.error(f"Failed to get document content: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get content: {str(e)}")
 
 @router.put("/documents/{document_id}/content", tags=["Results"])
@@ -388,6 +401,14 @@ async def update_document_content(
         "enqueued_at": datetime.utcnow(),
     }
 
+def _strip_hash_prefix(filename: str) -> str:
+    """Strip 32-character hex hash prefix from filename if present."""
+    if not filename:
+        return filename
+    match = re.match(r'^[0-9a-f]{32}_(.+)$', filename, re.IGNORECASE)
+    return match.group(1) if match else filename
+
+
 @router.get("/documents/{document_id}/download", tags=["Results"])
 async def download_document(document_id: str):
     """Download a processed document (with storage and filesystem fallback)."""
@@ -402,23 +423,27 @@ async def download_document(document_id: str):
         if not path or not path.exists():
             raise HTTPException(status_code=404, detail="Processed file not found")
 
-        # Determine a sensible download filename (strip document_id prefix)
+        # Determine a sensible download filename (strip hash prefix)
         download_name = None
         try:
             if result and getattr(result, 'filename', None):
-                download_name = f"{Path(result.filename).stem}.md"
+                # result.filename may contain hash prefix like "{hash}_{original}.ext"
+                # Strip the hash prefix and change extension to .md
+                clean_filename = _strip_hash_prefix(result.filename)
+                download_name = f"{Path(clean_filename).stem}.md"
             else:
                 # Files are stored as {document_id}_{original_name}.md
                 # Strip the document_id prefix to get the original filename
                 filename = path.name
-                if '_' in filename:
-                    download_name = filename.split('_', 1)[1]  # Get everything after first underscore
-                else:
-                    download_name = filename
+                clean_filename = _strip_hash_prefix(filename)
+                # If still has underscore after stripping, it might be double-hashed
+                clean_filename = _strip_hash_prefix(clean_filename)
+                download_name = clean_filename if clean_filename.endswith('.md') else f"{Path(clean_filename).stem}.md"
         except Exception:
             # Fallback: try to strip prefix, otherwise use full name
             filename = path.name
-            download_name = filename.split('_', 1)[1] if '_' in filename else filename
+            clean_filename = _strip_hash_prefix(filename)
+            download_name = clean_filename if clean_filename else filename
 
         return FileResponse(
             path=str(path),
@@ -497,18 +522,42 @@ async def list_processed_documents():
 
 @router.delete("/documents/{document_id}", tags=["Documents"])
 async def delete_document(document_id: str):
-    """Delete a document and its processing results."""
+    """Delete a document and its processing results from object storage."""
+    # Clear in-memory storage cache
     storage_service.delete_processing_result(document_id)
 
-    upload_dir = Path(settings.upload_dir)
-    processed_dir = Path(settings.processed_dir)
+    # Delete artifacts from object storage
+    try:
+        from ....services.minio_service import get_minio_service
+        from ....services.artifact_service import artifact_service
+        from ....database.base import get_session
 
-    for file_path in upload_dir.glob(f"{document_id}_*"):
-        if file_path.exists():
-            file_path.unlink()
+        minio = get_minio_service()
+        deleted_count = 0
 
-    for file_path in processed_dir.glob(f"*_{document_id}.md"):
-        if file_path.exists():
-            file_path.unlink()
+        if minio and minio.enabled:
+            # Get all artifacts for this document
+            with get_session() as session:
+                artifacts = artifact_service.get_artifacts_by_document(session, document_id)
 
-    return {"success": True, "message": "Document deleted successfully"}
+                for artifact in artifacts:
+                    # Delete from MinIO
+                    try:
+                        minio.delete_object(artifact.bucket, artifact.object_key)
+                        deleted_count += 1
+                    except Exception:
+                        pass  # Continue deleting other artifacts
+
+                # Delete artifact records from database
+                for artifact in artifacts:
+                    try:
+                        artifact_service.delete_artifact(session, artifact.id)
+                    except Exception:
+                        pass
+
+        return {
+            "success": True,
+            "message": f"Document deleted successfully ({deleted_count} files removed from storage)"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to delete document: {str(e)}")

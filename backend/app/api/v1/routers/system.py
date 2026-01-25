@@ -82,12 +82,34 @@ async def reset_system():
         except Exception:
             pass
 
-        # Clear temp ZIPs, runtime files (uploaded + processed) and storage; keep batch files
+        # Clear temp ZIPs and object storage
         try:
             zip_deleted = zip_service.cleanup_all_temp_archives()
         except Exception:
             zip_deleted = 0
-        document_service.clear_runtime_files()
+
+        # Clear object storage buckets
+        minio_deleted = {"uploads": 0, "processed": 0, "temp": 0}
+        try:
+            from ....services.minio_service import get_minio_service
+            minio = get_minio_service()
+            if minio and minio.enabled:
+                try:
+                    minio_deleted["uploads"] = minio.delete_all_objects_in_bucket(minio.bucket_uploads)
+                except Exception:
+                    pass
+                try:
+                    minio_deleted["processed"] = minio.delete_all_objects_in_bucket(minio.bucket_processed)
+                except Exception:
+                    pass
+                try:
+                    minio_deleted["temp"] = minio.delete_all_objects_in_bucket(minio.bucket_temp)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Clear in-memory storage cache
         storage_service.clear_all()
 
         # Clear job status keys and locks in Redis
@@ -97,8 +119,6 @@ async def reset_system():
         except Exception:
             jobs_cleared = {"jobs": 0, "active_locks": 0, "last_job_keys": 0}
 
-        document_service._ensure_directories()
-
         return {
             "success": True,
             "message": "System reset successfully",
@@ -106,6 +126,7 @@ async def reset_system():
             "queue": {"revoked": revoked, "purged": purged},
             "jobs_cleared": jobs_cleared,
             "temp_zips_deleted": zip_deleted,
+            "minio_objects_deleted": minio_deleted,
         }
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Reset failed: {str(e)}")
@@ -562,6 +583,61 @@ async def health_check_docling() -> Dict[str, Any]:
         }
 
 
+@router.get("/system/health/storage", tags=["System"])
+async def health_check_storage() -> Dict[str, Any]:
+    """Health check for object storage (S3/MinIO).
+
+    Returns:
+        Dict with status, message, and provider info when enabled.
+        Returns not_enabled status when USE_OBJECT_STORAGE=false.
+    """
+    if not settings.use_object_storage:
+        return {
+            "status": "not_enabled",
+            "message": "Object storage not enabled (USE_OBJECT_STORAGE=false)",
+            "use_object_storage": False,
+        }
+
+    try:
+        from ....services.minio_service import get_minio_service
+
+        minio = get_minio_service()
+        if not minio:
+            return {
+                "status": "not_configured",
+                "message": "MinIO service not initialized",
+                "use_object_storage": True,
+            }
+
+        # Check MinIO connection health
+        connected, buckets, error = minio.check_health()
+
+        if connected:
+            return {
+                "status": "healthy",
+                "message": "Object storage is responding",
+                "use_object_storage": True,
+                "endpoint": minio.endpoint,
+                "provider_connected": True,
+                "buckets": buckets or [],
+            }
+        else:
+            return {
+                "status": "unhealthy",
+                "message": f"MinIO connection failed: {error}",
+                "use_object_storage": True,
+                "endpoint": minio.endpoint,
+                "error": error,
+            }
+
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Storage service error: {str(e)}",
+            "use_object_storage": True,
+        }
+
+
 @router.get("/system/health/llm", tags=["System"])
 async def health_check_llm() -> Dict[str, Any]:
     """Health check for LLM connection component."""
@@ -712,6 +788,7 @@ async def comprehensive_health() -> Dict[str, Any]:
     - Docling Service (if configured)
     - LLM Connection
     - SharePoint / Microsoft Graph (if configured)
+    - Object Storage (S3/MinIO) (if enabled)
 
     Returns detailed status for each component with timestamps and error messages.
     """
@@ -911,6 +988,12 @@ async def comprehensive_health() -> Dict[str, Any]:
     if sharepoint_status.get("status") in ["unhealthy", "degraded"]:
         issues.append(f"SharePoint: {sharepoint_status.get('message')}")
 
+    # 8. Object Storage (S3/MinIO)
+    storage_status = await health_check_storage()
+    health_report["components"]["object_storage"] = storage_status
+    if storage_status.get("status") == "unhealthy":
+        issues.append(f"Object Storage: {storage_status.get('message')}")
+
     # Determine overall status
     component_statuses = [c.get("status") for c in health_report["components"].values()]
 
@@ -932,96 +1015,19 @@ async def comprehensive_health() -> Dict[str, Any]:
 # STORAGE MANAGEMENT & DEDUPLICATION ENDPOINTS
 # ============================================================================
 
-@router.get("/storage/stats", tags=["System", "Storage"])
+@router.get("/storage/stats", tags=["System", "Storage"], deprecated=True)
 async def get_storage_stats(organization_id: Optional[str] = None):
     """
-    Get storage usage statistics by organization.
+    DEPRECATED: Filesystem storage statistics endpoint.
 
-    Returns total files, total size, deduplication savings, and file count by type.
+    This endpoint is no longer supported with object storage (MinIO/S3).
+    Use MinIO Console or S3 metrics for storage usage information.
     """
-    try:
-        from ....services.deduplication_service import deduplication_service
-        from ....services.path_service import path_service
-
-        # Get deduplication stats
-        dedupe_stats = await deduplication_service.get_deduplication_stats(organization_id)
-
-        # Calculate storage used by organization
-        total_files = 0
-        total_size = 0
-        files_by_type = {"uploaded": 0, "processed": 0}
-
-        if organization_id:
-            org_paths = [path_service.resolve_organization_path(organization_id)]
-        else:
-            # All organizations
-            base_path = settings.files_root_path
-            org_base = base_path / "organizations"
-            shared_base = base_path / "shared"
-
-            org_paths = []
-            if org_base.exists():
-                org_paths.extend([p for p in org_base.iterdir() if p.is_dir()])
-            if shared_base.exists():
-                org_paths.append(shared_base)
-
-        # Scan files
-        for org_path in org_paths:
-            if not org_path.exists():
-                continue
-
-            for file_type in ["uploaded", "processed"]:
-                # Check batches
-                batches_path = org_path / "batches"
-                if batches_path.exists():
-                    for batch_dir in batches_path.iterdir():
-                        if not batch_dir.is_dir():
-                            continue
-
-                        type_dir = batch_dir / file_type
-                        if type_dir.exists():
-                            for file_path in type_dir.rglob("*"):
-                                if file_path.is_file():
-                                    total_files += 1
-                                    files_by_type[file_type] += 1
-
-                                    # Get actual file size (resolve symlinks)
-                                    if file_path.is_symlink():
-                                        resolved = file_path.resolve()
-                                        if resolved.exists():
-                                            total_size += resolved.stat().st_size
-                                    else:
-                                        total_size += file_path.stat().st_size
-
-                # Check adhoc
-                adhoc_dir = org_path / "adhoc" / file_type
-                if adhoc_dir.exists():
-                    for file_path in adhoc_dir.rglob("*"):
-                        if file_path.is_file():
-                            total_files += 1
-                            files_by_type[file_type] += 1
-
-                            if file_path.is_symlink():
-                                resolved = file_path.resolve()
-                                if resolved.exists():
-                                    total_size += resolved.stat().st_size
-                            else:
-                                total_size += file_path.stat().st_size
-
-        return {
-            "organization_id": organization_id,
-            "total_files": total_files,
-            "total_size_bytes": total_size,
-            "files_by_type": files_by_type,
-            "deduplication": dedupe_stats,
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get storage stats: {str(e)}")
-
-
-@router.post("/storage/cleanup", tags=["System", "Storage"])
-async def trigger_manual_cleanup(dry_run: bool = Query(default=True, description="Dry run mode")):
+    raise HTTPException(
+        status_code=410,
+        detail="This endpoint is deprecated. Filesystem storage has been replaced with object storage (MinIO/S3). "
+               "Use MinIO Console (http://localhost:9001) or S3 metrics for storage usage information."
+    )
     """
     Manually trigger cleanup of expired files.
 
@@ -1029,7 +1035,8 @@ async def trigger_manual_cleanup(dry_run: bool = Query(default=True, description
     Set dry_run=false to actually delete files.
     """
     try:
-        from ....services.retention_service import retention_service
+# DEPRECATED - Filesystem storage removed
+#         from ....services.retention_service import retention_service
 
         result = await retention_service.cleanup_expired_files(dry_run=dry_run)
         return result
@@ -1063,7 +1070,8 @@ async def get_deduplication_stats(organization_id: Optional[str] = None):
     Returns unique files, duplicate references, storage saved, and savings percentage.
     """
     try:
-        from ....services.deduplication_service import deduplication_service
+# DEPRECATED - Filesystem storage removed
+#         from ....services.deduplication_service import deduplication_service
 
         stats = await deduplication_service.get_deduplication_stats(organization_id)
         return {
@@ -1109,7 +1117,8 @@ async def get_duplicate_details(hash: str):
     Returns full reference list, file size, original name, and created dates.
     """
     try:
-        from ....services.deduplication_service import deduplication_service
+# DEPRECATED - Filesystem storage removed
+#         from ....services.deduplication_service import deduplication_service
 
         refs = await deduplication_service.get_file_references(hash)
 

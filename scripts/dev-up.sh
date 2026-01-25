@@ -27,25 +27,50 @@ if compgen -G "${REPO_ROOT}/scripts/*.sh" > /dev/null; then
   chmod +x "${REPO_ROOT}"/scripts/*.sh || true
 fi
 
-# Read ENABLE_DOCLING_SERVICE from .env (default: false)
-ENABLE_FLAG="false"
+# Read feature flags from .env (defaults: false)
+ENABLE_DOCLING="false"
+
 if [[ -f "${REPO_ROOT}/.env" ]]; then
-  # Extract last defined value, trim quotes and spaces, lowercase
-  ENABLE_FLAG="$(sed -n 's/^ENABLE_DOCLING_SERVICE=\(.*\)$/\1/p' "${REPO_ROOT}/.env" | tail -n1 | tr -d '"' | tr '[:upper:]' '[:lower:]')"
+  # Extract ENABLE_DOCLING_SERVICE
+  ENABLE_DOCLING="$(sed -n 's/^ENABLE_DOCLING_SERVICE=\(.*\)$/\1/p' "${REPO_ROOT}/.env" | tail -n1 | tr -d '"' | tr '[:upper:]' '[:lower:]')"
 fi
 
-# Prefer Makefile helper to honor ENABLE_DOCLING_SERVICE toggle
+# Default empty values to false
+ENABLE_DOCLING="${ENABLE_DOCLING:-false}"
+
+# Prefer Makefile helper to honor feature toggles
 if command -v make >/dev/null 2>&1 && [[ -f "${REPO_ROOT}/Makefile" ]]; then
-  echo "🛠  Using Makefile (ENABLE_DOCLING_SERVICE=${ENABLE_FLAG})"
-  ENABLE_DOCLING_SERVICE="${ENABLE_FLAG}" make -C "${REPO_ROOT}" up
+  echo "🛠  Using Makefile"
+  echo "   ENABLE_DOCLING_SERVICE=${ENABLE_DOCLING}"
+  echo "   MinIO (Object Storage): REQUIRED - starts automatically"
+  ENABLE_DOCLING_SERVICE="${ENABLE_DOCLING}" make -C "${REPO_ROOT}" up
 else
   echo "ℹ️  Make not available; falling back to docker compose"
-  if [[ "${ENABLE_FLAG}" == "true" ]]; then
-    ${DC} -f "${REPO_ROOT}/docker-compose.yml" --profile docling up -d --build
-  else
-    ${DC} -f "${REPO_ROOT}/docker-compose.yml" up -d --build
+  echo "   MinIO (Object Storage): REQUIRED - starts automatically"
+
+  # Build profiles list
+  PROFILES=""
+  if [[ "${ENABLE_DOCLING}" == "true" ]]; then
+    PROFILES="${PROFILES} --profile docling"
+    echo "   📦 Docling profile enabled"
   fi
+
+  ${DC} -f "${REPO_ROOT}/docker-compose.yml" ${PROFILES} up -d --build
 fi
 
-echo "🌐 Frontend: http://localhost:3000"
-echo "🔗 Backend:  http://localhost:8000 (Swagger at /docs)"
+echo ""
+echo "✅ Services started successfully!"
+echo ""
+echo "🌐 Frontend:    http://localhost:3000"
+echo "🔗 Backend:     http://localhost:8000 (Swagger at /docs)"
+echo "📦 Extraction:  http://localhost:8010 (Swagger at /api/v1/docs)"
+echo "🪣 MinIO:       http://localhost:9001 (Console - admin/changeme)"
+if [[ "${ENABLE_DOCLING}" == "true" ]]; then
+  echo "📄 Docling:     http://localhost:5151"
+fi
+echo ""
+echo "⏳ Initializing object storage..."
+"${REPO_ROOT}/scripts/init_storage.sh" || {
+  echo "⚠️  Object storage initialization failed (this is normal on first run)"
+  echo "   MinIO may still be starting up. Run './scripts/init_storage.sh' manually after a few seconds."
+}

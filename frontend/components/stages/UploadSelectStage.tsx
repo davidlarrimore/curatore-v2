@@ -1,7 +1,7 @@
 // components/stages/UploadSelectStage.tsx
 'use client'
 
-import { useState, useRef, useCallback, useEffect, type FC } from 'react';
+import React, { useState, useRef, useCallback, useEffect, type FC } from 'react';
 import { FileInfo, ProcessingOptions } from '@/types';
 import { fileApi, utils } from '@/lib/api';
 import { 
@@ -242,7 +242,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
           filename: uploadResult.filename,
           original_filename: uploadResult.filename,
           file_size: uploadResult.file_size,
-          upload_time: new Date(uploadResult.upload_time).getTime(),
+          upload_time: uploadResult.upload_time ? new Date(uploadResult.upload_time).getTime() : Date.now(),
           file_path: ''
         });
       } else {
@@ -404,7 +404,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
    * @param title - The title to display above the file list.
    * @returns A JSX element representing the file list.
    */
-  const renderFileList = (files: FileInfo[], title: string): JSX.Element => {
+  const renderFileList = (files: FileInfo[], title: string): React.JSX.Element => {
     const keyOf = (f: FileInfo) => f.document_id || f.file_path || f.filename;
     const allSelected = files.length > 0 && files.every(f => 
       selectedFiles.some(sf => keyOf(sf) === keyOf(f))
@@ -621,48 +621,7 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
               Processing Configuration
             </h3>
             
-            {/* Vector DB Optimization Toggle */}
-            <label className="flex items-center space-x-2">
-              <input
-                type="checkbox"
-                checked={processingOptions.auto_optimize}
-                onChange={(e) => onProcessingOptionsChange({
-                  ...processingOptions,
-                  auto_optimize: e.target.checked
-                })}
-                className="rounded border-gray-300 dark:border-gray-600 text-indigo-600 focus:ring-indigo-500 dark:bg-gray-800"
-              />
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300 relative inline-flex items-center group cursor-help">
-                Vector DB Optimization
-                <HelpCircle className="w-3 h-3 text-gray-400 dark:text-gray-500 ml-1" />
-                <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Rewrites structure for better chunking and retrieval; can adjust headings and sections.</span>
-              </span>
-            </label>
-
-            {/* Quality Threshold Quick Setting */}
-            <div className="flex items-center space-x-2">
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300 relative inline-flex items-center group cursor-help">
-                Quality Threshold
-                <HelpCircle className="w-3 h-3 text-gray-400 dark:text-gray-500 ml-1" />
-                <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Minimum conversion quality (0–100). Documents below this may be flagged or fail conversion.</span>
-              </span>
-              <select
-                value={processingOptions.quality_thresholds.conversion_threshold}
-                onChange={(e) => onProcessingOptionsChange({
-                  ...processingOptions,
-                  quality_thresholds: {
-                    ...processingOptions.quality_thresholds,
-                    conversion_threshold: parseInt(e.target.value)
-                  }
-                })}
-                className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
-              >
-                <option value={50}>Lenient (50%)</option>
-                <option value={70}>Standard (70%)</option>
-                <option value={85}>Strict (85%)</option>
-                <option value={95}>Very Strict (95%)</option>
-              </select>
-            </div>
+            {/* Vector DB Optimization and Quality Thresholds removed */}
 
             {/* Extraction Engine Selection */}
             <div className="flex items-center space-x-2">
@@ -708,116 +667,9 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
         {/* Advanced Settings Panel */}
         {showAdvancedSettings && (
           <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+            {/* Detailed Quality Thresholds removed - not part of current options */}
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-              {/* Detailed Quality Thresholds */}
-              <div className="space-y-3">
-                <h4 className="font-medium text-gray-900">Quality Thresholds</h4>
-                {Object.entries({
-                  'Clarity': 'clarity_threshold',
-                  'Completeness': 'completeness_threshold',
-                  'Relevance': 'relevance_threshold',
-                  'Markdown': 'markdown_threshold'
-                }).map(([label, key]) => (
-                  <div key={key} className="flex items-center justify-between">
-                    <label className="text-xs font-medium text-gray-700 relative inline-flex items-center group cursor-help">
-                      {label}
-                      <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
-                      <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">{getThresholdTip(label)}</span>
-                    </label>
-                    <div className="flex items-center space-x-2">
-                      <input
-                        type="range"
-                        min="1"
-                        max="10"
-                        value={processingOptions.quality_thresholds[key as keyof typeof processingOptions.quality_thresholds]}
-                        onChange={(e) => onProcessingOptionsChange({
-                          ...processingOptions,
-                          quality_thresholds: {
-                            ...processingOptions.quality_thresholds,
-                            [key]: parseInt(e.target.value)
-                          }
-                        })}
-                        className="w-16 h-1"
-                      />
-                      <span className="text-xs text-gray-600 w-6">
-                        {processingOptions.quality_thresholds[key as keyof typeof processingOptions.quality_thresholds]}/10
-                      </span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-
-              {/* Processing Settings */}
-              <div className="space-y-3">
-                <h4 className="font-medium text-gray-900">Processing</h4>
-                <div className="space-y-2 text-xs">
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-700 relative inline-flex items-center group cursor-help">
-                      Max Retries
-                      <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
-                      <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Number of times to retry a failed processing step per document.</span>
-                    </span>
-                    <input
-                      type="number"
-                      min="1"
-                      max="5"
-                      value={processingOptions.processing_settings.max_retries}
-                      onChange={(e) => onProcessingOptionsChange({
-                        ...processingOptions,
-                        processing_settings: {
-                          ...processingOptions.processing_settings,
-                          max_retries: parseInt(e.target.value)
-                        }
-                      })}
-                      className="w-12 px-1 py-0.5 border border-gray-300 rounded text-xs"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-700 relative inline-flex items-center group cursor-help">
-                      Chunk Size
-                      <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
-                      <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Target characters per chunk used for embeddings and retrieval.</span>
-                    </span>
-                    <input
-                      type="number"
-                      min="500"
-                      max="2000"
-                      step="100"
-                      value={processingOptions.processing_settings.chunk_size}
-                      onChange={(e) => onProcessingOptionsChange({
-                        ...processingOptions,
-                        processing_settings: {
-                          ...processingOptions.processing_settings,
-                          chunk_size: parseInt(e.target.value)
-                        }
-                      })}
-                      className="w-16 px-1 py-0.5 border border-gray-300 rounded text-xs"
-                    />
-                  </div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-gray-700 relative inline-flex items-center group cursor-help">
-                      Chunk Overlap
-                      <HelpCircle className="w-3 h-3 text-gray-400 ml-1" />
-                      <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Characters overlapped between adjacent chunks to preserve context.</span>
-                    </span>
-                    <input
-                      type="number"
-                      min="50"
-                      max="500"
-                      step="50"
-                      value={processingOptions.processing_settings.chunk_overlap}
-                      onChange={(e) => onProcessingOptionsChange({
-                        ...processingOptions,
-                        processing_settings: {
-                          ...processingOptions.processing_settings,
-                          chunk_overlap: parseInt(e.target.value)
-                        }
-                      })}
-                      className="w-16 px-1 py-0.5 border border-gray-300 rounded text-xs"
-                    />
-                  </div>
-                </div>
-              </div>
+              {/* Processing Settings removed - not part of current options */}
 
               {/* OCR settings removed — backend auto-detects OCR now */}
 

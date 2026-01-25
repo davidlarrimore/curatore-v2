@@ -9,7 +9,7 @@ including:
 - API/CORS settings
 - OpenAI/LLM configuration
 - OCR settings
-- File storage paths and limits
+- Object storage (MinIO/S3) configuration
 - Quality assessment thresholds
 
 Environment Variables:
@@ -17,7 +17,7 @@ Environment Variables:
 
 Usage:
     from app.config import settings
-    files_root = settings.files_root_path
+    use_object_storage = settings.use_object_storage  # Always True (required)
 """
 
 from pathlib import Path
@@ -64,76 +64,9 @@ class Settings(BaseSettings):
     ocr_psm: int = Field(default=3, description="Page Segmentation Mode for Tesseract")
 
     # =========================================================================
-    # FILE STORAGE CONFIGURATION (CANONICAL)
+    # FILE UPLOAD LIMITS
     # =========================================================================
-    # IMPORTANT: These defaults are ABSOLUTE paths inside containers
-    # and are supplied by a host bind-mount of ./files -> /app/files.
-    files_root: str = Field(default="/app/files", description="Root directory for file storage")
-    upload_dir: str = Field(default="/app/files/uploaded_files", description="User uploads")
-    processed_dir: str = Field(default="/app/files/processed_files", description="Processed markdown output")
-    batch_dir: str = Field(default="/app/files/batch_files", description="Operator-provided test/bulk inputs")
     max_file_size: int = Field(default=50 * 1024 * 1024, description="Max upload size in bytes")
-
-    # =========================================================================
-    # HIERARCHICAL STORAGE CONFIGURATION
-    # =========================================================================
-    use_hierarchical_storage: bool = Field(
-        default=True, description="Use new hierarchical organization-based file structure"
-    )
-    temp_dir: str = Field(
-        default="/app/files/temp", description="Temporary processing files"
-    )
-    dedupe_dir: str = Field(
-        default="/app/files/dedupe", description="Content-addressable storage for deduplication"
-    )
-
-    # =========================================================================
-    # FILE RETENTION CONFIGURATION
-    # =========================================================================
-    file_retention_uploaded_days: int = Field(
-        default=7, description="Days to retain uploaded files"
-    )
-    file_retention_processed_days: int = Field(
-        default=30, description="Days to retain processed files"
-    )
-    file_retention_batch_days: int = Field(
-        default=14, description="Days to retain batch files"
-    )
-    file_retention_temp_hours: int = Field(
-        default=24, description="Hours to retain temp files"
-    )
-
-    # =========================================================================
-    # FILE CLEANUP CONFIGURATION
-    # =========================================================================
-    file_cleanup_enabled: bool = Field(
-        default=True, description="Enable automatic file cleanup"
-    )
-    file_cleanup_schedule_cron: str = Field(
-        default="0 2 * * *", description="Cleanup schedule (daily at 2 AM)"
-    )
-    file_cleanup_batch_size: int = Field(
-        default=1000, description="Files to process per cleanup batch"
-    )
-    file_cleanup_dry_run: bool = Field(
-        default=False, description="Dry run mode for testing cleanup"
-    )
-
-    # =========================================================================
-    # FILE DEDUPLICATION CONFIGURATION
-    # =========================================================================
-    file_deduplication_enabled: bool = Field(
-        default=True, description="Enable duplicate file detection and storage optimization"
-    )
-    file_deduplication_strategy: str = Field(
-        default="symlink", description="Deduplication strategy: symlink | copy | reference"
-    )
-    dedupe_hash_algorithm: str = Field(
-        default="sha256", description="Hash algorithm for deduplication"
-    )
-    dedupe_min_file_size: int = Field(
-        default=1024, description="Minimum file size (bytes) to deduplicate"
-    )
 
     # =========================================================================
     # EXTRACTION SERVICE (optional external microservice)
@@ -149,6 +82,14 @@ class Settings(BaseSettings):
     docling_service_url: Optional[str] = Field(default=None, description="Base URL for Docling service")
     docling_timeout: float = Field(default=60.0, description="Timeout (s) for Docling requests")
     docling_verify_ssl: bool = Field(default=True, description="Verify SSL for Docling service calls")
+
+    # Tika-specific configuration
+    tika_service_url: Optional[str] = Field(default=None, description="Base URL for Apache Tika service")
+    tika_timeout: float = Field(default=300.0, description="Timeout (s) for Tika requests")
+    tika_verify_ssl: bool = Field(default=True, description="Verify SSL for Tika service calls")
+    tika_accept_format: str = Field(default="markdown", description="Tika output format: markdown, html, text")
+    tika_extract_metadata: bool = Field(default=True, description="Extract document metadata via Tika /meta endpoint")
+    tika_ocr_language: str = Field(default="eng", description="OCR language for Tika (Tesseract language code)")
 
     # =========================================================================
     # QUALITY ASSESSMENT DEFAULTS
@@ -281,36 +222,82 @@ class Settings(BaseSettings):
     )
     default_org_slug: str = Field(default="default", description="Default organization slug")
 
+    # =========================================================================
+    # OBJECT STORAGE CONFIGURATION (MinIO / S3)
+    # =========================================================================
+    # When USE_OBJECT_STORAGE=true, the backend connects directly to MinIO/S3
+    # for object storage operations (no separate microservice needed).
+    use_object_storage: bool = Field(
+        default=True, description="Use MinIO/S3 for object storage (REQUIRED - no filesystem fallback)"
+    )
+
+    # MinIO Connection Settings
+    minio_endpoint: str = Field(
+        default="minio:9000", description="MinIO server endpoint (host:port) for internal operations"
+    )
+    minio_public_endpoint: str = Field(
+        default="", description="Public endpoint for presigned URLs (must be reachable from clients)"
+    )
+    minio_presigned_endpoint: str = Field(
+        default="", description="Endpoint used to generate presigned URLs (must be reachable from backend)"
+    )
+    minio_access_key: str = Field(
+        default="minioadmin", description="MinIO access key"
+    )
+    minio_secret_key: str = Field(
+        default="minioadmin", description="MinIO secret key"
+    )
+    minio_secure: bool = Field(
+        default=False, description="Use HTTPS for MinIO connections"
+    )
+    minio_public_secure: bool = Field(
+        default=False, description="Use HTTPS for presigned URLs"
+    )
+
+    # Bucket Configuration
+    minio_bucket_uploads: str = Field(
+        default="curatore-uploads", description="Bucket for uploaded files"
+    )
+    minio_bucket_processed: str = Field(
+        default="curatore-processed", description="Bucket for processed files"
+    )
+    minio_bucket_temp: str = Field(
+        default="curatore-temp", description="Bucket for temporary files"
+    )
+
+    # Bucket Display Names (for UI)
+    minio_bucket_uploads_display_name: str = Field(
+        default="Default Storage", description="Display name for uploads bucket"
+    )
+    minio_bucket_processed_display_name: str = Field(
+        default="Processed Files", description="Display name for processed bucket"
+    )
+    minio_bucket_temp_display_name: str = Field(
+        default="Temporary Files", description="Display name for temp bucket"
+    )
+
+    # Presigned URL Configuration
+    minio_presigned_expiry: int = Field(
+        default=3600, description="Presigned URL expiry in seconds (1 hour)"
+    )
+
+    # Object Storage Retention Configuration
+    file_retention_uploaded_days: int = Field(
+        default=30, description="Retention period for uploaded files in object storage (days)"
+    )
+    file_retention_processed_days: int = Field(
+        default=90, description="Retention period for processed files in object storage (days)"
+    )
+    file_retention_temp_days: int = Field(
+        default=7, description="Retention period for temporary files in object storage (days)"
+    )
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
         case_sensitive = False
         extra = "ignore"
 
-    # -------- Path helpers (preferred by services) --------
-    @property
-    def files_root_path(self) -> Path:
-        return Path(self.files_root)
-
-    @property
-    def upload_path(self) -> Path:
-        return Path(self.upload_dir)
-
-    @property
-    def processed_path(self) -> Path:
-        return Path(self.processed_dir)
-
-    @property
-    def batch_path(self) -> Path:
-        return Path(self.batch_dir)
-
-    @property
-    def temp_path(self) -> Path:
-        return Path(self.temp_dir)
-
-    @property
-    def dedupe_path(self) -> Path:
-        return Path(self.dedupe_dir)
 
 
 # Global settings instance (imported elsewhere)

@@ -11,6 +11,7 @@ import logging
 from .base import BaseExtractionEngine
 from .extraction_service import ExtractionServiceEngine
 from .docling import DoclingEngine
+from .tika import TikaEngine
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +28,8 @@ class ExtractionEngineFactory:
     _engines = {
         "extraction-service": ExtractionServiceEngine,
         "docling": DoclingEngine,
+        "tika": TikaEngine,
         # Future engines will be registered here:
-        # "tika": TikaEngine,
         # "unstructured": UnstructuredEngine,
     }
 

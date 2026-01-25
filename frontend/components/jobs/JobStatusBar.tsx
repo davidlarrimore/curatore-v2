@@ -7,8 +7,10 @@ import { jobsApi } from '@/lib/api'
 
 interface JobStats {
   active_jobs: number
-  queued_jobs: number
-  total_jobs: number
+  total_jobs_24h: number
+  total_jobs_7d: number
+  completed_jobs_24h: number
+  failed_jobs_24h: number
 }
 
 interface OrgStats {
@@ -68,12 +70,12 @@ export default function JobStatusBar() {
     return null
   }
 
-  // Don't show if no jobs
-  if (userStats.total_jobs === 0) {
+  // Don't show if no jobs in the last 7 days
+  if (userStats.total_jobs_7d === 0) {
     return null
   }
 
-  const hasActiveJobs = userStats.active_jobs > 0 || userStats.queued_jobs > 0
+  const hasActiveJobs = userStats.active_jobs > 0
 
   return (
     <div
@@ -91,7 +93,7 @@ export default function JobStatusBar() {
               <div className="text-xs text-gray-600">Your Jobs</div>
               <div className="text-sm font-semibold text-gray-900">
                 {userStats.active_jobs} active
-                {userStats.queued_jobs > 0 && ` / ${userStats.queued_jobs} queued`}
+                {userStats.total_jobs_24h > 0 && ` / ${userStats.total_jobs_24h} today`}
               </div>
             </div>
           </div>

@@ -29,8 +29,8 @@ from app.models.config_models import (
     ExtractionEngineConfig,
     SharePointConfig,
     EmailConfig,
-    StorageConfig,
     QueueConfig,
+    MinIOConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -201,10 +201,10 @@ class ConfigLoader:
             if config.email is None:
                 logger.warning("Email configuration not found (optional)")
 
-            # Storage and queue are required
-            if config.storage is None:
-                errors.append("Storage configuration is required")
+            if config.minio is None:
+                logger.warning("MinIO configuration not found (optional)")
 
+            # Queue is required
             if config.queue is None:
                 errors.append("Queue configuration is required")
 
@@ -277,21 +277,6 @@ class ConfigLoader:
             return None
         return config.email
 
-    def get_storage_config(self) -> Optional[StorageConfig]:
-        """
-        Get typed storage configuration.
-
-        Returns:
-            StorageConfig instance (always present with defaults)
-
-        Raises:
-            ValueError: If configuration is invalid
-        """
-        config = self.get_config()
-        if config is None:
-            return None
-        return config.storage
-
     def get_queue_config(self) -> Optional[QueueConfig]:
         """
         Get typed queue configuration.
@@ -306,6 +291,21 @@ class ConfigLoader:
         if config is None:
             return None
         return config.queue
+
+    def get_minio_config(self) -> Optional[MinIOConfig]:
+        """
+        Get typed MinIO configuration.
+
+        Returns:
+            MinIOConfig instance or None if not configured
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        config = self.get_config()
+        if config is None:
+            return None
+        return config.minio
 
     def has_llm_config(self) -> bool:
         """Check if LLM configuration is available."""
@@ -322,6 +322,10 @@ class ConfigLoader:
     def has_email_config(self) -> bool:
         """Check if email configuration is available."""
         return self.get_email_config() is not None
+
+    def has_minio_config(self) -> bool:
+        """Check if MinIO configuration is available."""
+        return self.get_minio_config() is not None
 
     # -------------------------------------------------------------------------
     # Extraction engine convenience methods

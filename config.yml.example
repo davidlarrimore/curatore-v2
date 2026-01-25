@@ -82,7 +82,7 @@ llm:
 # Available engines:
 #   - extraction-service: Internal service using MarkItDown + Tesseract OCR
 #   - docling: IBM Docling for complex PDFs and Office documents
-#   - tika: Apache Tika (coming soon)
+#   - tika: Apache Tika for wide format support (1000+ types)
 #
 # If not configured here, falls back to EXTRACTION_* environment variables
 
@@ -201,20 +201,62 @@ extraction:
         table_mode: accurate
 
     # -------------------------------------------------------------------------
-    # Apache Tika (Coming Soon)
+    # Apache Tika
     # -------------------------------------------------------------------------
-    # Popular open-source content analysis toolkit
-    # Best for: Wide format support, metadata extraction
-    # Status: Not yet implemented - configuration shown for reference
-    # - name: tika
-    #   display_name: "Apache Tika"
-    #   description: "Open-source content analysis and extraction"
-    #   engine_type: tika
-    #   service_url: http://tika:9998
-    #   endpoint_path: /tika
-    #   timeout: 300
-    #   enabled: false
-    #   verify_ssl: true
+    # Popular open-source content analysis toolkit from Apache Software Foundation
+    # Best for: Wide format support (1000+ types), metadata extraction, archives
+    # Requires: Tika Server running (see docker-compose.yml)
+    # API Endpoint: /tika (automatically used based on engine_type)
+    # Reference: https://cwiki.apache.org/confluence/display/TIKA/TikaServer
+    - name: tika
+      display_name: "Apache Tika"
+      description: "Wide format support (1000+ types) with metadata extraction"
+
+      # Engine type identifier (required)
+      # This determines which extraction logic and API endpoint to use
+      engine_type: tika
+
+      # Tika Server URL (required)
+      # Default port is 9998
+      service_url: http://tika:9998
+
+      # Request timeout in seconds (optional, default: 300)
+      timeout: 300
+
+      # Enable this engine (required)
+      # Set to true to enable Tika extraction
+      enabled: false
+
+      # Verify SSL certificates (optional, default: true)
+      verify_ssl: true
+
+      # Tika-specific options (optional)
+      options:
+        # Output format preference (optional, default: markdown)
+        # Options:
+        #   - markdown: HTML converted to Markdown (recommended for RAG)
+        #   - html: Raw HTML output
+        #   - text: Plain text output
+        accept_format: markdown
+
+        # Extract document metadata (optional, default: true)
+        # Extracts author, title, creation date, etc.
+        extract_metadata: true
+
+        # OCR strategy for images/scanned PDFs (optional)
+        # Options:
+        #   - no_ocr: Skip OCR entirely
+        #   - ocr_only: Only use OCR (ignore embedded text)
+        #   - ocr_and_text: Use both OCR and embedded text
+        # ocr_strategy: ocr_and_text
+
+        # OCR language for Tesseract (optional, default: eng)
+        # Examples: eng, spa, fra, deu, or combinations like "eng+spa"
+        ocr_language: eng
+
+        # PDF OCR strategy (optional)
+        # Controls how PDFs with images are processed
+        # pdf_strategy: ocr_and_text
 
 
 # ============================================================================
@@ -329,73 +371,6 @@ email:
 
 
 # ============================================================================
-# Storage Configuration (optional)
-# ============================================================================
-# File storage management settings with defaults
-
-storage:
-  # Use hierarchical organization-based file structure (optional, default: true)
-  # - true: organizations/{org_id}/batches|adhoc structure
-  # - false: Flat uploaded_files/ and processed_files/ structure
-  hierarchical: true
-
-  # File deduplication settings
-  deduplication:
-    # Enable duplicate file detection (optional, default: true)
-    enabled: true
-
-    # Deduplication strategy (optional, default: symlink)
-    # - symlink: Create symbolic links (recommended, space efficient)
-    # - copy: Copy files from dedupe storage (compatible, uses more space)
-    # - reference: Store only reference (most efficient, requires lookup)
-    strategy: symlink
-
-    # Hash algorithm (optional, default: sha256)
-    # Options: md5, sha1, sha256, sha512
-    hash_algorithm: sha256
-
-    # Minimum file size to deduplicate in bytes (optional, default: 1024)
-    # Files smaller than this are not deduplicated (overhead not worth it)
-    min_file_size: 1024
-
-  # File retention policies (days/hours)
-  retention:
-    # Days to retain uploaded files (optional, default: 7)
-    uploaded_days: 7
-
-    # Days to retain processed markdown files (optional, default: 30)
-    processed_days: 30
-
-    # Days to retain batch files and metadata (optional, default: 14)
-    batch_days: 14
-
-    # Hours to retain temporary processing files (optional, default: 24)
-    temp_hours: 24
-
-  # Automatic cleanup settings
-  cleanup:
-    # Enable automatic file cleanup (optional, default: true)
-    enabled: true
-
-    # Cleanup schedule in cron format (optional, default: "0 2 * * *")
-    # Format: "minute hour day month day_of_week"
-    # Examples:
-    #   - "0 2 * * *": Daily at 2 AM
-    #   - "0 */6 * * *": Every 6 hours
-    #   - "0 0 * * 0": Weekly on Sunday at midnight
-    schedule_cron: "0 2 * * *"
-
-    # Files to process per cleanup batch (optional, default: 1000)
-    # Higher = faster cleanup but more memory usage
-    batch_size: 1000
-
-    # Run cleanup in dry-run mode (optional, default: false)
-    # - true: Log what would be deleted without actually deleting
-    # - false: Actually delete expired files
-    dry_run: false
-
-
-# ============================================================================
 # Queue Configuration (optional)
 # ============================================================================
 # Celery background job processing settings
@@ -417,3 +392,81 @@ queue:
   # Task timeout in seconds (optional, default: 3600)
   # Maximum time a task can run before being terminated
   task_timeout: 3600
+
+
+# ============================================================================
+# MinIO / S3 Object Storage Configuration (REQUIRED)
+# ============================================================================
+# Curatore v2 requires object storage. Filesystem storage is no longer supported.
+# Backend connects directly to MinIO or S3 for all file operations.
+#
+# Start services with: ./scripts/dev-up.sh
+# Initialize storage with: ./scripts/init_storage.sh
+#
+# IMPORTANT: For development, you need to:
+#   1. MinIO starts automatically with backend services (no --profile needed)
+#   2. Add "127.0.0.1 minio" to your /etc/hosts (or C:\Windows\System32\drivers\etc\hosts)
+#      This allows your browser to access presigned URLs that use the "minio" hostname.
+#   3. Run ./scripts/init_storage.sh to create buckets and set lifecycle policies
+#   For production, configure public_endpoint to match your public S3/MinIO hostname.
+#
+# If not configured here, falls back to MINIO_* environment variables
+
+minio:
+  # Enable object storage (REQUIRED, default: true)
+  # Object storage is required - no filesystem fallback
+  enabled: true
+
+  # MinIO/S3 server endpoint (host:port) for internal operations (required)
+  # Examples:
+  #   - MinIO (Docker): minio:9000
+  #   - MinIO (Local): localhost:9000
+  #   - AWS S3: s3.amazonaws.com
+  #   - AWS S3 (regional): s3.us-west-2.amazonaws.com
+  endpoint: minio:9000
+
+  # Endpoint used to generate presigned URLs (optional)
+  # Must be reachable from the backend container
+  # Leave empty to use 'endpoint' value
+  # presigned_endpoint:
+
+  # Public endpoint for presigned URLs (optional)
+  # The hostname that appears in presigned URLs for browser/client access
+  # Leave empty for development (requires /etc/hosts entry: 127.0.0.1 minio)
+  # Production: your-bucket.s3.amazonaws.com or custom domain
+  # public_endpoint:
+
+  # MinIO access key / AWS Access Key ID (required)
+  # Recommended: Reference from environment for security
+  # Should match MINIO_ROOT_USER for MinIO
+  access_key: ${MINIO_ACCESS_KEY}
+
+  # MinIO secret key / AWS Secret Access Key (required)
+  # CRITICAL: Keep this secret! Reference from environment.
+  # Should match MINIO_ROOT_PASSWORD for MinIO
+  secret_key: ${MINIO_SECRET_KEY}
+
+  # Use HTTPS for internal MinIO/S3 connections (optional, default: false)
+  # - false: HTTP (development, internal networks, MinIO default)
+  # - true: HTTPS (production, AWS S3, public networks)
+  secure: false
+
+  # Use HTTPS for presigned URLs (optional, defaults to 'secure' if not set)
+  # - false: HTTP (development)
+  # - true: HTTPS (production)
+  # public_secure: false
+
+  # Bucket for uploaded files (optional, default: curatore-uploads)
+  bucket_uploads: curatore-uploads
+
+  # Bucket for processed files (optional, default: curatore-processed)
+  bucket_processed: curatore-processed
+
+  # Bucket for temporary files (optional, default: curatore-temp)
+  bucket_temp: curatore-temp
+
+  # Presigned URL expiry in seconds (optional, default: 3600 = 1 hour)
+  # Range: 60 seconds (1 min) to 86400 seconds (24 hours)
+  # Frontend uploads/downloads use presigned URLs for direct storage access
+  # Lower = more secure, higher = more convenient
+  presigned_expiry: 3600

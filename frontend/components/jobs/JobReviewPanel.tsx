@@ -95,7 +95,7 @@ export function JobReviewPanel({
   useEffect(() => {
     if (selectedDocument && !documents.find(d => d.document_id === selectedDocument.document_id)) {
       setSelectedDocument(null)
-      toast.info('Document no longer available in this job')
+      toast('Document no longer available in this job')
     }
   }, [documents, selectedDocument])
 
@@ -183,7 +183,7 @@ export function JobReviewPanel({
       } else if (result.status === 'FAILED') {
         toast.error('Re-scoring failed', { id: loadingToast })
       } else if (result.status === 'CANCELLED') {
-        toast.info('Re-scoring was cancelled', { id: loadingToast })
+        toast('Re-scoring was cancelled', { id: loadingToast })
       }
     } catch (error: any) {
       if (error?.status === 409) {

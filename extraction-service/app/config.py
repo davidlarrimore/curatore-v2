@@ -14,12 +14,7 @@ class Settings(BaseModel):
     CORS_METHODS: List[str] = Field(default_factory=lambda: ["*"])
     CORS_HEADERS: List[str] = Field(default_factory=lambda: ["*"])
 
-    # Files
-    FILES_ROOT: str = Field(default=os.getenv("FILES_ROOT", "/app/files"))
-    UPLOAD_DIR: str = Field(default=os.getenv("UPLOAD_DIR", "/app/files/uploaded_files"))
-    PROCESSED_DIR: str = Field(default=os.getenv("PROCESSED_DIR", "/app/files/processed_files"))
-    BATCH_DIR: str = Field(default=os.getenv("BATCH_DIR", "/app/files/batch_files"))
-
+    # File Upload Limits
     MAX_FILE_SIZE: int = Field(default=int(os.getenv("MAX_FILE_SIZE", "52428800")))  # 50MB
 
     # OCR

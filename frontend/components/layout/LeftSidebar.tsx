@@ -21,7 +21,7 @@ import {
 } from 'lucide-react'
 import { systemApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
-import { QualityThresholds, OCRSettings } from '@/types'
+import { OCRSettings } from '@/types'
 import clsx from 'clsx'
 import Image from 'next/image'
 
@@ -65,18 +65,10 @@ export function LeftSidebar({
 
   // Settings state for quick settings panel
   const [settingsData, setSettingsData] = useState({
-    qualityThresholds: {
-      conversion: 70,
-      clarity: 7,
-      completeness: 7,
-      relevance: 7,
-      markdown: 7
-    } as QualityThresholds,
     ocrSettings: {
       language: 'eng',
       psm: 3
-    } as OCRSettings,
-    autoOptimize: true
+    } as OCRSettings
   })
 
   // Load settings when component mounts
@@ -88,9 +80,7 @@ export function LeftSidebar({
     try {
       const config = await systemApi.getConfig()
       setSettingsData({
-        qualityThresholds: config.quality_thresholds,
-        ocrSettings: config.ocr_settings,
-        autoOptimize: config.auto_optimize
+        ocrSettings: config.ocr_settings
       })
     } catch (error) {
       console.error('Failed to load settings:', error)

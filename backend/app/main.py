@@ -236,13 +236,14 @@ async def startup_event() -> None:
     print(f"   Version: {settings.api_version}")
     print(f"   Debug Mode: {settings.debug}")
     
-    # Log current working directory and configured paths
+    # Log current working directory and storage configuration
     print(f"📍 Current working directory: {os.getcwd()}")
-    print(f"📁 Configured storage paths:")
-    print(f"   FILES_ROOT: {settings.files_root}")
-    print(f"   UPLOAD_DIR: {settings.upload_dir}")
-    print(f"   PROCESSED_DIR: {settings.processed_dir}")
-    print(f"   BATCH_DIR: {settings.batch_dir}")
+    print(f"📦 Object Storage Configuration:")
+    print(f"   USE_OBJECT_STORAGE: {settings.use_object_storage}")
+    print(f"   MINIO_ENDPOINT: {getattr(settings, 'minio_endpoint', 'Not configured')}")
+    print(f"   MINIO_BUCKET_UPLOADS: {getattr(settings, 'minio_bucket_uploads', 'curatore-uploads')}")
+    print(f"   MINIO_BUCKET_PROCESSED: {getattr(settings, 'minio_bucket_processed', 'curatore-processed')}")
+
     # Extraction engine summary
     try:
         print("🔧 Extraction Engine Configuration:")
@@ -250,12 +251,6 @@ async def startup_event() -> None:
         print(f"   DOCLING_SERVICE_URL: {getattr(settings, 'docling_service_url', None)}")
     except Exception:
         pass
-    
-    # Validate that the main files directory exists (should be Docker volume)
-    files_root = Path(settings.files_root)
-    if not files_root.exists():
-        print(f"⚠️  WARNING: Main files directory doesn't exist: {files_root}")
-        print("   This may indicate Docker volume mount issues.")
     
     try:
         # Initialize database
@@ -339,16 +334,61 @@ async def startup_event() -> None:
         clear_batch = bool(os.getenv("CLEAR_BATCH_ON_STARTUP", "").lower() in {"1", "true", "yes"})
         if settings.debug or clear_on_startup:
             print("🧹 Cleaning up previous session data (debug/explicit)…")
-            if clear_batch:
-                print("   - Clearing uploads, processed, and batch files (CLEAR_BATCH_ON_STARTUP)")
-                document_service.clear_all_files()
-            else:
-                print("   - Clearing uploads and processed files only (preserving batch_files)")
-                document_service.clear_runtime_files()
+
+            # Clear object storage if enabled
+            if settings.use_object_storage:
+                try:
+                    from .services.minio_service import get_minio_service
+                    minio = get_minio_service()
+
+                    if minio and minio.enabled:
+                        if clear_batch:
+                            print("   - Clearing all MinIO buckets (uploads, processed, temp)")
+                            minio.delete_all_objects_in_bucket(minio.bucket_uploads)
+                            minio.delete_all_objects_in_bucket(minio.bucket_processed)
+                            minio.delete_all_objects_in_bucket(minio.bucket_temp)
+                        else:
+                            print("   - Clearing MinIO uploads and processed buckets (preserving temp)")
+                            minio.delete_all_objects_in_bucket(minio.bucket_uploads)
+                            minio.delete_all_objects_in_bucket(minio.bucket_processed)
+                        print("   ✓ Object storage cleared")
+                    else:
+                        print("   ⚠️  MinIO not configured, skipping storage cleanup")
+                except Exception as e:
+                    print(f"   ⚠️  Failed to clear object storage: {e}")
+
+            # Clear in-memory storage cache
             storage_service.clear_all()
-            print("✅ File directories and storage cleared")
+            print("✅ Storage cleared")
         else:
-            print("↩️  Preserving existing files and storage (production mode)")
+            print("↩️  Preserving existing storage (production mode)")
+
+        # Initialize object storage (MinIO) if enabled
+        if settings.use_object_storage:
+            print("📦 Initializing MinIO object storage...")
+            try:
+                from .services.minio_service import get_minio_service
+                minio = get_minio_service()
+                if minio:
+                    # Ensure buckets exist
+                    buckets = [
+                        settings.minio_bucket_uploads,
+                        settings.minio_bucket_processed,
+                        settings.minio_bucket_temp,
+                    ]
+                    for bucket in buckets:
+                        minio.ensure_bucket(bucket)
+
+                    print("   ✅ MinIO storage initialized")
+                    print(f"      MinIO Endpoint: {settings.minio_endpoint}")
+                    print(f"      Buckets: {settings.minio_bucket_uploads}, {settings.minio_bucket_processed}, {settings.minio_bucket_temp}")
+                else:
+                    print("   ⚠️  Object storage disabled in settings")
+            except Exception as e:
+                print(f"   ❌ Failed to initialize MinIO storage: {e}")
+                raise
+        else:
+            print("📁 Using filesystem storage (USE_OBJECT_STORAGE=false)")
 
         # Log LLM service status
         from .services.llm_service import llm_service

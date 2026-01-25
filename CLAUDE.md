@@ -11,6 +11,7 @@ Curatore v2 is a RAG-ready document processing and optimization platform. It con
 - **Extraction Service**: Separate microservice for document conversion
 - **Queue System**: Redis + Celery for async job processing
 - **Optional Docling**: External document converter for rich PDFs/Office docs
+- **Optional Object Storage**: S3-compatible storage (MinIO/AWS S3) with integrated MinIO SDK
 
 ## Development Commands
 
@@ -340,74 +341,96 @@ Curatore v2 supports multi-tenant architecture with optional authentication:
 
 ### File Storage
 
-#### Hierarchical Storage Structure (v2.1+)
+#### Object Storage (S3/MinIO) - REQUIRED
 
-Curatore uses a hierarchical file organization system with multi-tenant isolation, batch groupings, and automatic deduplication:
+**Curatore v2 now requires object storage** - filesystem storage has been removed. All files are stored in S3-compatible object storage (MinIO for development, AWS S3 for production).
 
+**BREAKING CHANGE (v2.3+):** Local filesystem storage has been completely removed. The `/app/files` directory is no longer used.
+
+**Architecture:**
 ```
-/app/files/
-├── organizations/                  # Multi-tenant file isolation
-│   └── {organization_id}/          # UUID-based organization folder
-│       ├── batches/
-│       │   └── {batch_id}/         # Batch-grouped files
-│       │       ├── uploaded/       # Original uploaded files (or symlinks)
-│       │       │   └── {document_id}_{name}.ext
-│       │       ├── processed/      # Converted markdown files
-│       │       │   └── {document_id}_{name}.md
-│       │       └── metadata.json   # Batch metadata + expiration
-│       └── adhoc/                  # Single-file uploads (no batch)
-│           ├── uploaded/
+Frontend → Backend API → MinIO/S3
+                ↓
+         presigned URLs for direct upload/download
+```
+
+**Object Storage Structure:**
+```
+MinIO/S3 Buckets:
+├── curatore-uploads/           # Uploaded source files
+│   └── {org_id}/
+│       └── {document_id}/
+│           └── uploaded/
+│               └── {filename}
+├── curatore-processed/         # Processed markdown files
+│   └── {org_id}/
+│       └── {document_id}/
 │           └── processed/
-├── shared/                         # For unauthenticated mode (ENABLE_AUTH=false)
-│   ├── batches/{batch_id}/...
-│   └── adhoc/...
-├── dedupe/                         # Content-addressable storage (deduplication)
-│   └── {hash[:2]}/                 # Shard by first 2 chars of SHA-256
-│       └── {hash}/                 # Full hash directory
-│           ├── content.ext         # Actual file content (stored once)
-│           └── refs.json           # Reference count + document IDs
-├── temp/                           # Temporary processing files
-│   └── {job_id}/                   # Auto-cleanup after job completion
-├── uploaded_files/                 # Legacy flat structure (backward compat)
-├── processed_files/                # Legacy flat structure (backward compat)
-└── batch_files/                    # Legacy bulk inputs (backward compat)
+│               └── {filename}.md
+└── curatore-temp/              # Temporary processing files
+    └── {job_id}/
+        └── {temp_files}
 ```
 
-**File Deduplication:**
-- Identical files are stored only once in `dedupe/` using SHA-256 content hashing
-- Original file locations contain symlinks (default) or copies to deduplicated content
-- Reference counting tracks how many documents use each unique file
-- Storage savings are reported via `/api/v1/storage/deduplication` endpoint
+**Key Features:**
+- **Provider-agnostic**: Works with MinIO (development) or AWS S3 (production)
+- **Presigned URLs**: Frontend uploads/downloads directly to storage, bypassing backend for large files
+- **Artifact tracking**: Database tracks all stored files via the `Artifact` model
+- **S3 lifecycle policies**: Automatic file expiration and retention (no Celery cleanup tasks needed)
+- **Multi-bucket setup**: Separate buckets for uploads, processed files, and temp files
+- **Multi-tenant isolation**: Organization ID prefixes ensure tenant isolation
+- **Integrated MinIO SDK**: Direct connection from backend (no separate microservice needed)
 
-**Automatic Cleanup:**
-- Expired files are automatically deleted based on configurable retention periods:
-  - Uploaded files: 7 days (configurable via `FILE_RETENTION_UPLOADED_DAYS`)
-  - Processed files: 30 days (configurable via `FILE_RETENTION_PROCESSED_DAYS`)
-  - Batch files: 14 days (configurable via `FILE_RETENTION_BATCH_DAYS`)
-  - Temp files: 24 hours (configurable via `FILE_RETENTION_TEMP_HOURS`)
-- Cleanup runs daily at 2 AM UTC (configurable via `FILE_CLEANUP_SCHEDULE_CRON`)
-- Active jobs are protected from cleanup
-- Deduplicated files are only deleted when all references are removed
-
-**Database Storage** (when using SQLite):
-```
-/app/data/
-└── curatore.db          # SQLite database file
-```
-
-**Important**:
-- File paths in code should use `path_service.get_document_path()` or `settings.upload_dir`, `settings.processed_dir`, etc. from `config.py`. Never hardcode paths.
-- Both `files/` and `data/` directories are bind-mounted from the host in docker-compose
-- SQLite database file persists across container restarts via volume mount
-- Set `USE_HIERARCHICAL_STORAGE=true` to enable new structure (default: true)
-- Legacy flat structure is maintained for backward compatibility
+**Setup (Development):**
+1. MinIO starts automatically with backend services (no profile needed)
+2. Run `./scripts/init_storage.sh` to create buckets and set lifecycle policies
+3. Add `127.0.0.1 minio` to `/etc/hosts` for presigned URL access from browser
 
 **Configuration:**
-- Hierarchical storage: `USE_HIERARCHICAL_STORAGE` (default: true)
-- Deduplication: `FILE_DEDUPLICATION_ENABLED` (default: true)
-- Deduplication strategy: `FILE_DEDUPLICATION_STRATEGY` (symlink | copy | reference)
-- Automatic cleanup: `FILE_CLEANUP_ENABLED` (default: true)
+- `USE_OBJECT_STORAGE`: Must be `true` (default: true, no filesystem fallback)
+- `MINIO_ENDPOINT`: MinIO server endpoint (default: minio:9000)
+- `MINIO_PUBLIC_ENDPOINT`: Public endpoint for presigned URLs (must be reachable from clients)
+- `MINIO_ACCESS_KEY`: MinIO access key (default: minioadmin)
+- `MINIO_SECRET_KEY`: MinIO secret key (default: minioadmin)
+- `MINIO_BUCKET_UPLOADS`: Bucket for uploaded files
+- `MINIO_BUCKET_PROCESSED`: Bucket for processed files
+- `MINIO_BUCKET_TEMP`: Bucket for temporary files
 - See `.env.example` for complete configuration options
+
+**File Upload/Download Workflow:**
+1. **Upload**: Frontend requests presigned upload URL from `POST /api/v1/storage/upload/presigned`
+2. **Direct Upload**: Frontend uploads file directly to MinIO using presigned URL
+3. **Confirm**: Frontend confirms upload via `POST /api/v1/storage/upload/confirm`
+4. **Artifact**: Backend creates artifact record in database for tracking
+5. **Process**: Celery task downloads from MinIO, processes, uploads result back to MinIO
+6. **Download**: Frontend requests presigned download URL from `GET /api/v1/storage/download/{document_id}/presigned`
+7. **Direct Download**: Frontend downloads directly from MinIO using presigned URL
+
+**Key Files:**
+- `backend/app/services/minio_service.py`: MinIO SDK integration
+- `backend/app/services/artifact_service.py`: Database tracking for stored files
+- `backend/app/api/v1/routers/storage.py`: Presigned URL endpoints
+- `backend/app/commands/init_storage.py`: Bucket initialization command
+- `scripts/init_storage.sh`: Storage initialization script
+
+**API Endpoints:**
+- `GET /api/v1/storage/health`: Check object storage status
+- `POST /api/v1/storage/upload/presigned`: Get presigned URL for upload
+- `POST /api/v1/storage/upload/confirm`: Confirm upload completed
+- `GET /api/v1/storage/download/{document_id}/presigned`: Get presigned URL for download
+
+**Database Storage** (SQLite/PostgreSQL):
+```
+/app/data/
+└── curatore.db          # SQLite database file (development)
+```
+
+**Important:**
+- Object storage is **REQUIRED** - the system will not work without it
+- MinIO starts automatically with backend services
+- Run `./scripts/init_storage.sh` after first startup to initialize buckets
+- For production, use AWS S3 or another S3-compatible service
+- S3 lifecycle policies handle file retention (configured via init_storage command)
 
 ### Frontend Architecture
 
@@ -1546,6 +1569,12 @@ Base URL: `http://localhost:8000/api/v1`
 - `DELETE /connections/{id}` - Delete connection
 - `POST /connections/{id}/test` - Test connection health
 
+**Storage** (when `USE_OBJECT_STORAGE=true`):
+- `GET /storage/health` - Storage service health check
+- `POST /storage/upload/presigned` - Get presigned URL for direct upload
+- `POST /storage/upload/confirm` - Confirm upload completed
+- `GET /storage/download/{document_id}/presigned` - Get presigned URL for download
+
 **System**:
 - `GET /health` - API health check
 - `GET /llm/status` - LLM connection status
@@ -1560,6 +1589,7 @@ Base URL: `http://localhost:8000/api/v1`
 - `GET /system/health/docling` - Docling service health check
 - `GET /system/health/llm` - LLM connection health check
 - `GET /system/health/sharepoint` - SharePoint / Microsoft Graph health check
+- `GET /system/health/storage` - Object storage (S3/MinIO) health check
 - `GET /system/health/comprehensive` - Comprehensive health check for all components
 
 **Interactive Docs**: http://localhost:8000/docs
@@ -1581,6 +1611,8 @@ All backend services follow comprehensive documentation standards (see existing 
 - `8010`: Extraction Service
 - `6379`: Redis
 - `5151`: Docling (when enabled, maps to internal 5001)
+- `9000`: MinIO S3 API (when using MinIO profile)
+- `9001`: MinIO Console (when using MinIO profile)
 
 ## Useful Debugging Commands
 

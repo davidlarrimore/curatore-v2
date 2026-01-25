@@ -77,9 +77,7 @@ export const systemApi = {
   },
 
   async getConfig(): Promise<{
-    quality_thresholds: { conversion: number; clarity: number; completeness: number; relevance: number; markdown: number }
     ocr_settings: { language: string; psm: number }
-    auto_optimize: boolean
   }> {
     const res = await fetch(apiUrl('/config/defaults'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
@@ -147,23 +145,88 @@ export const systemApi = {
 // -------------------- File API --------------------
 export const fileApi = {
   async listUploadedFiles(): Promise<{ files: FileInfo[]; count: number }> {
+    // Check if object storage is enabled
+    const useObjectStorage = await objectStorageApi.isEnabled()
+
+    if (useObjectStorage) {
+      // Use object storage artifacts endpoint
+      const artifacts = await objectStorageApi.listArtifacts('uploaded')
+      const files: FileInfo[] = artifacts.map(artifact => ({
+        document_id: artifact.document_id,
+        filename: artifact.original_filename,
+        original_filename: artifact.original_filename,
+        file_size: artifact.file_size || 0,
+        upload_time: new Date(artifact.created_at).getTime(),
+        file_path: `${artifact.bucket}/${artifact.object_key}`,
+      }))
+      return { files, count: files.length }
+    }
+
+    // Fall back to filesystem-based endpoint
     const res = await fetch(apiUrl('/documents/uploaded'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async listBatchFiles(): Promise<{ files: FileInfo[]; count: number }> {
+    // Check if object storage is enabled
+    const useObjectStorage = await objectStorageApi.isEnabled()
+
+    if (useObjectStorage) {
+      // With object storage, "batch files" don't really exist as a separate concept
+      // Return empty list for now (batch processing would use uploaded files)
+      return { files: [], count: 0 }
+    }
+
+    // Fall back to filesystem-based endpoint
     const res = await fetch(apiUrl('/documents/batch'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
-  async uploadFile(file: File): Promise<{ document_id: string; filename: string; file_size: number; upload_time: string }> {
+  /**
+   * Upload a file. Automatically uses object storage (presigned URLs) when enabled,
+   * otherwise falls back to traditional backend upload.
+   */
+  async uploadFile(file: File): Promise<{ document_id: string; filename: string; file_size: number; upload_time?: string; artifact_id?: string }> {
+    // Check if object storage is enabled
+    const useObjectStorage = await objectStorageApi.isEnabled()
+
+    if (useObjectStorage) {
+      // Use presigned URL flow (direct to storage)
+      const result = await objectStorageApi.uploadFile(file)
+      return {
+        document_id: result.document_id,
+        filename: result.filename,
+        file_size: result.file_size,
+        artifact_id: result.artifact_id,
+      }
+    }
+
+    // Fall back to traditional upload (through backend)
     const form = new FormData()
     form.append('file', file)
     const res = await fetch(apiUrl('/documents/upload'), { method: 'POST', body: form, headers: authHeaders() })
     return handleJson(res)
   },
 
-  async downloadDocument(documentId: string): Promise<Blob> {
+  /**
+   * Download a document. Automatically uses object storage (presigned URLs) when enabled,
+   * otherwise falls back to traditional backend download.
+   */
+  async downloadDocument(documentId: string, artifactType: 'uploaded' | 'processed' = 'processed'): Promise<Blob> {
+    // Check if object storage is enabled
+    const useObjectStorage = await objectStorageApi.isEnabled()
+
+    if (useObjectStorage) {
+      // Use presigned URL flow (direct from storage)
+      try {
+        return await objectStorageApi.downloadFile(documentId, artifactType)
+      } catch (e) {
+        // If object storage download fails (e.g., file not in storage), fall back
+        console.warn('Object storage download failed, falling back to backend:', e)
+      }
+    }
+
+    // Fall back to traditional download (through backend)
     const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/download`), { headers: authHeaders() })
     return handleBlob(res)
   },
@@ -404,15 +467,11 @@ export const utils = {
     const total = results.length
     const successful = results.filter(r => r.success).length
     const failed = total - successful
-    const ragReady = results.filter(r => r.pass_all_thresholds).length
-    const optimized = results.filter(r => r.vector_optimized).length
-    
-    return { 
-      total, 
-      successful, 
-      failed, 
-      ragReady, 
-      optimized 
+
+    return {
+      total,
+      successful,
+      failed
     }
   },
 
@@ -445,9 +504,6 @@ export const utils = {
 function mapV1ResultToFrontend(raw: any): ProcessingResult {
   // Safely extract conversion score with fallback logic
   const conversion_score = raw.conversion_result?.conversion_score ?? 0
-  const pass_all_thresholds = raw.pass_all_thresholds ?? raw.is_rag_ready ?? false
-  const vector_optimized = raw.vector_optimized ?? false
-
   return {
     // Required core fields
     document_id: raw.document_id,
@@ -461,8 +517,6 @@ function mapV1ResultToFrontend(raw: any): ProcessingResult {
     llm_evaluation: raw.llm_evaluation,
     document_summary: raw.document_summary ?? raw.summary,
     conversion_score,
-    pass_all_thresholds,
-    vector_optimized,
     processing_time: raw.processing_time ?? 0,
     processed_at: raw.processed_at,
     thresholds_used: raw.thresholds_used,
@@ -1017,7 +1071,8 @@ export const settingsApi = {
   },
 }
 
-// -------------------- Storage API --------------------
+// -------------------- Storage API (Filesystem) --------------------
+// These methods handle filesystem-based storage operations
 export const storageApi = {
   async getStats(token: string, organizationId?: string): Promise<{
     organization_id: string
@@ -1143,6 +1198,453 @@ export const storageApi = {
   },
 }
 
+// -------------------- Object Storage API --------------------
+// Direct access to S3/MinIO object storage via presigned URLs
+export const objectStorageApi = {
+  /**
+   * Check if object storage is enabled
+   */
+  async isEnabled(): Promise<boolean> {
+    try {
+      const res = await fetch(apiUrl('/storage/health'), {
+        headers: authHeaders(),
+        cache: 'no-store',
+      })
+      const data = await handleJson<{ status: string; enabled: boolean }>(res)
+      return data.enabled && data.status !== 'disabled'
+    } catch {
+      return false
+    }
+  },
+
+  /**
+   * Get storage health status
+   */
+  async getHealth(): Promise<{
+    status: string
+    enabled: boolean
+    provider_connected: boolean | null
+    buckets: string[] | null
+    error: string | null
+  }> {
+    const res = await fetch(apiUrl('/storage/health'), {
+      headers: authHeaders(),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Upload a file proxied through backend (bypasses CORS and network issues)
+   */
+  async uploadFile(file: File): Promise<{
+    document_id: string
+    artifact_id: string
+    filename: string
+    file_size: number
+  }> {
+    const token = getAccessToken()
+    if (!token) throw new Error('Authentication required')
+
+    // Upload file through backend proxy
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const res = await fetch(apiUrl('/storage/upload/proxy'), {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${token}` },
+      body: formData,
+    })
+
+    if (!res.ok) {
+      const error = await res.text()
+      throw new Error(`Upload failed: ${error || res.statusText}`)
+    }
+
+    const result = await res.json() as {
+      document_id: string
+      artifact_id: string
+      status: string
+      filename: string
+      file_size: number
+      etag: string | null
+    }
+
+    return {
+      document_id: result.document_id,
+      artifact_id: result.artifact_id,
+      filename: result.filename,
+      file_size: result.file_size,
+    }
+  },
+
+  /**
+   * Download a file proxied through backend (bypasses CORS)
+   */
+  async downloadFile(
+    documentId: string,
+    artifactType: 'uploaded' | 'processed' = 'processed'
+  ): Promise<Blob> {
+    const token = getAccessToken()
+    if (!token) throw new Error('Authentication required')
+
+    // Use proxy endpoint to bypass CORS issues with MinIO
+    const url = new URL(apiUrl(`/storage/download/${encodeURIComponent(documentId)}/proxy`))
+    url.searchParams.set('artifact_type', artifactType)
+
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+
+    if (!res.ok) {
+      const error = await res.text()
+      throw new Error(`Download failed: ${error || res.statusText}`)
+    }
+
+    return res.blob()
+  },
+
+  /**
+   * List all artifacts for a document
+   */
+  async listDocumentArtifacts(documentId: string, token?: string): Promise<Array<{
+    id: string
+    organization_id: string
+    document_id: string
+    job_id: string | null
+    artifact_type: string
+    bucket: string
+    object_key: string
+    original_filename: string
+    content_type: string | null
+    file_size: number | null
+    etag: string | null
+    status: string
+    created_at: string
+    updated_at: string
+    expires_at: string | null
+  }>> {
+    const res = await fetch(apiUrl(`/storage/artifacts/document/${encodeURIComponent(documentId)}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get artifact details by ID
+   */
+  async getArtifact(artifactId: string, token?: string): Promise<{
+    id: string
+    organization_id: string
+    document_id: string
+    job_id: string | null
+    artifact_type: string
+    bucket: string
+    object_key: string
+    original_filename: string
+    content_type: string | null
+    file_size: number | null
+    etag: string | null
+    status: string
+    created_at: string
+    updated_at: string
+    expires_at: string | null
+  }> {
+    const res = await fetch(apiUrl(`/storage/artifacts/${encodeURIComponent(artifactId)}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Delete an artifact
+   */
+  async deleteArtifact(artifactId: string, token?: string): Promise<{
+    deleted: boolean
+    artifact_id: string
+    document_id: string
+  }> {
+    const res = await fetch(apiUrl(`/storage/artifacts/${encodeURIComponent(artifactId)}`), {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * List artifacts for the current organization
+   */
+  async listArtifacts(
+    artifactType?: string,
+    limit: number = 100,
+    offset: number = 0,
+    token?: string
+  ): Promise<Array<{
+    id: string
+    organization_id: string
+    document_id: string
+    job_id: string | null
+    artifact_type: string
+    bucket: string
+    object_key: string
+    original_filename: string
+    content_type: string | null
+    file_size: number | null
+    etag: string | null
+    status: string
+    created_at: string
+    updated_at: string
+    expires_at: string | null
+  }>> {
+    const url = new URL(apiUrl('/storage/artifacts'))
+    if (artifactType) {
+      url.searchParams.set('artifact_type', artifactType)
+    }
+    url.searchParams.set('limit', limit.toString())
+    url.searchParams.set('offset', offset.toString())
+
+    const res = await fetch(url.toString(), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  // ========== Storage Browsing API ==========
+
+  /**
+   * List all accessible storage buckets with metadata
+   */
+  async listBuckets(token?: string): Promise<{
+    buckets: Array<{
+      name: string
+      display_name: string
+      is_protected: boolean
+      is_default: boolean
+    }>
+    default_bucket: string
+  }> {
+    const res = await fetch(apiUrl('/storage/browse'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Browse bucket contents at a specific path
+   */
+  async browse(bucket: string, prefix: string = '', token?: string): Promise<{
+    bucket: string
+    prefix: string
+    folders: string[]
+    files: Array<{
+      key: string
+      filename: string
+      size: number
+      content_type: string | null
+      etag: string
+      last_modified: string
+      is_folder: boolean
+    }>
+    is_protected: boolean
+    parent_path: string | null
+  }> {
+    const url = new URL(apiUrl(`/storage/browse/${encodeURIComponent(bucket)}`))
+    if (prefix) {
+      url.searchParams.set('prefix', prefix)
+    }
+    const res = await fetch(url.toString(), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get list of protected bucket names
+   */
+  async getProtectedBuckets(token?: string): Promise<{
+    protected_buckets: string[]
+  }> {
+    const res = await fetch(apiUrl('/storage/buckets/protected'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  // ========== Folder Management API ==========
+
+  /**
+   * Create a new folder in storage
+   */
+  async createFolder(bucket: string, path: string, token?: string): Promise<{
+    success: boolean
+    bucket: string
+    path: string
+  }> {
+    const res = await fetch(apiUrl('/storage/folders'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify({ bucket, path }),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Upload a file directly to a folder
+   */
+  async uploadToFolder(bucket: string, prefix: string, file: File, token?: string): Promise<{
+    success: boolean
+    bucket: string
+    prefix: string
+    filename: string
+    object_key: string
+    file_size: number
+  }> {
+    const formData = new FormData()
+    formData.append('bucket', bucket)
+    formData.append('prefix', prefix)
+    formData.append('file', file)
+
+    const res = await fetch(apiUrl('/storage/folders/upload'), {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: formData,
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Delete a folder from storage
+   */
+  async deleteFolder(bucket: string, path: string, recursive: boolean = false, token?: string): Promise<{
+    success: boolean
+    bucket: string
+    path: string
+    deleted_count: number
+    failed_count: number
+  }> {
+    const url = new URL(apiUrl(`/storage/folders/${encodeURIComponent(bucket)}/${path}`))
+    url.searchParams.set('recursive', String(recursive))
+    const res = await fetch(url.toString(), {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Download object proxied through backend (no presigned URLs needed)
+   */
+  async downloadObject(
+    bucket: string,
+    key: string,
+    inline: boolean = false,
+    token?: string
+  ): Promise<Blob> {
+    const url = new URL(apiUrl('/storage/object/download'))
+    url.searchParams.set('bucket', bucket)
+    url.searchParams.set('key', key)
+    url.searchParams.set('inline', String(inline))
+
+    const res = await fetch(url.toString(), {
+      headers: authHeaders(token),
+    })
+
+    if (!res.ok) {
+      throw new Error(`Download failed: ${res.statusText}`)
+    }
+
+    return await res.blob()
+  },
+
+  /**
+   * Get presigned URL for any object (DEPRECATED - use downloadObject instead)
+   * @deprecated Use downloadObject() for backend-proxied downloads
+   */
+  async getObjectPresignedUrl(
+    bucket: string,
+    key: string,
+    inline: boolean = false,
+    filename?: string,
+    token?: string
+  ): Promise<{
+    download_url: string
+    bucket: string
+    key: string
+    filename: string
+    size: number | null
+    content_type: string | null
+    expires_in: number
+  }> {
+    const url = new URL(apiUrl('/storage/object/presigned'))
+    url.searchParams.set('bucket', bucket)
+    url.searchParams.set('key', key)
+    url.searchParams.set('inline', String(inline))
+    if (filename) {
+      url.searchParams.set('filename', filename)
+    }
+    const res = await fetch(url.toString(), {
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  // ========== File Operations API ==========
+
+  /**
+   * Move files to a different location
+   */
+  async moveFiles(
+    artifactIds: string[],
+    destinationBucket: string,
+    destinationPrefix: string,
+    token?: string
+  ): Promise<{
+    moved_count: number
+    failed_count: number
+    moved_artifacts: string[]
+    failed_artifacts: string[]
+  }> {
+    const res = await fetch(apiUrl('/storage/files/move'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify({
+        artifact_ids: artifactIds,
+        destination_bucket: destinationBucket,
+        destination_prefix: destinationPrefix,
+      }),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Rename a file in storage
+   */
+  async renameFile(artifactId: string, newName: string, token?: string): Promise<{
+    success: boolean
+    artifact_id: string
+    old_name: string
+    new_name: string
+    new_key: string
+  }> {
+    const res = await fetch(apiUrl('/storage/files/rename'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify({
+        artifact_id: artifactId,
+        new_name: newName,
+      }),
+    })
+    return handleJson(res)
+  },
+}
+
 // -------------------- Users API --------------------
 export const usersApi = {
   async listUsers(token: string): Promise<{
@@ -1243,6 +1745,8 @@ export default {
   authApi,
   connectionsApi,
   settingsApi,
+  storageApi,
+  objectStorageApi,
   usersApi,
   utils,
 }

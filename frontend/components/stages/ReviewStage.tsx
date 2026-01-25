@@ -3,14 +3,13 @@
 
 import { useState, useEffect } from 'react';
 import toast from 'react-hot-toast';
-import { ProcessingResult, QualityThresholds } from '@/types';
+import { ProcessingResult } from '@/types';
 import { contentApi, jobsApi, utils } from '@/lib/api';
 
 interface ReviewStageProps {
   processingResults: ProcessingResult[];
   onResultsUpdate: (results: ProcessingResult[]) => void;
   onComplete: () => void;
-  qualityThresholds: QualityThresholds;
   isProcessingComplete: boolean;
   isProcessing: boolean;
   selectedFiles: any[];
@@ -19,13 +18,12 @@ interface ReviewStageProps {
 
 type TabType = 'quality' | 'editor';
 
-type ResultFilter = 'all' | 'failed_processing' | 'failed_quality' | 'passed'
+type ResultFilter = 'all' | 'failed_processing'
 
 export function ReviewStage({
   processingResults,
   onResultsUpdate,
   onComplete,
-  qualityThresholds,
   isProcessingComplete,
   isProcessing,
   selectedFiles,
@@ -101,8 +99,8 @@ export function ReviewStage({
         } else if (byDoc?.job_id) {
           // Fetch job details for logs
           try {
-            const job = await jobsApi.getJob(byDoc.job_id);
-            const jlogs = job?.logs || job?.log || job?.events || [];
+            const job = await jobsApi.getJob(undefined, byDoc.job_id);
+            const jlogs = job?.recent_logs || [];
             const n2 = Array.isArray(jlogs)
               ? jlogs.map((l: any) => ({ timestamp: l.timestamp || l.ts || l.time, level: l.level || l.severity || 'info', message: l.message || l.msg || String(l) }))
               : [];
@@ -146,20 +144,30 @@ export function ReviewStage({
     }
   };
 
-  const pollJobUntilDone = async (jobId: string) => {
+  const pollJobUntilDone = async (jobId: string): Promise<any> => {
     const interval = parseInt(process.env.NEXT_PUBLIC_JOB_POLL_INTERVAL_MS || '2500', 10);
+    const maxAttempts = 60; // 2.5s * 60 = 2.5min timeout
+    let attempts = 0;
+
     // eslint-disable-next-line no-constant-condition
-    while (true) {
+    while (attempts < maxAttempts) {
       try {
-        const status = await jobsApi.getJob(jobId);
+        const status = await jobsApi.getJob(undefined, jobId);
         const st = (status.status || '').toUpperCase();
-        if (st === 'SUCCESS') return status.result as ProcessingResult;
-        if (st === 'FAILURE') throw new Error(status.error || 'Update failed');
+        if (st === 'COMPLETED') {
+          // Return a basic success result
+          return { success: true, document_id: jobId };
+        }
+        if (st === 'FAILED' || st === 'CANCELLED') {
+          throw new Error('Job failed or was cancelled');
+        }
       } catch (e) {
-        throw e as Error;
+        if (attempts >= maxAttempts - 1) throw e as Error;
       }
       await new Promise(res => setTimeout(res, interval));
+      attempts++;
     }
+    throw new Error('Job polling timeout');
   };
 
   // Attempt to enqueue a content update. If a 409 occurs, wait for the active job
@@ -226,20 +234,15 @@ export function ReviewStage({
 
   // Vector optimization and custom LLM improvements are disabled
 
-  const getQualityColor = (score: number, threshold: number) => {
-    if (score >= 9) return 'text-green-600';
-    if (score >= threshold) return 'text-yellow-600';
+  const getQualityColor = (score: number) => {
+    if (score >= 80) return 'text-green-600';
+    if (score >= 60) return 'text-yellow-600';
     return 'text-red-600';
   };
 
-  const getPassFailColor = (passes: boolean) => {
-    return passes
-      ? 'bg-green-100 text-green-800'
-      : 'bg-red-100 text-red-800';
-  };
-
-  const getScoreIcon = (score: number, threshold: number) => {
-    if (score >= threshold) return '🟢';
+  const getScoreIcon = (score: number) => {
+    if (score >= 80) return '🟢';
+    if (score >= 60) return '🟡';
     return '🔴';
   };
 
@@ -291,17 +294,11 @@ export function ReviewStage({
     switch (resultFilter) {
       case 'failed_processing':
         return processingResults.filter(r => !r.success);
-      case 'failed_quality':
-        return processingResults.filter(r => r.success && !r.pass_all_thresholds);
-      case 'passed':
-        return processingResults.filter(r => r.success && r.pass_all_thresholds);
       case 'all':
       default:
         return processingResults;
     }
   })();
-  const ragReadyCount = successfulResults.filter(r => r.pass_all_thresholds).length;
-  const vectorOptimizedCount = successfulResults.filter(r => r.vector_optimized).length;
 
   // Show waiting state only if no results are available yet
   if (processingResults.length === 0 && !isProcessingComplete) {
@@ -351,7 +348,7 @@ export function ReviewStage({
     <div className="space-y-6 pb-24">
 
       {/* Summary Stats */}
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 gap-4">
         <div className="bg-blue-50 p-4 rounded-lg text-center">
           <div className="text-2xl font-bold text-blue-600">{processingResults.length}</div>
           <div className="text-sm text-blue-800">
@@ -359,16 +356,8 @@ export function ReviewStage({
           </div>
         </div>
         <div className="bg-green-50 p-4 rounded-lg text-center">
-          <div className="text-2xl font-bold text-green-600">{ragReadyCount}</div>
-          <div className="text-sm text-green-800">RAG Ready</div>
-        </div>
-        <div className="bg-purple-50 p-4 rounded-lg text-center">
-          <div className="text-2xl font-bold text-purple-600">{vectorOptimizedCount}</div>
-          <div className="text-sm text-purple-800">Optimized</div>
-        </div>
-        <div className="bg-gray-50 p-4 rounded-lg text-center">
-          <div className="text-2xl font-bold text-gray-600">{successfulResults.length}</div>
-          <div className="text-sm text-gray-800">Successful</div>
+          <div className="text-2xl font-bold text-green-600">{successfulResults.length}</div>
+          <div className="text-sm text-green-800">Successful</div>
         </div>
       </div>
 
@@ -395,33 +384,16 @@ export function ReviewStage({
                 type="button"
                 onClick={() => setResultFilter('failed_processing')}
                 className={`px-2 py-1 rounded text-xs border ${resultFilter === 'failed_processing' ? 'bg-red-600 text-white border-red-600' : 'bg-red-50 text-red-700 border-red-200 hover:bg-red-100'}`}
-                title="Failed to data extract"
+                title="Failed to process"
               >
                 Failed Processing
-              </button>
-              <button
-                type="button"
-                onClick={() => setResultFilter('failed_quality')}
-                className={`px-2 py-1 rounded text-xs border ${resultFilter === 'failed_quality' ? 'bg-yellow-600 text-white border-yellow-600' : 'bg-yellow-50 text-yellow-800 border-yellow-200 hover:bg-yellow-100'}`}
-                title="Passed processing, failed quality review"
-              >
-                Failed Quality Review
-              </button>
-              <button
-                type="button"
-                onClick={() => setResultFilter('passed')}
-                className={`px-2 py-1 rounded text-xs border ${resultFilter === 'passed' ? 'bg-green-600 text-white border-green-600' : 'bg-green-50 text-green-700 border-green-200 hover:bg-green-100'}`}
-                title="Passed processing and quality review"
-              >
-                Passed
               </button>
             </div>
             
             <div className="space-y-2 max-h-96 overflow-y-auto">
               {filteredResults.map((result) => {
                 const isSelected = selectedResult?.document_id === result.document_id;
-                const qualityBadge = getQualityColor(result.conversion_score || 0, qualityThresholds.conversion);
-                const passBadge = getPassFailColor(result.pass_all_thresholds);
+                const qualityBadge = getQualityColor(result.conversion_score || 0);
 
                 return (
                   <button
@@ -429,39 +401,27 @@ export function ReviewStage({
                     type="button"
                     onClick={() => setSelectedResult(result)}
                     className={`w-full text-left p-3 rounded-lg border transition-colors ${
-                      isSelected 
-                        ? 'border-blue-500 bg-blue-50' 
+                      isSelected
+                        ? 'border-blue-500 bg-blue-50'
                         : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                     }`}
                   >
                     <div className="flex items-center justify-between mb-2">
                       <span className="font-medium text-gray-900 truncate">{utils.getDisplayFilename(result.filename)}</span>
                     </div>
-                    
+
                     <div className="flex items-center justify-between text-xs">
                       {result.success ? (
-                        <>
-                          <span className={`px-2 py-1 rounded ${qualityBadge}`}>
-                            {result.conversion_score}%
-                          </span>
-                          <span className={`px-2 py-1 rounded ${passBadge}`}>
-                            {result.pass_all_thresholds ? 'PASS' : 'FAIL'}
-                          </span>
-                        </>
+                        <span className={`px-2 py-1 rounded ${qualityBadge}`}>
+                          {result.conversion_score}%
+                        </span>
                       ) : (
                         <span className="px-2 py-1 rounded bg-red-100 text-red-800">
                           PROCESS FAILED
                         </span>
                       )}
                     </div>
-                    
-                    {result.vector_optimized && (
-                      <div className="mt-1">
-                        <span className="text-xs bg-purple-100 text-purple-800 px-2 py-1 rounded">
-                          🎯 Optimized
-                        </span>
-                      </div>
-                    )}
+
                     {isExtractionOnlyFailure(result) && (
                       <div className="mt-1">
                         <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-1 rounded">
@@ -513,17 +473,9 @@ export function ReviewStage({
                         }
                       </span>
                     )}
-                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getQualityColor(selectedResult.conversion_score, qualityThresholds.conversion)}`}>
+                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getQualityColor(selectedResult.conversion_score)}`}>
                       Quality: {selectedResult.conversion_score}%
                     </span>
-                    <span className={`px-3 py-1 rounded-full text-sm font-medium ${getPassFailColor(selectedResult.pass_all_thresholds)}`}>
-                      {selectedResult.pass_all_thresholds ? '✅ PASS' : '❌ FAIL'}
-                    </span>
-                    {selectedResult.vector_optimized && (
-                      <span className="px-3 py-1 rounded-full text-sm font-medium bg-purple-100 text-purple-800">
-                        🎯 Optimized
-                      </span>
-                    )}
                   </div>
                 </div>
 
@@ -582,10 +534,10 @@ export function ReviewStage({
                             <div className="flex items-center justify-between">
                               <span className="text-sm font-medium">Clarity</span>
                               <div className="flex items-center space-x-2">
-                                <span className={getQualityColor(selectedResult.llm_evaluation.clarity_score || 0, qualityThresholds.clarity)}>
+                                <span className={getQualityColor((selectedResult.llm_evaluation.clarity_score || 0) * 10)}>
                                   {selectedResult.llm_evaluation.clarity_score || 'N/A'}/10
                                 </span>
-                                <span>{getScoreIcon(selectedResult.llm_evaluation.clarity_score || 0, qualityThresholds.clarity)}</span>
+                                <span>{getScoreIcon((selectedResult.llm_evaluation.clarity_score || 0) * 10)}</span>
                               </div>
                             </div>
                             {selectedResult.llm_evaluation.clarity_feedback && (
@@ -597,10 +549,10 @@ export function ReviewStage({
                             <div className="flex items-center justify-between">
                               <span className="text-sm font-medium">Completeness</span>
                               <div className="flex items-center space-x-2">
-                                <span className={getQualityColor(selectedResult.llm_evaluation.completeness_score || 0, qualityThresholds.completeness)}>
+                                <span className={getQualityColor((selectedResult.llm_evaluation.completeness_score || 0) * 10)}>
                                   {selectedResult.llm_evaluation.completeness_score || 'N/A'}/10
                                 </span>
-                                <span>{getScoreIcon(selectedResult.llm_evaluation.completeness_score || 0, qualityThresholds.completeness)}</span>
+                                <span>{getScoreIcon((selectedResult.llm_evaluation.completeness_score || 0) * 10)}</span>
                               </div>
                             </div>
                             {selectedResult.llm_evaluation.completeness_feedback && (
@@ -612,10 +564,10 @@ export function ReviewStage({
                             <div className="flex items-center justify-between">
                               <span className="text-sm font-medium">Relevance</span>
                               <div className="flex items-center space-x-2">
-                                <span className={getQualityColor(selectedResult.llm_evaluation.relevance_score || 0, qualityThresholds.relevance)}>
+                                <span className={getQualityColor((selectedResult.llm_evaluation.relevance_score || 0) * 10)}>
                                   {selectedResult.llm_evaluation.relevance_score || 'N/A'}/10
                                 </span>
-                                <span>{getScoreIcon(selectedResult.llm_evaluation.relevance_score || 0, qualityThresholds.relevance)}</span>
+                                <span>{getScoreIcon((selectedResult.llm_evaluation.relevance_score || 0) * 10)}</span>
                               </div>
                             </div>
                             {selectedResult.llm_evaluation.relevance_feedback && (
@@ -628,10 +580,10 @@ export function ReviewStage({
                               <div className="flex items-center justify-between">
                                 <span className="text-sm font-medium">Markdown</span>
                                 <div className="flex items-center space-x-2">
-                                  <span className={getQualityColor(selectedResult.llm_evaluation.markdown_score || 0, qualityThresholds.markdown)}>
+                                  <span className={getQualityColor((selectedResult.llm_evaluation.markdown_score || 0) * 10)}>
                                     {selectedResult.llm_evaluation.markdown_score || 'N/A'}/10
                                   </span>
-                                  <span>{getScoreIcon(selectedResult.llm_evaluation.markdown_score || 0, qualityThresholds.markdown)}</span>
+                                  <span>{getScoreIcon((selectedResult.llm_evaluation.markdown_score || 0) * 10)}</span>
                                 </div>
                               </div>
                               {selectedResult.llm_evaluation.markdown_feedback && (
@@ -676,21 +628,6 @@ export function ReviewStage({
                         )}
                       </div>
                     )}
-
-                    {/* Threshold Reference */}
-                    <div>
-                      <h4 className="font-medium mb-3">🎯 Current Thresholds</h4>
-                      <div className="bg-gray-50 p-4 rounded-lg">
-                        <p className="text-sm text-gray-600 mb-2">All must be met for RAG readiness:</p>
-                        <div className="grid grid-cols-2 gap-2 text-sm">
-                          <div>📄 Conversion: ≥ {qualityThresholds.conversion}/100</div>
-                          <div>📝 Clarity: ≥ {qualityThresholds.clarity}/10</div>
-                          <div>📋 Completeness: ≥ {qualityThresholds.completeness}/10</div>
-                          <div>🎯 Relevance: ≥ {qualityThresholds.relevance}/10</div>
-                          <div>📄 Markdown: ≥ {qualityThresholds.markdown}/10</div>
-                        </div>
-                      </div>
-                    </div>
 
                     {/* Document Summary */}
                     {selectedResult.document_summary && (
@@ -749,10 +686,6 @@ export function ReviewStage({
                         <div>
                           <h5 className="font-medium mb-2">🔎 What the system attempted</h5>
                           <div className="bg-gray-50 border border-gray-200 rounded-lg p-3 text-sm space-y-1">
-                            <div className="flex items-start justify-between">
-                              <span className="text-gray-600">Vector optimize attempted:</span>
-                              <span className="text-gray-900 font-mono">{selectedResult.vector_optimized ? 'yes' : 'no'}</span>
-                            </div>
                             {jobMeta?.processor && (
                               <div className="flex items-start justify-between">
                                 <span className="text-gray-600">Python framework:</span>
@@ -849,11 +782,6 @@ export function ReviewStage({
                             )}
                           </button>
                         </div>
-
-                        {/* Disabled state explanation */}
-                        {/* Vector optimization disabled */}
-
-                        {/* Custom LLM improvements disabled */}
                       </>
                     )}
                   </div>

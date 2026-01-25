@@ -1,10 +1,24 @@
 """
 Celery tasks wrapping the existing document processing pipeline.
+
+REQUIRES object storage (S3/MinIO) - no filesystem fallback.
+
+Object Storage Mode (REQUIRED):
+- artifact_id is REQUIRED for all processing tasks
+- Source files are downloaded from object storage to temporary directory
+- Processed results are uploaded back to object storage
+- Artifact records are created in the database for tracking
+- Task fails if artifact_id is not provided
+- S3 lifecycle policies handle file retention and cleanup
 """
 import asyncio
 import logging
+import shutil
+import tempfile
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
+from io import BytesIO
+from pathlib import Path
 from typing import Any, Dict, Optional
 
 from celery import shared_task, Task
@@ -19,6 +33,7 @@ from .services.job_service import (
 )
 from .services.database_service import database_service
 from .database.models import Job, JobDocument, JobLog
+from .config import settings
 
 
 class BaseTask(Task):
@@ -71,19 +86,35 @@ def process_document_task(
     file_path: Optional[str] = None,
     job_id: Optional[str] = None,
     job_document_id: Optional[str] = None,
+    artifact_id: Optional[str] = None,
+    organization_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Process a document with optional job tracking.
 
+    REQUIRES object storage (S3/MinIO) - artifact_id is mandatory.
+
+    Processing flow:
+    - Downloads source file from object storage using artifact_id
+    - Processes document through extraction and quality evaluation pipeline
+    - Uploads processed result back to object storage
+    - Creates artifact records in database for tracking
+
     Args:
         document_id: Document ID to process
         options: Processing options dict
-        file_path: Optional explicit file path
-        job_id: Optional job ID for database tracking (Phase 2+)
-        job_document_id: Optional job document ID for database tracking (Phase 2+)
+        file_path: Deprecated (object storage uses artifact_id)
+        job_id: Optional job ID for database tracking
+        job_document_id: Optional job document ID for database tracking
+        artifact_id: REQUIRED - artifact ID for object storage download
+        organization_id: Optional organization ID for multi-tenant isolation
 
     Returns:
-        Dict with processing result
+        Dict with processing result including markdown content and quality scores
+
+    Raises:
+        RuntimeError: If artifact_id is not provided
+        RuntimeError: If file cannot be downloaded from object storage
     """
     # Legacy Redis tracking
     record_job_status(self.request.id, {
@@ -140,27 +171,31 @@ def process_document_task(
         # Non-fatal; continue processing
         pass
 
-    # Locate file using provided path first, else unified resolver
+    # Locate file: object storage REQUIRED
     resolved_path = None
+    temp_dir = None  # Track temp directory for cleanup
+
+    # Enforce artifact_id requirement
+    if not artifact_id:
+        append_job_log(self.request.id, "error", "Missing artifact_id - object storage is required")
+        raise RuntimeError("artifact_id is required for object storage")
+
+    # Download from object storage
     try:
-        if file_path:
-            from pathlib import Path
-            p = Path(file_path)
-            if p.exists():
-                resolved_path = p
-    except Exception:
-        resolved_path = None
+        append_job_log(self.request.id, "info", f"Fetching file from object storage (artifact={artifact_id[:8]}...)")
+        resolved_path, temp_dir = asyncio.run(_fetch_from_object_storage(artifact_id))
+        if resolved_path:
+            append_job_log(self.request.id, "info", f"Downloaded file to temp: {resolved_path.name}")
+        else:
+            append_job_log(self.request.id, "error", "Failed to download file from object storage")
+            raise RuntimeError("Failed to download file from object storage")
+    except Exception as e:
+        append_job_log(self.request.id, "error", f"Object storage fetch failed: {e}")
+        raise
 
-    if not resolved_path:
-        resolved_path = document_service.find_document_file_unified(document_id)
-
-    if not resolved_path:
-        append_job_log(self.request.id, "error", "Document file not found")
-        raise RuntimeError("Document file not found")
-
-    # Get organization_id from job if available (for connection resolution)
-    organization_id = None
-    if job_document_id or job_id:
+    # Get organization_id from parameter or job if available (for connection resolution and storage uploads)
+    org_id_resolved = organization_id  # Use parameter if provided
+    if not org_id_resolved and (job_document_id or job_id):
         async def _get_organization_id():
             async with database_service.get_session() as session:
                 if job_document_id:
@@ -180,7 +215,7 @@ def process_document_task(
                 return None
 
         try:
-            organization_id = asyncio.run(_get_organization_id())
+            org_id_resolved = asyncio.run(_get_organization_id())
         except Exception as e:
             logging.getLogger("curatore.tasks").warning(f"Failed to get organization_id: {e}")
 
@@ -194,7 +229,7 @@ def process_document_task(
                     document_id,
                     resolved_path,
                     domain_options,
-                    organization_id=organization_id,
+                    organization_id=org_id_resolved,
                     session=session
                 )
 
@@ -227,26 +262,56 @@ def process_document_task(
             pass
         if result and getattr(result, 'conversion_result', None):
             append_job_log(self.request.id, "success", f"Conversion complete (score {result.conversion_result.conversion_score}/100)")
-        if getattr(result, 'vector_optimized', False):
-            append_job_log(self.request.id, "success", "Optimization applied")
-        else:
-            append_job_log(self.request.id, "info", "Optimization skipped")
-        if getattr(result, 'llm_evaluation', None):
-            append_job_log(self.request.id, "success", "Quality analysis complete")
-        if getattr(result, 'is_rag_ready', False) or getattr(result, 'pass_all_thresholds', False):
-            append_job_log(self.request.id, "success", "File passed quality thresholds")
-        else:
-            append_job_log(self.request.id, "warning", "File did not meet quality thresholds")
         append_job_log(self.request.id, "success", "Completed processing")
 
         # Persist result via storage service (so existing endpoints work)
         storage_service.save_processing_result(result)
+
+        # Upload processed result to object storage if enabled
+        if settings.use_object_storage and org_id_resolved and result:
+            try:
+                # Get markdown content from result attributes or read from file
+                markdown_content = getattr(result, 'optimized_markdown', None) or getattr(result, 'markdown', None)
+
+                # If not in memory, read from the markdown_path
+                if not markdown_content and hasattr(result, 'markdown_path') and result.markdown_path:
+                    markdown_path = Path(result.markdown_path)
+                    if markdown_path.exists():
+                        markdown_content = markdown_path.read_text(encoding='utf-8')
+
+                if markdown_content:
+                    append_job_log(self.request.id, "info", "Uploading processed result to object storage...")
+                    original_filename = resolved_path.name if resolved_path else f"{document_id}.txt"
+                    processed_artifact_id = asyncio.run(
+                        _upload_processed_to_object_storage(
+                            document_id=document_id,
+                            organization_id=str(org_id_resolved),
+                            markdown_content=markdown_content,
+                            original_filename=original_filename,
+                            job_id=job_id,
+                        )
+                    )
+                    if processed_artifact_id:
+                        append_job_log(self.request.id, "info", f"Uploaded to storage (artifact={processed_artifact_id[:8]}...)")
+                else:
+                    append_job_log(self.request.id, "warning", "No markdown content available to upload to object storage")
+            except Exception as e:
+                # Log but don't fail - filesystem result is already saved
+                append_job_log(self.request.id, "warning", f"Object storage upload failed: {e}")
+                logging.getLogger("curatore.tasks").warning(f"Object storage upload failed: {e}")
 
         # Return a JSON-serializable V1ProcessingResult dict
         return V1ProcessingResult.model_validate(result).model_dump()
     except Exception as e:
         append_job_log(self.request.id, "error", f"Processing error: {str(e)}")
         raise
+    finally:
+        # Clean up temp directory if we downloaded from object storage
+        if temp_dir:
+            try:
+                shutil.rmtree(temp_dir)
+            except Exception:
+                pass
 
 
 @shared_task(bind=True, base=BaseTask, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
@@ -283,10 +348,6 @@ def update_document_content_task(self, document_id: str, payload: Dict[str, Any]
             append_job_log(self.request.id, "error", "Document not found or update failed")
             raise RuntimeError("Document not found or update failed")
         append_job_log(self.request.id, "success", "Content saved and re-evaluated")
-        if getattr(result, 'is_rag_ready', False) or getattr(result, 'pass_all_thresholds', False):
-            append_job_log(self.request.id, "success", "File passed quality thresholds")
-        else:
-            append_job_log(self.request.id, "warning", "File did not meet quality thresholds")
         append_job_log(self.request.id, "success", "Update complete")
     except Exception as e:
         append_job_log(self.request.id, "error", f"Update failed: {str(e)}")
@@ -439,53 +500,10 @@ def send_invitation_email_task(
 
 
 # ============================================================================
-# FILE CLEANUP TASKS
+# JOB CLEANUP TASK
 # ============================================================================
-
-@shared_task(bind=True)
-def cleanup_expired_files_task(self, dry_run: bool = False) -> Dict[str, Any]:
-    """
-    Scheduled task for cleaning up expired files.
-
-    This task runs on a schedule defined in celery_app.py (default: daily at 2 AM).
-    It identifies and deletes files that have exceeded their retention period,
-    handles deduplicated files with reference counting, and respects active jobs.
-
-    Args:
-        dry_run: If True, only report what would be deleted without actual deletion
-
-    Returns:
-        Dict with cleanup statistics
-    """
-    from .services.retention_service import retention_service
-
-    logger = logging.getLogger("curatore.cleanup")
-    logger.info(f"Starting scheduled file cleanup task (dry_run={dry_run})")
-
-    try:
-        result = asyncio.run(retention_service.cleanup_expired_files(dry_run=dry_run))
-
-        if dry_run:
-            logger.info(
-                f"[DRY RUN] Would delete {result['would_delete_count']} files, "
-                f"skip {result['skipped_count']}, errors: {result['error_count']}"
-            )
-        else:
-            logger.info(
-                f"Cleanup completed: deleted {result['deleted_count']} files, "
-                f"skipped {result['skipped_count']}, errors: {result['error_count']}"
-            )
-
-        return result
-
-    except Exception as e:
-        logger.error(f"Error in cleanup task: {e}")
-        raise
-
-
-# ============================================================================
-# JOB CLEANUP TASK (Phase 2)
-# ============================================================================
+# Note: File cleanup is now handled by S3 lifecycle policies.
+#       Only job cleanup remains as a scheduled task.
 
 @shared_task(bind=True)
 def cleanup_expired_jobs_task(self, dry_run: bool = False) -> Dict[str, Any]:
@@ -535,6 +553,127 @@ def cleanup_expired_jobs_task(self, dry_run: bool = False) -> Dict[str, Any]:
     except Exception as e:
         logger.error(f"Error in job cleanup task: {e}")
         raise
+
+
+# ============================================================================
+# OBJECT STORAGE HELPERS (Phase 6)
+# ============================================================================
+
+async def _fetch_from_object_storage(artifact_id: str) -> tuple[Optional[Path], Optional[Path]]:
+    """
+    Download a file from object storage to a temporary directory.
+
+    Args:
+        artifact_id: Artifact UUID string
+
+    Returns:
+        Tuple of (file_path, temp_dir_path) - temp_dir should be cleaned up after use
+        Returns (None, None) if artifact not found or download fails
+    """
+    from .services.minio_service import get_minio_service
+    from .services.artifact_service import artifact_service
+
+    minio = get_minio_service()
+    if not minio:
+        logger = logging.getLogger("curatore.tasks")
+        logger.warning("Object storage not enabled, cannot fetch artifact")
+        return None, None
+
+    async with database_service.get_session() as session:
+        artifact = await artifact_service.get_artifact(session, uuid.UUID(artifact_id))
+        if not artifact:
+            logger = logging.getLogger("curatore.tasks")
+            logger.warning(f"Artifact {artifact_id} not found in database")
+            return None, None
+
+        # Download object content using get_object which returns BytesIO
+        try:
+            content_io = minio.get_object(artifact.bucket, artifact.object_key)
+            content = content_io.getvalue()  # Get bytes from BytesIO
+        except Exception as e:
+            logger = logging.getLogger("curatore.tasks")
+            logger.error(f"Failed to download artifact {artifact_id}: {e}")
+            return None, None
+
+        # Write to temp directory
+        temp_dir = Path(tempfile.mkdtemp(prefix="curatore_storage_"))
+        temp_file = temp_dir / artifact.original_filename
+        temp_file.write_bytes(content)
+
+        return temp_file, temp_dir
+
+
+async def _upload_processed_to_object_storage(
+    document_id: str,
+    organization_id: str,
+    markdown_content: str,
+    original_filename: str,
+    job_id: Optional[str] = None,
+) -> Optional[str]:
+    """
+    Upload processed markdown content to object storage.
+
+    Args:
+        document_id: Document identifier
+        organization_id: Organization UUID string
+        markdown_content: Processed markdown content
+        original_filename: Original source filename
+        job_id: Optional job UUID string
+
+    Returns:
+        Artifact ID string if successful, None on failure
+    """
+    from io import BytesIO
+    from .services.minio_service import get_minio_service
+    from .services.artifact_service import artifact_service
+
+    minio = get_minio_service()
+    if not minio:
+        logger = logging.getLogger("curatore.tasks")
+        logger.warning("Object storage not enabled, cannot upload processed result")
+        return None
+
+    # Build object key: org_id/document_id/processed/filename.md
+    base_filename = Path(original_filename).stem
+    processed_filename = f"{base_filename}.md"
+    object_key = f"{organization_id}/{document_id}/processed/{processed_filename}"
+    bucket = minio.bucket_processed
+
+    try:
+        # Upload content
+        content_bytes = markdown_content.encode("utf-8")
+        data_stream = BytesIO(content_bytes)
+        etag = minio.put_object(
+            bucket=bucket,
+            key=object_key,
+            data=data_stream,
+            length=len(content_bytes),
+            content_type="text/markdown",
+        )
+
+        # Create artifact record
+        async with database_service.get_session() as session:
+            artifact = await artifact_service.create_artifact(
+                session=session,
+                organization_id=uuid.UUID(organization_id),
+                document_id=document_id,
+                artifact_type="processed",
+                bucket=bucket,
+                object_key=object_key,
+                original_filename=processed_filename,
+                content_type="text/markdown",
+                file_size=len(content_bytes),
+                etag=etag,
+                job_id=uuid.UUID(job_id) if job_id else None,
+                status="available",
+            )
+            await session.commit()
+            return str(artifact.id)
+
+    except Exception as e:
+        logger = logging.getLogger("curatore.tasks")
+        logger.error(f"Failed to upload processed result: {e}")
+        return None
 
 
 # ============================================================================
@@ -647,8 +786,6 @@ async def _update_job_document_success(
                     if isinstance(quality_scores, dict):
                         job_doc.quality_scores = quality_scores
 
-                    job_doc.is_rag_ready = result.get("is_rag_ready", False)
-
                     # Store processed file path
                     if result.get("markdown_path"):
                         job_doc.processed_file_path = result["markdown_path"]
@@ -662,7 +799,6 @@ async def _update_job_document_success(
                     message=f"Document processed successfully: {job_doc.document_id}",
                     log_metadata={
                         "conversion_score": job_doc.conversion_score,
-                        "is_rag_ready": job_doc.is_rag_ready,
                     },
                 )
                 session.add(log_entry)

@@ -29,20 +29,18 @@
 # ============================================================================
 
 import os
+import re
 import zipfile
 import tempfile
 from pathlib import Path
 from typing import List, Optional, Tuple
 from datetime import datetime
+from io import BytesIO
 
-from ..config import settings
 from .storage_service import storage_service
+from .minio_service import get_minio_service
+from .artifact_service import artifact_service
 from ..models import ProcessingResult, DownloadType
-
-# Import document_service lazily to avoid circular imports
-def _get_document_service():
-    from .document_service import document_service
-    return document_service
 
 
 class ZipService:
@@ -69,18 +67,18 @@ class ZipService:
         - Comprehensive error handling and logging
     
     Attributes:
-        processed_dir (Path): Directory containing processed markdown files
+        minio: MinIO service instance for object storage access
     """
-    
+
     def __init__(self):
         """
-        Initialize the ZIP service with processed files directory.
-        
-        Sets up the service to work with the processed files directory from
-        application settings. This directory should contain all successfully
-        processed markdown files with the naming pattern: {original_name}_{document_id}.md
+        Initialize the ZIP service with object storage access.
+
+        Sets up the service to work with MinIO object storage for downloading
+        processed markdown files. Files are downloaded from the processed bucket
+        using artifact tracking from the database.
         """
-        self.processed_dir = Path(settings.processed_dir)
+        self.minio = get_minio_service()
     
     def create_zip_archive(
         self, 
@@ -147,22 +145,20 @@ class ZipService:
         file_count = 0
         
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            # Add processed documents
+            # Add processed documents from MinIO
             for doc_id in document_ids:
-                # Use document_service's file finder which handles hierarchical storage
-                file_path = self._find_processed_file(doc_id)
-                if file_path and file_path.exists():
-                    # Get original filename from processing result if available
-                    original_name = self._get_original_filename(doc_id, file_path)
-                    zipf.write(file_path, f"processed_documents/{original_name}")
+                # Download file from object storage
+                file_content, original_name = self._download_processed_file(doc_id)
+                if file_content:
+                    zipf.writestr(f"processed_documents/{original_name}", file_content)
                     file_count += 1
-            
+
             # Add summary file if requested
             if include_summary and file_count > 0:
                 summary_content = self._generate_zip_summary(document_ids, file_count)
                 summary_filename = f"PROCESSING_SUMMARY_{datetime.now().strftime('%Y%m%d_%H%M%S')}.md"
                 zipf.writestr(summary_filename, summary_content)
-        
+
         return zip_path, file_count
     
     def create_combined_markdown_zip(
@@ -279,14 +275,14 @@ class ZipService:
         ])
         
         with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-            # Add individual processed documents
+            # Add individual processed documents from MinIO
             for doc_id in document_ids:
-                # Use document_service's file finder which handles hierarchical storage
-                file_path = self._find_processed_file(doc_id)
-                if file_path and file_path.exists():
-                    # Read content for combined file
+                # Download file from object storage
+                file_content, original_name = self._download_processed_file(doc_id)
+                if file_content:
                     try:
-                        content = file_path.read_text(encoding="utf-8")
+                        # Decode content for combined file
+                        content = file_content if isinstance(file_content, str) else file_content.decode('utf-8')
                         result = next((r for r in results if r.document_id == doc_id), None)
 
                         # Add section header using result metadata when available
@@ -294,8 +290,8 @@ class ZipService:
                         if result and getattr(result, 'filename', None):
                             section_title = result.filename
                         else:
-                            # Use original filename from path as fallback
-                            section_title = file_path.name.split('_', 1)[-1] if '_' in file_path.name else file_path.name
+                            # Use original filename as fallback
+                            section_title = original_name
                         combined_sections.append(f"# {section_title}")
 
                         # Optional metadata when result is available
@@ -328,11 +324,10 @@ class ZipService:
                         combined_sections.extend([adjusted_content, "", "", "---", ""])
 
                     except Exception as e:
-                        print(f"Error reading {file_path}: {e}")
+                        print(f"Error processing content for {doc_id}: {e}")
 
                     # Add to ZIP as individual file using original filename
-                    original_name = self._get_original_filename(doc_id, file_path, result)
-                    zipf.write(file_path, f"individual_files/{original_name}")
+                    zipf.writestr(f"individual_files/{original_name}", file_content)
                     file_count += 1
             
             # Add combined markdown file
@@ -349,72 +344,109 @@ class ZipService:
         
         return zip_path, file_count
 
-    def _find_processed_file(self, doc_id: str) -> Optional[Path]:
+    def _download_processed_file(self, doc_id: str) -> Tuple[Optional[str], str]:
         """
-        Find the processed markdown file for a document ID.
+        Download the processed markdown file from object storage.
 
-        Uses multiple fallback strategies to locate the file:
-        1. Storage service manifest path (if available in memory)
-        2. Document service's get_processed_markdown_path (handles hierarchical storage)
-        3. Direct glob in processed_dir (legacy fallback)
+        Uses artifact service to locate the file in MinIO and downloads the content.
+        Falls back to storage service for in-memory results if artifact not found.
 
         Args:
-            doc_id: The document ID to find the processed file for
+            doc_id: The document ID to download the processed file for
 
         Returns:
-            Path to the processed file if found, None otherwise
+            Tuple of (file_content, original_filename) where:
+            - file_content: String content of the markdown file, or None if not found
+            - original_filename: Original filename with .md extension
         """
-        # Try storage service first (for in-memory cached paths)
-        if hasattr(storage_service, 'get_processed_path'):
-            manifest_path = storage_service.get_processed_path(doc_id)
-            if manifest_path:
-                path = Path(manifest_path)
-                if path.exists():
-                    return path
+        # Try to get artifact from database
+        from sqlalchemy.orm import Session
+        from ..database.base import get_session
 
-        # Use document_service's method which handles hierarchical storage correctly
         try:
-            doc_svc = _get_document_service()
-            path = doc_svc.get_processed_markdown_path(doc_id)
-            if path and path.exists():
-                return path
-        except Exception:
-            pass
+            # Get artifact from database
+            with get_session() as session:
+                artifact = artifact_service.get_artifact_by_document(
+                    session,
+                    document_id=doc_id,
+                    artifact_type="processed"
+                )
 
-        # Final fallback: direct glob in processed_dir
-        for file_path in self.processed_dir.glob(f"{doc_id}_*.md"):
-            if file_path.exists():
-                return file_path
+                if artifact and self.minio and self.minio.enabled:
+                    # Download from MinIO
+                    file_obj = self.minio.get_object(artifact.bucket, artifact.object_key)
+                    if file_obj:
+                        content = file_obj.read()
+                        # Decode if bytes
+                        if isinstance(content, bytes):
+                            content = content.decode('utf-8')
 
-        return None
+                        # Get original filename
+                        original_name = self._get_original_filename_from_artifact(doc_id, artifact)
+                        return content, original_name
 
-    def _get_original_filename(
+        except Exception as e:
+            print(f"Error downloading from MinIO for {doc_id}: {e}")
+
+        # Fallback: Try storage service for in-memory results
+        result = storage_service.get_processing_result(doc_id)
+        if result and result.markdown_content:
+            filename = getattr(result, 'filename', f'{doc_id}.md')
+            # Strip hash prefix and change extension
+            clean_filename = self._strip_hash_prefix(filename)
+            stem = Path(clean_filename).stem
+            return result.markdown_content, f"{stem}.md"
+
+        return None, f"{doc_id}.md"
+
+    def _strip_hash_prefix(self, filename: str) -> str:
+        """
+        Strip the 32-character hex hash prefix from a filename.
+
+        Backend stores files as {hash}_{original_name}. This method removes
+        the hash prefix to restore the original filename for user-facing exports.
+
+        Args:
+            filename: Filename potentially containing a hash prefix
+
+        Returns:
+            Filename with hash prefix removed, or original if no prefix found
+
+        Example:
+            >>> self._strip_hash_prefix("abc123def456789012345678901234_My Document.pdf")
+            "My Document.pdf"
+            >>> self._strip_hash_prefix("regular_file.pdf")
+            "regular_file.pdf"
+        """
+        if not filename:
+            return filename
+
+        # Match 32 hex characters followed by underscore at the start
+        match = re.match(r'^[0-9a-f]{32}_(.+)$', filename, re.IGNORECASE)
+        if match:
+            return match.group(1)
+
+        return filename
+
+    def _get_original_filename_from_artifact(
         self,
         doc_id: str,
-        file_path: Path,
-        result: Optional[ProcessingResult] = None
+        artifact: "Artifact"
     ) -> str:
         """
-        Get the original filename for a document, with .md extension for export.
+        Get the original filename from an artifact record, with .md extension.
 
-        Attempts to retrieve the original filename from multiple sources:
-        1. Provided ProcessingResult (if available)
-        2. Storage service processing result
-        3. Fall back to extracting from the file path
+        Extracts the original filename from artifact metadata and cleans it.
 
         Args:
             doc_id: The document ID
-            file_path: Path to the processed file
-            result: Optional ProcessingResult with original filename
+            artifact: Artifact database record
 
         Returns:
             Original filename with .md extension (e.g., "My Report.md")
         """
-        original_filename = None
-
-        # Try to get from provided result first
-        if result and getattr(result, 'filename', None):
-            original_filename = result.filename
+        # Try to get original filename from artifact metadata
+        original_filename = artifact.original_filename if hasattr(artifact, 'original_filename') else None
 
         # Try storage service if not found
         if not original_filename:
@@ -422,16 +454,14 @@ class ZipService:
             if stored_result and getattr(stored_result, 'filename', None):
                 original_filename = stored_result.filename
 
-        # If we found an original filename, change extension to .md
+        # If we found an original filename, strip hash prefix and change extension to .md
         if original_filename:
-            stem = Path(original_filename).stem
+            clean_filename = self._strip_hash_prefix(original_filename)
+            stem = Path(clean_filename).stem
             return f"{stem}.md"
 
-        # Fall back to extracting from file path (remove document_id prefix)
-        if '_' in file_path.name:
-            return file_path.name.split('_', 1)[-1]
-
-        return file_path.name
+        # Fall back to document_id.md
+        return f"{doc_id}.md"
 
     def _adjust_markdown_hierarchy(self, content: str) -> str:
         """

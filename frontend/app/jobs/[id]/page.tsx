@@ -72,6 +72,7 @@ export default function JobDetailPage() {
   const [cancelling, setCancelling] = useState(false)
   const [activeTab, setActiveTab] = useState<'documents' | 'logs' | 'review' | 'export'>('documents')
   const [currentTime, setCurrentTime] = useState<number>(Date.now()) // Updates every second for live timers
+  const [extractionConnection, setExtractionConnection] = useState<{ name: string; engine_type: string } | null>(null)
 
   // Track when documents started processing (client-side tracking)
   const documentStartTimes = useRef<Map<string, number>>(new Map())
@@ -93,6 +94,33 @@ export default function JobDetailPage() {
         setError(null)
         const jobData = await jobsApi.getJob(accessToken, jobId)
         setJob(jobData as JobDetail)
+
+        // If extraction_engine looks like a UUID, fetch the connection to get name and engine type
+        const extractionEngine = jobData.processing_options?.extraction_engine
+        if (extractionEngine && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(extractionEngine)) {
+          try {
+            const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/connections/${extractionEngine}`, {
+              headers: {
+                'Authorization': `Bearer ${accessToken}`,
+              },
+            })
+            if (response.ok) {
+              const connection = await response.json()
+              setExtractionConnection({
+                name: connection.name || 'Unknown',
+                engine_type: connection.config?.engine_type || 'unknown'
+              })
+            }
+          } catch (err) {
+            console.error('Failed to fetch extraction connection:', err)
+          }
+        } else if (extractionEngine) {
+          // Not a UUID, use it directly (legacy format)
+          setExtractionConnection({
+            name: extractionEngine,
+            engine_type: extractionEngine
+          })
+        }
       } catch (err: any) {
         console.error('Failed to load job:', err)
         setError(err.message || 'Failed to load job details')
@@ -221,6 +249,7 @@ export default function JobDetailPage() {
   }
 
   // Format duration - calculates live elapsed time when job is running
+  // Shows seconds until 99s, then switches to minutes format
   const formatDuration = (start?: string, end?: string): string => {
     if (!start) return 'N/A'
     const startDate = new Date(start)
@@ -248,12 +277,16 @@ export default function JobDetailPage() {
       seconds = Math.max(0, Math.floor((currentTime - startDate.getTime()) / 1000))
     }
 
+    // Show seconds only until 99s, then switch to minutes format
+    if (seconds <= 99) {
+      return `${seconds}s`
+    }
+
     const minutes = Math.floor(seconds / 60)
     const hours = Math.floor(minutes / 60)
 
     if (hours > 0) return `${hours}h ${minutes % 60}m`
-    if (minutes > 0) return `${minutes}m ${seconds % 60}s`
-    return `${seconds}s`
+    return `${minutes}m ${seconds % 60}s`
   }
 
   // Get elapsed time for a document (client-side tracking for RUNNING documents)
@@ -294,6 +327,40 @@ export default function JobDetailPage() {
     }
 
     return displayName
+  }
+
+  const getExtractionEngineDisplay = (connection: { name: string; engine_type: string } | null): { displayName: string; description: string; color: string } => {
+    if (!connection) {
+      return {
+        displayName: 'Default',
+        description: 'Internal',
+        color: 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300'
+      }
+    }
+
+    // Use the connection name as the display name
+    const displayName = connection.name
+
+    // Get description and color based on engine type
+    let description = 'Custom'
+    let color = 'bg-violet-100 dark:bg-violet-900/30 text-violet-700 dark:text-violet-300'
+
+    switch (connection.engine_type.toLowerCase()) {
+      case 'extraction-service':
+        description = 'Curatore Extraction (MarkItDown + Tesseract)'
+        color = 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300'
+        break
+      case 'docling':
+        description = 'External Docling (Advanced PDF/Office)'
+        color = 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+        break
+      case 'tika':
+        description = 'Apache Tika (Legacy)'
+        color = 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
+        break
+    }
+
+    return { displayName, description, color }
   }
 
   if (isLoading || !isAuthenticated) {
@@ -463,6 +530,16 @@ export default function JobDetailPage() {
               <div className="flex items-center">
                 <span className="text-gray-500 dark:text-gray-400 mr-2">Cancelled:</span>
                 <span className="text-gray-900 dark:text-gray-100 font-medium">{formatDate(job.cancelled_at)}</span>
+              </div>
+            )}
+            {extractionConnection && (
+              <div className="flex items-center">
+                <span className="text-gray-500 dark:text-gray-400 mr-2">Extraction Engine:</span>
+                <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${getExtractionEngineDisplay(extractionConnection).color}`}>
+                  <span className="font-semibold">{getExtractionEngineDisplay(extractionConnection).displayName}</span>
+                  <span className="opacity-75">•</span>
+                  <span className="opacity-90">{getExtractionEngineDisplay(extractionConnection).description}</span>
+                </span>
               </div>
             )}
           </div>

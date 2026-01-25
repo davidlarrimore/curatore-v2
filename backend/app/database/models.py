@@ -760,3 +760,95 @@ class JobLog(Base):
 
     def __repr__(self) -> str:
         return f"<JobLog(id={self.id}, job_id={self.job_id}, level={self.level})>"
+
+
+class Artifact(Base):
+    """
+    Artifact model for tracking files in object storage (MinIO/S3).
+
+    Represents a single file stored in object storage, including both
+    uploaded source files and processed output files. Replaces filesystem-based
+    metadata tracking with database-backed tracking.
+
+    Attributes:
+        id: Unique artifact identifier
+        organization_id: Organization that owns this artifact
+        document_id: Document identifier (links uploaded/processed pairs)
+        job_id: Job this artifact belongs to (nullable for adhoc uploads)
+        artifact_type: Type of artifact (uploaded, processed, temp)
+        bucket: Object storage bucket name
+        object_key: Full object key (path) in the bucket
+        original_filename: Original filename from upload
+        content_type: MIME type of the file
+        file_size: File size in bytes
+        etag: Object storage ETag (for caching/validation)
+        file_hash: SHA-256 hash of content (optional, for reference)
+        status: Artifact status (pending, available, deleted)
+        metadata: Additional metadata (JSONB)
+        created_at: When artifact was created
+        updated_at: When artifact was last updated
+        expires_at: When artifact should expire (for lifecycle)
+        deleted_at: Soft delete timestamp
+
+    Relationships:
+        organization: Organization that owns this artifact
+        job: Job this artifact belongs to
+
+    Artifact Types:
+        - uploaded: Original uploaded source file
+        - processed: Processed markdown output
+        - temp: Temporary processing file
+
+    Status Flow:
+        pending (upload in progress) → available (ready to use) → deleted (soft deleted)
+    """
+
+    __tablename__ = "artifacts"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    document_id = Column(String(255), nullable=False, index=True)
+    job_id = Column(
+        UUID(), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # Object storage location
+    artifact_type = Column(String(50), nullable=False, index=True)  # uploaded, processed, temp
+    bucket = Column(String(255), nullable=False)
+    object_key = Column(String(1024), nullable=False)
+
+    # File metadata
+    original_filename = Column(String(500), nullable=False)
+    content_type = Column(String(255), nullable=True)
+    file_size = Column(Integer, nullable=True)
+    etag = Column(String(255), nullable=True)
+    file_hash = Column(String(64), nullable=True)  # SHA-256 for reference
+
+    # Status tracking
+    status = Column(String(50), nullable=False, default="pending", index=True)
+    file_metadata = Column(JSON, nullable=False, default=dict, server_default="{}")
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+    expires_at = Column(DateTime, nullable=True, index=True)
+    deleted_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    organization = relationship("Organization")
+    job = relationship("Job")
+
+    # Composite indexes for common queries
+    __table_args__ = (
+        Index("ix_artifacts_org_doc", "organization_id", "document_id"),
+        Index("ix_artifacts_org_type", "organization_id", "artifact_type"),
+        Index("ix_artifacts_bucket_key", "bucket", "object_key", unique=True),
+        Index("ix_artifacts_doc_type", "document_id", "artifact_type"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Artifact(id={self.id}, document_id={self.document_id}, type={self.artifact_type})>"

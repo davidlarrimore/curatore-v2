@@ -15,8 +15,6 @@ services:
     volumes:
       # Hot-reload app code without stomping other layers
       - ./backend/app:/app/app
-      # Shared storage (authoritative on host)
-      - ./files:/app/files
       # Database persistence
       - ./backend/data:/app/data
       # YAML configuration (optional, falls back to env vars if not present)
@@ -35,11 +33,7 @@ services:
       # OCR
       - OCR_LANG=${OCR_LANG:-eng}
       - OCR_PSM=${OCR_PSM:-3}
-      # FILES (absolute in-container)
-      - FILES_ROOT=/app/files
-      - UPLOAD_DIR=/app/files/uploaded_files
-      - PROCESSED_DIR=/app/files/processed_files
-      - BATCH_DIR=/app/files/batch_files
+      # FILE UPLOAD LIMITS
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-52428800}
       # Extraction service (optional; when enabled backend will call it for PDFs/DOCX, etc.)
       - EXTRACTION_SERVICE_URL=http://extraction:8010
@@ -56,6 +50,19 @@ services:
       - MS_CLIENT_SECRET=${MS_CLIENT_SECRET:-}
       - MS_GRAPH_SCOPE=${MS_GRAPH_SCOPE:-https://graph.microsoft.com/.default}
       - MS_GRAPH_BASE_URL=${MS_GRAPH_BASE_URL:-https://graph.microsoft.com/v1.0}
+      # Object Storage (direct MinIO connection - REQUIRED)
+      - USE_OBJECT_STORAGE=${USE_OBJECT_STORAGE:-true}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_PUBLIC_ENDPOINT=${MINIO_PUBLIC_ENDPOINT:-}
+      - MINIO_PRESIGNED_ENDPOINT=${MINIO_PRESIGNED_ENDPOINT:-}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-${MINIO_ROOT_USER:-admin}}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-changeme}}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - MINIO_PUBLIC_SECURE=${MINIO_PUBLIC_SECURE:-false}
+      - MINIO_BUCKET_UPLOADS=${MINIO_BUCKET_UPLOADS:-curatore-uploads}
+      - MINIO_BUCKET_PROCESSED=${MINIO_BUCKET_PROCESSED:-curatore-processed}
+      - MINIO_BUCKET_TEMP=${MINIO_BUCKET_TEMP:-curatore-temp}
+      - MINIO_PRESIGNED_EXPIRY=${MINIO_PRESIGNED_EXPIRY:-3600}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
@@ -67,6 +74,7 @@ services:
       start_period: 40s
     depends_on:
       - redis
+      - minio
 
   # --------------------------------------------------------------------------
   # WORKER: Celery worker
@@ -85,11 +93,6 @@ services:
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       - CELERY_DEFAULT_QUEUE=${CELERY_DEFAULT_QUEUE:-processing}
-      # Share the same storage config
-      - FILES_ROOT=/app/files
-      - UPLOAD_DIR=/app/files/uploaded_files
-      - PROCESSED_DIR=/app/files/processed_files
-      - BATCH_DIR=/app/files/batch_files
       # Extraction service (match backend)
       - EXTRACTION_SERVICE_URL=http://extraction:8010
       - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-180}
@@ -105,15 +108,28 @@ services:
       - MS_CLIENT_SECRET=${MS_CLIENT_SECRET:-}
       - MS_GRAPH_SCOPE=${MS_GRAPH_SCOPE:-https://graph.microsoft.com/.default}
       - MS_GRAPH_BASE_URL=${MS_GRAPH_BASE_URL:-https://graph.microsoft.com/v1.0}
+      # Object Storage (direct MinIO connection - REQUIRED)
+      - USE_OBJECT_STORAGE=${USE_OBJECT_STORAGE:-true}
+      - MINIO_ENDPOINT=${MINIO_ENDPOINT:-minio:9000}
+      - MINIO_PUBLIC_ENDPOINT=${MINIO_PUBLIC_ENDPOINT:-}
+      - MINIO_PRESIGNED_ENDPOINT=${MINIO_PRESIGNED_ENDPOINT:-}
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-${MINIO_ROOT_USER:-admin}}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-changeme}}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - MINIO_PUBLIC_SECURE=${MINIO_PUBLIC_SECURE:-false}
+      - MINIO_BUCKET_UPLOADS=${MINIO_BUCKET_UPLOADS:-curatore-uploads}
+      - MINIO_BUCKET_PROCESSED=${MINIO_BUCKET_PROCESSED:-curatore-processed}
+      - MINIO_BUCKET_TEMP=${MINIO_BUCKET_TEMP:-curatore-temp}
+      - MINIO_PRESIGNED_EXPIRY=${MINIO_PRESIGNED_EXPIRY:-3600}
     volumes:
       - ./backend/app:/app/app
-      - ./files:/app/files
       # Database persistence (shared with backend)
       - ./backend/data:/app/data
       # YAML configuration (optional, falls back to env vars if not present)
       - ./config.yml:/app/config.yml:ro
     depends_on:
       - redis
+      - minio
 
   # --------------------------------------------------------------------------
   # REDIS: Broker/result backend
@@ -186,3 +202,27 @@ services:
       DOCLING_SERVE_MAX_SYNC_WAIT: ${DOCLING_SERVE_MAX_SYNC_WAIT:-300}
     extra_hosts:
       - "host.docker.internal:host-gateway"
+
+  # --------------------------------------------------------------------------
+  # MINIO: S3-compatible object storage (REQUIRED)
+  # --------------------------------------------------------------------------
+  minio:
+    image: quay.io/minio/minio:latest
+    container_name: curatore-minio
+    ports:
+      - "9000:9000"    # S3 API
+      - "9001:9001"    # Console
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-admin}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-changeme}
+    command: server /data --console-address ":9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+volumes:
+  minio_data:

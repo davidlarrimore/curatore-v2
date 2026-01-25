@@ -28,7 +28,6 @@ from sqlalchemy.exc import SQLAlchemyError
 
 from ..database.models import Job, JobDocument, JobLog
 from .database_service import database_service
-from .path_service import path_service
 
 
 def get_redis_client() -> redis.Redis:
@@ -36,64 +35,39 @@ def get_redis_client() -> redis.Redis:
     return redis.Redis.from_url(url)
 
 
-def _get_original_filename(document_id: str, organization_id: Optional[uuid.UUID] = None) -> str:
+async def _get_original_filename(document_id: str, organization_id: Optional[uuid.UUID] = None) -> str:
     """
-    Get the original filename for a document by searching the file system.
+    Get the original filename for a document from artifact records.
 
-    Files are stored as {document_id}_{original_filename} in the uploaded directory.
-    This function extracts the original_filename portion.
+    Queries the artifacts table in the database to find the original filename.
 
     Args:
         document_id: The document UUID
-        organization_id: Optional organization UUID for hierarchical storage
+        organization_id: Optional organization UUID (not used, kept for compatibility)
 
     Returns:
         Original filename if found, otherwise returns document_id as fallback
     """
-    from ..config import settings
-
+    # Query artifacts table for original filename
     try:
-        # Check shared/adhoc/uploaded directory (for individual document uploads)
-        if settings.use_hierarchical_storage:
-            shared_adhoc = Path(settings.files_root) / "shared" / "adhoc" / "uploaded"
-            if shared_adhoc.exists():
-                for file in shared_adhoc.iterdir():
-                    if file.is_file() and file.name.startswith(f"{document_id}_"):
-                        return file.name[len(document_id) + 1:]
+        from ..services.artifact_service import artifact_service
 
-        # Check organization-specific adhoc directory if using hierarchical storage
-        if organization_id and settings.use_hierarchical_storage:
-            org_adhoc = Path(settings.files_root) / "organizations" / str(organization_id) / "adhoc" / "uploaded"
-            if org_adhoc.exists():
-                for file in org_adhoc.iterdir():
-                    if file.is_file() and file.name.startswith(f"{document_id}_"):
-                        return file.name[len(document_id) + 1:]
+        async with database_service.get_session() as session:
+            # Get the uploaded artifact for this document
+            artifact = await artifact_service.get_artifact_by_document(
+                session=session,
+                document_id=document_id,
+                artifact_type="uploaded",
+            )
 
-        # Check organization-specific batch directory if using hierarchical storage
-        if organization_id and settings.use_hierarchical_storage:
-            org_batch_dir = Path(settings.files_root) / "organizations" / str(organization_id) / "batches"
-            if org_batch_dir.exists():
-                for batch_path in org_batch_dir.iterdir():
-                    if batch_path.is_dir():
-                        uploaded_dir = batch_path / "uploaded"
-                        if uploaded_dir.exists():
-                            for file in uploaded_dir.iterdir():
-                                if file.name.startswith(f"{document_id}_"):
-                                    return file.name[len(document_id) + 1:]
-
-        # Check flat batch directory
-        batch_dir = Path(settings.batch_files_dir)
-        if batch_dir.exists():
-            for file in batch_dir.iterdir():
-                if file.is_file() and file.name.startswith(f"{document_id}_"):
-                    return file.name[len(document_id) + 1:]
-
+            if artifact and artifact.original_filename:
+                return artifact.original_filename
     except Exception as e:
         logging.getLogger("curatore.jobs").debug(
-            f"Could not find original filename for {document_id}: {e}"
+            f"Could not find original filename in artifacts for {document_id}: {e}"
         )
 
-    # Fallback to document_id if we can't find the file
+    # Fallback to document_id if we can't find the artifact
     return document_id
 
 
@@ -326,8 +300,8 @@ async def create_batch_job(
         # Create job_documents entries (bulk)
         job_documents = []
         for doc_id in document_ids:
-            # Look up original filename from file system
-            original_filename = _get_original_filename(doc_id, organization_id)
+            # Look up original filename from artifacts table or file system
+            original_filename = await _get_original_filename(doc_id, organization_id)
 
             job_doc = JobDocument(
                 id=uuid.uuid4(),
@@ -412,16 +386,46 @@ async def enqueue_job(job_id: uuid.UUID) -> Dict[str, Any]:
 
         # Create Celery tasks for each document
         from ..tasks import process_document_task
+        from ..config import settings
 
         celery_batch_id = str(uuid.uuid4())
         task_count = 0
 
         for job_doc in job_documents:
             try:
+                # Build task kwargs
+                task_kwargs = {
+                    "job_id": str(job_id),
+                    "job_document_id": str(job_doc.id),
+                    "organization_id": str(job.organization_id),
+                }
+
+                # When object storage is enabled, look up and pass artifact_id
+                if settings.use_object_storage:
+                    from ..services.artifact_service import artifact_service
+
+                    # Get the uploaded artifact for this document
+                    artifact = await artifact_service.get_artifact_by_document(
+                        session=session,
+                        document_id=job_doc.document_id,
+                        artifact_type="uploaded",
+                    )
+
+                    if artifact:
+                        task_kwargs["artifact_id"] = str(artifact.id)
+                    else:
+                        # If no artifact found, log error and skip
+                        logger.error(
+                            f"Object storage enabled but no uploaded artifact found for document {job_doc.document_id}"
+                        )
+                        job_doc.status = "FAILED"
+                        job_doc.error_message = "No uploaded artifact found in object storage"
+                        continue
+
                 # Enqueue Celery task
                 task = process_document_task.apply_async(
                     args=[job_doc.document_id, job.processing_options],
-                    kwargs={"job_id": str(job_id), "job_document_id": str(job_doc.id)},
+                    kwargs=task_kwargs,
                 )
 
                 # Update job document with Celery task ID

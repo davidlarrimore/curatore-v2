@@ -13,13 +13,20 @@
     "@headlessui/react": "^1.7.19",
     "clsx": "^2.1.1",
     "lucide-react": "^0.263.1",
+    "mammoth": "^1.8.0",
     "next": "15.5.0",
+    "papaparse": "^5.4.1",
     "react": "19.1.1",
     "react-dom": "19.1.1",
-    "react-hot-toast": "^2.6.0"
+    "react-hot-toast": "^2.6.0",
+    "react-markdown": "^10.1.0",
+    "react-pdf": "^9.1.1",
+    "remark-gfm": "^4.0.1",
+    "xlsx": "^0.18.5"
   },
   "devDependencies": {
     "@types/node": "^20.14.8",
+    "@types/papaparse": "^5.3.14",
     "@types/react": "19.1.11",
     "@types/react-dom": "19.1.7",
     "autoprefixer": "^10.4.20",

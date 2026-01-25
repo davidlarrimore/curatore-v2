@@ -94,12 +94,12 @@ function UsersContent() {
     }
   }
 
-  const getRoleBadgeVariant = (role: string) => {
+  const getRoleBadgeVariant = (role: string): 'default' | 'secondary' | 'success' | 'warning' | 'error' | 'info' => {
     switch (role) {
       case 'admin':
         return 'error'
       case 'user':
-        return 'primary'
+        return 'info'
       default:
         return 'secondary'
     }

@@ -7,7 +7,6 @@ import {
   FileInfo,
   ProcessingResult,
   ProcessingOptions,
-  QualityThresholds,
   OCRSettings
 } from '@/types'
 import { systemApi, fileApi, processingApi, jobsApi, utils } from '@/lib/api'
@@ -62,25 +61,10 @@ export default function ProcessingPage() {
     processingComplete: false,
     isProcessing: false,
     processingOptions: {
-      quality_thresholds: {
-        conversion_threshold: 70.0,
-        clarity_threshold: 7.0,
-        completeness_threshold: 8.0,
-        relevance_threshold: 6.0,
-        markdown_threshold: 7.0
-      },
       ocr_settings: {
-        enabled: true,
         language: 'eng',
-        confidence_threshold: 0.8,
         psm: 3
       },
-      processing_settings: {
-        chunk_size: 1000,
-        chunk_overlap: 200,
-        max_retries: 3
-      },
-      auto_optimize: true,
       extraction_engine: 'extraction-service'
     },
     resetCounter: 0
@@ -415,13 +399,6 @@ export default function ProcessingPage() {
               processingResults={state.processingResults}
               onResultsUpdate={handleResultsUpdate}
               onComplete={() => handleStageChange('download')}
-              qualityThresholds={{
-                conversion: state.processingOptions.quality_thresholds.conversion_threshold,
-                clarity: state.processingOptions.quality_thresholds.clarity_threshold,
-                completeness: state.processingOptions.quality_thresholds.completeness_threshold,
-                relevance: state.processingOptions.quality_thresholds.relevance_threshold,
-                markdown: state.processingOptions.quality_thresholds.markdown_threshold,
-              }}
               isProcessingComplete={state.processingComplete}
               isProcessing={state.isProcessing}
               processingPanelState={processingPanelState}

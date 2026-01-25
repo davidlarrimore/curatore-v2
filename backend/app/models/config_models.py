@@ -330,100 +330,6 @@ class EmailConfig(BaseModel):
         return v
 
 
-class DeduplicationConfig(BaseModel):
-    """File deduplication configuration."""
-    model_config = ConfigDict(extra='forbid')
-
-    enabled: bool = Field(
-        default=True,
-        description="Enable file deduplication"
-    )
-    strategy: Literal["symlink", "copy", "reference"] = Field(
-        default="symlink",
-        description="Deduplication strategy"
-    )
-    hash_algorithm: str = Field(
-        default="sha256",
-        description="Hash algorithm (md5, sha1, sha256, sha512)"
-    )
-    min_file_size: int = Field(
-        default=1024,
-        ge=0,
-        description="Minimum file size in bytes to deduplicate"
-    )
-
-
-class RetentionConfig(BaseModel):
-    """File retention configuration."""
-    model_config = ConfigDict(extra='forbid')
-
-    uploaded_days: int = Field(
-        default=7,
-        ge=0,
-        description="Days to retain uploaded files"
-    )
-    processed_days: int = Field(
-        default=30,
-        ge=0,
-        description="Days to retain processed files"
-    )
-    batch_days: int = Field(
-        default=14,
-        ge=0,
-        description="Days to retain batch files"
-    )
-    temp_hours: int = Field(
-        default=24,
-        ge=0,
-        description="Hours to retain temporary files"
-    )
-
-
-class CleanupConfig(BaseModel):
-    """Automatic cleanup configuration."""
-    model_config = ConfigDict(extra='forbid')
-
-    enabled: bool = Field(
-        default=True,
-        description="Enable automatic cleanup"
-    )
-    schedule_cron: str = Field(
-        default="0 2 * * *",
-        description="Cleanup schedule in cron format"
-    )
-    batch_size: int = Field(
-        default=1000,
-        ge=1,
-        description="Files to process per cleanup batch"
-    )
-    dry_run: bool = Field(
-        default=False,
-        description="Run in dry-run mode (preview only)"
-    )
-
-
-class StorageConfig(BaseModel):
-    """Storage management configuration."""
-    model_config = ConfigDict(extra='forbid')
-
-    hierarchical: bool = Field(
-        default=True,
-        description="Use hierarchical organization-based file structure"
-    )
-    deduplication: DeduplicationConfig = Field(
-        default_factory=DeduplicationConfig,
-        description="File deduplication settings"
-    )
-    retention: RetentionConfig = Field(
-        default_factory=RetentionConfig,
-        description="File retention policies"
-    )
-    cleanup: CleanupConfig = Field(
-        default_factory=CleanupConfig,
-        description="Automatic cleanup settings"
-    )
-
-
 class QueueConfig(BaseModel):
     """Celery queue configuration."""
     model_config = ConfigDict(extra='forbid')
@@ -449,6 +355,66 @@ class QueueConfig(BaseModel):
         default=3600,
         ge=1,
         description="Task timeout in seconds"
+    )
+
+
+class MinIOConfig(BaseModel):
+    """
+    MinIO/S3 object storage configuration.
+
+    Backend connects directly to MinIO or S3 for object storage operations.
+    All file operations are now proxied through the backend API, eliminating
+    the need for presigned URLs and environment-specific endpoint configuration.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable object storage (MinIO/S3)"
+    )
+    endpoint: str = Field(
+        default="minio:9000",
+        description="MinIO/S3 server endpoint for backend connections (host:port)"
+    )
+    presigned_endpoint: Optional[str] = Field(
+        default=None,
+        description="DEPRECATED: No longer needed with proxy architecture. Endpoint used to generate presigned URLs."
+    )
+    public_endpoint: Optional[str] = Field(
+        default=None,
+        description="DEPRECATED: No longer needed with proxy architecture. Public endpoint for presigned URLs."
+    )
+    access_key: str = Field(
+        description="MinIO access key / AWS Access Key ID"
+    )
+    secret_key: str = Field(
+        description="MinIO secret key / AWS Secret Access Key"
+    )
+    secure: bool = Field(
+        default=False,
+        description="Use HTTPS for internal MinIO/S3 connections"
+    )
+    public_secure: Optional[bool] = Field(
+        default=None,
+        description="DEPRECATED: No longer needed with proxy architecture. Use HTTPS for presigned URLs."
+    )
+    bucket_uploads: str = Field(
+        default="curatore-uploads",
+        description="Bucket for uploaded files"
+    )
+    bucket_processed: str = Field(
+        default="curatore-processed",
+        description="Bucket for processed files"
+    )
+    bucket_temp: str = Field(
+        default="curatore-temp",
+        description="Bucket for temporary files"
+    )
+    presigned_expiry: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        description="DEPRECATED: No longer needed with proxy architecture. Presigned URL expiry in seconds."
     )
 
 
@@ -480,13 +446,13 @@ class AppConfig(BaseModel):
         default=None,
         description="Email service configuration"
     )
-    storage: StorageConfig = Field(
-        default_factory=StorageConfig,
-        description="Storage management configuration"
-    )
     queue: QueueConfig = Field(
         default_factory=QueueConfig,
         description="Queue configuration"
+    )
+    minio: Optional[MinIOConfig] = Field(
+        default=None,
+        description="MinIO/S3 object storage configuration"
     )
 
     @classmethod

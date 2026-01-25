@@ -1144,6 +1144,128 @@ class DocumentService:
 
     # _apply_vector_optimization and _is_rag_ready methods removed - features deprecated
 
+    # ====================== HIERARCHICAL STORAGE HELPER METHODS ======================
+
+    def create_temp_job_directory(self, job_id: str) -> Path:
+        """
+        Create a temporary processing directory for a job.
+
+        Args:
+            job_id: Job UUID
+
+        Returns:
+            Path to job's temp directory
+        """
+        return path_service.get_temp_job_path(job_id, create_dirs=True)
+
+    def cleanup_temp_job_directory(self, job_id: str) -> bool:
+        """
+        Clean up temporary processing directory for a job.
+
+        Args:
+            job_id: Job UUID
+
+        Returns:
+            True if cleaned up successfully, False otherwise
+        """
+        try:
+            temp_path = path_service.get_temp_job_path(job_id, create_dirs=False)
+            if temp_path.exists():
+                shutil.rmtree(temp_path)
+                self._logger.info(f"Cleaned up temp directory: {temp_path}")
+                return True
+            return False
+        except Exception as e:
+            self._logger.error(f"Failed to cleanup temp directory for job {job_id}: {e}")
+            return False
+
+    async def get_file_hash(self, document_id: str, organization_id: Optional[str] = None, batch_id: Optional[str] = None) -> Optional[str]:
+        """
+        Retrieve the content hash for a document.
+
+        Args:
+            document_id: Document UUID
+            organization_id: Organization UUID
+            batch_id: Batch UUID
+
+        Returns:
+            File hash string or None if not found
+        """
+        file_path = self.find_uploaded_file(document_id, organization_id, batch_id)
+        if not file_path or not file_path.exists():
+            return None
+
+        try:
+            # If file is a symlink, it's deduplicated - resolve to get hash from path
+            if file_path.is_symlink():
+                resolved = file_path.resolve()
+                # Hash is the parent directory name in dedupe structure
+                if "dedupe" in str(resolved):
+                    return resolved.parent.name
+
+            # Otherwise calculate hash
+            return await deduplication_service.calculate_file_hash(file_path)
+        except Exception as e:
+            self._logger.error(f"Failed to get file hash for {document_id}: {e}")
+            return None
+
+    async def find_duplicates(self, organization_id: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Find all duplicate files in an organization.
+
+        Args:
+            organization_id: Organization UUID (None for all orgs)
+
+        Returns:
+            List of duplicate file groups with metadata
+        """
+        duplicates = []
+        dedupe_base = settings.dedupe_path
+
+        if not dedupe_base.exists():
+            return duplicates
+
+        # Scan dedupe directory for files with multiple references
+        for shard_dir in dedupe_base.iterdir():
+            if not shard_dir.is_dir():
+                continue
+
+            for hash_dir in shard_dir.iterdir():
+                if not hash_dir.is_dir():
+                    continue
+
+                refs_path = hash_dir / "refs.json"
+                if not refs_path.exists():
+                    continue
+
+                try:
+                    import json
+                    refs_data = json.loads(refs_path.read_text())
+
+                    # Filter by organization if specified
+                    references = refs_data.get("references", [])
+                    if organization_id:
+                        references = [
+                            ref for ref in references
+                            if ref.get("organization_id") == organization_id
+                        ]
+
+                    # Only include if there are multiple references (duplicates)
+                    if len(references) > 1:
+                        duplicates.append({
+                            "hash": refs_data.get("hash"),
+                            "original_filename": refs_data.get("original_filename"),
+                            "file_size": refs_data.get("file_size"),
+                            "reference_count": len(references),
+                            "references": references,
+                            "storage_saved": refs_data.get("file_size", 0) * (len(references) - 1),
+                        })
+
+                except Exception as e:
+                    self._logger.error(f"Error reading refs file {refs_path}: {e}")
+                    continue
+
+        return duplicates
 
 
 # Create singleton instance

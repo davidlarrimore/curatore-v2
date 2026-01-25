@@ -12,7 +12,6 @@ interface JobDocument {
   status: string
   conversion_score?: number
   quality_scores?: Record<string, any>
-  is_rag_ready?: boolean
   error_message?: string
   processing_time_seconds?: number
 }
@@ -36,12 +35,10 @@ export function JobExportPanel({
 
   // Filter to completed documents only
   const completedDocuments = documents.filter(d => d.status === 'COMPLETED')
-  const ragReadyDocuments = completedDocuments.filter(d => d.is_rag_ready === true)
 
   // Calculate stats
   const stats = {
     total: completedDocuments.length,
-    ragReady: ragReadyDocuments.length,
     selected: selectedDocIds.size,
   }
 
@@ -61,10 +58,6 @@ export function JobExportPanel({
 
   const handleClearAll = () => {
     setSelectedDocIds(new Set())
-  }
-
-  const handleSelectRagReady = () => {
-    setSelectedDocIds(new Set(ragReadyDocuments.map(d => d.document_id)))
   }
 
   const downloadIndividualFile = async (document: JobDocument) => {
@@ -164,43 +157,6 @@ export function JobExportPanel({
     }
   }
 
-  const handleExportRagReady = async () => {
-    if (ragReadyDocuments.length === 0) {
-      toast.error('No RAG-ready documents to export')
-      return
-    }
-
-    setIsExporting(true)
-    const loadingToast = toast.loading(`Creating ZIP archive with ${ragReadyDocuments.length} RAG-ready files...`)
-
-    try {
-      const ragDocIds = ragReadyDocuments.map(d => d.document_id)
-      const timestamp = utils.generateTimestamp()
-      const zipName = `job_${jobId}_rag_ready_${timestamp}.zip`
-
-      const blob = await fileApi.downloadBulkDocuments(
-        ragDocIds,
-        'rag_ready',
-        zipName,
-        includeSummary
-      )
-
-      utils.downloadBlob(blob, zipName)
-      toast.success(`Exported ${ragReadyDocuments.length} RAG-ready documents`, { id: loadingToast })
-    } catch (error: any) {
-      console.error('Export failed:', error)
-
-      if (error?.status === 404) {
-        toast.error('Some processed files not found. Documents may not be fully processed yet.', { id: loadingToast })
-      } else {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error occurred'
-        toast.error(`Export failed: ${errorMessage}`, { id: loadingToast })
-      }
-    } finally {
-      setIsExporting(false)
-    }
-  }
-
   const getScoreColor = (score?: number) => {
     if (score === undefined) return 'text-gray-400'
     if (score >= 70) return 'text-green-600'
@@ -238,13 +194,6 @@ export function JobExportPanel({
           >
             Clear All
           </button>
-          <button
-            onClick={handleSelectRagReady}
-            className="px-3 py-1 text-sm bg-blue-100 hover:bg-blue-200 text-blue-700 rounded transition-colors"
-            disabled={ragReadyDocuments.length === 0}
-          >
-            Select RAG-Ready
-          </button>
         </div>
       </div>
 
@@ -262,9 +211,6 @@ export function JobExportPanel({
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-24">
                   Score
-                </th>
-                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-28">
-                  RAG Ready
                 </th>
                 <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider w-24">
                   Actions
@@ -292,13 +238,6 @@ export function JobExportPanel({
                     <span className={`text-sm font-semibold ${getScoreColor(doc.conversion_score)}`}>
                       {doc.conversion_score !== undefined ? `${doc.conversion_score}` : '-'}
                     </span>
-                  </td>
-                  <td className="px-4 py-3 whitespace-nowrap text-center">
-                    {doc.is_rag_ready ? (
-                      <span className="text-green-600 text-lg">✓</span>
-                    ) : (
-                      <span className="text-red-600 text-lg">✗</span>
-                    )}
                   </td>
                   <td className="px-4 py-3 whitespace-nowrap">
                     <button
@@ -380,13 +319,6 @@ export function JobExportPanel({
             className="px-4 py-2 bg-gray-600 text-white rounded hover:bg-gray-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
           >
             Export All ({completedDocuments.length})
-          </button>
-          <button
-            onClick={handleExportRagReady}
-            disabled={isExporting || ragReadyDocuments.length === 0}
-            className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed transition-colors"
-          >
-            Export RAG-Ready ({ragReadyDocuments.length})
           </button>
         </div>
       </div>

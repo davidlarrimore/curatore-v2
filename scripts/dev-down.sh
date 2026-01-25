@@ -23,13 +23,17 @@ fi
 
 echo "🛑 Stopping Curatore v2 development environment..."
 
-# Prefer Makefile to ensure profile-based services (docling) are also torn down
+# Prefer Makefile to ensure profile-based services (docling, minio) are also torn down
 if command -v make >/dev/null 2>&1 && [[ -f "${REPO_ROOT}/Makefile" ]]; then
-  echo "🛠  Using Makefile to stop stack (handles docling profile)"
+  echo "🛠  Using Makefile to stop stack (handles all profiles)"
   make -C "${REPO_ROOT}" down
 else
   echo "ℹ️  Make not available; using docker compose directly"
-  # Run down twice: once with docling profile (if it was used), then general down
-  ${DC} -f "${REPO_ROOT}/docker-compose.yml" --profile docling down --remove-orphans || true
+  # Run down for each profile (if it was used), then general down
+  # This ensures all profile-based containers are stopped
+  ${DC} -f "${REPO_ROOT}/docker-compose.yml" --profile docling down --remove-orphans 2>/dev/null || true
+  ${DC} -f "${REPO_ROOT}/docker-compose.yml" --profile minio down --remove-orphans 2>/dev/null || true
   ${DC} -f "${REPO_ROOT}/docker-compose.yml" down --remove-orphans
 fi
+
+echo "✅ All services stopped"
