@@ -347,12 +347,14 @@ Curatore v2 supports multi-tenant architecture with optional authentication:
 
 **BREAKING CHANGE (v2.3+):** Local filesystem storage has been completely removed. The `/app/files` directory is no longer used.
 
-**Architecture:**
+**Architecture (v2.3+):**
 ```
 Frontend → Backend API → MinIO/S3
                 ↓
-         presigned URLs for direct upload/download
+         proxy upload/download (all files stream through backend)
 ```
+
+**BREAKING CHANGE (v2.3+):** All file operations are now proxied through the backend. Presigned URLs are deprecated but still available for backward compatibility.
 
 **Object Storage Structure:**
 ```
@@ -374,7 +376,8 @@ MinIO/S3 Buckets:
 
 **Key Features:**
 - **Provider-agnostic**: Works with MinIO (development) or AWS S3 (production)
-- **Presigned URLs**: Frontend uploads/downloads directly to storage, bypassing backend for large files
+- **Backend-proxied access (v2.3+)**: All file operations stream through backend API - eliminates need for direct browser-to-MinIO communication
+- **Simplified configuration**: No environment-specific endpoints or /etc/hosts entries required
 - **Artifact tracking**: Database tracks all stored files via the `Artifact` model
 - **S3 lifecycle policies**: Automatic file expiration and retention (no Celery cleanup tasks needed)
 - **Multi-bucket setup**: Separate buckets for uploads, processed files, and temp files
@@ -384,27 +387,38 @@ MinIO/S3 Buckets:
 **Setup (Development):**
 1. MinIO starts automatically with backend services (no profile needed)
 2. Run `./scripts/init_storage.sh` to create buckets and set lifecycle policies
-3. Add `127.0.0.1 minio` to `/etc/hosts` for presigned URL access from browser
+
+**Note (v2.3+):** No `/etc/hosts` entries or `MINIO_PUBLIC_ENDPOINT` configuration required. All file access is proxied through backend API.
 
 **Configuration:**
 - `USE_OBJECT_STORAGE`: Must be `true` (default: true, no filesystem fallback)
-- `MINIO_ENDPOINT`: MinIO server endpoint (default: minio:9000)
-- `MINIO_PUBLIC_ENDPOINT`: Public endpoint for presigned URLs (must be reachable from clients)
+- `MINIO_ENDPOINT`: MinIO server endpoint for backend connections (default: minio:9000)
 - `MINIO_ACCESS_KEY`: MinIO access key (default: minioadmin)
 - `MINIO_SECRET_KEY`: MinIO secret key (default: minioadmin)
 - `MINIO_BUCKET_UPLOADS`: Bucket for uploaded files
 - `MINIO_BUCKET_PROCESSED`: Bucket for processed files
 - `MINIO_BUCKET_TEMP`: Bucket for temporary files
-- See `.env.example` for complete configuration options
 
-**File Upload/Download Workflow:**
-1. **Upload**: Frontend requests presigned upload URL from `POST /api/v1/storage/upload/presigned`
-2. **Direct Upload**: Frontend uploads file directly to MinIO using presigned URL
-3. **Confirm**: Frontend confirms upload via `POST /api/v1/storage/upload/confirm`
-4. **Artifact**: Backend creates artifact record in database for tracking
-5. **Process**: Celery task downloads from MinIO, processes, uploads result back to MinIO
-6. **Download**: Frontend requests presigned download URL from `GET /api/v1/storage/download/{document_id}/presigned`
-7. **Direct Download**: Frontend downloads directly from MinIO using presigned URL
+**Deprecated (v2.3+):**
+- `MINIO_PUBLIC_ENDPOINT`: No longer needed with proxy architecture
+- `MINIO_PRESIGNED_ENDPOINT`: No longer needed with proxy architecture
+- `MINIO_PUBLIC_SECURE`: No longer needed with proxy architecture
+
+See `.env.example` for complete configuration options
+
+**File Upload/Download Workflow (v2.3+):**
+1. **Upload**: Frontend uploads file to `POST /api/v1/storage/upload/proxy`
+2. **Backend Proxy**: Backend receives file and uploads to MinIO
+3. **Artifact**: Backend creates artifact record in database for tracking
+4. **Process**: Celery task downloads from MinIO, processes, uploads result back to MinIO
+5. **Download**: Frontend requests file from `GET /api/v1/storage/object/download?bucket={bucket}&key={key}`
+6. **Backend Proxy**: Backend fetches from MinIO and streams to frontend
+
+**Legacy Workflow (deprecated):**
+- Presigned URL endpoints still available for backward compatibility
+- `POST /api/v1/storage/upload/presigned` and `POST /api/v1/storage/upload/confirm`
+- `GET /api/v1/storage/download/{document_id}/presigned`
+- `GET /api/v1/storage/object/presigned` (marked deprecated in OpenAPI docs)
 
 **Key Files:**
 - `backend/app/services/minio_service.py`: MinIO SDK integration
@@ -415,9 +429,12 @@ MinIO/S3 Buckets:
 
 **API Endpoints:**
 - `GET /api/v1/storage/health`: Check object storage status
-- `POST /api/v1/storage/upload/presigned`: Get presigned URL for upload
-- `POST /api/v1/storage/upload/confirm`: Confirm upload completed
-- `GET /api/v1/storage/download/{document_id}/presigned`: Get presigned URL for download
+- `POST /api/v1/storage/upload/proxy`: Upload file proxied through backend (recommended)
+- `GET /api/v1/storage/object/download`: Download file proxied through backend (recommended)
+- `POST /api/v1/storage/upload/presigned`: Get presigned URL for upload (deprecated)
+- `POST /api/v1/storage/upload/confirm`: Confirm upload completed (deprecated)
+- `GET /api/v1/storage/download/{document_id}/presigned`: Get presigned URL for download (deprecated)
+- `GET /api/v1/storage/object/presigned`: Get presigned URL for any object (deprecated)
 
 **Database Storage** (SQLite/PostgreSQL):
 ```
@@ -1571,9 +1588,12 @@ Base URL: `http://localhost:8000/api/v1`
 
 **Storage** (when `USE_OBJECT_STORAGE=true`):
 - `GET /storage/health` - Storage service health check
-- `POST /storage/upload/presigned` - Get presigned URL for direct upload
-- `POST /storage/upload/confirm` - Confirm upload completed
-- `GET /storage/download/{document_id}/presigned` - Get presigned URL for download
+- `POST /storage/upload/proxy` - Upload file proxied through backend (recommended)
+- `GET /storage/object/download` - Download file proxied through backend (recommended)
+- `POST /storage/upload/presigned` - Get presigned URL for direct upload (deprecated)
+- `POST /storage/upload/confirm` - Confirm upload completed (deprecated)
+- `GET /storage/download/{document_id}/presigned` - Get presigned URL for download (deprecated)
+- `GET /storage/object/presigned` - Get presigned URL for any object (deprecated)
 
 **System**:
 - `GET /health` - API health check

@@ -17,7 +17,8 @@ import {
   HardDrive,
   Briefcase,
   Zap,
-  ChevronRight
+  ChevronRight,
+  LayoutDashboard
 } from 'lucide-react'
 import { systemApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
@@ -90,11 +91,11 @@ export function LeftSidebar({
   // Navigation items with gradients for active states
   const navigation: NavItem[] = [
     {
-      name: 'Process Documents',
-      href: '/process',
-      icon: FileText,
-      current: pathname === '/process',
-      gradient: 'from-blue-500 to-cyan-500'
+      name: 'Dashboard',
+      href: '/',
+      icon: LayoutDashboard,
+      current: pathname === '/',
+      gradient: 'from-indigo-500 to-purple-600'
     },
     ...(isAuthenticated ? [
       {
@@ -109,7 +110,7 @@ export function LeftSidebar({
         href: '/connections',
         icon: LinkIcon,
         current: pathname === '/connections',
-        gradient: 'from-indigo-500 to-purple-600'
+        gradient: 'from-blue-500 to-cyan-500'
       }
     ] : []),
     ...(isAuthenticated && user?.role === 'org_admin' ? [

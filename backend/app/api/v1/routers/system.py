@@ -1062,72 +1062,44 @@ async def get_retention_policy():
     }
 
 
-@router.get("/storage/deduplication", tags=["System", "Storage"])
+@router.get("/storage/deduplication", tags=["System", "Storage"], deprecated=True)
 async def get_deduplication_stats(organization_id: Optional[str] = None):
     """
-    Get deduplication statistics and storage savings.
+    DEPRECATED: Deduplication statistics endpoint.
 
-    Returns unique files, duplicate references, storage saved, and savings percentage.
+    This endpoint is no longer supported with object storage (MinIO/S3).
+    Deduplication is now handled by S3-native features.
     """
-    try:
-# DEPRECATED - Filesystem storage removed
-#         from ....services.deduplication_service import deduplication_service
-
-        stats = await deduplication_service.get_deduplication_stats(organization_id)
-        return {
-            "organization_id": organization_id,
-            "enabled": settings.file_deduplication_enabled,
-            "strategy": settings.file_deduplication_strategy,
-            "min_file_size": settings.dedupe_min_file_size,
-            **stats,
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get deduplication stats: {str(e)}")
+    raise HTTPException(
+        status_code=410,
+        detail="This endpoint is deprecated. Filesystem deduplication has been replaced with object storage (MinIO/S3). "
+               "Use S3-native deduplication features or MinIO Console for storage management."
+    )
 
 
-@router.get("/storage/duplicates", tags=["System", "Storage"])
+@router.get("/storage/duplicates", tags=["System", "Storage"], deprecated=True)
 async def list_duplicate_files(organization_id: Optional[str] = None):
     """
-    List all files with duplicates.
+    DEPRECATED: List duplicate files endpoint.
 
-    Returns hash, file count, document IDs, and storage saved per file.
+    This endpoint is no longer supported with object storage (MinIO/S3).
     """
-    try:
-        from ....services.document_service import document_service
-
-        duplicates = await document_service.find_duplicates(organization_id)
-
-        return {
-            "organization_id": organization_id,
-            "duplicate_groups": len(duplicates),
-            "total_storage_saved": sum(d.get("storage_saved", 0) for d in duplicates),
-            "duplicates": duplicates,
-        }
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to list duplicates: {str(e)}")
+    raise HTTPException(
+        status_code=410,
+        detail="This endpoint is deprecated. Filesystem deduplication has been replaced with object storage (MinIO/S3). "
+               "Use MinIO Console or S3 API for storage analysis."
+    )
 
 
-@router.get("/storage/duplicates/{hash}", tags=["System", "Storage"])
+@router.get("/storage/duplicates/{hash}", tags=["System", "Storage"], deprecated=True)
 async def get_duplicate_details(hash: str):
     """
-    Get detailed info about a specific duplicate file group.
+    DEPRECATED: Get duplicate file details endpoint.
 
-    Returns full reference list, file size, original name, and created dates.
+    This endpoint is no longer supported with object storage (MinIO/S3).
     """
-    try:
-# DEPRECATED - Filesystem storage removed
-#         from ....services.deduplication_service import deduplication_service
-
-        refs = await deduplication_service.get_file_references(hash)
-
-        if not refs:
-            raise HTTPException(status_code=404, detail=f"Duplicate group not found: {hash}")
-
-        return refs
-
-    except HTTPException:
-        raise
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Failed to get duplicate details: {str(e)}")
+    raise HTTPException(
+        status_code=410,
+        detail="This endpoint is deprecated. Filesystem deduplication has been replaced with object storage (MinIO/S3). "
+               "Use MinIO Console or S3 API for storage analysis."
+    )

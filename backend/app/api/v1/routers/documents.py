@@ -304,54 +304,37 @@ async def get_processing_result(document_id: str):
 
 @router.get("/documents/{document_id}/content", tags=["Results"])
 async def get_document_content(document_id: str):
-    """Get the content of a processed document (supports both object storage and filesystem)."""
+    """Get the content of a processed document from object storage."""
     import logging
     logger = logging.getLogger("curatore.api")
 
     try:
-        # When object storage is enabled, fetch from MinIO
-        if settings.use_object_storage:
-            from ....services.minio_service import get_minio_service
-            from ....services.artifact_service import artifact_service
+        from ....services.minio_service import get_minio_service
+        from ....services.artifact_service import artifact_service
 
-            minio = get_minio_service()
-            if not minio:
-                raise HTTPException(status_code=503, detail="Object storage not available")
+        minio = get_minio_service()
+        if not minio:
+            raise HTTPException(status_code=503, detail="Object storage not available")
 
-            # Get the processed artifact for this document
-            async with database_service.get_session() as session:
-                artifact = await artifact_service.get_artifact_by_document(
-                    session=session,
-                    document_id=document_id,
-                    artifact_type="processed",
-                )
+        # Get the processed artifact for this document
+        async with database_service.get_session() as session:
+            artifact = await artifact_service.get_artifact_by_document(
+                session=session,
+                document_id=document_id,
+                artifact_type="processed",
+            )
 
-                if not artifact:
-                    raise HTTPException(status_code=404, detail="Processed content not found in object storage")
+            if not artifact:
+                raise HTTPException(status_code=404, detail="Processed content not found in object storage")
 
-            # Download content from object storage
-            try:
-                content_io = minio.get_object(artifact.bucket, artifact.object_key)
-                content = content_io.getvalue().decode('utf-8')
-                return {"content": content}
-            except Exception as e:
-                logger.error(f"Failed to download processed content from object storage: {e}")
-                raise HTTPException(status_code=500, detail=f"Failed to download content: {str(e)}")
-
-        # Filesystem mode: use existing logic
-        else:
-            # Try storage first, then filesystem fallback
-            result = storage_service.get_processing_result(document_id)
-            path: Optional[Path] = None
-            if result and getattr(result, 'markdown_path', None):
-                path = Path(result.markdown_path)
-            if not path or not path.exists():
-                path = document_service.get_processed_markdown_path(document_id)
-            if not path or not path.exists():
-                raise HTTPException(status_code=404, detail="Processed content not found")
-
-            content = path.read_text(encoding='utf-8')
+        # Download content from object storage
+        try:
+            content_io = minio.get_object(artifact.bucket, artifact.object_key)
+            content = content_io.getvalue().decode('utf-8')
             return {"content": content}
+        except Exception as e:
+            logger.error(f"Failed to download processed content from object storage: {e}")
+            raise HTTPException(status_code=500, detail=f"Failed to download content: {str(e)}")
 
     except HTTPException:
         raise
@@ -411,45 +394,57 @@ def _strip_hash_prefix(filename: str) -> str:
 
 @router.get("/documents/{document_id}/download", tags=["Results"])
 async def download_document(document_id: str):
-    """Download a processed document (with storage and filesystem fallback)."""
+    """Download a processed document from object storage.
+
+    Note: This endpoint streams content from object storage.
+    For direct downloads, use GET /api/v1/storage/download/{document_id}/proxy instead.
+    """
+    import io
+    from fastapi.responses import StreamingResponse
+    import logging
+    logger = logging.getLogger("curatore.api")
+
     try:
-        result = storage_service.get_processing_result(document_id)
-        path: Optional[Path] = None
-        if result and getattr(result, 'markdown_path', None):
-            path = Path(result.markdown_path)
-        if not path or not path.exists():
-            # Fallback to filesystem lookup (worker saved file, backend memory lacks result)
-            path = document_service.get_processed_markdown_path(document_id)
-        if not path or not path.exists():
-            raise HTTPException(status_code=404, detail="Processed file not found")
+        from ....services.minio_service import get_minio_service
+        from ....services.artifact_service import artifact_service
 
-        # Determine a sensible download filename (strip hash prefix)
-        download_name = None
+        minio = get_minio_service()
+        if not minio:
+            raise HTTPException(status_code=503, detail="Object storage not available")
+
+        # Get the processed artifact for this document
+        async with database_service.get_session() as session:
+            artifact = await artifact_service.get_artifact_by_document(
+                session=session,
+                document_id=document_id,
+                artifact_type="processed",
+            )
+
+            if not artifact:
+                raise HTTPException(status_code=404, detail="Processed file not found in object storage")
+
+        # Determine download filename
+        original_filename = artifact.original_filename or f"{document_id}.md"
+        clean_filename = _strip_hash_prefix(original_filename)
+        download_name = f"{Path(clean_filename).stem}.md"
+
+        # Download content from object storage
         try:
-            if result and getattr(result, 'filename', None):
-                # result.filename may contain hash prefix like "{hash}_{original}.ext"
-                # Strip the hash prefix and change extension to .md
-                clean_filename = _strip_hash_prefix(result.filename)
-                download_name = f"{Path(clean_filename).stem}.md"
-            else:
-                # Files are stored as {document_id}_{original_name}.md
-                # Strip the document_id prefix to get the original filename
-                filename = path.name
-                clean_filename = _strip_hash_prefix(filename)
-                # If still has underscore after stripping, it might be double-hashed
-                clean_filename = _strip_hash_prefix(clean_filename)
-                download_name = clean_filename if clean_filename.endswith('.md') else f"{Path(clean_filename).stem}.md"
-        except Exception:
-            # Fallback: try to strip prefix, otherwise use full name
-            filename = path.name
-            clean_filename = _strip_hash_prefix(filename)
-            download_name = clean_filename if clean_filename else filename
+            content_io = minio.get_object(artifact.bucket, artifact.object_key)
+            content = content_io.getvalue()
 
-        return FileResponse(
-            path=str(path),
-            filename=download_name,
-            media_type="text/markdown"
-        )
+            return StreamingResponse(
+                io.BytesIO(content),
+                media_type="text/markdown",
+                headers={
+                    "Content-Disposition": f'attachment; filename="{download_name}"',
+                    "Content-Length": str(len(content)),
+                }
+            )
+        except Exception as e:
+            logger.error(f"Failed to download processed file from object storage: {e}")
+            raise HTTPException(status_code=500, detail=f"Download failed: {str(e)}")
+
     except HTTPException:
         raise
     except Exception as e:
