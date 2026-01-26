@@ -1012,38 +1012,8 @@ async def comprehensive_health() -> Dict[str, Any]:
 
 
 # ============================================================================
-# STORAGE MANAGEMENT & DEDUPLICATION ENDPOINTS
+# STORAGE MANAGEMENT & RETENTION ENDPOINTS
 # ============================================================================
-
-@router.get("/storage/stats", tags=["System", "Storage"], deprecated=True)
-async def get_storage_stats(organization_id: Optional[str] = None):
-    """
-    DEPRECATED: Filesystem storage statistics endpoint.
-
-    This endpoint is no longer supported with object storage (MinIO/S3).
-    Use MinIO Console or S3 metrics for storage usage information.
-    """
-    raise HTTPException(
-        status_code=410,
-        detail="This endpoint is deprecated. Filesystem storage has been replaced with object storage (MinIO/S3). "
-               "Use MinIO Console (http://localhost:9001) or S3 metrics for storage usage information."
-    )
-    """
-    Manually trigger cleanup of expired files.
-
-    By default runs in dry_run mode to preview what would be deleted.
-    Set dry_run=false to actually delete files.
-    """
-    try:
-# DEPRECATED - Filesystem storage removed
-#         from ....services.retention_service import retention_service
-
-        result = await retention_service.cleanup_expired_files(dry_run=dry_run)
-        return result
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Cleanup failed: {str(e)}")
-
 
 @router.get("/storage/retention", tags=["System", "Storage"])
 async def get_retention_policy():
@@ -1060,46 +1030,3 @@ async def get_retention_policy():
         "batch_size": settings.file_cleanup_batch_size,
         "dry_run": settings.file_cleanup_dry_run,
     }
-
-
-@router.get("/storage/deduplication", tags=["System", "Storage"], deprecated=True)
-async def get_deduplication_stats(organization_id: Optional[str] = None):
-    """
-    DEPRECATED: Deduplication statistics endpoint.
-
-    This endpoint is no longer supported with object storage (MinIO/S3).
-    Deduplication is now handled by S3-native features.
-    """
-    raise HTTPException(
-        status_code=410,
-        detail="This endpoint is deprecated. Filesystem deduplication has been replaced with object storage (MinIO/S3). "
-               "Use S3-native deduplication features or MinIO Console for storage management."
-    )
-
-
-@router.get("/storage/duplicates", tags=["System", "Storage"], deprecated=True)
-async def list_duplicate_files(organization_id: Optional[str] = None):
-    """
-    DEPRECATED: List duplicate files endpoint.
-
-    This endpoint is no longer supported with object storage (MinIO/S3).
-    """
-    raise HTTPException(
-        status_code=410,
-        detail="This endpoint is deprecated. Filesystem deduplication has been replaced with object storage (MinIO/S3). "
-               "Use MinIO Console or S3 API for storage analysis."
-    )
-
-
-@router.get("/storage/duplicates/{hash}", tags=["System", "Storage"], deprecated=True)
-async def get_duplicate_details(hash: str):
-    """
-    DEPRECATED: Get duplicate file details endpoint.
-
-    This endpoint is no longer supported with object storage (MinIO/S3).
-    """
-    raise HTTPException(
-        status_code=410,
-        detail="This endpoint is deprecated. Filesystem deduplication has been replaced with object storage (MinIO/S3). "
-               "Use MinIO Console or S3 API for storage analysis."
-    )

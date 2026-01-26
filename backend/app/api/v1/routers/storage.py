@@ -2,15 +2,17 @@
 # backend/app/api/v1/routers/storage.py
 # ============================================================================
 """
-Object Storage Router for Presigned URL Operations.
+Object Storage Router for Backend-Proxied File Operations.
 
 Provides endpoints for:
-- Presigned upload URLs (frontend uploads directly to storage)
-- Confirming upload completion
-- Presigned download URLs (frontend downloads directly from storage)
+- Proxied file uploads (backend streams files to storage)
+- Proxied file downloads (backend streams files from storage)
+- Storage browsing and management
+- Artifact tracking and management
 - Storage health checks
 
 Uses integrated MinIO service (no separate microservice needed).
+All file operations are proxied through the backend for security and simplicity.
 """
 
 from __future__ import annotations
@@ -31,11 +33,7 @@ from ....services.artifact_service import artifact_service
 from ....services.database_service import database_service
 from ....services.minio_service import get_minio_service
 from ..models import (
-    PresignedUploadRequest,
-    PresignedUploadResponse,
-    ConfirmUploadRequest,
     ConfirmUploadResponse,
-    PresignedDownloadResponse,
     StorageHealthResponse,
     ArtifactResponse,
     BulkDeleteArtifactsRequest,
@@ -144,93 +142,8 @@ async def get_storage_health() -> StorageHealthResponse:
 
 
 # =========================================================================
-# PRESIGNED UPLOAD
+# UPLOAD (PROXY ONLY)
 # =========================================================================
-
-@router.post(
-    "/upload/presigned",
-    response_model=PresignedUploadResponse,
-    summary="Get presigned upload URL",
-    description="Generate a presigned URL for direct upload to object storage.",
-)
-async def get_presigned_upload_url(
-    request: PresignedUploadRequest,
-    current_user: User = Depends(get_current_user),
-) -> PresignedUploadResponse:
-    """
-    Get a presigned URL for direct upload to object storage.
-
-    Flow:
-    1. Generate document_id and object key
-    2. Create pending Artifact record in database
-    3. Generate presigned URL from MinIO
-    4. Return URL + artifact info to client
-
-    The client then uploads directly to storage, bypassing the backend.
-    """
-    _require_storage_enabled()
-
-    minio = get_minio_service()
-    if not minio:
-        raise HTTPException(status_code=503, detail="MinIO service unavailable")
-
-    organization_id = current_user.organization_id
-
-    # Generate IDs (using full UUID format)
-    document_id = str(uuid.uuid4())
-    object_key = f"{organization_id}/{document_id}/uploaded/{request.filename}"
-
-    # Get bucket name from settings
-    bucket = settings.minio_bucket_uploads
-
-    # Calculate expiration
-    expires_seconds = settings.minio_presigned_expiry
-    expires_at = datetime.utcnow() + timedelta(days=settings.file_retention_uploaded_days)
-
-    try:
-        async with database_service.get_session() as session:
-            # Create pending artifact record
-            artifact = await artifact_service.create_artifact(
-                session=session,
-                organization_id=organization_id,
-                document_id=document_id,
-                artifact_type="uploaded",
-                bucket=bucket,
-                object_key=object_key,
-                original_filename=request.filename,
-                content_type=request.content_type,
-                file_size=request.file_size,
-                status="pending",
-                expires_at=expires_at,
-            )
-            await session.commit()
-            await session.refresh(artifact)
-
-            # Get presigned URL from MinIO
-            upload_url = minio.get_presigned_put_url(
-                bucket=bucket,
-                key=object_key,
-                expires_seconds=expires_seconds,
-                content_type=request.content_type,
-            )
-
-            logger.info(
-                f"Generated presigned upload URL for document={document_id}, "
-                f"artifact={artifact.id}, org={organization_id}"
-            )
-
-            return PresignedUploadResponse(
-                document_id=document_id,
-                artifact_id=str(artifact.id),
-                upload_url=upload_url,
-                expires_in=expires_seconds,
-                bucket=bucket,
-                object_key=object_key,
-            )
-
-    except Exception as e:
-        logger.error(f"Error generating presigned upload URL: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post(
@@ -334,184 +247,9 @@ async def proxy_upload(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.post(
-    "/upload/confirm",
-    response_model=ConfirmUploadResponse,
-    summary="Confirm upload completion",
-    description="Confirm that a file upload completed successfully.",
-)
-async def confirm_upload(
-    request: ConfirmUploadRequest,
-    current_user: User = Depends(get_current_user),
-) -> ConfirmUploadResponse:
-    """
-    Confirm that upload completed successfully.
-
-    Flow:
-    1. Verify object exists in storage
-    2. Get object metadata (size, etag)
-    3. Update Artifact status to 'available'
-
-    Called by frontend after successful direct upload to storage.
-    """
-    _require_storage_enabled()
-
-    minio = get_minio_service()
-    if not minio:
-        raise HTTPException(status_code=503, detail="MinIO service unavailable")
-
-    try:
-        artifact_id = UUID(request.artifact_id)
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid artifact_id format")
-
-    async with database_service.get_session() as session:
-        # Get artifact
-        artifact = await artifact_service.get_artifact(session, artifact_id)
-        if not artifact:
-            raise HTTPException(status_code=404, detail="Artifact not found")
-
-        # Verify organization access
-        if artifact.organization_id != current_user.organization_id:
-            raise HTTPException(status_code=404, detail="Artifact not found")
-
-        # Verify document_id matches
-        if artifact.document_id != request.document_id:
-            raise HTTPException(status_code=400, detail="Document ID mismatch")
-
-        # Verify artifact is in pending status
-        if artifact.status != "pending":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Artifact already confirmed (status: {artifact.status})"
-            )
-
-        try:
-            # Verify object exists in storage
-            exists = minio.object_exists(artifact.bucket, artifact.object_key)
-            if not exists:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Object not found in storage. Upload may have failed."
-                )
-
-            # Get object info for metadata
-            info = minio.get_object_info(artifact.bucket, artifact.object_key)
-
-            # Update artifact status and metadata
-            artifact = await artifact_service.update_artifact_status(
-                session=session,
-                artifact_id=artifact_id,
-                status="available",
-                file_size=info.get("size") if info else None,
-                etag=info.get("etag") if info else None,
-            )
-            await session.commit()
-
-            logger.info(
-                f"Confirmed upload for document={artifact.document_id}, "
-                f"artifact={artifact.id}, size={info.get('size') if info else 'unknown'}"
-            )
-
-            return ConfirmUploadResponse(
-                document_id=artifact.document_id,
-                artifact_id=str(artifact.id),
-                status=artifact.status,
-                filename=artifact.original_filename,
-                file_size=artifact.file_size,
-                etag=artifact.etag,
-            )
-
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Error confirming upload: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
-
-
 # =========================================================================
-# PRESIGNED DOWNLOAD
+# DOWNLOAD (PROXY ONLY)
 # =========================================================================
-
-@router.get(
-    "/download/{document_id}/presigned",
-    response_model=PresignedDownloadResponse,
-    summary="Get presigned download URL",
-    description="Generate a presigned URL for direct download from object storage.",
-)
-async def get_presigned_download_url(
-    document_id: str,
-    artifact_type: str = Query(default="processed", description="Artifact type (uploaded, processed)"),
-    current_user: User = Depends(get_current_user),
-) -> PresignedDownloadResponse:
-    """
-    Get a presigned URL for direct download from object storage.
-
-    Args:
-        document_id: Document identifier
-        artifact_type: Type of artifact to download (uploaded, processed)
-
-    Returns presigned URL that client can use to download directly from storage.
-    """
-    _require_storage_enabled()
-
-    minio = get_minio_service()
-    if not minio:
-        raise HTTPException(status_code=503, detail="MinIO service unavailable")
-
-    organization_id = current_user.organization_id
-
-    async with database_service.get_session() as session:
-        # Find artifact
-        artifact = await artifact_service.get_artifact_by_document(
-            session=session,
-            document_id=document_id,
-            artifact_type=artifact_type,
-            organization_id=organization_id,
-        )
-
-        if not artifact:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No {artifact_type} artifact found for document {document_id}"
-            )
-
-        if artifact.status != "available":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Artifact not available (status: {artifact.status})"
-            )
-
-        try:
-            # Get presigned download URL
-            expires_seconds = settings.minio_presigned_expiry
-            download_url = minio.get_presigned_get_url(
-                bucket=artifact.bucket,
-                key=artifact.object_key,
-                expires_seconds=expires_seconds,
-                response_headers={
-                    "response-content-disposition": f'attachment; filename="{artifact.original_filename}"'
-                },
-            )
-
-            logger.info(
-                f"Generated presigned download URL for document={document_id}, "
-                f"artifact={artifact.id}, type={artifact_type}"
-            )
-
-            return PresignedDownloadResponse(
-                document_id=document_id,
-                artifact_id=str(artifact.id),
-                download_url=download_url,
-                filename=artifact.original_filename,
-                content_type=artifact.content_type,
-                file_size=artifact.file_size,
-                expires_in=expires_seconds,
-            )
-
-        except Exception as e:
-            logger.error(f"Error generating presigned download URL: {e}")
-            raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.get(
@@ -1622,97 +1360,3 @@ async def download_object_proxy(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-# =========================================================================
-# OBJECT PRESIGNED URLS (for folder browser) - DEPRECATED
-# =========================================================================
-
-@router.get(
-    "/object/presigned",
-    summary="Get presigned URL for any object (DEPRECATED - use /object/download instead)",
-    description="Generate a presigned URL for direct download/preview of any object by bucket and key. DEPRECATED: Use /object/download proxy endpoint instead.",
-    deprecated=True,
-)
-async def get_object_presigned_url(
-    bucket: str = Query(..., description="Bucket name"),
-    key: str = Query(..., description="Object key"),
-    filename: Optional[str] = Query(None, description="Filename for download (optional)"),
-    inline: bool = Query(False, description="If true, set content-disposition to inline for preview"),
-    current_user: User = Depends(get_current_user),
-) -> Dict[str, Any]:
-    """
-    Get a presigned URL for any object in storage (for folder browser).
-
-    This endpoint allows getting presigned URLs for objects that may not have
-    artifact records, such as files uploaded directly to folders.
-
-    Args:
-        bucket: Bucket name
-        key: Object key
-        filename: Optional filename for Content-Disposition header
-        inline: If true, use inline disposition for preview (default: attachment for download)
-
-    Returns:
-        Presigned URL and metadata
-    """
-    _require_storage_enabled()
-
-    minio = get_minio_service()
-    if not minio:
-        raise HTTPException(status_code=503, detail="MinIO service unavailable")
-
-    # Verify bucket exists
-    if not minio.bucket_exists(bucket):
-        raise HTTPException(status_code=404, detail=f"Bucket '{bucket}' not found")
-
-    # Check if object exists
-    try:
-        logger.info(f"Checking if object exists: bucket={bucket}, key={key!r}")
-        obj_info = minio.get_object_info(bucket, key)
-        if not obj_info:
-            logger.warning(f"Object not found: bucket={bucket}, key={key!r}")
-            raise HTTPException(status_code=404, detail=f"Object '{key}' not found")
-        logger.info(f"Object found: bucket={bucket}, key={key!r}, size={obj_info.get('size', 0)}")
-    except HTTPException:
-        raise
-    except Exception as e:
-        logger.error(f"Error checking object existence for bucket={bucket}, key={key!r}: {e}")
-        raise HTTPException(status_code=404, detail=f"Object '{key}' not found: {str(e)}")
-
-    try:
-        # Generate presigned URL
-        expires_seconds = settings.minio_presigned_expiry
-
-        # Use provided filename or extract from key
-        if not filename:
-            filename = key.split('/')[-1]
-
-        # Set content disposition based on inline flag
-        disposition = "inline" if inline else f'attachment; filename="{filename}"'
-
-        download_url = minio.get_presigned_get_url(
-            bucket=bucket,
-            key=key,
-            expires_seconds=expires_seconds,
-            response_headers={
-                "response-content-disposition": disposition
-            },
-        )
-
-        logger.info(
-            f"Generated presigned URL for object bucket={bucket}, key={key}, "
-            f"inline={inline}, user={current_user.id}"
-        )
-
-        return {
-            "download_url": download_url,
-            "bucket": bucket,
-            "key": key,
-            "filename": filename,
-            "size": obj_info.get("size") if obj_info else None,
-            "content_type": obj_info.get("content_type") if obj_info else None,
-            "expires_in": expires_seconds,
-        }
-
-    except Exception as e:
-        logger.error(f"Error generating presigned URL: {e}")
-        raise HTTPException(status_code=500, detail=str(e))

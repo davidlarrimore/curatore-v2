@@ -537,7 +537,6 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
 # API ROUTERS
 # ----------------------------------------------------------------------------
 # Expose versioned routes at /api/v1 following industry best practices.
-# Keep non-versioned /api as a backward-compatible alias for v1 (deprecated).
 
 # Primary, versioned API
 app.include_router(
@@ -545,44 +544,21 @@ app.include_router(
     prefix="/api/v1",
 )
 
-# Future version scaffold (currently mirrors v1)
-# Removed v2 router; consolidating on v1
-
-# Backward-compatible alias for existing clients/tests hitting /api/*
-# This mirrors v1 and should be removed in a future major release.
-app.include_router(
-    v1_router,
-    prefix="/api",
-)
-
-# Add deprecation headers for non-versioned /api/* requests to guide migration
-@app.middleware("http")
-async def legacy_api_deprecation_header(request: Request, call_next):
-    response = await call_next(request)
-    path = request.url.path
-    if path.startswith("/api/") and not path.startswith("/api/v"):
-        # RFC 8594 style guidance via headers
-        response.headers["Deprecation"] = "true"
-        # Example sunset date ~90 days from now (adjust as needed)
-        response.headers["Sunset"] = "Tue, 30 Nov 2027 23:59:59 GMT"
-        response.headers["Link"] = "</api/v1>; rel=successor-version"
-    return response
-
 # ============================================================================
 # OPENAPI CUSTOMIZATION
 # ============================================================================
 
-def _build_tag_description(base: str, version_label: str) -> str:
+def _build_tag_description(base: str) -> str:
     base_desc = {
         "System": "System health, status, and maintenance endpoints.",
         "Configuration": "Configuration and capability metadata endpoints.",
         "Documents": "Document management: upload, list, and delete.",
         "Processing": "Document processing operations and workflows.",
         "Results": "Accessing, editing, and downloading processing results.",
+        "Storage": "Object storage operations for uploads and downloads.",
         "Legacy": "Legacy compatibility endpoints.",
     }.get(base, f"Endpoints for {base}.")
-    suffix = "API v1" if version_label == "v1" else "API v1 (legacy alias)"
-    return f"{base_desc} {suffix}."
+    return f"{base_desc} API v1."
 
 
 def custom_openapi():
@@ -598,17 +574,12 @@ def custom_openapi():
 
     # Transform operation tags to be version-specific and add metadata
     seen_tags = {}
-    tag_meta = {}  # (version, base) -> (name, desc)
+    tag_meta = {}  # base -> (name, desc)
     for path, methods in list(schema.get("paths", {}).items()):
         if not isinstance(methods, dict):
             continue
-        # Determine version label from path
-        if path.startswith("/api/v1/"):
-            version_label = "v1"
-        elif path.startswith("/api/"):
-            version_label = "v1 (legacy)"
-        else:
-            # Non-API or root endpoints, skip
+        # Only process v1 API endpoints
+        if not path.startswith("/api/v1/"):
             continue
 
         for method, operation in methods.items():
@@ -624,28 +595,22 @@ def custom_openapi():
                 # Normalize base tag capitalization
                 base = t.title()
                 # Prefix with version for clarity
-                vprefix = "v1: " if version_label == "v1" else "v1 (legacy): "
-                name = f"{vprefix}{base}"
+                name = f"v1: {base}"
                 new_tags.append(name)
                 # Record tag metadata
                 if name not in seen_tags:
-                    # version id for description builder: 'v1' or 'v1 (legacy)'
-                    version_id = "v1" if vprefix.startswith("v1: ") else "v1 (legacy)"
-                    desc = _build_tag_description(base, version_id)
+                    desc = _build_tag_description(base)
                     seen_tags[name] = desc
-                    tag_meta[(version_id, base)] = (name, desc)
+                    tag_meta[base] = (name, desc)
             operation["tags"] = new_tags
 
     # Inject descriptive tag metadata with deterministic ordering
-    versions_order = ["v1", "v1 (legacy)"]
-    bases_order = ["System", "Documents", "Processing", "Results", "Configuration", "Legacy", "General"]
+    bases_order = ["System", "Documents", "Processing", "Results", "Storage", "Configuration", "Legacy", "General"]
     ordered = []
-    for v in versions_order:
-        for b in bases_order:
-            key = (v, b)
-            if key in tag_meta:
-                name, desc = tag_meta[key]
-                ordered.append({"name": name, "description": desc})
+    for b in bases_order:
+        if b in tag_meta:
+            name, desc = tag_meta[b]
+            ordered.append({"name": name, "description": desc})
     # Fallback for any unaccounted tags
     remaining = [{"name": name, "description": desc} for name, desc in seen_tags.items()
                  if name not in {t["name"] for t in ordered}]

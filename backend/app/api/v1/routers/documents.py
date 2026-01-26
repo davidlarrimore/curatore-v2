@@ -7,13 +7,12 @@ from datetime import datetime
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import APIRouter, Body, File, UploadFile, HTTPException, Query, Request, Depends
+from fastapi import APIRouter, Body, HTTPException, Query, Depends
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from ....config import settings
 from ..models import (
-    FileUploadResponse,
     DocumentEditRequest,
     ProcessingOptions,
     BulkDownloadRequest,
@@ -41,37 +40,6 @@ from ....services.storage_service import storage_service
 from ....services.zip_service import zip_service
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
-
-
-@router.post("/documents/upload", response_model=FileUploadResponse, tags=["Documents"], deprecated=True)
-async def upload_document(file: UploadFile = File(...)):
-    """
-    DEPRECATED: Upload a document through the backend (inefficient for large files).
-
-    Use /storage/upload/presigned for direct uploads to object storage instead.
-    This endpoint proxies files through the backend, which is slower and uses more resources.
-
-    Kept for backward compatibility only.
-    """
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No filename provided")
-    
-    if not document_service.is_supported_file(file.filename):
-        raise HTTPException(
-            status_code=400, 
-            detail=f"Unsupported file type. Supported: {document_service.get_supported_extensions()}"
-        )
-    
-    # This endpoint is deprecated - direct uploads through backend are inefficient
-    # Users should use /storage/upload/presigned for direct object storage uploads
-    raise HTTPException(
-        status_code=410,
-        detail={
-            "error": "This endpoint is deprecated and no longer supported",
-            "message": "Please use POST /api/v1/storage/upload/presigned for direct uploads to object storage",
-            "migration_guide": "See API documentation for presigned URL upload workflow"
-        }
-    )
 
 # Ensure static batch routes are registered before dynamic '{document_id}' routes
 @router.post("/documents/batch/process", tags=["Processing"])
@@ -135,162 +103,6 @@ async def process_batch(request: V1BatchProcessingRequest):
         "conflicts": conflicts,
         "total": len(request.document_ids)
     }
-
-@router.post("/documents/{document_id}/process", tags=["Processing"])
-async def process_document(
-    document_id: str = Depends(validate_document_id_param),
-    options: Optional[V1ProcessingOptions] = None,
-    request: Request = None,
-    sync: bool = Query(False, description="Run synchronously (for tests only)"),
-    user: User = Depends(get_current_user),
-):
-    """
-    Enqueue processing for a single document (Celery) or run sync when requested.
-
-    **DEPRECATED**: This endpoint is deprecated and will be removed in a future version.
-    Use POST /api/v1/jobs to create batch jobs with proper tracking and management.
-
-    Supports optional authentication for database connection lookup in synchronous mode.
-    Async mode (Celery) currently uses environment variables for backward compatibility.
-
-    When authentication is enabled, this endpoint creates a single-document batch job
-    internally for proper tracking while maintaining backward compatibility.
-    """
-    # Validate artifact exists in object storage
-    from ....services.artifact_service import artifact_service
-
-    try:
-        async with database_service.get_session() as session:
-            artifact = await artifact_service.get_artifact_by_document(
-                session=session,
-                document_id=document_id,
-                artifact_type="uploaded",
-            )
-            if not artifact:
-                raise HTTPException(status_code=404, detail="Document not found in object storage")
-
-            artifact_id = str(artifact.id)
-    except HTTPException:
-        raise
-    except Exception as e:
-        try:
-            # Emit detailed debug info to API logs to help diagnose issues
-            from ....main import api_logger
-            extra = {"request_id": getattr(getattr(request, 'state', object()), 'request_id', '-')}
-            api_logger.warning(
-                f"process_document: Failed to verify document id=%s error=%s",
-                document_id,
-                str(e),
-                extra=extra,
-            )
-        except Exception:
-            pass
-        raise HTTPException(status_code=404, detail="Document not found")
-
-    # Synchronous path (optional) - NOT SUPPORTED in object storage mode
-    if sync and os.getenv("ALLOW_SYNC_PROCESS", "false").lower() in {"1", "true", "yes"}:
-        raise HTTPException(
-            status_code=501,
-            detail="Synchronous processing is not supported with object storage. Use async mode or POST /api/v1/jobs instead."
-        )
-
-    # NEW: If authentication is enabled and user exists, create database-backed job
-    # Otherwise fall back to legacy Redis-based tracking
-    if settings.enable_auth:
-        from ....services.job_service import create_batch_job, enqueue_job, check_concurrency_limit
-
-        # Check concurrency limit
-        can_create, error_msg = await check_concurrency_limit(user.organization_id)
-        if not can_create:
-            raise HTTPException(
-                status_code=409,
-                detail=error_msg or "Organization concurrency limit exceeded"
-            )
-
-        try:
-            # Create single-document batch job
-            opts = (options.model_dump() if options else {})
-            job = await create_batch_job(
-                organization_id=user.organization_id,
-                user_id=user.id,
-                document_ids=[document_id],
-                options=opts,
-                name=f"Document {document_id}",
-                description="Single document processing (legacy endpoint)",
-            )
-
-            # Enqueue job
-            enqueue_result = await enqueue_job(job.id)
-
-            # Return legacy response format
-            return {
-                "job_id": str(job.id),
-                "document_id": document_id,
-                "status": "queued",
-                "enqueued_at": job.created_at,
-            }
-        except ValueError as e:
-            raise HTTPException(status_code=400, detail=str(e))
-
-    # Legacy path: Enqueue Celery task with Redis tracking
-    opts = (options.model_dump() if options else {})
-    async_result = process_document_task.apply_async(
-        kwargs={
-            "document_id": document_id,
-            "options": opts,
-            "artifact_id": artifact_id
-        },
-        queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
-    )
-    # Acquire per-document lock with real job id; if it fails, revoke and return 409
-    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
-    if not set_active_job(document_id, async_result.id, ttl):
-        try:
-            celery_app.control.revoke(async_result.id, terminate=False)
-        except Exception:
-            pass
-        active_job = get_active_job_for_document(document_id)
-        raise HTTPException(status_code=409, detail={
-            "error": "Another job is already running for this document",
-            "active_job_id": active_job,
-            "status": "conflict"
-        })
-
-    # Record initial job status
-    record_job_status(async_result.id, {
-        "job_id": async_result.id,
-        "document_id": document_id,
-        "status": "PENDING",
-        "enqueued_at": datetime.utcnow().isoformat(),
-    })
-    append_job_log(async_result.id, "info", f"Queued: {document_id}")
-
-    return {
-        "job_id": async_result.id,
-        "document_id": document_id,
-        "status": "queued",
-        "enqueued_at": datetime.utcnow(),
-    }
-
-@router.post("/documents/batch/{filename}/process", tags=["Processing"], deprecated=True)
-async def process_batch_file(
-    filename: str,
-    options: Optional[V1ProcessingOptions] = None,
-):
-    """
-    DEPRECATED: Process a file from the batch_files directory.
-
-    This endpoint is deprecated because filesystem storage has been replaced with object storage.
-    Use POST /api/v1/jobs to create batch jobs with proper tracking and management.
-    """
-    raise HTTPException(
-        status_code=410,
-        detail={
-            "error": "This endpoint is deprecated and no longer supported",
-            "message": "Batch file processing from filesystem is no longer available",
-            "migration_guide": "Upload files via POST /api/v1/storage/upload/presigned and create jobs via POST /api/v1/jobs"
-        }
-    )
 
 # (moved above to avoid shadowing by dynamic routes)
 
