@@ -197,6 +197,12 @@ class TestDocumentServiceFileListFix:
         self.create_test_file(upload_dir, "test123_document.pdf")  # Supported
         self.create_test_file(upload_dir, "test456_image.png")     # Not in our mock supported extensions
         self.create_test_file(upload_dir, "test789_text.txt")      # Supported
+
+
+def test_document_service_sets_processed_dir():
+    service = DocumentService()
+    assert hasattr(service, "processed_dir")
+    assert service.processed_dir.exists()
         
         result = document_service._list_files_for_api(upload_dir, "uploaded")
         

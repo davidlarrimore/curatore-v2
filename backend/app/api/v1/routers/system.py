@@ -545,7 +545,7 @@ async def health_check_docling() -> Dict[str, Any]:
     """Health check for Docling service component."""
     import httpx
 
-    docling_url = getattr(settings, "docling_service_url", "").rstrip("/")
+    docling_url = (getattr(settings, "docling_service_url", None) or "").rstrip("/")
     if not docling_url:
         return {
             "status": "not_configured",
@@ -915,7 +915,7 @@ async def comprehensive_health() -> Dict[str, Any]:
         issues.append(f"Extraction Service: {str(e)}")
 
     # 5. Docling Service (if configured)
-    docling_url = getattr(settings, "docling_service_url", "").rstrip("/")
+    docling_url = (getattr(settings, "docling_service_url", None) or "").rstrip("/")
     if docling_url:
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:

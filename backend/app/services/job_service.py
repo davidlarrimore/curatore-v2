@@ -16,6 +16,7 @@ Responsibilities:
 import json
 import logging
 import os
+import re
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -33,6 +34,14 @@ from .database_service import database_service
 def get_redis_client() -> redis.Redis:
     url = os.getenv("JOB_REDIS_URL") or os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
     return redis.Redis.from_url(url)
+
+
+def _build_processed_folder(name: Optional[str], created_at: datetime, job_id: uuid.UUID) -> str:
+    raw_name = name or f"job-{job_id.hex[:8]}"
+    slug = re.sub(r"[^a-zA-Z0-9-_]+", "-", raw_name.strip()).strip("-").lower()
+    slug = slug[:50] if slug else f"job-{job_id.hex[:8]}"
+    ts = created_at.strftime("%Y%m%d-%H%M%S")
+    return f"{slug}_{ts}_{job_id.hex[:8]}"
 
 
 async def _get_original_filename(document_id: str, organization_id: Optional[uuid.UUID] = None) -> str:
@@ -278,6 +287,7 @@ async def create_batch_job(
     retention_days = await _get_org_retention_days(organization_id)
     expires_at = datetime.utcnow() + timedelta(days=retention_days)
 
+    created_at = datetime.utcnow()
     async with database_service.get_session() as session:
         # Create job record
         job = Job(
@@ -293,7 +303,9 @@ async def create_batch_job(
             failed_documents=0,
             processing_options=options,
             expires_at=expires_at,
+            created_at=created_at,
         )
+        job.processed_folder = _build_processed_folder(job.name, created_at, job.id)
         session.add(job)
         await session.flush()  # Get job.id
 
@@ -390,6 +402,7 @@ async def enqueue_job(job_id: uuid.UUID) -> Dict[str, Any]:
 
         celery_batch_id = str(uuid.uuid4())
         task_count = 0
+        failed_before_enqueue = 0
 
         for job_doc in job_documents:
             try:
@@ -403,24 +416,69 @@ async def enqueue_job(job_id: uuid.UUID) -> Dict[str, Any]:
                 # When object storage is enabled, look up and pass artifact_id
                 if settings.use_object_storage:
                     from ..services.artifact_service import artifact_service
+                    from ..services.minio_service import get_minio_service
 
                     # Get the uploaded artifact for this document
                     artifact = await artifact_service.get_artifact_by_document(
                         session=session,
                         document_id=job_doc.document_id,
                         artifact_type="uploaded",
+                        organization_id=job.organization_id,
                     )
 
                     if artifact:
                         task_kwargs["artifact_id"] = str(artifact.id)
                     else:
-                        # If no artifact found, log error and skip
-                        logger.error(
-                            f"Object storage enabled but no uploaded artifact found for document {job_doc.document_id}"
-                        )
-                        job_doc.status = "FAILED"
-                        job_doc.error_message = "No uploaded artifact found in object storage"
-                        continue
+                        minio = get_minio_service()
+                        fallback_key = job_doc.document_id
+                        if minio and minio.object_exists(settings.minio_bucket_uploads, fallback_key):
+                            info = minio.get_object_info(settings.minio_bucket_uploads, fallback_key) or {}
+                            artifact = await artifact_service.create_artifact(
+                                session=session,
+                                organization_id=job.organization_id,
+                                document_id=fallback_key,
+                                artifact_type="uploaded",
+                                bucket=settings.minio_bucket_uploads,
+                                object_key=fallback_key,
+                                original_filename=Path(fallback_key).name,
+                                content_type=info.get("content_type"),
+                                file_size=info.get("size"),
+                                etag=info.get("etag"),
+                                status="available",
+                            )
+                            task_kwargs["artifact_id"] = str(artifact.id)
+                            session.add(
+                                JobLog(
+                                    id=uuid.uuid4(),
+                                    job_id=job.id,
+                                    document_id=job_doc.document_id,
+                                    level="INFO",
+                                    message="Registered artifact for existing object storage file",
+                                    log_metadata={
+                                        "document_id": job_doc.document_id,
+                                        "bucket": settings.minio_bucket_uploads,
+                                    },
+                                )
+                            )
+                        else:
+                            # If no artifact found, log error and skip
+                            logger.error(
+                                f"Object storage enabled but no uploaded artifact found for document {job_doc.document_id}"
+                            )
+                            job_doc.status = "FAILED"
+                            job_doc.error_message = "No uploaded artifact found in object storage"
+                            failed_before_enqueue += 1
+                            session.add(
+                                JobLog(
+                                    id=uuid.uuid4(),
+                                    job_id=job.id,
+                                    document_id=job_doc.document_id,
+                                    level="ERROR",
+                                    message="No uploaded artifact found in object storage; skipping enqueue",
+                                    log_metadata={"document_id": job_doc.document_id},
+                                )
+                            )
+                            continue
 
                 # Enqueue Celery task
                 task = process_document_task.apply_async(
@@ -439,25 +497,67 @@ async def enqueue_job(job_id: uuid.UUID) -> Dict[str, Any]:
                 logger.error(f"Failed to enqueue task for document {job_doc.document_id}: {e}")
                 job_doc.status = "FAILED"
                 job_doc.error_message = f"Failed to enqueue: {str(e)}"
+                failed_before_enqueue += 1
+                session.add(
+                    JobLog(
+                        id=uuid.uuid4(),
+                        job_id=job.id,
+                        document_id=job_doc.document_id,
+                        level="ERROR",
+                        message="Failed to enqueue document task",
+                        log_metadata={"document_id": job_doc.document_id, "error": str(e)},
+                    )
+                )
 
         # Update job status
-        job.status = "QUEUED"
-        job.queued_at = datetime.utcnow()
+        if failed_before_enqueue:
+            job.failed_documents = (job.failed_documents or 0) + failed_before_enqueue
+
+        if task_count == 0:
+            job.status = "FAILED"
+            job.completed_at = datetime.utcnow()
+            job.error_message = "No tasks were enqueued; check document artifacts and storage configuration"
+        else:
+            job.status = "QUEUED"
+            job.queued_at = datetime.utcnow()
         job.celery_batch_id = celery_batch_id
 
         # Log enqueueing
-        log_entry = JobLog(
-            id=uuid.uuid4(),
-            job_id=job.id,
-            level="INFO",
-            message=f"Job queued with {task_count} tasks",
-            log_metadata={"celery_batch_id": celery_batch_id, "task_count": task_count},
-        )
-        session.add(log_entry)
+        if task_count == 0:
+            session.add(
+                JobLog(
+                    id=uuid.uuid4(),
+                    job_id=job.id,
+                    level="ERROR",
+                    message="Job failed before enqueueing any tasks",
+                    log_metadata={
+                        "celery_batch_id": celery_batch_id,
+                        "task_count": task_count,
+                        "failed_documents": failed_before_enqueue,
+                    },
+                )
+            )
+        else:
+            session.add(
+                JobLog(
+                    id=uuid.uuid4(),
+                    job_id=job.id,
+                    level="INFO",
+                    message=f"Job queued with {task_count} tasks",
+                    log_metadata={
+                        "celery_batch_id": celery_batch_id,
+                        "task_count": task_count,
+                        "failed_documents": failed_before_enqueue,
+                    },
+                )
+            )
 
         await session.commit()
 
-        logger.info(f"Enqueued job {job_id} with {task_count} tasks, batch ID: {celery_batch_id}")
+        logger.info(
+            f"Enqueued job {job_id} with {task_count} tasks, batch ID: {celery_batch_id}, "
+            f"failed before enqueue: {failed_before_enqueue}"
+        )
 
         return {
             "job_id": str(job.id),

@@ -206,6 +206,45 @@ class ArtifactService:
         )
         return list(result.scalars().all())
 
+    async def get_artifact_by_document_and_job(
+        self,
+        session: AsyncSession,
+        document_id: str,
+        job_id: UUID,
+        artifact_type: str,
+        organization_id: Optional[UUID] = None,
+    ) -> Optional[Artifact]:
+        """
+        Get an artifact by document ID, job ID, and type.
+
+        This is used when retrieving processed files in the context of a specific job,
+        ensuring that the correct artifact is returned even if the same document has
+        been processed by multiple jobs.
+
+        Args:
+            session: Database session
+            document_id: Document identifier
+            job_id: Job UUID
+            artifact_type: Type (uploaded, processed, temp)
+            organization_id: Optional organization filter
+
+        Returns:
+            Artifact or None if not found
+        """
+        conditions = [
+            Artifact.document_id == document_id,
+            Artifact.job_id == job_id,
+            Artifact.artifact_type == artifact_type,
+            Artifact.deleted_at.is_(None),
+        ]
+        if organization_id:
+            conditions.append(Artifact.organization_id == organization_id)
+
+        result = await session.execute(
+            select(Artifact).where(and_(*conditions))
+        )
+        return result.scalar_one_or_none()
+
     async def list_artifacts_by_job(
         self, session: AsyncSession, job_id: UUID
     ) -> List[Artifact]:
@@ -499,6 +538,77 @@ class ArtifactService:
                 "count": row.count,
             }
         return usage
+
+    async def search_by_filename(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        filename: str,
+        artifact_type: Optional[str] = None,
+        limit: int = 20
+    ) -> List[Artifact]:
+        """
+        Search for artifacts by filename within an organization.
+
+        Provides a way to find documents by their original filename without
+        using the filename as a document_id. This is the recommended way to
+        look up documents when you only have the filename.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID for tenant isolation
+            filename: Filename to search for (case-insensitive partial match)
+            artifact_type: Optional artifact type filter ('uploaded', 'processed', 'temp')
+            limit: Maximum number of results to return (default: 20)
+
+        Returns:
+            List[Artifact]: List of matching artifacts, ordered by creation date (newest first)
+
+        Example:
+            # Search for all PDFs uploaded by an organization
+            artifacts = await artifact_service.search_by_filename(
+                session=session,
+                organization_id=org_id,
+                filename="report.pdf",
+                artifact_type="uploaded"
+            )
+
+            for artifact in artifacts:
+                print(f"Found: {artifact.document_id} - {artifact.original_filename}")
+
+        Security:
+            - Always scoped to a single organization (tenant isolation)
+            - Returns only artifacts the organization owns
+            - No cross-tenant data leakage
+
+        Performance:
+            - Uses ILIKE for case-insensitive search (PostgreSQL)
+            - Limited to 20 results by default to prevent large result sets
+            - Consider adding database index on original_filename for better performance
+        """
+        query = (
+            select(Artifact)
+            .where(Artifact.organization_id == organization_id)
+            .where(Artifact.original_filename.ilike(f"%{filename}%"))
+            .where(Artifact.status == "active")  # Exclude deleted artifacts
+        )
+
+        # Filter by artifact type if specified
+        if artifact_type:
+            query = query.where(Artifact.artifact_type == artifact_type)
+
+        # Order by creation date (newest first) and limit results
+        query = query.order_by(Artifact.created_at.desc()).limit(limit)
+
+        result = await session.execute(query)
+        artifacts = result.scalars().all()
+
+        logger.debug(
+            f"Filename search for '{filename}' in org {organization_id}: "
+            f"found {len(artifacts)} results"
+        )
+
+        return list(artifacts)
 
 
 # Global service instance

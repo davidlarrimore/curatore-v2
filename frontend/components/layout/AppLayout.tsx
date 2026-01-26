@@ -22,7 +22,7 @@
  * - Screen size (responsive sidebar)
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { usePathname } from 'next/navigation'
 import { TopNavigation } from './TopNavigation'
 import { LeftSidebar } from './LeftSidebar'
@@ -31,6 +31,7 @@ import { systemApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import toast, { Toaster } from 'react-hot-toast'
+import { HealthUnavailableOverlay } from '@/components/system/HealthUnavailableOverlay'
 
 interface SystemStatus {
   health: string
@@ -57,6 +58,7 @@ export function AppLayout({ children }: AppLayoutProps) {
     supportedFormats: [],
     maxFileSize: 52428800
   })
+  const hasShownHealthError = useRef(false)
 
   /**
    * Determine if the current page should show navigation.
@@ -68,6 +70,7 @@ export function AppLayout({ children }: AppLayoutProps) {
    * This provides a clean, minimal experience for the login page only.
    */
   const showNavigation = pathname !== '/login'
+  const isSystemUnavailable = !systemStatus.isLoading && systemStatus.health !== 'healthy'
 
   // Load system status on mount and set up refresh interval
   useEffect(() => {
@@ -113,9 +116,10 @@ export function AppLayout({ children }: AppLayoutProps) {
       health: 'error'
     }))
 
-    // Only show error toast on initial load failure, not on refresh failures
-    if (systemStatus.health === 'checking') {
-      toast.error('Failed to load system status')
+    // Only show the error toast once and never while the unavailable modal is visible
+    if (!hasShownHealthError.current) {
+      hasShownHealthError.current = true
+      // Modal will be visible when health is unavailable, so skip toast in that case
     }
   }
 
@@ -318,6 +322,8 @@ export function AppLayout({ children }: AppLayoutProps) {
           systemStatus={systemStatus}
           sidebarCollapsed={sidebarCollapsed}
         />
+
+        <HealthUnavailableOverlay isVisible={isSystemUnavailable} />
       </div>
     </ProtectedRoute>
   )

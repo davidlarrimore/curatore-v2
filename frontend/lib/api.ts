@@ -13,6 +13,7 @@ import type {
   ProcessingResult,
   LLMConnectionStatus,
 } from '@/types'
+import { validateDocumentId, DocumentIdError } from './validators'
 
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 export const API_PATH_VERSION = 'v1' as const
@@ -64,11 +65,35 @@ async function handleBlob(res: Response): Promise<Blob> {
   return res.blob()
 }
 
+/**
+ * Validate and encode document ID for use in API paths.
+ *
+ * @param documentId - Document ID to validate and encode
+ * @returns URL-encoded validated document ID
+ * @throws {DocumentIdError} If document ID is invalid
+ */
+function validateAndEncodeDocumentId(documentId: string): string {
+  // Validate format (throws DocumentIdError if invalid)
+  const validated = validateDocumentId(documentId, true, true)
+
+  // Encode for use in URL path
+  return encodeURIComponent(validated)
+}
+
 // -------------------- System API --------------------
 export const systemApi = {
   async getHealth(): Promise<{ status: string; llm_connected: boolean; version: string } & Record<string, any>> {
     const res = await fetch(apiUrl('/health'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
+  },
+
+  async checkAvailability(): Promise<boolean> {
+    try {
+      const res = await fetch(apiUrl('/health'), { cache: 'no-store' })
+      return res.ok || res.status === 401 || res.status === 403
+    } catch {
+      return false
+    }
   },
 
   async getSupportedFormats(): Promise<{ supported_extensions: string[]; max_file_size: number }> {
@@ -211,8 +236,15 @@ export const fileApi = {
   /**
    * Download a document. Automatically uses object storage (presigned URLs) when enabled,
    * otherwise falls back to traditional backend download.
+   *
+   * @param documentId - Document ID to download
+   * @param artifactType - Type of artifact ('uploaded' or 'processed')
+   * @param jobId - Optional job ID to download job-specific processed file
    */
-  async downloadDocument(documentId: string, artifactType: 'uploaded' | 'processed' = 'processed'): Promise<Blob> {
+  async downloadDocument(documentId: string, artifactType: 'uploaded' | 'processed' = 'processed', jobId?: string): Promise<Blob> {
+    // Validate document ID
+    const encodedDocId = validateAndEncodeDocumentId(documentId)
+
     // Check if object storage is enabled
     const useObjectStorage = await objectStorageApi.isEnabled()
 
@@ -227,12 +259,18 @@ export const fileApi = {
     }
 
     // Fall back to traditional download (through backend)
-    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/download`), { headers: authHeaders() })
+    // Use path parameter with validated document ID
+    let url = apiUrl(`/documents/${encodedDocId}/download`)
+    if (jobId) {
+      url += `?job_id=${encodeURIComponent(jobId)}`
+    }
+    const res = await fetch(url, { headers: authHeaders() })
     return handleBlob(res)
   },
 
   async deleteDocument(documentId: string): Promise<{ success: boolean; message?: string }> {
-    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}`), { method: 'DELETE', headers: authHeaders() })
+    const encodedDocId = validateAndEncodeDocumentId(documentId)
+    const res = await fetch(apiUrl(`/documents/${encodedDocId}`), { method: 'DELETE', headers: authHeaders() })
     return handleJson(res)
   },
 
@@ -313,7 +351,8 @@ export const processingApi = {
   },
 
   async getProcessingResult(documentId: string): Promise<ProcessingResult> {
-    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/result`), { cache: 'no-store', headers: authHeaders() })
+    const encodedDocId = validateAndEncodeDocumentId(documentId)
+    const res = await fetch(apiUrl(`/documents/${encodedDocId}/result`), { cache: 'no-store', headers: authHeaders() })
     const raw = await handleJson<any>(res)
     return mapV1ResultToFrontend(raw)
   },
@@ -337,10 +376,45 @@ export const processingApi = {
   },
 }
 
+// -------------------- Organizations API --------------------
+export const organizationsApi = {
+  async getCurrentOrganization(token?: string): Promise<{
+    id: string
+    name: string
+    display_name: string
+    slug: string
+    is_active: boolean
+    settings: Record<string, any>
+    created_at: string
+    updated_at: string
+  }> {
+    const res = await fetch(apiUrl('/organizations/me'), {
+      cache: 'no-store',
+      headers: authHeaders(token)
+    })
+    return handleJson(res)
+  },
+}
+
 // -------------------- Content API --------------------
 export const contentApi = {
-  async getDocumentContent(documentId: string, token?: string): Promise<{ content: string }> {
-    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/content`), {
+  /**
+   * Get document content for viewing/editing.
+   *
+   * @param documentId - Document ID to retrieve
+   * @param token - Optional auth token
+   * @param jobId - Optional job ID to retrieve job-specific processed content
+   */
+  async getDocumentContent(documentId: string, token?: string, jobId?: string): Promise<{ content: string }> {
+    // Validate and encode document ID
+    const encodedDocId = validateAndEncodeDocumentId(documentId)
+
+    // Use path parameter with validated document ID
+    let url = apiUrl(`/documents/${encodedDocId}/content`)
+    if (jobId) {
+      url += `?job_id=${encodeURIComponent(jobId)}`
+    }
+    const res = await fetch(url, {
       cache: 'no-store',
       headers: authHeaders(token)
     })
@@ -352,7 +426,8 @@ export const contentApi = {
     content: string,
     token?: string,
   ): Promise<{ job_id: string; document_id: string; status: string; enqueued_at?: string }> {
-    const res = await fetch(apiUrl(`/documents/${encodeURIComponent(documentId)}/content`), {
+    const encodedDocId = validateAndEncodeDocumentId(documentId)
+    const res = await fetch(apiUrl(`/documents/${encodedDocId}/content`), {
       method: 'PUT',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ content }),
@@ -789,7 +864,8 @@ export const jobsApi = {
 
   // Legacy endpoints (backward compatibility)
   async getJobByDocument(documentId: string, token?: string): Promise<any> {
-    const res = await fetch(apiUrl(`/jobs/by-document/${encodeURIComponent(documentId)}`), {
+    const encodedDocId = validateAndEncodeDocumentId(documentId)
+    const res = await fetch(apiUrl(`/jobs/by-document/${encodedDocId}`), {
       cache: 'no-store',
       headers: authHeaders(token)
     })
@@ -1288,8 +1364,11 @@ export const objectStorageApi = {
     const token = getAccessToken()
     if (!token) throw new Error('Authentication required')
 
+    // Validate and encode document ID
+    const encodedDocId = validateAndEncodeDocumentId(documentId)
+
     // Use proxy endpoint to bypass CORS issues with MinIO
-    const url = new URL(apiUrl(`/storage/download/${encodeURIComponent(documentId)}/proxy`))
+    const url = new URL(apiUrl(`/storage/download/${encodedDocId}/proxy`))
     url.searchParams.set('artifact_type', artifactType)
 
     const res = await fetch(url.toString(), {
@@ -1325,7 +1404,8 @@ export const objectStorageApi = {
     updated_at: string
     expires_at: string | null
   }>> {
-    const res = await fetch(apiUrl(`/storage/artifacts/document/${encodeURIComponent(documentId)}`), {
+    const encodedDocId = validateAndEncodeDocumentId(documentId)
+    const res = await fetch(apiUrl(`/storage/artifacts/document/${encodedDocId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -1409,6 +1489,28 @@ export const objectStorageApi = {
     const res = await fetch(url.toString(), {
       headers: authHeaders(token),
       cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async bulkDeleteArtifacts(
+    artifactIds: string[],
+    token?: string
+  ): Promise<{
+    total: number
+    succeeded: number
+    failed: number
+    results: Array<{
+      artifact_id: string
+      document_id: string | null
+      success: boolean
+      error: string | null
+    }>
+  }> {
+    const res = await fetch(apiUrl('/storage/artifacts/bulk-delete'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify({ artifact_ids: artifactIds }),
     })
     return handleJson(res)
   },
@@ -1532,6 +1634,22 @@ export const objectStorageApi = {
     const url = new URL(apiUrl(`/storage/folders/${encodeURIComponent(bucket)}/${path}`))
     url.searchParams.set('recursive', String(recursive))
     const res = await fetch(url.toString(), {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Delete a file from storage by bucket and key
+   */
+  async deleteFile(bucket: string, key: string, token?: string): Promise<{
+    success: boolean
+    bucket: string
+    key: string
+    artifact_deleted: boolean
+  }> {
+    const res = await fetch(apiUrl(`/storage/files/${encodeURIComponent(bucket)}/${key}`), {
       method: 'DELETE',
       headers: authHeaders(token),
     })
@@ -1744,6 +1862,7 @@ export default {
   jobsApi,
   authApi,
   connectionsApi,
+  organizationsApi,
   settingsApi,
   storageApi,
   objectStorageApi,

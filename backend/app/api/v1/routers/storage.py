@@ -38,6 +38,9 @@ from ..models import (
     PresignedDownloadResponse,
     StorageHealthResponse,
     ArtifactResponse,
+    BulkDeleteArtifactsRequest,
+    BulkDeleteArtifactsResponse,
+    BulkDeleteResultItem,
     BucketInfo,
     BucketsListResponse,
     BrowseResponse,
@@ -45,6 +48,7 @@ from ..models import (
     CreateFolderRequest,
     CreateFolderResponse,
     DeleteFolderResponse,
+    DeleteFileResponse,
     MoveFilesRequest,
     MoveFilesResponse,
     RenameFileRequest,
@@ -172,8 +176,8 @@ async def get_presigned_upload_url(
 
     organization_id = current_user.organization_id
 
-    # Generate IDs
-    document_id = f"doc_{uuid.uuid4().hex[:12]}"
+    # Generate IDs (using full UUID format)
+    document_id = str(uuid.uuid4())
     object_key = f"{organization_id}/{document_id}/uploaded/{request.filename}"
 
     # Get bucket name from settings
@@ -255,8 +259,8 @@ async def proxy_upload(
 
     organization_id = current_user.organization_id
 
-    # Generate IDs
-    document_id = f"doc_{uuid.uuid4().hex[:12]}"
+    # Generate IDs (using full UUID format)
+    document_id = str(uuid.uuid4())
     filename = file.filename or "unknown"
     object_key = f"{organization_id}/{document_id}/uploaded/{filename}"
 
@@ -782,6 +786,111 @@ async def delete_artifact(
             raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.post(
+    "/artifacts/bulk-delete",
+    response_model=BulkDeleteArtifactsResponse,
+    summary="Bulk delete artifacts",
+    description="Delete multiple artifacts and their storage objects in a single request.",
+)
+async def bulk_delete_artifacts(
+    request: BulkDeleteArtifactsRequest,
+    current_user: User = Depends(get_current_user),
+) -> BulkDeleteArtifactsResponse:
+    """Delete multiple artifacts and their storage objects."""
+    _require_storage_enabled()
+
+    minio = get_minio_service()
+    if not minio:
+        raise HTTPException(status_code=503, detail="MinIO service unavailable")
+
+    results: List[BulkDeleteResultItem] = []
+    succeeded = 0
+    failed = 0
+
+    async with database_service.get_session() as session:
+        for artifact_id_str in request.artifact_ids:
+            try:
+                # Validate UUID format
+                try:
+                    artifact_uuid = UUID(artifact_id_str)
+                except ValueError:
+                    results.append(BulkDeleteResultItem(
+                        artifact_id=artifact_id_str,
+                        document_id=None,
+                        success=False,
+                        error="Invalid artifact_id format"
+                    ))
+                    failed += 1
+                    continue
+
+                # Get artifact
+                artifact = await artifact_service.get_artifact(session, artifact_uuid)
+                if not artifact:
+                    results.append(BulkDeleteResultItem(
+                        artifact_id=artifact_id_str,
+                        document_id=None,
+                        success=False,
+                        error="Artifact not found"
+                    ))
+                    failed += 1
+                    continue
+
+                # Verify organization access
+                if artifact.organization_id != current_user.organization_id:
+                    results.append(BulkDeleteResultItem(
+                        artifact_id=artifact_id_str,
+                        document_id=artifact.document_id,
+                        success=False,
+                        error="Access denied"
+                    ))
+                    failed += 1
+                    continue
+
+                # Delete from storage
+                try:
+                    minio.delete_object(artifact.bucket, artifact.object_key)
+                except Exception as storage_error:
+                    logger.warning(f"Storage deletion failed for {artifact_id_str}: {storage_error}")
+                    # Continue with database update even if storage delete fails
+
+                # Mark as deleted in database
+                await artifact_service.update_artifact_status(
+                    session=session,
+                    artifact_id=artifact_uuid,
+                    status="deleted",
+                )
+
+                results.append(BulkDeleteResultItem(
+                    artifact_id=artifact_id_str,
+                    document_id=artifact.document_id,
+                    success=True,
+                    error=None
+                ))
+                succeeded += 1
+
+                logger.info(f"Deleted artifact {artifact_id_str} for document {artifact.document_id}")
+
+            except Exception as e:
+                logger.error(f"Error deleting artifact {artifact_id_str}: {e}")
+                results.append(BulkDeleteResultItem(
+                    artifact_id=artifact_id_str,
+                    document_id=None,
+                    success=False,
+                    error=str(e)
+                ))
+                failed += 1
+
+        # Commit all database changes
+        await session.commit()
+
+    return BulkDeleteArtifactsResponse(
+        total=len(request.artifact_ids),
+        succeeded=succeeded,
+        failed=failed,
+        results=results
+    )
+
+
 # =========================================================================
 # STORAGE BROWSING
 # =========================================================================
@@ -847,8 +956,21 @@ async def browse_bucket(
     if not minio.bucket_exists(bucket):
         raise HTTPException(status_code=404, detail=f"Bucket not found: {bucket}")
 
+    # Validate that non-admin users can only browse within their organization prefix
+    organization_id = str(current_user.organization_id)
+    if current_user.role != "org_admin" and prefix and not prefix.startswith(f"{organization_id}/"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"You can only browse within your organization prefix: {organization_id}/"
+        )
+
+    # If browsing root (empty prefix), automatically scope to user's organization for non-admins
+    scoped_prefix = prefix
+    if current_user.role != "org_admin" and not prefix:
+        scoped_prefix = f"{organization_id}/"
+
     try:
-        result = minio.browse_bucket(bucket, prefix)
+        result = minio.browse_bucket(bucket, scoped_prefix)
 
         # Convert ObjectInfo to StorageObjectInfo
         files = []
@@ -933,6 +1055,14 @@ async def create_folder(
             detail=f"Cannot create folders in protected bucket: {request.bucket}"
         )
 
+    # Validate that path starts with user's organization prefix
+    organization_id = str(current_user.organization_id)
+    if not request.path.startswith(f"{organization_id}/"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"You can only create folders within your organization prefix: {organization_id}/"
+        )
+
     try:
         logger.info(f"Creating folder in bucket={request.bucket}, path={request.path!r}")
         minio.create_folder(request.bucket, request.path)
@@ -985,6 +1115,14 @@ async def delete_folder(
             detail=f"Cannot delete folders in protected bucket: {bucket}"
         )
 
+    # Validate that path starts with user's organization prefix
+    organization_id = str(current_user.organization_id)
+    if not path.startswith(f"{organization_id}/"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"You can only delete folders within your organization prefix: {organization_id}/"
+        )
+
     try:
         deleted_count, failed_count = minio.delete_folder(bucket, path, recursive=recursive)
 
@@ -1006,6 +1144,91 @@ async def delete_folder(
     except Exception as e:
         logger.error(f"Error deleting folder: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete(
+    "/files/{bucket}/{key:path}",
+    response_model=DeleteFileResponse,
+    summary="Delete file",
+    description="Delete a file from storage by bucket and key.",
+)
+async def delete_file(
+    bucket: str,
+    key: str,
+    current_user: User = Depends(get_current_user),
+) -> DeleteFileResponse:
+    """Delete a file from storage by bucket and key."""
+    _require_storage_enabled()
+
+    minio = get_minio_service()
+    if not minio:
+        raise HTTPException(status_code=503, detail="MinIO service unavailable")
+
+    # Verify bucket exists
+    if not minio.bucket_exists(bucket):
+        raise HTTPException(status_code=404, detail=f"Bucket not found: {bucket}")
+
+    # Check if bucket is protected
+    if minio.is_bucket_protected(bucket):
+        raise HTTPException(
+            status_code=403,
+            detail=f"Cannot delete files in protected bucket: {bucket}"
+        )
+
+    # Validate that file path starts with user's organization prefix
+    organization_id = str(current_user.organization_id)
+    if not key.startswith(f"{organization_id}/"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"You can only delete files within your organization prefix: {organization_id}/"
+        )
+
+    artifact_deleted = False
+
+    async with database_service.get_session() as session:
+        try:
+            # Try to find artifact by object_key
+            artifacts = await artifact_service.list_artifacts_by_organization(
+                session=session,
+                organization_id=current_user.organization_id,
+                artifact_type=None,
+                limit=1000,
+                offset=0,
+            )
+
+            # Find artifact with matching object_key
+            matching_artifact = None
+            for artifact in artifacts:
+                if artifact.object_key == key and artifact.bucket == bucket:
+                    matching_artifact = artifact
+                    break
+
+            # Delete from storage
+            minio.delete_object(bucket, key)
+
+            # If artifact exists, mark as deleted
+            if matching_artifact:
+                await artifact_service.update_artifact_status(
+                    session=session,
+                    artifact_id=matching_artifact.id,
+                    status="deleted",
+                )
+                await session.commit()
+                artifact_deleted = True
+                logger.info(f"Deleted artifact {matching_artifact.id} for file {bucket}/{key}")
+
+            logger.info(f"Deleted file {bucket}/{key}, artifact_deleted={artifact_deleted}")
+
+            return DeleteFileResponse(
+                success=True,
+                bucket=bucket,
+                key=key,
+                artifact_deleted=artifact_deleted,
+            )
+
+        except Exception as e:
+            logger.error(f"Error deleting file {bucket}/{key}: {e}")
+            raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post(
@@ -1070,6 +1293,71 @@ async def upload_to_folder(
 
         logger.info(f"Uploaded file to {bucket}/{object_key} ({file_size} bytes)")
 
+        artifact_id = None
+        document_id = None
+
+        if bucket == settings.minio_bucket_uploads:
+            try:
+                expires_at = datetime.utcnow() + timedelta(days=settings.file_retention_uploaded_days)
+                content_type = file.content_type or "application/octet-stream"
+
+                async with database_service.get_session() as session:
+                    # Check if an artifact already exists for this object_key
+                    # (in case someone re-uploads to the same path)
+                    artifacts = await artifact_service.list_artifacts_by_organization(
+                        session=session,
+                        organization_id=current_user.organization_id,
+                        artifact_type="uploaded",
+                        limit=1000,
+                        offset=0,
+                    )
+                    existing = None
+                    for artifact in artifacts:
+                        if artifact.object_key == object_key and artifact.bucket == bucket:
+                            existing = artifact
+                            break
+
+                    if existing:
+                        # Reuse existing document_id for same path
+                        document_id = existing.document_id
+                        artifact = await artifact_service.update_artifact_status(
+                            session=session,
+                            artifact_id=existing.id,
+                            status="available",
+                            bucket=bucket,
+                            object_key=object_key,
+                            original_filename=filename,
+                            content_type=content_type,
+                            file_size=file_size,
+                            expires_at=expires_at,
+                        )
+                    else:
+                        # Generate a new UUID for new documents
+                        document_id = str(uuid.uuid4())
+                        artifact = await artifact_service.create_artifact(
+                            session=session,
+                            organization_id=current_user.organization_id,
+                            document_id=document_id,
+                            artifact_type="uploaded",
+                            bucket=bucket,
+                            object_key=object_key,
+                            original_filename=filename,
+                            content_type=content_type,
+                            file_size=file_size,
+                            status="available",
+                            expires_at=expires_at,
+                        )
+                    await session.commit()
+                    await session.refresh(artifact)
+                    artifact_id = str(artifact.id)
+
+                logger.info(
+                    f"Registered upload artifact for document={document_id}, "
+                    f"artifact={artifact_id}, org={current_user.organization_id}"
+                )
+            except Exception as e:
+                logger.error(f"Failed to register upload artifact for {bucket}/{object_key}: {e}")
+
         return {
             "success": True,
             "bucket": bucket,
@@ -1077,6 +1365,8 @@ async def upload_to_folder(
             "filename": filename,
             "object_key": object_key,
             "file_size": file_size,
+            "document_id": document_id,
+            "artifact_id": artifact_id,
         }
 
     except Exception as e:
@@ -1117,6 +1407,15 @@ async def move_files(
         raise HTTPException(
             status_code=403,
             detail=f"Cannot move files to protected bucket: {request.destination_bucket}"
+        )
+
+    # Validate that destination prefix starts with user's organization prefix
+    organization_id = str(current_user.organization_id)
+    dest_prefix = request.destination_prefix or ""
+    if dest_prefix and not dest_prefix.startswith(f"{organization_id}/"):
+        raise HTTPException(
+            status_code=403,
+            detail=f"You can only move files to destinations within your organization prefix: {organization_id}/"
         )
 
     moved_artifacts = []

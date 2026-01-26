@@ -302,6 +302,34 @@
   animation: panelSlideDown 0.3s ease-in;
 }
 
+@keyframes stopwatchSweep {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes stopwatchPulse {
+  0%, 100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.04);
+  }
+}
+
+.stopwatch-hand {
+  transform-origin: 50% 50%;
+  animation: stopwatchSweep 2s linear infinite;
+}
+
+.stopwatch-pulse {
+  transform-origin: 50% 50%;
+  animation: stopwatchPulse 1.8s ease-in-out infinite;
+}
+
 /* Responsive design helpers */
 @media (max-width: 1024px) {
   .sidebar-overlay {
@@ -353,6 +381,11 @@
   }
   
   .animate-pulse {
+    animation: none;
+  }
+
+  .stopwatch-hand,
+  .stopwatch-pulse {
     animation: none;
   }
   

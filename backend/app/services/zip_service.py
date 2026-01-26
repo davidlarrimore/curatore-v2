@@ -46,7 +46,7 @@ from ..models import ProcessingResult, DownloadType
 class ZipService:
     """
     Service for creating and managing ZIP archives of processed documents.
-    
+
     This service provides multiple archive creation methods for different use cases,
     from simple individual file collections to complex combined exports with
     detailed processing summaries. All archives are created in the system
@@ -79,6 +79,7 @@ class ZipService:
         using artifact tracking from the database.
         """
         self.minio = get_minio_service()
+        self._artifact_cache = {}  # Cache for artifacts by document_id
     
     def create_zip_archive(
         self, 
@@ -348,8 +349,8 @@ class ZipService:
         """
         Download the processed markdown file from object storage.
 
-        Uses artifact service to locate the file in MinIO and downloads the content.
-        Falls back to storage service for in-memory results if artifact not found.
+        Uses cached artifact information (populated by async caller) or falls back
+        to storage service for in-memory results.
 
         Args:
             doc_id: The document ID to download the processed file for
@@ -359,34 +360,23 @@ class ZipService:
             - file_content: String content of the markdown file, or None if not found
             - original_filename: Original filename with .md extension
         """
-        # Try to get artifact from database
-        from sqlalchemy.orm import Session
-        from ..database.base import get_session
+        # Try to use cached artifact (populated by async caller)
+        artifact = self._artifact_cache.get(doc_id)
+        if artifact and self.minio and self.minio.enabled:
+            try:
+                # Download from MinIO using cached artifact
+                file_obj = self.minio.get_object(artifact.bucket, artifact.object_key)
+                if file_obj:
+                    content = file_obj.read()
+                    # Decode if bytes
+                    if isinstance(content, bytes):
+                        content = content.decode('utf-8')
 
-        try:
-            # Get artifact from database
-            with get_session() as session:
-                artifact = artifact_service.get_artifact_by_document(
-                    session,
-                    document_id=doc_id,
-                    artifact_type="processed"
-                )
-
-                if artifact and self.minio and self.minio.enabled:
-                    # Download from MinIO
-                    file_obj = self.minio.get_object(artifact.bucket, artifact.object_key)
-                    if file_obj:
-                        content = file_obj.read()
-                        # Decode if bytes
-                        if isinstance(content, bytes):
-                            content = content.decode('utf-8')
-
-                        # Get original filename
-                        original_name = self._get_original_filename_from_artifact(doc_id, artifact)
-                        return content, original_name
-
-        except Exception as e:
-            print(f"Error downloading from MinIO for {doc_id}: {e}")
+                    # Get original filename
+                    original_name = self._get_original_filename_from_artifact(doc_id, artifact)
+                    return content, original_name
+            except Exception as e:
+                print(f"Error downloading from MinIO for {doc_id}: {e}")
 
         # Fallback: Try storage service for in-memory results
         result = storage_service.get_processing_result(doc_id)
@@ -806,6 +796,23 @@ class ZipService:
         if not document_ids:
             raise ValueError("No document IDs provided")
 
+        # Load artifacts for all documents into cache (for sync functions to use)
+        from ..services.database_service import database_service
+        self._artifact_cache = {}
+        try:
+            async with database_service.get_session() as session:
+                for doc_id in document_ids:
+                    artifacts = await artifact_service.get_artifacts_by_document(
+                        session, doc_id
+                    )
+                    # Filter for processed artifacts
+                    processed = [a for a in artifacts if a.artifact_type == "processed"]
+                    if processed:
+                        self._artifact_cache[doc_id] = processed[0]  # Get first processed artifact
+        except Exception as e:
+            print(f"Failed to load artifacts: {e}")
+            # Continue anyway - will fall back to storage service
+
         # Gather processing results for provided IDs
         results: List[ProcessingResult] = []
         for doc_id in document_ids:
@@ -833,6 +840,9 @@ class ZipService:
         else:
             zip_path_str, count = self.create_zip_archive(filtered_ids, custom_filename, include_summary)
 
+        # Clear artifact cache after use
+        self._artifact_cache = {}
+
         zip_path = Path(zip_path_str)
         return ZipService.ZipInfo(zip_path=zip_path, file_count=count)
 
@@ -850,7 +860,29 @@ class ZipService:
             raise ValueError("No RAG-ready documents found")
 
         ids = [r.document_id for r in rag_ready]
+
+        # Load artifacts for all documents into cache (for sync functions to use)
+        from ..services.database_service import database_service
+        self._artifact_cache = {}
+        try:
+            async with database_service.get_session() as session:
+                for doc_id in ids:
+                    artifacts = await artifact_service.get_artifacts_by_document(
+                        session, doc_id
+                    )
+                    # Filter for processed artifacts
+                    processed = [a for a in artifacts if a.artifact_type == "processed"]
+                    if processed:
+                        self._artifact_cache[doc_id] = processed[0]  # Get first processed artifact
+        except Exception as e:
+            print(f"Failed to load artifacts: {e}")
+            # Continue anyway - will fall back to storage service
+
         zip_path_str, count = self.create_zip_archive(ids, custom_filename or "curatore_rag_ready_export.zip", include_summary)
+
+        # Clear artifact cache after use
+        self._artifact_cache = {}
+
         return ZipService.ZipInfo(zip_path=Path(zip_path_str), file_count=count)
 
 

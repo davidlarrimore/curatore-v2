@@ -1,7 +1,9 @@
 # backend/app/services/document_service.py
 from __future__ import annotations
 
+import os
 import re
+import tempfile
 import json
 import logging
 import uuid
@@ -76,6 +78,14 @@ class DocumentService:
         self._logger = logging.getLogger("curatore.api")
 
         self._supported_extensions: Set[str] = self._load_supported_extensions()
+
+        processed_dir_env = os.getenv("PROCESSED_DIR", "").strip()
+        base_processed_dir = Path(processed_dir_env) if processed_dir_env else Path(tempfile.gettempdir()) / "curatore_processed"
+        self.processed_dir = base_processed_dir
+        try:
+            self.processed_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            self._logger.warning("Failed to create processed_dir %s: %s", self.processed_dir, e)
 
         # Existing custom extraction service (legacy/default)
         self.extract_base: str = str(getattr(settings, "extraction_service_url", "")).rstrip("/")
@@ -407,6 +417,7 @@ class DocumentService:
             # Step 5: Save processed markdown file
             markdown_filename = f"{document_id}_{Path(file_path.name).stem}.md"
             markdown_path = self.processed_dir / markdown_filename
+            markdown_path.parent.mkdir(parents=True, exist_ok=True)
             markdown_path.write_text(markdown_content, encoding='utf-8')
 
             # Step 6: Create final result

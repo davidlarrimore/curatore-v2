@@ -99,6 +99,14 @@ See [ADMIN_SETUP.md](./ADMIN_SETUP.md) for default admin credentials and initial
 
 ---
 
+## TODO
+
+- Semantic search index (lexical + vector) for processed documents
+- SharePoint integration: push/pull document sync
+- Open WebUI integration: push processed documents into knowledge bases
+
+---
+
 ## Development
 
 ### Backend Development

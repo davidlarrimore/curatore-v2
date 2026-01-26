@@ -15,6 +15,7 @@ import {
   Users,
   Shield,
   HardDrive,
+  Database,
   Briefcase,
   Zap,
   ChevronRight,

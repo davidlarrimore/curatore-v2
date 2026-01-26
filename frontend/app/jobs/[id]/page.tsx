@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { jobsApi, utils } from '@/lib/api'
@@ -73,6 +73,8 @@ export default function JobDetailPage() {
   const [activeTab, setActiveTab] = useState<'documents' | 'logs' | 'review' | 'export'>('documents')
   const [currentTime, setCurrentTime] = useState<number>(Date.now()) // Updates every second for live timers
   const [extractionConnection, setExtractionConnection] = useState<{ name: string; engine_type: string } | null>(null)
+  const [jobLogs, setJobLogs] = useState<JobLog[]>([])
+  const [logsLoading, setLogsLoading] = useState(false)
 
   // Track when documents started processing (client-side tracking)
   const documentStartTimes = useRef<Map<string, number>>(new Map())
@@ -83,6 +85,19 @@ export default function JobDetailPage() {
       router.push('/login')
     }
   }, [isLoading, isAuthenticated, router])
+
+  const loadJobLogs = useCallback(async (pageSize: number) => {
+    if (!accessToken || !isAuthenticated || !jobId) return
+    try {
+      setLogsLoading(true)
+      const logs = await jobsApi.getJobLogs(accessToken, jobId, { page_size: pageSize })
+      setJobLogs(logs as JobLog[])
+    } catch (err) {
+      console.error('Failed to load job logs:', err)
+    } finally {
+      setLogsLoading(false)
+    }
+  }, [accessToken, isAuthenticated, jobId])
 
   // Load job details initially
   useEffect(() => {
@@ -121,6 +136,7 @@ export default function JobDetailPage() {
             engine_type: extractionEngine
           })
         }
+        loadJobLogs(200).catch(() => undefined)
       } catch (err: any) {
         console.error('Failed to load job:', err)
         setError(err.message || 'Failed to load job details')
@@ -130,7 +146,7 @@ export default function JobDetailPage() {
     }
 
     loadJob()
-  }, [accessToken, isAuthenticated, jobId])
+  }, [accessToken, isAuthenticated, jobId, loadJobLogs])
 
   // Track document processing start times (client-side)
   useEffect(() => {
@@ -161,13 +177,16 @@ export default function JobDetailPage() {
       try {
         const jobData = await jobsApi.getJob(accessToken, jobId)
         setJob(jobData as JobDetail)
+        if (activeTab === 'logs') {
+          loadJobLogs(200).catch(() => undefined)
+        }
       } catch (err: any) {
         console.error('Failed to poll job:', err)
       }
     }, 2000)
 
     return () => clearInterval(interval)
-  }, [accessToken, isAuthenticated, jobId, job?.status])
+  }, [accessToken, isAuthenticated, jobId, job?.status, activeTab, loadJobLogs])
 
   // Timer effect - updates currentTime every second for live elapsed time display
   useEffect(() => {
@@ -243,6 +262,9 @@ export default function JobDetailPage() {
         return 'text-gray-600 dark:text-gray-400 bg-gray-100 dark:bg-gray-800'
     }
   }
+
+  const displayedLogs = jobLogs.length > 0 ? jobLogs : (job?.recent_logs || [])
+  const logCount = displayedLogs.length
 
   const formatDate = (dateString: string) => {
     return new Date(dateString).toLocaleString()
@@ -581,7 +603,7 @@ export default function JobDetailPage() {
                     <ClipboardList className="w-4 h-4 mr-2" />
                     Logs
                     <span className="ml-2 px-2 py-0.5 text-xs font-semibold rounded-full bg-gray-200 dark:bg-gray-700 text-gray-700 dark:text-gray-300">
-                      {job.recent_logs.length}
+                      {logCount}
                     </span>
                   </span>
                 </button>
@@ -696,7 +718,7 @@ export default function JobDetailPage() {
               ) : activeTab === 'logs' ? (
                 <div className="p-6">
                   <div className="space-y-2 max-h-[600px] overflow-y-auto">
-                    {job.recent_logs.map((log) => (
+                    {displayedLogs.map((log) => (
                       <div
                         key={log.id}
                         className={`p-3 rounded-lg font-mono text-xs border ${
@@ -714,9 +736,19 @@ export default function JobDetailPage() {
                           <span className="font-semibold mr-3">[{log.level}]</span>
                           <span className="flex-1">{log.message}</span>
                         </div>
+                        {log.metadata && (
+                          <div className="mt-2 text-[11px] text-gray-500 dark:text-gray-400">
+                            {JSON.stringify(log.metadata)}
+                          </div>
+                        )}
                       </div>
                     ))}
-                    {job.recent_logs.length === 0 && (
+                    {logsLoading && (
+                      <div className="text-center py-6 text-xs text-gray-500 dark:text-gray-400">
+                        Loading logs...
+                      </div>
+                    )}
+                    {displayedLogs.length === 0 && !logsLoading && (
                       <div className="text-center py-12">
                         <ClipboardList className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
                         <p className="text-sm font-medium text-gray-900 dark:text-white mb-1">No logs available</p>

@@ -1126,6 +1126,60 @@ class ArtifactResponse(BaseModel):
         }
 
 
+class BulkDeleteArtifactsRequest(BaseModel):
+    """Request to bulk delete artifacts."""
+    artifact_ids: List[str] = Field(..., min_length=1, max_length=100, description="List of artifact UUIDs to delete (max 100)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "artifact_ids": [
+                    "123e4567-e89b-12d3-a456-426614174000",
+                    "223e4567-e89b-12d3-a456-426614174001"
+                ]
+            }
+        }
+
+
+class BulkDeleteResultItem(BaseModel):
+    """Result for a single artifact deletion."""
+    artifact_id: str = Field(..., description="Artifact UUID")
+    document_id: Optional[str] = Field(None, description="Associated document ID")
+    success: bool = Field(..., description="Whether deletion succeeded")
+    error: Optional[str] = Field(None, description="Error message if deletion failed")
+
+
+class BulkDeleteArtifactsResponse(BaseModel):
+    """Response from bulk artifact deletion."""
+    total: int = Field(..., description="Total artifacts requested for deletion")
+    succeeded: int = Field(..., description="Number of successfully deleted artifacts")
+    failed: int = Field(..., description="Number of failed deletions")
+    results: List[BulkDeleteResultItem] = Field(..., description="Detailed results for each artifact")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "total": 2,
+                "succeeded": 1,
+                "failed": 1,
+                "results": [
+                    {
+                        "artifact_id": "123e4567-e89b-12d3-a456-426614174000",
+                        "document_id": "doc_abc123",
+                        "success": True,
+                        "error": None
+                    },
+                    {
+                        "artifact_id": "223e4567-e89b-12d3-a456-426614174001",
+                        "document_id": "doc_def456",
+                        "success": False,
+                        "error": "Artifact not found"
+                    }
+                ]
+            }
+        }
+
+
 # =========================================================================
 # STORAGE BROWSE MODELS
 # =========================================================================
@@ -1267,6 +1321,24 @@ class DeleteFolderResponse(BaseModel):
                 "path": "org_123/my-workspace/old-folder/",
                 "deleted_count": 5,
                 "failed_count": 0
+            }
+        }
+
+
+class DeleteFileResponse(BaseModel):
+    """Response after deleting a file."""
+    success: bool = Field(..., description="Whether deletion was successful")
+    bucket: str = Field(..., description="Bucket name")
+    key: str = Field(..., description="Deleted file key")
+    artifact_deleted: bool = Field(False, description="Whether artifact record was also deleted")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "success": True,
+                "bucket": "curatore-uploads",
+                "key": "org_123/document.pdf",
+                "artifact_deleted": True
             }
         }
 

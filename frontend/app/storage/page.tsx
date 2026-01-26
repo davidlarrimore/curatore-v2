@@ -289,7 +289,7 @@ function StorageContent() {
     if (!token || selectedArtifacts.size === 0) return
 
     const confirmed = window.confirm(
-      `Delete ${selectedArtifacts.size} file(s)? This cannot be undone.`
+      `Delete ${selectedArtifacts.size} file(s)? This will permanently remove them from storage and delete artifact records. This cannot be undone.`
     )
     if (!confirmed) return
 
@@ -297,28 +297,20 @@ function StorageContent() {
     setError('')
     setSuccessMessage('')
 
-    let successCount = 0
-    let failCount = 0
-
     try {
-      // Delete artifacts sequentially
-      for (const artifactId of selectedArtifacts) {
-        try {
-          await objectStorageApi.deleteArtifact(artifactId, token)
-          successCount++
-        } catch (err: any) {
-          console.error(`Failed to delete artifact ${artifactId}:`, err)
-          failCount++
-        }
-      }
+      // Use bulk delete API for better performance
+      const result = await objectStorageApi.bulkDeleteArtifacts(
+        Array.from(selectedArtifacts),
+        token
+      )
 
       // Show results
-      if (successCount > 0 && failCount === 0) {
-        setSuccessMessage(`Successfully deleted ${successCount} file(s)`)
-      } else if (successCount > 0 && failCount > 0) {
-        setSuccessMessage(`Deleted ${successCount} file(s), ${failCount} failed`)
-      } else if (failCount > 0) {
-        setError(`Failed to delete ${failCount} file(s)`)
+      if (result.succeeded > 0 && result.failed === 0) {
+        setSuccessMessage(`Successfully deleted ${result.succeeded} file(s) and artifact records`)
+      } else if (result.succeeded > 0 && result.failed > 0) {
+        setSuccessMessage(`Deleted ${result.succeeded} file(s), ${result.failed} failed`)
+      } else if (result.failed > 0) {
+        setError(`Failed to delete ${result.failed} file(s)`)
       }
 
       // Clear selection and reload

@@ -63,7 +63,8 @@ export function JobExportPanel({
   const downloadIndividualFile = async (document: JobDocument) => {
     setDownloadingId(document.document_id)
     try {
-      const blob = await fileApi.downloadDocument(document.document_id)
+      // Pass jobId to ensure we download the correct processed file for this job
+      const blob = await fileApi.downloadDocument(document.document_id, 'processed', jobId)
       const displayName = utils.getDisplayFilename(document.filename)
       const filename = `${displayName.split('.')[0]}.md`
       utils.downloadBlob(blob, filename)

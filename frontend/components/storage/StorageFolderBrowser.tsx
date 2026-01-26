@@ -17,7 +17,8 @@ import {
   MoreHorizontal,
   Upload,
 } from 'lucide-react'
-import { objectStorageApi, utils } from '@/lib/api'
+import { objectStorageApi, organizationsApi, utils } from '@/lib/api'
+import { useAuth } from '@/lib/auth-context'
 import FolderBreadcrumb from '../jobs/FolderBreadcrumb'
 import toast from 'react-hot-toast'
 
@@ -49,6 +50,9 @@ export default function StorageFolderBrowser({
   onFileDownload,
   onFileUpload,
 }: StorageFolderBrowserProps) {
+  // Auth
+  const { token } = useAuth()
+
   // State
   const [buckets, setBuckets] = useState<Bucket[]>([])
   const [currentBucket, setCurrentBucket] = useState<string>('')
@@ -64,9 +68,42 @@ export default function StorageFolderBrowser({
   const [newFolderName, setNewFolderName] = useState<string>('')
   const [isCreatingFolder, setIsCreatingFolder] = useState<boolean>(false)
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null)
+  const [deletingFile, setDeletingFile] = useState<string | null>(null)
+
+  // Organization data for folder name mapping
+  const [currentOrganization, setCurrentOrganization] = useState<{ id: string; name: string; display_name: string } | null>(null)
 
   // Get current bucket display name
   const currentBucketDisplay = buckets.find(b => b.name === currentBucket)?.display_name || currentBucket
+
+  // Helper function to check if a string is a UUID
+  const isUUID = (str: string): boolean => {
+    const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    return uuidRegex.test(str)
+  }
+
+  // Helper function to get display name for a folder
+  const getFolderDisplayName = (folderName: string): string => {
+    // Check if at root level and folder name is a UUID (organization folder)
+    if (currentPrefix === '' && isUUID(folderName) && currentOrganization) {
+      // Check if this UUID matches the current organization
+      if (folderName.toLowerCase() === currentOrganization.id.toLowerCase()) {
+        return currentOrganization.display_name || currentOrganization.name
+      }
+      // For other org UUIDs, we could fetch them, but for now just show "Organization"
+      return `Organization (${folderName.substring(0, 8)}...)`
+    }
+
+    // Return the folder name as-is for non-org folders
+    return folderName
+  }
+
+  // Load current organization on mount
+  useEffect(() => {
+    if (token) {
+      loadCurrentOrganization()
+    }
+  }, [token])
 
   // Load buckets on mount
   useEffect(() => {
@@ -79,6 +116,22 @@ export default function StorageFolderBrowser({
       loadContents(currentBucket, currentPrefix)
     }
   }, [currentBucket, currentPrefix])
+
+  const loadCurrentOrganization = async () => {
+    if (!token) return
+
+    try {
+      const org = await organizationsApi.getCurrentOrganization(token)
+      setCurrentOrganization({
+        id: org.id,
+        name: org.name,
+        display_name: org.display_name
+      })
+    } catch (err: any) {
+      console.warn('Failed to load organization:', err)
+      // Not critical - just won't have org name mapping
+    }
+  }
 
   const loadBuckets = async () => {
     try {
@@ -203,6 +256,31 @@ export default function StorageFolderBrowser({
       toast.error(`Failed to delete folder: ${err.message}`)
     } finally {
       setDeletingFolder(null)
+    }
+  }
+
+  const handleDeleteFile = async (file: StorageFile) => {
+    if (isProtected) {
+      toast.error('Cannot delete files in protected buckets')
+      return
+    }
+
+    const confirmed = window.confirm(
+      `Delete file "${file.filename}"? This cannot be undone.`
+    )
+    if (!confirmed) return
+
+    setDeletingFile(file.key)
+    try {
+      await objectStorageApi.deleteFile(currentBucket, file.key, token ?? undefined)
+      toast.success(`File "${file.filename}" deleted`)
+      // Reload current folder
+      await loadContents(currentBucket, currentPrefix)
+    } catch (err: any) {
+      console.error('Failed to delete file:', err)
+      toast.error(`Failed to delete file: ${err.message}`)
+    } finally {
+      setDeletingFile(null)
     }
   }
 
@@ -400,23 +478,32 @@ export default function StorageFolderBrowser({
               )}
 
               {/* Folders */}
-              {folders.map(folder => (
-                <div
-                  key={folder}
-                  className="px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group"
-                >
-                  <div className="grid grid-cols-12 gap-4 items-center">
-                    <button
-                      onClick={() => handleNavigateToFolder(folder)}
-                      className="col-span-5 flex items-center gap-3 text-left min-w-0"
-                    >
-                      <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center flex-shrink-0">
-                        <Folder className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      </div>
-                      <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                        {folder}
-                      </span>
-                    </button>
+              {folders.map(folder => {
+                const displayName = getFolderDisplayName(folder)
+                return (
+                  <div
+                    key={folder}
+                    className="px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group"
+                  >
+                    <div className="grid grid-cols-12 gap-4 items-center">
+                      <button
+                        onClick={() => handleNavigateToFolder(folder)}
+                        className="col-span-5 flex items-center gap-3 text-left min-w-0"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center flex-shrink-0">
+                          <Folder className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        </div>
+                        <div className="flex flex-col min-w-0">
+                          <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                            {displayName}
+                          </span>
+                          {displayName !== folder && (
+                            <span className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
+                              {folder}
+                            </span>
+                          )}
+                        </div>
+                      </button>
                     <div className="col-span-2 text-sm text-gray-500 dark:text-gray-400">
                       Folder
                     </div>
@@ -444,7 +531,8 @@ export default function StorageFolderBrowser({
                     </div>
                   </div>
                 </div>
-              ))}
+              )
+              })}
 
               {/* Files */}
               {files.map(file => (
@@ -485,6 +573,20 @@ export default function StorageFolderBrowser({
                       >
                         <Download className="w-4 h-4" />
                       </button>
+                      {!isProtected && (
+                        <button
+                          onClick={() => handleDeleteFile(file)}
+                          disabled={deletingFile === file.key}
+                          className="opacity-0 group-hover:opacity-100 p-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 rounded-lg transition-all disabled:opacity-50"
+                          title="Delete file"
+                        >
+                          {deletingFile === file.key ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
+                        </button>
+                      )}
                     </div>
                   </div>
                 </div>

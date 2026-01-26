@@ -101,7 +101,8 @@ export function JobReviewPanel({
 
   const loadDocumentContent = async (documentId: string) => {
     try {
-      const result = await contentApi.getDocumentContent(documentId, accessToken)
+      // Pass jobId to ensure we get the correct processed file for this job
+      const result = await contentApi.getDocumentContent(documentId, accessToken, jobId)
       setDocumentContent(result.content)
       setEditedContent(result.content)
     } catch (error: any) {
@@ -258,9 +259,9 @@ export function JobReviewPanel({
   const getDocumentDisplayName = (doc: JobDocument): string => {
     const displayName = utils.getDisplayFilename(doc.filename)
 
-    // If filename is just a hash (32 hex chars with no extension), use document_id as fallback
-    if (/^[0-9a-f]{32}$/i.test(displayName)) {
-      return `Document ${doc.document_id.substring(0, 8)}...`
+    // If filename is just a hash (32 hex chars with no extension) or looks like a document_id, show a cleaner fallback
+    if (/^[0-9a-f]{32}$/i.test(displayName) || /^doc_[0-9a-f]{12}$/i.test(displayName)) {
+      return `Document ${doc.document_id.substring(0, 12)}...`
     }
 
     return displayName

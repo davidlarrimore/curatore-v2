@@ -13,6 +13,7 @@ Object Storage Mode (REQUIRED):
 """
 import asyncio
 import logging
+import re
 import shutil
 import tempfile
 import uuid
@@ -626,6 +627,7 @@ async def _upload_processed_to_object_storage(
     from io import BytesIO
     from .services.minio_service import get_minio_service
     from .services.artifact_service import artifact_service
+    from .database.models import Job
 
     minio = get_minio_service()
     if not minio:
@@ -633,10 +635,31 @@ async def _upload_processed_to_object_storage(
         logger.warning("Object storage not enabled, cannot upload processed result")
         return None
 
-    # Build object key: org_id/document_id/processed/filename.md
+    def _slugify(value: str) -> str:
+        cleaned = re.sub(r"[^a-zA-Z0-9-_]+", "-", value.strip())
+        return cleaned.strip("-").lower()
+
+    job_folder = None
+    if job_id:
+        try:
+            async with database_service.get_session() as session:
+                result = await session.execute(select(Job).where(Job.id == uuid.UUID(job_id)))
+                job = result.scalar_one_or_none()
+                if job:
+                    job_folder = job.processed_folder
+        except Exception:
+            job_folder = None
+
+    if not job_folder:
+        slug = _slugify(f"job-{job_id}" if job_id else "job")
+        ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
+        job_folder = f"{slug}_{ts}"
+
+    # Build object key: org_id/{job_name_timestamp}/filename.md
     base_filename = Path(original_filename).stem
-    processed_filename = f"{base_filename}.md"
-    object_key = f"{organization_id}/{document_id}/processed/{processed_filename}"
+    safe_document_id = _slugify(document_id) or "document"
+    processed_filename = f"{safe_document_id}_{base_filename}.md"
+    object_key = f"{organization_id}/{job_folder}/{processed_filename}"
     bucket = minio.bucket_processed
 
     try:

@@ -603,6 +603,7 @@ class Job(Base):
     processing_options = Column(JSON, nullable=False, default=dict, server_default="{}")
     results_summary = Column(JSON, nullable=True)
     error_message = Column(Text, nullable=True)
+    processed_folder = Column(String(255), nullable=True, index=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -674,7 +675,7 @@ class JobDocument(Base):
     )
 
     # Document identification
-    document_id = Column(String(255), nullable=False, index=True)
+    document_id = Column(String(36), nullable=False, index=True)  # UUID or legacy doc_* format
     filename = Column(String(500), nullable=False)
     file_path = Column(Text, nullable=False)
     file_hash = Column(String(64), nullable=True)
@@ -744,7 +745,7 @@ class JobLog(Base):
     job_id = Column(
         UUID(), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    document_id = Column(String(255), nullable=True, index=True)
+    document_id = Column(String(36), nullable=True, index=True)  # UUID or legacy doc_* format
 
     # Log details
     timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -809,7 +810,7 @@ class Artifact(Base):
     organization_id = Column(
         UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    document_id = Column(String(255), nullable=False, index=True)
+    document_id = Column(String(36), nullable=False, index=True)  # UUID or legacy doc_* format
     job_id = Column(
         UUID(), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
     )

@@ -19,6 +19,7 @@
 import { useState, FormEvent, useEffect, useCallback, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
+import { systemApi } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import toast from 'react-hot-toast'
 
@@ -80,12 +81,28 @@ export default function LoginPage() {
     setLoginStage('submitting')
 
     try {
+      const availability = await Promise.race([
+        systemApi.checkAvailability(),
+        new Promise<boolean>((_, reject) => setTimeout(() => reject(new Error('Health check timeout')), 5000)),
+      ])
+
+      if (!availability) {
+        toast.error('Curatore is restarting. Please wait and try again.')
+        setLoginStage('idle')
+        return
+      }
+
       await login(emailOrUsername, password)
       setLoginStage('finalizing')
       if (isAuthenticated) {
         redirectToReturnUrl()
       }
     } catch (err: any) {
+      if (err?.message === 'Health check timeout') {
+        toast.error('Curatore is restarting. Please wait and try again.')
+        setLoginStage('idle')
+        return
+      }
       const message = getLoginErrorMessage(err)
       setError(message)
       toast.error(message)
