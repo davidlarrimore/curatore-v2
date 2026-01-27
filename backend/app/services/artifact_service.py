@@ -118,6 +118,103 @@ class ArtifactService:
         )
         return artifact
 
+    async def upsert_artifact(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        document_id: str,
+        artifact_type: str,
+        bucket: str,
+        object_key: str,
+        original_filename: str,
+        content_type: Optional[str] = None,
+        file_size: Optional[int] = None,
+        etag: Optional[str] = None,
+        file_hash: Optional[str] = None,
+        job_id: Optional[UUID] = None,
+        status: str = "pending",
+        file_metadata: Optional[Dict[str, Any]] = None,
+        expires_at: Optional[datetime] = None,
+    ) -> Artifact:
+        """
+        Create or update an artifact record.
+
+        If an artifact with the same (bucket, object_key) exists, updates it.
+        Otherwise, creates a new artifact record.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            document_id: Document identifier
+            artifact_type: Type (uploaded, processed, temp)
+            bucket: Object storage bucket
+            object_key: Full object key/path
+            original_filename: Original filename
+            content_type: MIME type
+            file_size: Size in bytes
+            etag: Object storage ETag
+            file_hash: SHA-256 hash
+            job_id: Associated job UUID
+            status: Status (default: pending)
+            file_metadata: Additional metadata dict
+            expires_at: Expiration timestamp
+
+        Returns:
+            Created or updated Artifact instance
+        """
+        # Check if artifact already exists
+        result = await session.execute(
+            select(Artifact).where(
+                and_(
+                    Artifact.bucket == bucket,
+                    Artifact.object_key == object_key,
+                    Artifact.deleted_at.is_(None),
+                )
+            )
+        )
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            # Update existing artifact
+            existing.organization_id = organization_id
+            existing.document_id = document_id
+            existing.artifact_type = artifact_type
+            existing.original_filename = original_filename
+            existing.content_type = content_type
+            existing.file_size = file_size
+            existing.etag = etag
+            existing.file_hash = file_hash
+            existing.job_id = job_id
+            existing.status = status
+            existing.file_metadata = file_metadata or {}
+            existing.expires_at = expires_at
+            existing.updated_at = datetime.utcnow()
+            await session.flush()
+            logger.debug(
+                f"Updated artifact {existing.id} for document {document_id} "
+                f"(bucket={bucket}, key={object_key})"
+            )
+            return existing
+        else:
+            # Create new artifact
+            return await self.create_artifact(
+                session=session,
+                organization_id=organization_id,
+                document_id=document_id,
+                artifact_type=artifact_type,
+                bucket=bucket,
+                object_key=object_key,
+                original_filename=original_filename,
+                content_type=content_type,
+                file_size=file_size,
+                etag=etag,
+                file_hash=file_hash,
+                job_id=job_id,
+                status=status,
+                file_metadata=file_metadata,
+                expires_at=expires_at,
+            )
+
     # =========================================================================
     # READ OPERATIONS
     # =========================================================================

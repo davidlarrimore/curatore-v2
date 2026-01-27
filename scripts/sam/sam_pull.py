@@ -369,14 +369,30 @@ def fetch_opportunities():
         params["offset"] = offset
 
         print(f"  Fetching batch {batch_num} (offset {offset})...")
-        data = make_request_with_retry(params)
 
-        batch = data.get("opportunitiesData", [])
-        if not batch:
+        try:
+            data = make_request_with_retry(params)
+
+            batch = data.get("opportunitiesData", [])
+            if not batch:
+                break
+
+            results.extend(batch)
+            print(f"  Retrieved {len(batch)} records (total so far: {len(results)})")
+
+        except httpx.HTTPStatusError as e:
+            # SAM.gov API sometimes fails on pagination - continue with partial results
+            print(f"  ⚠ Failed to fetch batch {batch_num}: {e.response.status_code} error")
+            print(f"  ℹ️  Continuing with {len(results)} records retrieved so far")
+            break
+        except Exception as e:
+            # Other errors - log and continue with partial results
+            print(f"  ⚠ Failed to fetch batch {batch_num}: {str(e)}")
+            print(f"  ℹ️  Continuing with {len(results)} records retrieved so far")
             break
 
-        results.extend(batch)
-        print(f"  Retrieved {len(batch)} records (total so far: {len(results)})")
+    if len(results) < total_records:
+        print(f"  ⚠ Retrieved {len(results)}/{total_records} records (SAM.gov API pagination issue)")
 
     return results
 
@@ -635,11 +651,26 @@ def extract_key_dates(opp):
 
 def resolve_agency_component(opp):
     """
-    Normalize agency / component naming across inconsistent SAM fields.
+    Normalize agency / component naming using authoritative SAM fields.
     Returns (agency, component).
     """
 
-    # Preferred structured SAM fields
+    full_path = opp.get("fullParentPathName")
+
+    if full_path:
+        # Example:
+        # "HOMELAND SECURITY, DEPARTMENT OF.OFFICE OF PROCUREMENT OPERATIONS"
+        parts = [p.strip() for p in full_path.split(".") if p.strip()]
+
+        if len(parts) >= 2:
+            agency = parts[0].title()
+            component = parts[1].title()
+            return agency, component
+
+        if len(parts) == 1:
+            return parts[0].title(), "Unknown"
+
+    # Fallbacks (less reliable)
     agency = (
         opp.get("departmentName")
         or opp.get("agency")
@@ -652,25 +683,6 @@ def resolve_agency_component(opp):
         or opp.get("officeName")
         or "Unknown"
     )
-
-    # Fallback: infer from description text if still unknown
-    if agency == "Unknown" or component == "Unknown":
-        desc = ""
-        if isinstance(opp.get("_full_description"), dict):
-            desc = opp["_full_description"].get("description", "")
-
-        if "Transportation Security Administration" in desc or "TSA" in desc:
-            agency = "Department of Homeland Security"
-            component = "Transportation Security Administration"
-        elif "Customs and Border Protection" in desc or "CBP" in desc:
-            agency = "Department of Homeland Security"
-            component = "Customs and Border Protection"
-        elif "Immigration and Customs Enforcement" in desc or "ICE" in desc:
-            agency = "Department of Homeland Security"
-            component = "Immigration and Customs Enforcement"
-        elif "Citizenship and Immigration Services" in desc or "USCIS" in desc:
-            agency = "Department of Homeland Security"
-            component = "U.S. Citizenship and Immigration Services"
 
     return agency, component
 
@@ -819,32 +831,76 @@ REQUIRED OUTPUT FORMAT:
 
 
 # --- BEGIN: Executive Intelligence Summary LLM step ---
-async def generate_executive_summary(analyzed_entries, llm_service):
+# Helper to classify “headline” opportunity types (for executive summary headline list)
+def classify_headline_opportunity(analysis_text):
+    """
+    Determine whether an analyzed opportunity should appear
+    in the executive headline list.
+    """
+    text = analysis_text.lower()
+
+    if "sources sought" in text or "rfi" in text:
+        return "RFI / Sources Sought"
+    if "industry day" in text:
+        return "Industry Day"
+    if "solicitation" in text or "rfp" in text:
+        return "Solicitation / RFP"
+
+    return None
+
+
+async def generate_executive_summary(analyzed_entries, headline_items, llm_service):
     if not llm_service.is_available:
         return None
 
-    summary_context = "Daily Opportunity Intelligence:\n\n"
+    summary_context = "HEADLINE OPPORTUNITIES:\n\n"
+
+    if headline_items:
+        for item in headline_items:
+            summary_context += (
+                f"- [{item['category']}] {item['title']}\n"
+                f"  Agency: {item['agency']} / {item['component']}\n"
+                f"  Link: {item['link']}\n\n"
+            )
+    else:
+        summary_context += "None identified.\n\n"
+
+    summary_context += "DETAILED ANALYSIS INPUT:\n\n"
     for entry in analyzed_entries:
         summary_context += f"- {entry}\n\n"
 
     system_prompt = """
-You are a senior Business Development and Capture executive at Amivero, LLC.
+You are a senior Business Development executive at Amivero, LLC.
 
-Your task is to synthesize today’s SAM.gov intelligence into clear guidance for BD and capture teams.
+Your task is to produce an executive-ready daily SAM.gov intelligence summary.
 
-Focus on:
-- Immediate bid or response actions
-- Strategic signals for DHS (especially TSA, CISA, FEMA)
-- What to monitor vs ignore
-- Impact to Amivero’s pipeline
+REQUIRED STRUCTURE:
 
-Style:
-- 4–6 bullets
-- Plain English
-- Action- and impact-oriented
-- Suitable for email and PDF
+## New & Updated Government Actions
+- List ONLY the following when present:
+  - New RFIs / Sources Sought
+  - Industry Day announcements
+  - Newly released solicitations (RFPs)
+  - Updates or amendments to previously released RFIs or RFPs (clearly label as UPDATE)
+- Each bullet MUST include:
+  - Title
+  - Agency / Component
+  - Direct SAM.gov link
 
-Do NOT restate opportunity descriptions.
+If none exist, explicitly state: “No new RFIs, Industry Days, or Solicitations released in this period.”
+
+## Executive Takeaways for Amivero
+- 3–6 concise bullets focused on:
+  - DHS component activity (CBP, USCIS, ICE, TSA, CISA, FEMA)
+  - Signals relevant to Amivero’s AI, fraud, SecDevOps, automation, and digital services focus
+  - What is worth monitoring vs. safely ignoring
+
+STYLE RULES:
+- Bullet-driven
+- No long prose
+- No FAR explanations
+- No restating full opportunity descriptions
+- Optimized for email and PDF
 """
 
     client = llm_service._client
@@ -1032,6 +1088,8 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
 
     # Prepare to collect analyzed outputs for executive summary
     analyzed_entries = []
+    # Prepare to collect structured headline items
+    headline_items = []
 
     # Build markdown report
     report_lines = [
@@ -1067,6 +1125,18 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
         analysis = await analyze_opportunity_with_llm(opp, llm_service)
         if analysis:
             analyzed_entries.append(analysis)
+
+            # Classify for executive summary headline list
+            headline_category = classify_headline_opportunity(analysis or "")
+            if headline_category and opp.get("uiLink"):
+                headline_items.append({
+                    "category": headline_category,
+                    "title": title,
+                    "agency": agency,
+                    "component": component,
+                    "link": opp["uiLink"],
+                })
+
             report_lines.append("")
             report_lines.append(analysis)
             report_lines.append("")
@@ -1108,8 +1178,8 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
         report_lines.append("---")
         report_lines.append("")
 
-    # Generate executive summary using LLM
-    exec_summary = await generate_executive_summary(analyzed_entries, llm_service)
+    # Generate executive summary using LLM, passing headline_items
+    exec_summary = await generate_executive_summary(analyzed_entries, headline_items, llm_service)
 
     # Insert executive summary at correct location
     report_lines = (

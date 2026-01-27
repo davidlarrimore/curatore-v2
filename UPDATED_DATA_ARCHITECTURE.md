@@ -837,44 +837,193 @@ These are foundational requirements, even if some features are implemented incre
 
 ## Phased Implementation Plan
 
-### Phase 1 — Extraction as Infrastructure
-- Automatic extraction on asset ingest
-- ExtractionResult persistence
-- UI surface for extracted content
+This phased plan is designed to:
+- Preserve existing functionality at every step
+- Introduce foundational capabilities before feature surface area
+- Coordinate backend and frontend changes tightly to maintain debuggability
+- Explicitly separate **required foundations** from **optional / future integrations**
 
-### Phase 2 — Run & Artifact Core
-- Introduce Run and RunArtifact models
-- Simple processing runs
-- Artifact browsing and inspection
-
-### Phase 3 — Experimentation UX
-- Multi-config experiment runs
-- Comparison views
-- Metrics and evaluation support
-
-### Phase 4 — Output Sync
-- Vector DB and Open WebUI sync actions
-- Repeatable, auditable publishing
-
-### Phase 5 — Automation
-- Optional chaining of runs
-- Limited pipelines for stabilized workflows
+Each phase should result in a system that is:
+- Deployable
+- Observable
+- Usable by real users
+- Easier to reason about than before
 
 ---
 
-## Key Guardrails
+### Phase 0 — Stabilization & Baseline Observability (Immediate)
 
-- Do not expose extraction configuration prematurely
-- Do not require pipelines for experimentation
-- Do not overload the UI with workflow concepts
-- Optimize for clarity, iteration speed, and trust
+**Goal:** Make existing behavior explicit, traceable, and safe to evolve.
+
+**Backend**
+- Normalize the concept of `Asset`, `Run`, and `ExtractionResult` in code
+- Ensure every upload triggers:
+  - Asset creation
+  - Automatic extraction
+  - A system `Run` with logs and progress
+- Enforce DB-as-source-of-truth for object store references
+- Introduce structured run logging (`RunLogEvent`)
+- Ensure extraction failures are visible but non-blocking
+
+**Frontend**
+- Surface extraction status consistently (`Uploading`, `Processing`, `Ready`, `Needs Attention`)
+- Add basic run visibility (read-only timeline per document)
+- Clearly distinguish raw file vs extracted content in the UI
+
+**Why this phase matters**
+Without this baseline, later changes are difficult to debug and trust.
 
 ---
 
-## Conclusion
+### Phase 1 — Asset-Centric UX & Versioning Foundations
 
-This architecture positions Curatore as a **curation and experimentation platform first**, with automation as an emergent capability rather than a prerequisite.
+**Goal:** Make documents feel stable, inspectable, and version-aware.
 
-By treating extraction as infrastructure, separating concerns cleanly, and designing for rapid LLM iteration, Curatore can scale in capability without sacrificing usability or velocity.
+**Backend**
+- Introduce asset versioning (immutable raw versions)
+- Support re-extraction on version change
+- Store extraction metadata (timestamps, extractor version)
+- Support manual re-run extraction as a system run
+- Lay groundwork for bulk upload diffing (fingerprints, paths)
 
-The result is a system that supports today’s needs while remaining flexible enough for tomorrow’s pipelines.
+**Frontend**
+- Introduce a consistent Document Detail View:
+  - Original
+  - Extracted Content
+  - Metadata (canonical-only at first)
+  - History
+- Expose “Re-run extraction” safely
+- Show asset update history (non-destructive)
+
+**Why this phase matters**
+This is the foundation for user trust and later experimentation.
+
+---
+
+### Phase 2 — Bulk Upload Updates & Collection Health
+
+**Goal:** Eliminate friction for real-world document updates.
+
+**Backend**
+- Implement bulk upload analysis:
+  - unchanged / updated / new / missing
+- Create new asset versions for updates
+- Trigger automatic re-extraction for updated assets
+- Track collection-level health signals
+
+**Frontend**
+- Folder re-upload UX with single confirmation step
+- Clear preview of detected changes (counts, not per-file clicks)
+- Collection-level health indicators
+- Non-destructive handling of missing files
+
+**Why this phase matters**
+This is where Curatore becomes usable at scale, not just for demos.
+
+---
+
+### Phase 3 — Flexible Metadata & Experimentation Core
+
+**Goal:** Enable LLM-driven iteration without schema churn or backend scripts.
+
+**Backend**
+- Implement `AssetMetadata` as first-class artifacts
+- Support canonical vs experimental metadata
+- Enable experiment runs that produce metadata variants
+- Add promotion/demotion mechanics (pointer updates, not recompute)
+- Ensure all metadata-producing activity is run-attributed
+
+**Frontend**
+- Metadata tab with:
+  - Canonical metadata (default)
+  - Experimental metadata (collapsible)
+- Side-by-side comparison for experiment outputs
+- Explicit “Promote to Canonical” actions
+- Clear attribution to runs/configs
+
+**Why this phase matters**
+This unlocks Curatore’s differentiation without committing to automation.
+
+---
+
+### Phase 4 — Web Scraping as a Durable Data Source
+
+**Goal:** Treat web scraping as institutional memory, not transient crawling.
+
+**Backend**
+- Introduce scrape collections with:
+  - Discovery (page) assets
+  - Durable record assets
+- Support hierarchical path metadata
+- Ensure record-preserving behavior (no auto-deletes)
+- Implement crawl runs and re-crawl semantics
+- Integrate scheduled re-crawls via `ScheduledTask`
+
+**Frontend**
+- Tree-based browsing for scraped collections
+- Clear distinction between pages and captured records
+- Crawl history and status visibility
+- Re-crawl actions at collection and subtree levels
+
+**Why this phase matters**
+This prevents irreversible data loss and supports high-value use cases (e.g., SAM.gov).
+
+---
+
+### Phase 5 — System Maintenance & Scheduling Maturity
+
+**Goal:** Make the system self-maintaining and operable long-term.
+
+**Backend**
+- Implement `ScheduledTask` and scheduler loop
+- Add maintenance runs:
+  - GC
+  - orphan detection
+  - retention enforcement
+- Enforce idempotency and locking
+- Add summary reporting for system runs
+
+**Frontend**
+- Admin/system views for scheduled activity (read-only initially)
+- Visibility into maintenance outcomes (summaries, not logs)
+- Clear separation of user vs system activity
+
+**Why this phase matters**
+This phase reduces operational risk and supports confident scaling.
+
+---
+
+### Phase 6 — Optional Integrations & Automation (Explicitly Non-Blocking)
+
+**Goal:** Extend Curatore outward without destabilizing the core.
+
+**Backend (Optional / TODO)**
+- Vector DB sync actions
+- OpenWebUI publication
+- External notifications/webhooks
+- Limited automation chaining for stabilized workflows
+
+**Frontend (Optional / TODO)**
+- Output destination configuration
+- Sync history and status views
+- Automation opt-in controls
+
+**Important**
+These integrations are **not required** for Curatore’s core value and must not block earlier phases.
+
+---
+
+## Phase Coordination & Debuggability Principles
+
+Across all phases:
+- Backend changes must land with at least minimal UI visibility
+- Frontend features must rely on stable, documented API contracts
+- Every background activity must be traceable to a Run
+- No phase should introduce opaque behavior
+
+Progress should be tracked by:
+- Reduction in “invisible work”
+- Fewer ad-hoc scripts
+- Increased confidence in system state
+
+This phased approach prioritizes correctness, clarity, and user trust over feature count.
