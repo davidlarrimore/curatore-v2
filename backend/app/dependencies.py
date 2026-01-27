@@ -545,18 +545,17 @@ def validate_document_id_param(document_id: str) -> str:
     """
     Validate document ID parameter from API endpoint.
 
-    Ensures document_id is a valid UUID or legacy format (doc_*), and rejects
-    file paths or other invalid patterns. This dependency should be used on
+    Ensures document_id is a valid UUID. This dependency should be used on
     all endpoints that accept document_id as a path or query parameter.
 
     Args:
         document_id: Document ID from path or query parameter
 
     Returns:
-        str: Validated and normalized document ID (lowercase)
+        str: Validated document ID (normalized to lowercase)
 
     Raises:
-        HTTPException: 400 if document_id is invalid or looks like a file path
+        HTTPException: 400 if document_id is not a valid UUID
 
     Example:
         from fastapi import Depends
@@ -566,22 +565,17 @@ def validate_document_id_param(document_id: str) -> str:
         async def get_document(
             document_id: str = Depends(validate_document_id_param)
         ):
-            # document_id is guaranteed to be valid UUID or legacy format
+            # document_id is guaranteed to be a valid UUID
             return {"document_id": document_id}
 
     Security:
-        - Prevents file path injection attacks
-        - Enforces consistent document ID format
+        - Enforces UUID-only format
         - Provides clear error messages for API consumers
     """
     from app.utils.validators import validate_document_id
 
     try:
-        return validate_document_id(
-            document_id,
-            allow_legacy=True,  # Backward compatibility
-            reject_file_paths=True  # Security
-        )
+        return validate_document_id(document_id)
     except ValueError as e:
         logger.warning(f"Invalid document_id parameter: {document_id} - {e}")
         raise HTTPException(

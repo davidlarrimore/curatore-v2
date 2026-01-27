@@ -3,35 +3,35 @@
 SAM.gov DHS Opportunities Daily Pull Script
 
 Fetches opportunities from SAM.gov API for DHS components (ICE, CBP, USCIS)
-and stores them in MinIO object storage with database tracking.
+and stores them in object storage.
 
-STORAGE STRUCTURE:
-    Bucket: curatore-uploads (or configured MINIO_BUCKET_UPLOADS)
+UPLOAD METHODS:
+    - Consolidated JSON & Summary Reports: Uploaded via backend API (receive UUIDs)
+    - Resource Files: Uploaded directly to MinIO (organized by solicitation number)
 
+FILES UPLOADED:
     Consolidated JSON file (all opportunities with full descriptions):
-      Path: {org_id}/sam/daily_extract/sam_pull_{date}.json
-      Example: a1b2c3d4-5678-90ab-cdef-1234567890ab/sam/daily_extract/sam_pull_20260127.json
+      Uploaded via backend API
+      Filename: sam_pull_{date}.json
+      Receives UUID document ID
 
     Daily Summary Report (AI-powered analysis - Markdown + PDF):
-      Path: {org_id}/sam/daily_extract_summary/sam_pull_summary_{date}.md
-      Path: {org_id}/sam/daily_extract_summary/sam_pull_summary_{date}.pdf
-      Example: a1b2c3d4-5678-90ab-cdef-1234567890ab/sam/daily_extract_summary/sam_pull_summary_20260127.md
-      Example: a1b2c3d4-5678-90ab-cdef-1234567890ab/sam/daily_extract_summary/sam_pull_summary_20260127.pdf
+      Uploaded via backend API
+      Filenames: sam_pull_summary_{date}.md, sam_pull_summary_{date}.pdf
+      Receive UUID document IDs
 
     Resource files (PDFs, DOCs, etc. from resourceLinks):
-      Path: {org_id}/sam/{solicitationNumber}/{filename}
-      Example: a1b2c3d4-5678-90ab-cdef-1234567890ab/sam/70ABC123456/document.pdf
-
-    Note: Consolidated JSON and summary reports are one per day (updates on re-run).
-          Resource files are organized by solicitation number.
-          Only processes NAICS-matched opportunities.
-          Date used for filenames is always today's date, regardless of query date range.
+      Uploaded directly to MinIO with custom folder structure
+      Path: {org_id}/sam/{solicitation_number}/{filename}
+      Original filenames preserved from SAM.gov
+      Files with same name are overwritten
+      Only downloads for NAICS-matched opportunities
 
 SETUP INSTRUCTIONS:
     1. Ensure Curatore v2 services are running:
        $ ./scripts/dev-up.sh
 
-    2. Initialize MinIO storage (if not already done):
+    2. Initialize storage (if not already done):
        $ ./scripts/init_storage.sh
 
     3. Initialize database and get organization ID (if not already done):
@@ -42,10 +42,8 @@ SETUP INSTRUCTIONS:
     4. Configure environment variables in .env file:
        SAM_API_KEY=your-sam-gov-api-key-here
        DEFAULT_ORG_ID=your-org-uuid-from-seed-command
-       USE_OBJECT_STORAGE=true
-       MINIO_ENDPOINT=minio:9000
-       MINIO_ACCESS_KEY=minioadmin
-       MINIO_SECRET_KEY=minioadmin
+       API_URL=http://localhost:8000  # Backend API URL
+       API_KEY=your-api-key  # Optional, only if ENABLE_AUTH=true
 
     5. Get SAM.gov API Key:
        - Register at https://sam.gov/
@@ -243,9 +241,12 @@ sys.path.insert(0, str(backend_path))
 
 # NOW import app modules (after environment is configured)
 from app.config import settings
-from app.services.database_service import database_service
-from app.services.artifact_service import ArtifactService
 from app.services.llm_service import LLMService
+
+# Import backend upload helper for proper UUID document IDs
+sam_scripts_path = project_root / "scripts" / "sam"
+sys.path.insert(0, str(sam_scripts_path))
+from backend_upload import upload_file_to_backend
 
 # Validate required environment variables
 SAM_API_KEY = os.getenv("SAM_API_KEY")
@@ -450,27 +451,36 @@ async def download_resource_links(opportunities, pulled_at):
     """
     Download files from resourceLinks for NAICS-matched opportunities.
 
-    Files are organized by solicitationNumber:
-    {org_id}/sam/{solicitationNumber}/filename.pdf
+    Files are uploaded directly to MinIO (not via backend API) to maintain
+    custom folder structure organized by solicitationNumber:
+        {org_id}/sam/{solicitationNumber}/filename.pdf
+
+    This preserves the legacy SAM file organization that users expect.
+    Files with the same name will be overwritten.
 
     Args:
         opportunities: List of opportunity records
         pulled_at: Timestamp of the pull
 
     Returns:
-        Dict mapping notice_id to list of uploaded artifact IDs
+        Dict mapping notice_id to list of uploaded filenames
     """
     from minio import Minio
+    from io import BytesIO
 
-    # Create MinIO client
+    # Initialize MinIO client for direct upload
     minio_client = Minio(
         "localhost:9000",
-        access_key=os.getenv("MINIO_ACCESS_KEY", "admin"),
-        secret_key=os.getenv("MINIO_SECRET_KEY", "changeme"),
+        access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+        secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
         secure=False
     )
-
     bucket = os.getenv("MINIO_BUCKET_UPLOADS", "curatore-uploads")
+
+    # Ensure bucket exists
+    if not minio_client.bucket_exists(bucket):
+        minio_client.make_bucket(bucket)
+
     results = {}
 
     print(f"\nDownloading resource files for NAICS-matched opportunities...")
@@ -545,50 +555,23 @@ async def download_resource_links(opportunities, pulled_at):
                     if guessed_type:
                         content_type = guessed_type
 
-                # Build storage path: {org_id}/sam/{solicitationNumber}/{filename}
-                key = f"{DEFAULT_ORG_ID}/sam/{solicitation_number}/{filename}"
-                document_id = f"sam_{solicitation_number}_{filename}"
-
-                # Upload to MinIO
+                # Upload directly to MinIO with custom folder structure
                 file_bytes = response.content
-                file_stream = BytesIO(file_bytes)
                 file_size = len(file_bytes)
+                file_stream = BytesIO(file_bytes)
 
-                # Ensure bucket exists
-                if not minio_client.bucket_exists(bucket):
-                    minio_client.make_bucket(bucket)
+                # Build path: {org_id}/sam/{solicitation_number}/{filename}
+                object_key = f"{DEFAULT_ORG_ID}/sam/{solicitation_number}/{filename}"
 
-                result = minio_client.put_object(
-                    bucket_name=bucket,
-                    object_name=key,
-                    data=file_stream,
-                    length=file_size,
-                    content_type=content_type,
-                    metadata={
-                        "source": "sam.gov",
-                        "notice_id": notice_id,
-                        "solicitation_number": solicitation_number,
-                        "link_name": link_name,
-                    }
-                )
-                etag = result.etag
-
-                # Create artifact record
-                artifact_service = ArtifactService()
-                async with database_service.get_session() as session:
-                    artifact = await artifact_service.upsert_artifact(
-                        session=session,
-                        organization_id=UUID(DEFAULT_ORG_ID),
-                        document_id=document_id,
-                        artifact_type="uploaded",
-                        bucket=bucket,
-                        object_key=key,
-                        original_filename=filename,
+                try:
+                    # Upload to MinIO (overwrites if file already exists)
+                    result = minio_client.put_object(
+                        bucket_name=bucket,
+                        object_name=object_key,
+                        data=file_stream,
+                        length=file_size,
                         content_type=content_type,
-                        file_size=file_size,
-                        etag=etag,
-                        status="completed",
-                        file_metadata={
+                        metadata={
                             "source": "sam.gov",
                             "notice_id": notice_id,
                             "solicitation_number": solicitation_number,
@@ -596,10 +579,15 @@ async def download_resource_links(opportunities, pulled_at):
                             "pulled_at": pulled_at.isoformat(),
                         }
                     )
-                    await session.commit()
-                    artifact_ids.append(artifact.id)
 
-                print(f"    ✓ Uploaded {filename} ({file_size:,} bytes)")
+                    # Track filename (not UUID since we're using custom paths)
+                    artifact_ids.append(filename)
+                    print(f"    ✓ Uploaded {filename} ({file_size:,} bytes)")
+                    print(f"      Path: {bucket}/{object_key}")
+
+                except Exception as upload_error:
+                    print(f"    ✗ Failed to upload {filename}: {upload_error}")
+                    continue
 
             except Exception as e:
                 print(f"    ✗ Failed to download {link_name}: {e}")
@@ -1066,11 +1054,9 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
         resource_results: Dict mapping notice_id to list of downloaded file artifact IDs
 
     Returns:
-        Dict with uploaded file info: {'md': (bucket, key, artifact_id), 'pdf': (bucket, key, artifact_id)}
+        Dict with uploaded file info: {'md': document_id, 'pdf': document_id}
         or None if no matches
     """
-    from minio import Minio
-
     # Filter NAICS-matched opportunities
     matched_opportunities = [opp for opp in opportunities if opp.get("_naics_match")]
 
@@ -1207,79 +1193,37 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
     # Join into single markdown document
     markdown_content = "\n".join(report_lines)
 
-    # Upload markdown and PDF to MinIO
+    # Upload markdown and PDF via backend API
     try:
-        minio_client = Minio(
-            "localhost:9000",
-            access_key=os.getenv("MINIO_ACCESS_KEY", "admin"),
-            secret_key=os.getenv("MINIO_SECRET_KEY", "changeme"),
-            secure=False
-        )
-
-        bucket = os.getenv("MINIO_BUCKET_UPLOADS", "curatore-uploads")
         base_filename = f"sam_pull_summary_{pulled_at.strftime('%Y%m%d')}"
         md_filename = f"{base_filename}.md"
         pdf_filename = f"{base_filename}.pdf"
 
-        # Use subfolder for summary files
-        md_key = f"{DEFAULT_ORG_ID}/sam/daily_extract_summary/{md_filename}"
-        pdf_key = f"{DEFAULT_ORG_ID}/sam/daily_extract_summary/{pdf_filename}"
-
-        md_document_id = f"sam_summary_md_{pulled_at.strftime('%Y%m%d')}"
-        pdf_document_id = f"sam_summary_pdf_{pulled_at.strftime('%Y%m%d')}"
-
-        # Ensure bucket exists
-        if not minio_client.bucket_exists(bucket):
-            minio_client.make_bucket(bucket)
-
-        artifact_service = ArtifactService()
         results = {}
 
-        # Upload markdown file
+        # Upload markdown file via backend API
         md_bytes = markdown_content.encode('utf-8')
-        md_stream = BytesIO(md_bytes)
-        md_file_size = len(md_bytes)
 
-        md_result = minio_client.put_object(
-            bucket_name=bucket,
-            object_name=md_key,
-            data=md_stream,
-            length=md_file_size,
-            content_type="text/markdown",
-            metadata={
-                "source": "sam.gov",
-                "generated_at": pulled_at.isoformat(),
-                "opportunity_count": str(len(matched_opportunities)),
-            }
-        )
-        md_etag = md_result.etag
-
-        # Create artifact record for markdown
-        async with database_service.get_session() as session:
-            md_artifact = await artifact_service.upsert_artifact(
-                session=session,
-                organization_id=UUID(DEFAULT_ORG_ID),
-                document_id=md_document_id,
-                artifact_type="uploaded",
-                bucket=bucket,
-                object_key=md_key,
-                original_filename=md_filename,
+        try:
+            md_document_id = upload_file_to_backend(
+                file_content=md_bytes,
+                filename=md_filename,
                 content_type="text/markdown",
-                file_size=md_file_size,
-                etag=md_etag,
-                status="completed",
-                file_metadata={
+                metadata={
                     "source": "sam.gov",
                     "type": "daily_summary",
                     "format": "markdown",
                     "generated_at": pulled_at.isoformat(),
-                    "opportunity_count": len(matched_opportunities),
-                }
+                    "opportunity_count": str(len(matched_opportunities)),
+                },
+                api_url=os.getenv("API_URL", "http://localhost:8000"),
+                api_key=os.getenv("API_KEY"),
             )
-            await session.commit()
-            results['md'] = (bucket, md_key, md_artifact.id)
-
-        print(f"  ✓ Uploaded markdown: {md_filename}")
+            results['md'] = md_document_id
+            print(f"  ✓ Uploaded markdown: {md_filename} - ID: {md_document_id}")
+        except Exception as md_error:
+            print(f"  ✗ Failed to upload markdown: {md_error}")
+            # Continue to try PDF upload even if markdown fails
 
         # Generate and upload PDF (optional - skip if dependencies not available)
         if not PDF_AVAILABLE:
@@ -1291,52 +1235,26 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
             try:
                 pdf_stream = markdown_to_pdf(markdown_content)
                 pdf_bytes = pdf_stream.getvalue()
-                pdf_file_size = len(pdf_bytes)
-                pdf_stream.seek(0)
 
-                pdf_result = minio_client.put_object(
-                    bucket_name=bucket,
-                    object_name=pdf_key,
-                    data=pdf_stream,
-                    length=pdf_file_size,
+                pdf_document_id = upload_file_to_backend(
+                    file_content=pdf_bytes,
+                    filename=pdf_filename,
                     content_type="application/pdf",
                     metadata={
                         "source": "sam.gov",
+                        "type": "daily_summary",
+                        "format": "pdf",
                         "generated_at": pulled_at.isoformat(),
                         "opportunity_count": str(len(matched_opportunities)),
-                    }
+                    },
+                    api_url=os.getenv("API_URL", "http://localhost:8000"),
+                    api_key=os.getenv("API_KEY"),
                 )
-                pdf_etag = pdf_result.etag
-
-                # Create artifact record for PDF
-                async with database_service.get_session() as session:
-                    pdf_artifact = await artifact_service.upsert_artifact(
-                        session=session,
-                        organization_id=UUID(DEFAULT_ORG_ID),
-                        document_id=pdf_document_id,
-                        artifact_type="uploaded",
-                        bucket=bucket,
-                        object_key=pdf_key,
-                        original_filename=pdf_filename,
-                        content_type="application/pdf",
-                        file_size=pdf_file_size,
-                        etag=pdf_etag,
-                        status="completed",
-                        file_metadata={
-                            "source": "sam.gov",
-                            "type": "daily_summary",
-                            "format": "pdf",
-                            "generated_at": pulled_at.isoformat(),
-                            "opportunity_count": len(matched_opportunities),
-                        }
-                    )
-                    await session.commit()
-                    results['pdf'] = (bucket, pdf_key, pdf_artifact.id)
-
-                print(f"  ✓ Uploaded PDF: {pdf_filename}")
+                results['pdf'] = pdf_document_id
+                print(f"  ✓ Uploaded PDF: {pdf_filename} - ID: {pdf_document_id}")
 
             except Exception as e:
-                print(f"  ⚠ PDF generation failed: {e}")
+                print(f"  ⚠ PDF generation/upload failed: {e}")
                 # Continue even if PDF fails - we have markdown
 
         print(f"✓ Daily summary generated in daily_extract_summary/")
@@ -1349,34 +1267,21 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
 
 async def write_output(opportunities, pulled_at):
     """
-    Write JSON output to MinIO object storage and create artifact record.
+    Write JSON output via backend API with artifact tracking.
 
-    Storage location: {bucket}/{org_id}/sam/{filename}.json
-    Database: Artifact record for frontend visibility
+    Uploads to object storage through backend API for proper UUID generation
+    and automatic artifact record creation.
 
     Args:
         opportunities: List of opportunity records from SAM.gov
         pulled_at: Timestamp of when opportunities were pulled
 
     Returns:
-        Tuple of (bucket, key, artifact_id) where the file was stored
+        str: UUID document ID assigned by backend
 
     Raises:
-        RuntimeError: If MinIO service is not available or upload fails
+        RuntimeError: If upload fails
     """
-    # Create MinIO client directly for local execution (bypasses config.yml)
-    from minio import Minio
-    from io import BytesIO
-
-    # Use localhost:9000 for local script execution
-    minio_client = Minio(
-        "localhost:9000",
-        access_key=os.getenv("MINIO_ACCESS_KEY", "admin"),
-        secret_key=os.getenv("MINIO_SECRET_KEY", "changeme"),
-        secure=False
-    )
-
-    bucket = os.getenv("MINIO_BUCKET_UPLOADS", "curatore-uploads")
 
     # Fetch descriptions for NAICS-matched opportunities only
     print("  Fetching descriptions for NAICS-matched opportunities...")
@@ -1423,114 +1328,51 @@ async def write_output(opportunities, pulled_at):
         "opportunities": opportunities,
     }
 
-    # Generate filename and document ID (date only)
-    # Multiple runs per day will update the same file
+    # Generate filename (date only)
+    # Multiple runs per day will create separate files with unique UUIDs
     filename = f"sam_pull_{pulled_at.strftime('%Y%m%d')}.json"
-    document_id = f"sam_{pulled_at.strftime('%Y%m%d')}"  # Document ID for tracking
-
-    # Build storage path: {org_id}/sam/daily_extract/{filename}
-    key = f"{DEFAULT_ORG_ID}/sam/daily_extract/{filename}"
 
     # Convert JSON to bytes
     json_bytes = json.dumps(output, indent=2, ensure_ascii=False).encode('utf-8')
-    json_stream = BytesIO(json_bytes)
-    file_size = len(json_bytes)
 
-    # Upload to MinIO
+    # Upload via backend API
     try:
-        # Ensure bucket exists
-        if not minio_client.bucket_exists(bucket):
-            minio_client.make_bucket(bucket)
-            print(f"✓ Created bucket: {bucket}")
-
-        # Upload the file
-        print(f"Uploading to: {bucket}/{key}")
-        result = minio_client.put_object(
-            bucket_name=bucket,
-            object_name=key,
-            data=json_stream,
-            length=file_size,
+        print(f"Uploading {filename} via backend API...")
+        document_id = upload_file_to_backend(
+            file_content=json_bytes,
+            filename=filename,
             content_type="application/json",
             metadata={
                 "source": "sam.gov",
+                "type": "daily_extract",
                 "pulled_at": pulled_at.isoformat(),
                 "record_count": str(len(opportunities)),
-            }
+                "naics_matched_count": str(matched_count),
+                "target_naics_codes": ",".join(sorted(TARGET_NAICS_CODES)),
+                "date": POSTED_FROM,
+            },
+            api_url=os.getenv("API_URL", "http://localhost:8000"),
+            api_key=os.getenv("API_KEY"),
         )
-        etag = result.etag
-        print(f"✓ Upload successful (ETag: {etag})")
+        print(f"✓ Upload successful - Document ID: {document_id}")
 
-        # Create or update artifact record in database for frontend visibility
-        print(f"Creating/updating artifact record in database...")
-        artifact_service = ArtifactService()
-        async with database_service.get_session() as session:
-            artifact = await artifact_service.upsert_artifact(
-                session=session,
-                organization_id=UUID(DEFAULT_ORG_ID),
-                document_id=document_id,
-                artifact_type="uploaded",
-                bucket=bucket,
-                object_key=key,
-                original_filename=filename,
-                content_type="application/json",
-                file_size=file_size,
-                etag=etag,
-                status="completed",
-                file_metadata={
-                    "source": "sam.gov",
-                    "pulled_at": pulled_at.isoformat(),
-                    "record_count": len(opportunities),
-                    "naics_matched_count": matched_count,
-                    "target_naics_codes": sorted(TARGET_NAICS_CODES),
-                    "date": POSTED_FROM,
-                }
-            )
-            await session.commit()
-            print(f"✓ Artifact record created/updated (ID: {artifact.id})")
+        # TODO: API Rate Limit Handling
+        # SAM.gov API has limits: 1000 requests/hour, 10 requests/second
+        #
+        # When native SAM.gov integration is implemented, consider:
+        # 1. Track API usage in database (requests per hour)
+        # 2. Queue remaining opportunities for later processing
+        # 3. Create follow-up jobs for descriptions/resources that hit rate limits
+        # 4. Implement exponential backoff for rate limit errors
+        # 5. Store partial results and resume on next run
+        #
+        # For now, all data is fetched in a single run. If rate limits are hit,
+        # the script will fail and can be re-run after the rate limit window resets.
 
-        # Track follow-on API work for NAICS-matched records
-        # Deduplicate to avoid re-adding opportunities already in backlog
-        backlog_path = project_root / "storage" / "default" / "sam" / "api_backlog.json"
-        backlog = []
-
-        if backlog_path.exists():
-            backlog = json.loads(backlog_path.read_text())
-
-        # Build set of existing noticeIds for deduplication
-        existing_notice_ids = {item.get("noticeId") for item in backlog if item.get("noticeId")}
-        new_opportunities_count = 0
-
-        for opp in opportunities:
-            if not opp.get("_naics_match"):
-                continue
-
-            notice_id = opp.get("noticeId")
-            # Skip if already in backlog
-            if notice_id in existing_notice_ids:
-                continue
-
-            backlog.append({
-                "noticeId": notice_id,
-                "solicitationNumber": opp.get("solicitationNumber"),
-                "description_url": opp.get("description"),
-                "resourceLinks": opp.get("resourceLinks", []),
-                "priority": "description",
-            })
-            existing_notice_ids.add(notice_id)
-            new_opportunities_count += 1
-
-        backlog_path.parent.mkdir(parents=True, exist_ok=True)
-        backlog_path.write_text(json.dumps(backlog, indent=2))
-
-        if new_opportunities_count > 0:
-            print(f"✓ Added {new_opportunities_count} new opportunities to backlog (skipped {matched_count - new_opportunities_count} duplicates)")
-        else:
-            print(f"✓ No new opportunities to add (all {matched_count} already in backlog)")
-
-        return bucket, key, artifact.id
+        return document_id
 
     except Exception as e:
-        raise RuntimeError(f"Failed to upload to MinIO or create artifact: {e}")
+        raise RuntimeError(f"Failed to upload via backend API: {e}")
 
 
 async def main():
@@ -1574,9 +1416,9 @@ async def main():
         # Get timestamp for all uploads
         pulled_at = datetime.now(timezone.utc)
 
-        # Upload consolidated JSON file with descriptions to MinIO
+        # Upload consolidated JSON file via backend API
         print("Uploading consolidated JSON to object storage...")
-        bucket, key, artifact_id = await write_output(opportunities, pulled_at)
+        document_id = await write_output(opportunities, pulled_at)
         print()
 
         # Download resource files for NAICS-matched opportunities
@@ -1602,28 +1444,24 @@ async def main():
         print(f"  - {naics_matched_count} match target NAICS codes")
         print()
         print("Consolidated JSON file:")
-        print(f"  Location: {bucket}/{key}")
-        print(f"  Artifact ID: {artifact_id}")
+        print(f"  Document ID: {document_id}")
         print(f"  Includes full descriptions for all opportunities")
+        print(f"  View in frontend: http://localhost:3000/storage")
         print()
         if total_files_downloaded > 0:
             print(f"Resource files:")
             print(f"  Downloaded: {total_files_downloaded} files from {len(resource_results)} opportunities")
-            print(f"  Location: {bucket}/{DEFAULT_ORG_ID}/sam/<solicitationNumber>/")
-            print(f"  Organized by solicitation number")
+            print(f"  All files organized by solicitation number")
+            print(f"  View in frontend: http://localhost:3000/storage")
             print()
         if summary_result:
             print(f"Daily Summary Reports:")
             if 'md' in summary_result:
-                md_bucket, md_key, md_artifact_id = summary_result['md']
-                print(f"  Markdown:")
-                print(f"    Location: {md_bucket}/{md_key}")
-                print(f"    Artifact ID: {md_artifact_id}")
+                print(f"  Markdown Report:")
+                print(f"    Document ID: {summary_result['md']}")
             if 'pdf' in summary_result:
-                pdf_bucket, pdf_key, pdf_artifact_id = summary_result['pdf']
-                print(f"  PDF:")
-                print(f"    Location: {pdf_bucket}/{pdf_key}")
-                print(f"    Artifact ID: {pdf_artifact_id}")
+                print(f"  PDF Report:")
+                print(f"    Document ID: {summary_result['pdf']}")
             print(f"  AI-powered analysis of {naics_matched_count} opportunities")
             print()
         print(f"Organization: {DEFAULT_ORG_ID}")
@@ -1635,7 +1473,7 @@ async def main():
         print("View in MinIO Console:")
         print(f"  http://localhost:9001")
         print(f"  Login: minioadmin/minioadmin")
-        print(f"  Browse: {bucket}/{DEFAULT_ORG_ID}/sam/")
+        print(f"  Browse: curatore-uploads/{DEFAULT_ORG_ID}/sam/")
         print()
 
     except Exception as e:

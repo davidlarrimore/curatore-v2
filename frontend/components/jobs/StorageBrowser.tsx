@@ -61,6 +61,7 @@ export default function StorageBrowser({
   const [loading, setLoading] = useState<boolean>(true)
   const [error, setError] = useState<string | null>(null)
   const [bucketDropdownOpen, setBucketDropdownOpen] = useState<boolean>(false)
+  const [selectingFolder, setSelectingFolder] = useState<string | null>(null)
 
   // Get current bucket display name
   const currentBucketDisplay = buckets.find(b => b.name === currentBucket)?.display_name || currentBucket
@@ -159,6 +160,82 @@ export default function StorageBrowser({
       ])
     }
   }, [currentBucket, selectedFiles, onSelectionChange, maxSelections])
+
+  const handleFolderToggle = useCallback(async (folderName: string) => {
+    const folderPrefix = currentPrefix + folderName + '/'
+
+    try {
+      setSelectingFolder(folderName)
+
+      // Fetch all files in this folder recursively
+      const folderFiles = await fetchFolderFilesRecursively(currentBucket, folderPrefix)
+
+      // Check if all files in the folder are already selected
+      const folderFileKeys = new Set(folderFiles.map(f => `${currentBucket}:${f.key}`))
+      const allFolderFilesSelected = folderFiles.every(f =>
+        selectedFiles.some(sf => `${sf.bucket}:${sf.key}` === `${currentBucket}:${f.key}`)
+      )
+
+      if (allFolderFilesSelected) {
+        // Deselect all files in this folder
+        onSelectionChange(selectedFiles.filter(sf =>
+          !folderFileKeys.has(`${sf.bucket}:${sf.key}`)
+        ))
+      } else {
+        // Select all files in this folder
+        const newSelections = folderFiles.map(f => ({
+          key: f.key,
+          filename: f.filename,
+          bucket: currentBucket,
+          size: f.size,
+        }))
+
+        // Add to existing selections (avoid duplicates)
+        const existingKeys = new Set(selectedFiles.map(f => `${f.bucket}:${f.key}`))
+        const toAdd = newSelections.filter(f => !existingKeys.has(`${f.bucket}:${f.key}`))
+
+        if (maxSelections) {
+          const remaining = maxSelections - selectedFiles.length
+          if (remaining > 0) {
+            onSelectionChange([...selectedFiles, ...toAdd.slice(0, remaining)])
+          }
+        } else {
+          onSelectionChange([...selectedFiles, ...toAdd])
+        }
+      }
+    } catch (err) {
+      console.error('Failed to select folder:', err)
+    } finally {
+      setSelectingFolder(null)
+    }
+  }, [currentBucket, currentPrefix, selectedFiles, onSelectionChange, maxSelections])
+
+  const fetchFolderFilesRecursively = async (bucket: string, prefix: string): Promise<StorageFile[]> => {
+    const result = await objectStorageApi.browse(bucket, prefix)
+    let allFiles: StorageFile[] = [...result.files.filter(f => !f.is_folder)]
+
+    // Recursively fetch files from subfolders
+    for (const folder of result.folders) {
+      const subfolderFiles = await fetchFolderFilesRecursively(bucket, prefix + folder + '/')
+      allFiles = [...allFiles, ...subfolderFiles]
+    }
+
+    return allFiles
+  }
+
+  const getFolderSelectionState = useCallback((folderName: string): 'none' | 'partial' | 'all' => {
+    const folderPrefix = currentPrefix + folderName + '/'
+
+    // Check files that belong to this folder (start with folder prefix)
+    const folderFileKeys = selectedFiles
+      .filter(f => f.bucket === currentBucket && f.key.startsWith(folderPrefix))
+
+    if (folderFileKeys.length === 0) return 'none'
+
+    // We can't easily determine total files without fetching, so we'll show 'partial'
+    // unless we happen to know all files are selected (which we don't without a fetch)
+    return 'partial'
+  }, [currentBucket, currentPrefix, selectedFiles])
 
   const isFileSelected = (file: StorageFile): boolean => {
     const fileKey = `${currentBucket}:${file.key}`
@@ -325,21 +402,54 @@ export default function StorageBrowser({
               </button>
             )}
 
-            {/* Folders */}
-            {folders.map(folder => (
-              <button
-                key={folder}
-                onClick={() => handleNavigateToFolder(folder)}
-                className="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors text-left"
-              >
-                <div className="w-10 h-10 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center">
-                  <Folder className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+            {/* Folders with selection */}
+            {folders.map(folder => {
+              const selectionState = getFolderSelectionState(folder)
+              const isSelected = selectionState !== 'none'
+              const isPartial = selectionState === 'partial'
+              const isSelecting = selectingFolder === folder
+
+              return (
+                <div
+                  key={folder}
+                  className={`flex items-center gap-3 px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${
+                    isSelected ? 'bg-indigo-50 dark:bg-indigo-900/20' : ''
+                  }`}
+                >
+                  {isSelecting ? (
+                    <div className="w-4 h-4 flex items-center justify-center">
+                      <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
+                    </div>
+                  ) : (
+                    <input
+                      type="checkbox"
+                      checked={isSelected}
+                      ref={(el) => {
+                        if (el) el.indeterminate = isPartial
+                      }}
+                      onChange={(e) => {
+                        e.stopPropagation()
+                        handleFolderToggle(folder)
+                      }}
+                      onClick={(e) => e.stopPropagation()}
+                      className="w-4 h-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                  )}
+                  <button
+                    onClick={() => handleNavigateToFolder(folder)}
+                    className="flex-1 flex items-center gap-3 text-left"
+                    disabled={isSelecting}
+                  >
+                    <div className="w-10 h-10 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center">
+                      <Folder className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                    </div>
+                    <span className="flex-1 text-sm font-medium text-gray-900 dark:text-white truncate">
+                      {folder}
+                    </span>
+                  </button>
                 </div>
-                <span className="flex-1 text-sm font-medium text-gray-900 dark:text-white truncate">
-                  {folder}
-                </span>
-              </button>
-            ))}
+              )
+            })}
 
             {/* Files with checkboxes */}
             {files.length > 0 && (

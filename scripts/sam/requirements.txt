@@ -1,0 +1,21 @@
+# SAM.gov Scripts Requirements
+#
+# TEMPORARY FILE - WILL BE REMOVED
+# This file is no longer needed as all dependencies have been added to backend/requirements.txt
+#
+# The SAM scripts run using the backend virtual environment which has all required dependencies.
+# This file is kept for documentation purposes only.
+#
+# ⚠️  DO NOT USE: Run `pip install -r backend/requirements.txt` instead
+#
+
+# All dependencies are now in backend/requirements.txt:
+# - requests>=2.31.0 (HTTP client for backend API calls)
+# - python-dotenv>=1.0.0 (Environment variable loading)
+# - All backend dependencies (SQLAlchemy, LLM libraries, etc.)
+
+# Optional: PDF generation for summary reports
+# These have system dependencies - see MIGRATION_GUIDE.md
+# Already in backend/requirements.txt:
+# - markdown>=3.5.0
+# - weasyprint>=60.0

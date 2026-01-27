@@ -13,6 +13,23 @@ Provides endpoints for:
 
 Uses integrated MinIO service (no separate microservice needed).
 All file operations are proxied through the backend for security and simplicity.
+
+IMPORTANT - TEMPORARY PROXY ENDPOINTS:
+    The /upload/proxy and /download/* proxy endpoints are TEMPORARY workarounds
+    for external scripts (e.g., SAM.gov import scripts) to upload files via the
+    backend API.
+
+    TODO: When native SAM.gov integration is built into the backend/frontend:
+    1. Remove /upload/proxy endpoint
+    2. Remove /download/{document_id}/proxy endpoint
+    3. Remove /object/download proxy endpoint
+    4. Remove scripts/sam/backend_upload.py helper
+    5. Replace with native SAM import/processing workflows
+    6. Use standard document upload/processing endpoints instead
+
+    These proxy endpoints should NOT be used for general frontend file operations.
+    They bypass normal upload workflows and should be removed once SAM integration
+    is natively implemented.
 """
 
 from __future__ import annotations
@@ -142,15 +159,24 @@ async def get_storage_health() -> StorageHealthResponse:
 
 
 # =========================================================================
-# UPLOAD (PROXY ONLY)
+# UPLOAD (PROXY ONLY) - TEMPORARY
 # =========================================================================
+#
+# TODO: REMOVE WHEN SAM.GOV INTEGRATION IS NATIVE
+# This endpoint is a TEMPORARY workaround for external SAM.gov scripts to upload
+# files via the backend API. It should be removed when native SAM integration is
+# built into the backend/frontend.
+#
+# See module docstring for complete removal checklist.
+#
 
 
 @router.post(
     "/upload/proxy",
     response_model=ConfirmUploadResponse,
-    summary="Upload file proxied through backend",
-    description="Upload file through backend (bypasses CORS and network issues).",
+    summary="[TEMPORARY] Upload file proxied through backend",
+    description="[TEMPORARY] Upload file through backend (bypasses CORS). "
+                "Used by external SAM.gov scripts. Will be removed when native SAM integration is implemented.",
 )
 async def proxy_upload(
     file: fastapi.UploadFile,
@@ -159,8 +185,14 @@ async def proxy_upload(
     """
     Upload file proxied through backend.
 
-    This endpoint receives the file from the frontend and uploads it to MinIO,
+    **TEMPORARY ENDPOINT**: This endpoint is a workaround for external SAM.gov
+    import scripts and should be removed when native SAM integration is built.
+
+    This endpoint receives the file from the client and uploads it to MinIO,
     bypassing CORS restrictions and network issues with direct presigned URL access.
+
+    TODO: Remove this endpoint when SAM.gov integration is natively implemented
+    in the backend/frontend. See module docstring for complete removal checklist.
     """
     _require_storage_enabled()
 
@@ -248,14 +280,19 @@ async def proxy_upload(
 
 
 # =========================================================================
-# DOWNLOAD (PROXY ONLY)
+# DOWNLOAD (PROXY ONLY) - TEMPORARY
 # =========================================================================
+#
+# TODO: REMOVE WHEN SAM.GOV INTEGRATION IS NATIVE
+# These download proxy endpoints are TEMPORARY workarounds and should be removed
+# when native SAM integration is built. See module docstring for removal checklist.
+#
 
 
 @router.get(
     "/download/{document_id}/proxy",
-    summary="Proxy download from storage",
-    description="Download file content proxied through backend (bypasses CORS).",
+    summary="[TEMPORARY] Proxy download from storage",
+    description="[TEMPORARY] Download file content proxied through backend. Will be removed when native SAM integration is implemented.",
 )
 async def proxy_download(
     document_id: str,
@@ -265,8 +302,13 @@ async def proxy_download(
     """
     Proxy download from object storage through the backend.
 
+    **TEMPORARY ENDPOINT**: This endpoint is a workaround for external scripts
+    and should be removed when native SAM integration is built.
+
     This endpoint fetches the file from MinIO and streams it to the client,
     bypassing CORS restrictions that would occur with direct presigned URL access.
+
+    TODO: Remove this endpoint when SAM.gov integration is natively implemented.
     """
     _require_storage_enabled()
 
@@ -1282,8 +1324,8 @@ async def rename_file(
 
 @router.get(
     "/object/download",
-    summary="Download object proxied through backend",
-    description="Download any object by bucket and key, proxied through backend (eliminates need for presigned URLs).",
+    summary="[TEMPORARY] Download object proxied through backend",
+    description="[TEMPORARY] Download any object by bucket and key, proxied through backend. Will be removed when native SAM integration is implemented.",
 )
 async def download_object_proxy(
     bucket: str = Query(..., description="Bucket name"),
@@ -1293,6 +1335,9 @@ async def download_object_proxy(
 ):
     """
     Download object proxied through backend.
+
+    **TEMPORARY ENDPOINT**: This endpoint is a workaround for external scripts
+    and should be removed when native SAM integration is built.
 
     This endpoint streams files from MinIO through the backend, eliminating the need
     for presigned URLs and direct browser-to-MinIO communication. All access is
@@ -1306,6 +1351,8 @@ async def download_object_proxy(
 
     Returns:
         StreamingResponse with file content
+
+    TODO: Remove this endpoint when SAM.gov integration is natively implemented.
     """
     _require_storage_enabled()
 

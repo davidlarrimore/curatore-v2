@@ -135,6 +135,7 @@ Introduce raw data into Curatore with full provenance.
 
 ---
 
+
 ## 2. Canonicalization (Automatic Extraction)
 
 ### Purpose
@@ -174,6 +175,147 @@ Ensure every asset has a **standard, reliable representation** for downstream pr
 Extraction is **not a job step**. It is a **platform guarantee**.
 
 ---
+
+### Large & Structured Document Handling (Hierarchical Extraction)
+
+Certain documents ingested into Curatore are **structurally complex and extremely large** (e.g., regulatory compendiums such as the Federal Acquisition Regulation, multi‑thousand‑page policy manuals, standards documents, or encyclopedic references).
+
+These documents must be handled **automatically** without requiring users to select a special workflow, job type, or extraction mode.
+
+#### Core Principle
+
+> **Document size or structural complexity must never require user intervention.  
+> Extraction strategy selection is a platform responsibility.**
+
+Large-document handling is an **extension of canonical extraction infrastructure**, not a separate workflow.
+
+---
+
+#### Extraction Strategy Selection
+
+During canonical extraction, the extractor inspects the asset to determine an appropriate strategy based on:
+- File size and page count
+- Structural signals (table of contents, headings, numbering)
+- Content type (text-based PDF, scanned PDF, mixed)
+
+Possible strategies include:
+- Simple extraction (single-unit output)
+- OCR-assisted extraction
+- Hierarchical extraction (multi-unit structured output)
+
+This decision is internal and invisible to the user.
+
+---
+
+#### Hierarchical Extraction Model
+
+For large structured documents, extraction produces a **hierarchical set of extracted units** rather than a single monolithic output.
+
+Key characteristics:
+- One raw asset
+- One `ExtractionResult`
+- Many extracted units, organized in a tree
+- Stable, deterministic unit identifiers
+- Addressable units for downstream processing
+
+#### Extraction Manifest
+
+Hierarchical extraction emits an **extraction manifest** describing the structure and outputs.
+
+Conceptual example:
+
+```json
+{
+  "manifest_type": "hierarchical",
+  "units": [
+    {
+      "unit_id": "part_15",
+      "title": "Part 15 — Contracting by Negotiation",
+      "path": ["Part 15"],
+      "content_ref": "extracted/asset/{asset_id}/v{version}/part_15.md",
+      "children": [
+        {
+          "unit_id": "15.404",
+          "title": "15.404 Proposal Analysis",
+          "path": ["Part 15", "15.404"],
+          "content_ref": "extracted/asset/{asset_id}/v{version}/15.404.md"
+        }
+      ]
+    }
+  ]
+}
+```
+
+The manifest itself is stored as an object-store artifact and referenced by the `ExtractionResult`.
+
+---
+
+#### Extended ExtractionResult (Conceptual)
+
+```
+ExtractionResult
+- asset_id
+- extractor_version
+- status
+- extraction_manifest_ref
+- warnings / errors
+- created_at
+```
+
+For non-hierarchical documents, the manifest contains a single root unit.
+
+---
+
+#### Downstream Processing & Search
+
+All downstream systems operate on **extracted units**, not raw pages:
+
+- Runs may target:
+  - Entire assets
+  - Specific extracted units
+  - Subtrees within the hierarchy
+- Deterministic filtering, keyword search, and semantic search operate at the unit level
+- Vector synchronization (if used) indexes extracted units, never raw blobs
+
+This enables:
+- Precise retrieval
+- Efficient LLM context usage
+- Scalable processing of very large documents
+
+---
+
+#### Metadata & Summaries for Large Documents
+
+Metadata may be produced at multiple levels:
+- Unit-level metadata (e.g., section summaries, tags)
+- Intermediate node metadata (e.g., Part-level summaries)
+- Document-level metadata (derived aggregations)
+
+All metadata follows standard `AssetMetadata` rules and is fully attributable to producing runs.
+
+---
+
+#### UI / UX Implications
+
+From the user’s perspective:
+- Large documents appear as **browsable structured documents**
+- Navigation is tree-based (parts, sections, subsections)
+- Extracted content is viewed per unit
+- Search is scoped to the document by default
+- No chunking, extraction strategy, or job selection is exposed
+
+Small documents continue to appear and behave exactly as they do today.
+
+---
+
+#### Backward Compatibility Guarantee
+
+- Manual uploads continue to trigger automatic extraction without configuration
+- Existing documents extracted as single units remain valid
+- Hierarchical extraction is additive and does not invalidate prior behavior
+- No existing APIs or workflows are removed or redefined
+
+This extension ensures Curatore can handle both everyday documents and extremely large reference corpora with a unified, intuitive user experience.
 
 ## Flexible Document Metadata Model
 
@@ -339,12 +481,61 @@ Users never edit metadata objects directly; they promote, demote, or regenerate 
 
 ---
 
-### Why This Works
 
-- No schema churn as metadata evolves
-- Clear provenance and auditability
-- Supports experimentation without polluting the canonical view
-- Aligns metadata creation with Curatore’s run and artifact model
+### In-Run Search & Ephemeral Semantic Computation
+
+### Search Access Model (Engineer Guidance)
+
+```
+Curatore exposes search as a run-scoped capability, not as a standalone platform service.
+
+All search and retrieval is accessed through a single, unified run-level interface that progressively applies increasingly expensive techniques as needed. Runs do not directly select or configure specific search backends.
+
+Search escalation follows this order:
+
+1. Deterministic filtering (always applied)
+   - Relational queries over assets, domain models, and canonical metadata
+   - Used to constrain scope by time, collection, status, or priority
+   - Requires no external services or connections
+
+2. Keyword / full-text search (automatic when applicable)
+   - Applied to canonical extracted content only
+   - Used to narrow candidate sets before further processing
+   - Implemented via database full-text search or in-process text scanning
+
+3. Ephemeral semantic search (run-scoped, optional)
+   - In-memory chunking, embedding generation, and similarity comparison
+   - Uses existing LLM embedding connections
+   - Embeddings are not persisted and are discarded when the run completes
+
+4. Persistent semantic search (optional, downstream)
+   - Implemented only via explicit output synchronization to a vector database
+   - Used for interactive or large-scale semantic retrieval
+   - Vector indexes are rebuildable and never treated as sources of truth
+
+Configuration principles:
+- Search behavior is owned by platform code, not user configuration
+- Runs may request semantic search, but never select infrastructure details
+- Users never configure search modes, thresholds, or models
+- Absence of a connection (e.g., vector DB or embeddings) gracefully disables that capability
+```
+
+Runs may perform transient search and retrieval operations over extracted content as part of processing or experimentation.
+
+This includes:
+- Deterministic filtering using relational data and canonical metadata
+- Keyword or full-text search over canonical extracted content
+- Ephemeral chunking, embedding generation, and similarity comparison executed in-memory during a run
+
+Ephemeral search and embeddings:
+- Are scoped to the lifetime of a single run
+- Are not persisted as system state
+- Do not create canonical metadata unless explicitly emitted as artifacts
+- Must be fully reproducible from inputs, configuration, and code
+
+Curatore does not require a persistent semantic index to support summaries, reports, or notifications. Persistent vector indexes, when needed, are implemented exclusively as output synchronization targets and must be fully rebuildable from canonical extracted content.
+
+---
 
 
 ## 3. Processing & Experimentation
@@ -496,7 +687,158 @@ Later, sync actions may be attached to automated runs.
 
 ---
 
+### Notifications & Messaging Outputs
+
+Email notifications, messaging, and webhook deliveries are treated as output synchronization actions.
+
+Notifications:
+- Consume existing canonical understanding and run artifacts
+- Produce rendered message artifacts attributable to a run
+- Must not create or mutate canonical metadata
+- Are observational outputs, not generators of system understanding
+
+Notification jobs are implemented as system or user-triggered runs and are fully observable through standard run status, events, and artifacts.
+
+---
+
 ## Web Scraping as a First-Class Domain
+
+
+## Structured Domain Ingestion: SAM.gov Opportunities
+
+### Overview
+
+SAM.gov ingestion represents a **structured domain ingestion pipeline** rather than simple document scraping. The SAM.gov API provides time-versioned, relational records (Solicitations and Notices) alongside unstructured supporting artifacts (attachments and linked documents). Curatore must treat this data as **durable business records** designed for reuse across multiple workflows and outputs.
+
+The SAM.gov pipeline must:
+- Preserve full historical fidelity
+- Separate structured domain records from unstructured assets
+- Enable downstream experimentation and reporting without re-ingestion
+- Align with Curatore’s asset, run, and metadata principles
+
+---
+
+### Domain Data Model (Conceptual)
+
+#### Solicitation (Relational, Long-Lived)
+Represents the long-lived procurement opportunity lifecycle.
+
+Fields (indicative):
+- `id`
+- `organization_id`
+- `sam_solicitation_number`
+- `title`
+- `agency_path_name`
+- `agency_path_code`
+- `naics_codes` (array)
+- `classification_code`
+- `set_aside_type`
+- `status` (open | archived | awarded | cancelled)
+- `open_date`
+- `close_date`
+- `archive_date`
+- `created_at`
+- `updated_at`
+
+#### Notice (Relational, Time-Versioned)
+Represents individual SAM.gov notices tied to a solicitation.
+
+Fields (indicative):
+- `id`
+- `solicitation_id` (FK)
+- `sam_notice_id`
+- `notice_type` (e.g. Solicitation, Award Notice, Special Notice)
+- `posted_date`
+- `response_deadline`
+- `active`
+- `raw_payload_ref`
+- `created_at`
+
+Each notice must preserve its full raw JSON payload as an immutable artifact in the object store.
+
+---
+
+### Unstructured Artifacts (Assets)
+
+Attachments and linked documents referenced by notices are ingested as standard Curatore assets:
+- Stored in the object store under `raw/asset/{asset_id}/`
+- Automatically extracted via canonical extraction
+- Linked to the originating notice via relational association
+
+These assets may be reused across multiple runs, experiments, reports, and output syncs.
+
+---
+
+### Raw Payload Preservation
+
+All SAM.gov API responses must be preserved in the object store:
+- Raw notice JSON payloads
+- Description endpoints (HTML/text)
+- Attachment metadata
+
+The database stores references, not inline payloads. This guarantees lossless ingestion and supports future reprocessing as requirements evolve.
+
+---
+
+### Ingestion & Execution Model
+
+SAM.gov ingestion is executed as a **scheduled system run**:
+
+- A `ScheduledTask` (e.g. `sam.daily_ingest`) triggers a system-originated `Run`
+- The run performs:
+  1. API fetch and pagination
+  2. Normalization into Solicitation and Notice records
+  3. Asset creation for attachments
+  4. Automatic extraction for new assets
+  5. Optional downstream processing (e.g. prioritization, summarization)
+
+Downstream processing must depend on extraction completion but does not require workflow orchestration. Runs query system state to determine readiness.
+
+---
+
+### Prioritization & Derived Intelligence
+
+Priority signals (e.g. NAICS matching, agency filters) are treated as **derived metadata**, not schema fields.
+
+- Stored as `AssetMetadata` or `NoticeMetadata`
+- Produced by runs
+- Promotable to canonical status
+- Comparable across experiments
+
+Executive summaries and daily reports are produced as run artifacts and may be synchronized externally.
+
+---
+
+### Multi-Use & Synchronization
+
+SAM.gov data is ingested once and reused many times.
+
+- SharePoint synchronization is an output sync referencing existing assets
+- No duplicate ingestion or re-scraping is permitted for downstream needs
+- Vectorization and RAG preparation operate on canonical extracted content
+
+This ensures consistency and avoids data divergence.
+
+---
+
+### UI / UX Implications
+
+SAM.gov collections are presented as **specialized record collections**:
+- Primary view: Solicitation list
+- Drill-down: Notices, attachments, extracted content, summaries
+- Users never interact with raw JSON or storage paths
+- Runs, extraction, and scheduling remain background concepts
+
+---
+
+### Architectural Requirements
+
+To support SAM.gov ingestion natively, Curatore must provide:
+- Relational domain models alongside assets
+- Run-attributed structured ingestion
+- Raw payload artifact preservation
+- Attachment-to-record linking
+- Metadata extensibility without schema churn
 
 Web scraping is expected to be:
 - The largest data source
@@ -1013,6 +1355,26 @@ These integrations are **not required** for Curatore’s core value and must not
 
 ---
 
+### Phase 7 — Native SAM.gov Domain Integration (Future)
+
+**Goal:** Migrate SAM.gov ingestion from scripts into Curatore as a first-class domain pipeline.
+
+**Backend**
+- Introduce Solicitation and Notice relational models
+- Implement SAM.gov API abstraction layer
+- Convert daily ingest script into a scheduled system run
+- Integrate attachment ingestion with asset + extraction pipeline
+- Enable derived metadata and reporting runs
+
+**Frontend**
+- Add SAM.gov collection type
+- Solicitation-centric browsing and filtering
+- Notice history and attachment visibility
+- Executive report access and export
+
+**Why this phase matters**
+This phase transforms ad-hoc ingestion into a durable, reusable intelligence capability without overfitting the core platform.
+
 ## Phase Coordination & Debuggability Principles
 
 Across all phases:
@@ -1027,3 +1389,31 @@ Progress should be tracked by:
 - Increased confidence in system state
 
 This phased approach prioritizes correctness, clarity, and user trust over feature count.
+
+---
+
+### Search, Summarization, and Notification Implementation by Phase
+
+The following guidance clarifies when search, summarization, and notification capabilities should be introduced:
+
+- Phase 0–1:
+  - Relational filtering and deterministic queries only
+  - No semantic search or embeddings
+  - No notifications
+
+- Phase 2:
+  - Optional lightweight keyword or full-text search over canonical extracted content
+  - Search used only to narrow candidate sets for runs
+
+- Phase 3:
+  - Ephemeral in-run semantic search (chunking, embeddings, similarity)
+  - LLM-based summarization and aggregation within runs
+  - No persistent semantic indexes
+
+- Phase 5:
+  - Scheduled notification and summary runs (email, webhook)
+  - Notifications implemented as output synchronization actions
+
+- Phase 6 (Optional):
+  - Persistent vector database synchronization for interactive or large-scale semantic retrieval
+  - Vector indexes treated as rebuildable downstream systems, never sources of truth

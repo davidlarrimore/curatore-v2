@@ -1,6 +1,20 @@
 # SAM.gov Integration Scripts
 
+⚠️  **TEMPORARY SCRIPTS - WILL BE REMOVED WHEN NATIVE SAM.GOV INTEGRATION IS IMPLEMENTED**
+
 Scripts for pulling data from SAM.gov (System for Award Management) API and storing in Curatore with AI-powered analysis.
+
+See `TODO_REMOVE_WHEN_NATIVE_SAM.md` for removal checklist.
+
+---
+
+## Prerequisites
+
+**Dependencies:**
+
+All required dependencies are included in `backend/requirements.txt` and will be automatically installed by the `run.sh` script.
+
+No separate installation is needed - the SAM scripts use the backend virtual environment.
 
 ---
 
@@ -74,6 +88,8 @@ cd /path/to/curatore-v2
 # 2. Configure .env (one-time)
 SAM_API_KEY=your-sam-gov-api-key
 DEFAULT_ORG_ID=your-org-uuid
+API_URL=http://localhost:8000
+# API_KEY=your-api-key  # Optional, only if ENABLE_AUTH=true
 
 # 3. Run the script (EASIEST - handles everything automatically)
 ./scripts/sam/run.sh
@@ -173,13 +189,17 @@ SAM_API_KEY=your-api-key-here
 # Organization ID from seed command (required)
 DEFAULT_ORG_ID=your-org-uuid
 
+# Backend API Configuration (required for file uploads via backend API)
+API_URL=http://localhost:8000
+# API_KEY=your-api-key  # Optional, only if ENABLE_AUTH=true
+
 # LLM Configuration (required for AI summaries)
 OPENAI_API_KEY=your-openai-api-key
 OPENAI_MODEL=gpt-4o-mini
 OPENAI_BASE_URL=https://api.openai.com/v1
 # Or use alternative LLM providers (Ollama, LiteLLM, etc.)
 
-# Object storage (required)
+# Object storage (required - used by backend for file storage)
 USE_OBJECT_STORAGE=true
 MINIO_ENDPOINT=minio:9000
 MINIO_ACCESS_KEY=admin
@@ -269,7 +289,7 @@ echo "DEFAULT_ORG_ID=your-org-uuid" >> .env
 ./scripts/init_storage.sh
 ```
 
-### "No module named 'app'"
+### "No module named 'requests'" or "No module named 'app'"
 
 **Cause:** Virtual environment not activated (if not using Docker)
 
@@ -471,7 +491,6 @@ for obj in objects:
 - ✅ AI-powered opportunity analysis and classification
 - ✅ Executive intelligence summaries
 - ✅ Markdown and PDF report generation with clickable links
-- ✅ Duplicate detection (skip already-pulled opportunities in backlog)
 - ✅ Retry logic with exponential backoff for API reliability
 - ✅ Organized folder structure (daily_extract, daily_extract_summary, attachments)
 - ✅ Database tracking for all files (frontend visibility)
@@ -479,6 +498,11 @@ for obj in objects:
 - ✅ Idempotent operations (safe to run multiple times per day)
 
 ### Future Enhancements
+- [ ] API rate limit handling (1000 req/hour limit)
+  - Track API usage in database
+  - Queue remaining opportunities for later processing
+  - Create follow-up jobs when rate limits are hit
+  - Implement exponential backoff for rate limit errors
 - [ ] Add `--dry-run` flag for testing without uploads
 - [ ] Add `--date-range` CLI argument for custom date ranges
 - [ ] Add `--agencies` CLI argument for custom agency filters

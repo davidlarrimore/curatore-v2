@@ -149,22 +149,20 @@ export function FileSelector({
  * Extract document ID from storage key.
  *
  * Storage keys follow the pattern: {org_id}/{document_id}/uploaded/{filename}
- * This extracts the document_id portion.
+ * This extracts the document_id portion. Only accepts valid UUIDs.
  */
 function extractDocumentId(key: string): string {
   const parts = key.split('/')
   // Key format: org_id/document_id/uploaded/filename
   if (parts.length >= 4 && parts[2] === 'uploaded') {
     const documentId = parts[1]
-    // Validate it's not a file path (must be UUID or doc_* format)
-    if (documentId && !documentId.includes('.') && (
-      documentId.startsWith('doc_') ||
-      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(documentId)
-    )) {
-      return documentId
+    // Only accept valid UUIDs
+    const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (documentId && UUID_PATTERN.test(documentId)) {
+      return documentId.toLowerCase()
     }
   }
-  // If we can't extract a valid document_id, return empty string
+  // If we can't extract a valid UUID, return empty string
   // This will cause the file to be filtered out
   return ''
 }
