@@ -983,8 +983,55 @@ async def delete_file(
                     matching_artifact = artifact
                     break
 
+            # Get the parent folder path before deleting
+            parent_folder = None
+            if "/" in key:
+                parent_folder = key.rsplit("/", 1)[0] + "/"
+
+            # Check if this is the last file in the folder (if in a folder)
+            preserve_folder = False
+            if parent_folder:
+                # List all objects in the parent folder
+                folder_objects = list(minio.client.list_objects(
+                    bucket,
+                    prefix=parent_folder,
+                    recursive=False
+                ))
+
+                # Count non-folder files (excluding the one being deleted and folder markers)
+                remaining_files = [
+                    obj for obj in folder_objects
+                    if not obj.is_dir
+                    and obj.object_name != key
+                    and not obj.object_name.endswith("/")
+                ]
+
+                # If this is the last file, preserve the folder
+                if len(remaining_files) == 0:
+                    preserve_folder = True
+                    logger.info(f"Last file in folder {parent_folder}, will preserve folder marker")
+
             # Delete from storage
             minio.delete_object(bucket, key)
+
+            # If this was the last file in a folder, ensure folder marker exists
+            if preserve_folder and parent_folder:
+                try:
+                    # Check if folder marker exists
+                    folder_exists = minio.object_exists(bucket, parent_folder)
+                    if not folder_exists:
+                        # Create folder marker to preserve the folder structure
+                        from io import BytesIO
+                        minio.client.put_object(
+                            bucket_name=bucket,
+                            object_name=parent_folder,
+                            data=BytesIO(b""),
+                            length=0,
+                            content_type="application/x-directory",
+                        )
+                        logger.info(f"Created folder marker to preserve folder: {bucket}/{parent_folder}")
+                except Exception as folder_error:
+                    logger.warning(f"Failed to preserve folder marker: {folder_error}")
 
             # If artifact exists, mark as deleted
             if matching_artifact:

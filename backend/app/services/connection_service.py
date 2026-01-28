@@ -263,32 +263,61 @@ class SharePointConnectionType(BaseConnectionType):
                         error="Empty access_token in response"
                     )
 
-                # Test token with a simple API call
+                # Test token with SharePoint sites endpoint
+                # This validates credentials have proper SharePoint permissions
                 graph_base_url = config.get("graph_base_url", "https://graph.microsoft.com/v1.0")
                 test_response = await client.get(
-                    f"{graph_base_url}/me",
+                    f"{graph_base_url}/sites?$top=1",
                     headers={"Authorization": f"Bearer {access_token}"}
                 )
 
-                # Note: /me endpoint will fail for app-only auth, but that's OK
-                # A 401/403 with valid error structure means connection works
-                if test_response.status_code in [200, 401, 403]:
+                if test_response.status_code == 200:
+                    # Successfully accessed SharePoint sites
+                    try:
+                        data = test_response.json()
+                        site_count = len(data.get("value", []))
+                        return ConnectionTestResult(
+                            success=True,
+                            status="healthy",
+                            message="Successfully authenticated with Microsoft Graph API",
+                            details={
+                                "tenant_id": tenant_id,
+                                "graph_endpoint": graph_base_url,
+                                "sites_accessible": site_count > 0
+                            }
+                        )
+                    except Exception:
+                        # Valid response but couldn't parse
+                        return ConnectionTestResult(
+                            success=True,
+                            status="healthy",
+                            message="Successfully authenticated with Microsoft Graph API",
+                            details={
+                                "tenant_id": tenant_id,
+                                "graph_endpoint": graph_base_url
+                            }
+                        )
+                elif test_response.status_code == 401:
                     return ConnectionTestResult(
-                        success=True,
-                        status="healthy",
-                        message="Successfully authenticated with Microsoft Graph API",
-                        details={
-                            "tenant_id": tenant_id,
-                            "graph_endpoint": graph_base_url
-                        }
+                        success=False,
+                        status="unhealthy",
+                        message="Authentication failed - invalid credentials or expired token",
+                        error="HTTP 401 Unauthorized"
                     )
-
-                return ConnectionTestResult(
-                    success=False,
-                    status="unhealthy",
-                    message="Unexpected response from Graph API",
-                    error=f"HTTP {test_response.status_code}"
-                )
+                elif test_response.status_code == 403:
+                    return ConnectionTestResult(
+                        success=False,
+                        status="unhealthy",
+                        message="Insufficient permissions - missing Sites.Read.All or Files.Read.All",
+                        error="HTTP 403 Forbidden"
+                    )
+                else:
+                    return ConnectionTestResult(
+                        success=False,
+                        status="unhealthy",
+                        message="Unexpected response from Graph API",
+                        error=f"HTTP {test_response.status_code}: {test_response.text[:200]}"
+                    )
 
         except httpx.TimeoutException:
             return ConnectionTestResult(

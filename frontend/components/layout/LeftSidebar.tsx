@@ -1,18 +1,15 @@
 // components/layout/LeftSidebar.tsx
 'use client'
 
-import { useState, useEffect } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { Fragment } from 'react'
 import { Dialog, Transition } from '@headlessui/react'
 import {
   X,
   FileText,
-  Settings,
   PanelLeftOpen,
   PanelLeftClose,
   Link as LinkIcon,
-  Users,
   Shield,
   HardDrive,
   Database,
@@ -21,9 +18,7 @@ import {
   ChevronRight,
   LayoutDashboard
 } from 'lucide-react'
-import { systemApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
-import { OCRSettings } from '@/types'
 import clsx from 'clsx'
 import Image from 'next/image'
 
@@ -65,30 +60,6 @@ export function LeftSidebar({
   const pathname = usePathname()
   const { user, isAuthenticated } = useAuth()
 
-  // Settings state for quick settings panel
-  const [settingsData, setSettingsData] = useState({
-    ocrSettings: {
-      language: 'eng',
-      psm: 3
-    } as OCRSettings
-  })
-
-  // Load settings when component mounts
-  useEffect(() => {
-    loadSettings()
-  }, [])
-
-  const loadSettings = async () => {
-    try {
-      const config = await systemApi.getConfig()
-      setSettingsData({
-        ocrSettings: config.ocr_settings
-      })
-    } catch (error) {
-      console.error('Failed to load settings:', error)
-    }
-  }
-
   // Navigation items with gradients for active states
   const navigation: NavItem[] = [
     {
@@ -116,25 +87,11 @@ export function LeftSidebar({
     ] : []),
     ...(isAuthenticated && user?.role === 'org_admin' ? [
       {
-        name: 'Users',
-        href: '/users',
-        icon: Users,
-        current: pathname === '/users',
-        gradient: 'from-amber-500 to-orange-500'
-      },
-      {
         name: 'Storage',
         href: '/storage',
         icon: HardDrive,
         current: pathname === '/storage',
         gradient: 'from-emerald-500 to-teal-500'
-      },
-      {
-        name: 'Admin Settings',
-        href: '/settings-admin',
-        icon: Shield,
-        current: pathname === '/settings-admin',
-        gradient: 'from-red-500 to-rose-600'
       }
     ] : [])
   ]
@@ -229,86 +186,37 @@ export function LeftSidebar({
 
       {/* Bottom section */}
       <div className="mt-auto border-t border-gray-100 dark:border-gray-800 p-3">
-        {/* Settings button */}
-        <button
-          onClick={() => {
-            router.push('/settings')
-            if (isMobile) onOpenChange(false)
-          }}
-          className={clsx(
-            "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
-            pathname === '/settings'
-              ? "bg-gray-100 dark:bg-gray-800 text-gray-900 dark:text-white"
-              : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
-            collapsed && !isMobile && "justify-center px-2"
-          )}
-          title={collapsed && !isMobile ? 'Settings' : ''}
-        >
-          <Settings
+        {/* Admin Settings button (only for org_admin) */}
+        {isAuthenticated && user?.role === 'org_admin' && (
+          <button
+            onClick={() => {
+              router.push('/settings-admin')
+              if (isMobile) onOpenChange(false)
+            }}
             className={clsx(
-              "w-5 h-5 shrink-0",
-              pathname === '/settings' ? "text-gray-700 dark:text-gray-300" : "text-gray-400 dark:text-gray-500"
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
+              pathname === '/settings-admin'
+                ? "bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-lg"
+                : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
+              collapsed && !isMobile && "justify-center px-2"
             )}
-          />
-          {(!collapsed || isMobile) && <span>Settings</span>}
-        </button>
-
-        {/* Status indicators */}
-        {collapsed && !isMobile ? (
-          <div className="mt-4 flex flex-col items-center gap-2">
-            <div
+            title={collapsed && !isMobile ? 'Admin Settings' : ''}
+          >
+            <Shield
               className={clsx(
-                "w-2.5 h-2.5 rounded-full transition-colors",
-                systemStatus.health === 'healthy' ? 'bg-emerald-500' : 'bg-red-500'
+                "w-5 h-5 shrink-0",
+                pathname === '/settings-admin' ? "text-white" : "text-gray-400 dark:text-gray-500"
               )}
-              title={`API: ${systemStatus.health}`}
             />
-            <div
-              className={clsx(
-                "w-2.5 h-2.5 rounded-full transition-colors",
-                systemStatus.llmConnected ? 'bg-emerald-500' : 'bg-amber-500'
-              )}
-              title={`LLM: ${systemStatus.llmConnected ? 'Connected' : 'Disconnected'}`}
-            />
-          </div>
-        ) : (
-          <div className="mt-3 px-3 py-3 bg-gray-50 dark:bg-gray-800/50 rounded-xl">
-            <p className="text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider mb-2">
-              System Status
-            </p>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-gray-500 dark:text-gray-400">API</span>
-                <div className={clsx(
-                  "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium",
-                  systemStatus.health === 'healthy'
-                    ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400"
-                    : "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400"
-                )}>
-                  <span className={clsx(
-                    "w-1.5 h-1.5 rounded-full",
-                    systemStatus.health === 'healthy' ? 'bg-emerald-500' : 'bg-red-500'
-                  )} />
-                  {systemStatus.health === 'healthy' ? 'Healthy' : 'Error'}
-                </div>
-              </div>
-              <div className="flex items-center justify-between">
-                <span className="text-xs text-gray-500 dark:text-gray-400">LLM</span>
-                <div className={clsx(
-                  "flex items-center gap-1.5 px-2 py-0.5 rounded-full text-xs font-medium",
-                  systemStatus.llmConnected
-                    ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400"
-                    : "bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400"
-                )}>
-                  <span className={clsx(
-                    "w-1.5 h-1.5 rounded-full",
-                    systemStatus.llmConnected ? 'bg-emerald-500' : 'bg-amber-500'
-                  )} />
-                  {systemStatus.llmConnected ? 'Connected' : 'Disconnected'}
-                </div>
-              </div>
-            </div>
-          </div>
+            {(!collapsed || isMobile) && (
+              <>
+                <span className="flex-1 text-left">Admin Settings</span>
+                {pathname === '/settings-admin' && (
+                  <ChevronRight className="w-4 h-4 text-white/70" />
+                )}
+              </>
+            )}
+          </button>
         )}
       </div>
     </div>

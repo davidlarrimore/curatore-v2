@@ -2,11 +2,14 @@
 
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
-import { settingsApi, systemApi } from '@/lib/api'
+import { settingsApi, systemApi, usersApi } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
+import { Badge } from '@/components/ui/Badge'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import { JobStatsWidget } from '@/components/admin/JobStatsWidget'
 import InfrastructureHealthPanel from '@/components/admin/InfrastructureHealthPanel'
+import UserInviteForm from '@/components/users/UserInviteForm'
+import UserEditForm from '@/components/users/UserEditForm'
 import {
   Settings,
   Building2,
@@ -18,8 +21,22 @@ import {
   ChevronDown,
   ChevronUp,
   FileText,
-  Lock
+  Lock,
+  Users,
+  UserPlus
 } from 'lucide-react'
+
+interface UserData {
+  id: string
+  email: string
+  username: string
+  full_name?: string
+  role: string
+  organization_id: string
+  is_active: boolean
+  created_at: string
+  last_login?: string
+}
 
 export default function SettingsAdminPage() {
   return (
@@ -38,8 +55,13 @@ function SettingsAdminContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
-  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'jobs' | 'infrastructure'>('organization')
+  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'jobs' | 'infrastructure' | 'users'>('organization')
   const [showMergedPreview, setShowMergedPreview] = useState(false)
+
+  // Users management state
+  const [users, setUsers] = useState<UserData[]>([])
+  const [showInviteForm, setShowInviteForm] = useState(false)
+  const [editingUser, setEditingUser] = useState<UserData | null>(null)
 
   // Job management settings
   const [jobConcurrencyLimit, setJobConcurrencyLimit] = useState(3)
@@ -61,6 +83,12 @@ function SettingsAdminContent() {
       loadSettings()
     }
   }, [token])
+
+  useEffect(() => {
+    if (token && activeTab === 'users') {
+      loadUsers()
+    }
+  }, [token, activeTab])
 
   const loadSettings = async () => {
     if (!token) return
@@ -116,6 +144,62 @@ function SettingsAdminContent() {
       setError(err.message || 'Failed to load settings')
     } finally {
       setIsLoading(false)
+    }
+  }
+
+  const loadUsers = async () => {
+    if (!token) return
+
+    try {
+      const response = await usersApi.listUsers(token)
+      setUsers(response.users)
+    } catch (err: any) {
+      setError(err.message || 'Failed to load users')
+    }
+  }
+
+  const handleInviteSuccess = async () => {
+    setShowInviteForm(false)
+    await loadUsers()
+  }
+
+  const handleEditSuccess = async () => {
+    setEditingUser(null)
+    await loadUsers()
+  }
+
+  const handleToggleActive = async (userId: string, isActive: boolean) => {
+    if (!token) return
+    if (!confirm(`Are you sure you want to ${isActive ? 'deactivate' : 'activate'} this user?`)) return
+
+    try {
+      await usersApi.updateUser(token, userId, { is_active: !isActive })
+      await loadUsers()
+    } catch (err: any) {
+      alert(`Failed to update user: ${err.message}`)
+    }
+  }
+
+  const handleDeleteUser = async (userId: string) => {
+    if (!token) return
+    if (!confirm('Are you sure you want to delete this user? This action cannot be undone.')) return
+
+    try {
+      await usersApi.deleteUser(token, userId)
+      await loadUsers()
+    } catch (err: any) {
+      alert(`Failed to delete user: ${err.message}`)
+    }
+  }
+
+  const getRoleBadgeVariant = (role: string): 'default' | 'secondary' | 'success' | 'warning' | 'error' | 'info' => {
+    switch (role) {
+      case 'admin':
+        return 'error'
+      case 'user':
+        return 'info'
+      default:
+        return 'secondary'
     }
   }
 
@@ -328,6 +412,17 @@ function SettingsAdminContent() {
               >
                 <Server className="w-4 h-4 mr-2" />
                 Infrastructure
+              </button>
+              <button
+                onClick={() => setActiveTab('users')}
+                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'users'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                <Users className="w-4 h-4 mr-2" />
+                Users
               </button>
             </nav>
           </div>
@@ -574,6 +669,143 @@ function SettingsAdminContent() {
 
             {activeTab === 'infrastructure' && (
               <InfrastructureHealthPanel />
+            )}
+
+            {activeTab === 'users' && (
+              <div className="space-y-6">
+                <div>
+                  <div className="flex justify-between items-center mb-4">
+                    <div>
+                      <h2 className="text-lg font-semibold text-gray-900 dark:text-white">User Management</h2>
+                      <p className="text-sm text-gray-600 dark:text-gray-400 mt-0.5">
+                        Invite users, manage roles, and control access
+                      </p>
+                    </div>
+                    <Button onClick={() => setShowInviteForm(true)} className="inline-flex items-center">
+                      <UserPlus className="w-4 h-4 mr-2" />
+                      Invite User
+                    </Button>
+                  </div>
+                </div>
+
+                {showInviteForm && (
+                  <div className="mb-6">
+                    <UserInviteForm
+                      onSuccess={handleInviteSuccess}
+                      onCancel={() => setShowInviteForm(false)}
+                    />
+                  </div>
+                )}
+
+                {editingUser && (
+                  <div className="mb-6">
+                    <UserEditForm
+                      user={editingUser}
+                      onSuccess={handleEditSuccess}
+                      onCancel={() => setEditingUser(null)}
+                    />
+                  </div>
+                )}
+
+                {/* Users Table */}
+                <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden">
+                  <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                    <thead className="bg-gray-50 dark:bg-gray-800/50">
+                      <tr>
+                        <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                          User
+                        </th>
+                        <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                          Role
+                        </th>
+                        <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                          Status
+                        </th>
+                        <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                          Last Login
+                        </th>
+                        <th className="px-6 py-3.5 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                          Actions
+                        </th>
+                      </tr>
+                    </thead>
+                    <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
+                      {users.map((userItem) => (
+                        <tr key={userItem.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center">
+                              <div>
+                                <div className="text-sm font-medium text-gray-900 dark:text-white">
+                                  {userItem.full_name || userItem.username}
+                                  {userItem.id === user?.id && (
+                                    <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">(You)</span>
+                                  )}
+                                </div>
+                                <div className="text-sm text-gray-500 dark:text-gray-400">
+                                  {userItem.email}
+                                </div>
+                                <div className="text-xs text-gray-400 dark:text-gray-500">
+                                  @{userItem.username}
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <Badge variant={getRoleBadgeVariant(userItem.role)}>
+                              {userItem.role}
+                            </Badge>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <Badge variant={userItem.is_active ? 'success' : 'secondary'}>
+                              {userItem.is_active ? 'Active' : 'Inactive'}
+                            </Badge>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
+                            {userItem.last_login ? new Date(userItem.last_login).toLocaleDateString() : 'Never'}
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
+                            <div className="flex justify-end gap-2">
+                              <Button
+                                variant="secondary"
+                                size="sm"
+                                onClick={() => setEditingUser(userItem)}
+                              >
+                                Edit
+                              </Button>
+                              {userItem.id !== user?.id && (
+                                <>
+                                  <Button
+                                    variant="secondary"
+                                    size="sm"
+                                    onClick={() => handleToggleActive(userItem.id, userItem.is_active)}
+                                  >
+                                    {userItem.is_active ? 'Deactivate' : 'Activate'}
+                                  </Button>
+                                  <Button
+                                    variant="destructive"
+                                    size="sm"
+                                    onClick={() => handleDeleteUser(userItem.id)}
+                                  >
+                                    Delete
+                                  </Button>
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+
+                  {users.length === 0 && (
+                    <div className="text-center py-12">
+                      <Users className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+                      <p className="text-sm font-medium text-gray-900 dark:text-white mb-1">No users found</p>
+                      <p className="text-sm text-gray-500 dark:text-gray-400">Invite users to get started.</p>
+                    </div>
+                  )}
+                </div>
+              </div>
             )}
           </div>
 

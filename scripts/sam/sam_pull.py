@@ -3,22 +3,25 @@
 SAM.gov DHS Opportunities Daily Pull Script
 
 Fetches opportunities from SAM.gov API for DHS components (ICE, CBP, USCIS)
-and stores them in object storage.
+and stores them in object storage with date-based folder organization.
 
 UPLOAD METHODS:
-    - Consolidated JSON & Summary Reports: Uploaded via backend API (receive UUIDs)
-    - Resource Files: Uploaded directly to MinIO (organized by solicitation number)
+    - All files uploaded directly to MinIO with custom folder structure
+    - Date-based organization for daily extracts and summaries
+    - Solicitation-based organization for resource files
 
 FILES UPLOADED:
     Consolidated JSON file (all opportunities with full descriptions):
-      Uploaded via backend API
+      Uploaded directly to MinIO
+      Path: {org_id}/sam/pull_{YYYYMMDD}/sam_pull_{YYYYMMDD}.json
       Filename: sam_pull_{date}.json
-      Receives UUID document ID
+      Contains all opportunities with NAICS-matched ones having full descriptions
 
     Daily Summary Report (AI-powered analysis - Markdown + PDF):
-      Uploaded via backend API
+      Uploaded directly to MinIO
+      Path: {org_id}/sam/pull_{YYYYMMDD}/sam_pull_summary_{YYYYMMDD}.md
+      Path: {org_id}/sam/pull_{YYYYMMDD}/sam_pull_summary_{YYYYMMDD}.pdf
       Filenames: sam_pull_summary_{date}.md, sam_pull_summary_{date}.pdf
-      Receive UUID document IDs
 
     Resource files (PDFs, DOCs, etc. from resourceLinks):
       Uploaded directly to MinIO with custom folder structure
@@ -26,6 +29,15 @@ FILES UPLOADED:
       Original filenames preserved from SAM.gov
       Files with same name are overwritten
       Only downloads for NAICS-matched opportunities
+
+FOLDER STRUCTURE:
+    {org_id}/sam/
+      pull_{YYYYMMDD}/                      # Date-based folders for daily runs
+        sam_pull_{YYYYMMDD}.json            # Consolidated JSON
+        sam_pull_summary_{YYYYMMDD}.md      # Daily summary (Markdown)
+        sam_pull_summary_{YYYYMMDD}.pdf     # Daily summary (PDF)
+      {solicitationNumber}/                 # Solicitation-based folders
+        {filename}                          # Resource files
 
 SETUP INSTRUCTIONS:
     1. Ensure Curatore v2 services are running:
@@ -92,9 +104,11 @@ SCHEDULE WITH CRON:
 VIEW RESULTS:
     - Frontend: http://localhost:3000/storage
       Navigate to: Default Storage > {org_id} > sam/
-        - daily_extract/ (JSON data files)
-        - daily_extract_summary/ (Markdown + PDF reports)
-        - {solicitationNumber}/ (Resource files)
+        - pull_{YYYYMMDD}/ (Daily extracts and summaries organized by date)
+          - sam_pull_{YYYYMMDD}.json
+          - sam_pull_summary_{YYYYMMDD}.md
+          - sam_pull_summary_{YYYYMMDD}.pdf
+        - {solicitationNumber}/ (Resource files organized by solicitation)
     - MinIO Console: http://localhost:9001
       Login: minioadmin/minioadmin
       Browse: curatore-uploads/{org_id}/sam/
@@ -109,26 +123,22 @@ WHAT IT DOES:
        - Merges description into opportunity record
        - Downloads files from resourceLinks URLs (adds api_key parameter)
        - Uploads files to {org_id}/sam/{solicitationNumber}/ folders
-       - Creates artifact records for each file
-    6. Uploads consolidated JSON file to {org_id}/sam/daily_extract/ folder (all opportunities)
+    6. Uploads consolidated JSON file to {org_id}/sam/pull_{YYYYMMDD}/ folder (all opportunities)
     7. Generates AI-powered daily summary report:
        - Analyzes each NAICS-matched opportunity using LLM
        - Classifies opportunity type (RFI, Industry Day, RFP, etc.)
        - Summarizes key information, timelines, and evaluation
        - Creates markdown report with all analyses
        - Converts markdown to PDF for email-friendly distribution
-       - Uploads to {org_id}/sam/daily_extract_summary/ (both .md and .pdf)
-    8. Creates or updates artifact records in database for frontend visibility
-    9. Adds new NAICS-matched opportunities to backlog (deduplicates by noticeId)
-    10. Displays summary with storage locations
+       - Uploads to {org_id}/sam/pull_{YYYYMMDD}/ (both .md and .pdf)
+    8. Displays summary with storage locations organized by date
 
 IDEMPOTENCY:
     This script is safe to run multiple times per day:
-    - Consolidated JSON file is updated (one file per day)
-    - Daily summary report is regenerated with latest data
+    - Consolidated JSON file is overwritten (same filename per day)
+    - Daily summary report is regenerated with latest data (overwrites existing)
     - Resource files are created/updated by filename
-    - Artifact records are updated with latest metadata
-    - Backlog only adds new opportunities (no duplicates)
+    - All files organized by date in {org_id}/sam/pull_{YYYYMMDD}/ folders
 
 LLM CONFIGURATION:
     The daily summary uses the LLM configured in config.yml or environment variables.
@@ -1044,7 +1054,7 @@ def markdown_to_pdf(markdown_content, output_stream=None):
     return output_stream
 
 
-async def generate_daily_summary(opportunities, pulled_at, resource_results):
+async def generate_daily_summary(opportunities, pulled_at, resource_results, date_folder):
     """
     Generate a comprehensive daily summary report using LLM analysis.
 
@@ -1052,9 +1062,10 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
         opportunities: List of all opportunity records
         pulled_at: Timestamp of the pull
         resource_results: Dict mapping notice_id to list of downloaded file artifact IDs
+        date_folder: Date string for folder organization (format: pull_YYYYMMDD)
 
     Returns:
-        Dict with uploaded file info: {'md': document_id, 'pdf': document_id}
+        Dict with uploaded file paths: {'md': object_key, 'pdf': object_key}
         or None if no matches
     """
     # Filter NAICS-matched opportunities
@@ -1193,21 +1204,41 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
     # Join into single markdown document
     markdown_content = "\n".join(report_lines)
 
-    # Upload markdown and PDF via backend API
+    # Upload markdown and PDF directly to MinIO (date-based folder structure)
+    from minio import Minio
+
+    # Initialize MinIO client for direct upload
+    minio_client = Minio(
+        "localhost:9000",
+        access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+        secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+        secure=False
+    )
+    bucket = os.getenv("MINIO_BUCKET_UPLOADS", "curatore-uploads")
+
+    # Ensure bucket exists
+    if not minio_client.bucket_exists(bucket):
+        minio_client.make_bucket(bucket)
+
     try:
-        base_filename = f"sam_pull_summary_{pulled_at.strftime('%Y%m%d')}"
+        # Extract date from date_folder which is "pull_YYYYMMDD"
+        date_str = date_folder.replace("pull_", "")
+        base_filename = f"sam_pull_summary_{date_str}"
         md_filename = f"{base_filename}.md"
         pdf_filename = f"{base_filename}.pdf"
 
         results = {}
 
-        # Upload markdown file via backend API
+        # Upload markdown file directly to MinIO
         md_bytes = markdown_content.encode('utf-8')
+        md_object_key = f"{DEFAULT_ORG_ID}/sam/{date_folder}/{md_filename}"
 
         try:
-            md_document_id = upload_file_to_backend(
-                file_content=md_bytes,
-                filename=md_filename,
+            minio_client.put_object(
+                bucket_name=bucket,
+                object_name=md_object_key,
+                data=BytesIO(md_bytes),
+                length=len(md_bytes),
                 content_type="text/markdown",
                 metadata={
                     "source": "sam.gov",
@@ -1215,12 +1246,11 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
                     "format": "markdown",
                     "generated_at": pulled_at.isoformat(),
                     "opportunity_count": str(len(matched_opportunities)),
-                },
-                api_url=os.getenv("API_URL", "http://localhost:8000"),
-                api_key=os.getenv("API_KEY"),
+                }
             )
-            results['md'] = md_document_id
-            print(f"  ✓ Uploaded markdown: {md_filename} - ID: {md_document_id}")
+            results['md'] = md_object_key
+            print(f"  ✓ Uploaded markdown: {md_filename}")
+            print(f"      Path: {bucket}/{md_object_key}")
         except Exception as md_error:
             print(f"  ✗ Failed to upload markdown: {md_error}")
             # Continue to try PDF upload even if markdown fails
@@ -1235,10 +1265,13 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
             try:
                 pdf_stream = markdown_to_pdf(markdown_content)
                 pdf_bytes = pdf_stream.getvalue()
+                pdf_object_key = f"{DEFAULT_ORG_ID}/sam/{date_folder}/{pdf_filename}"
 
-                pdf_document_id = upload_file_to_backend(
-                    file_content=pdf_bytes,
-                    filename=pdf_filename,
+                minio_client.put_object(
+                    bucket_name=bucket,
+                    object_name=pdf_object_key,
+                    data=BytesIO(pdf_bytes),
+                    length=len(pdf_bytes),
                     content_type="application/pdf",
                     metadata={
                         "source": "sam.gov",
@@ -1246,18 +1279,17 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
                         "format": "pdf",
                         "generated_at": pulled_at.isoformat(),
                         "opportunity_count": str(len(matched_opportunities)),
-                    },
-                    api_url=os.getenv("API_URL", "http://localhost:8000"),
-                    api_key=os.getenv("API_KEY"),
+                    }
                 )
-                results['pdf'] = pdf_document_id
-                print(f"  ✓ Uploaded PDF: {pdf_filename} - ID: {pdf_document_id}")
+                results['pdf'] = pdf_object_key
+                print(f"  ✓ Uploaded PDF: {pdf_filename}")
+                print(f"      Path: {bucket}/{pdf_object_key}")
 
             except Exception as e:
                 print(f"  ⚠ PDF generation/upload failed: {e}")
                 # Continue even if PDF fails - we have markdown
 
-        print(f"✓ Daily summary generated in daily_extract_summary/")
+        print(f"✓ Daily summary generated in sam/{date_folder}/")
         return results
 
     except Exception as e:
@@ -1265,19 +1297,20 @@ async def generate_daily_summary(opportunities, pulled_at, resource_results):
         return None
 
 
-async def write_output(opportunities, pulled_at):
+async def write_output(opportunities, pulled_at, date_folder):
     """
-    Write JSON output via backend API with artifact tracking.
+    Write JSON output directly to MinIO with date-based folder structure.
 
-    Uploads to object storage through backend API for proper UUID generation
-    and automatic artifact record creation.
+    Uploads to object storage with custom path organization:
+        {org_id}/sam/{date_folder}/sam_pull_{date}.json
 
     Args:
         opportunities: List of opportunity records from SAM.gov
         pulled_at: Timestamp of when opportunities were pulled
+        date_folder: Date string for folder organization (format: pull_YYYYMMDD)
 
     Returns:
-        str: UUID document ID assigned by backend
+        str: Object key (path) where file was stored
 
     Raises:
         RuntimeError: If upload fails
@@ -1328,19 +1361,38 @@ async def write_output(opportunities, pulled_at):
         "opportunities": opportunities,
     }
 
-    # Generate filename (date only)
-    # Multiple runs per day will create separate files with unique UUIDs
-    filename = f"sam_pull_{pulled_at.strftime('%Y%m%d')}.json"
+    # Generate filename (extract date from date_folder which is "pull_YYYYMMDD")
+    date_str = date_folder.replace("pull_", "")
+    filename = f"sam_pull_{date_str}.json"
 
     # Convert JSON to bytes
     json_bytes = json.dumps(output, indent=2, ensure_ascii=False).encode('utf-8')
 
-    # Upload via backend API
+    # Upload directly to MinIO with date-based folder structure
+    from minio import Minio
+
+    minio_client = Minio(
+        "localhost:9000",
+        access_key=os.getenv("MINIO_ACCESS_KEY", "minioadmin"),
+        secret_key=os.getenv("MINIO_SECRET_KEY", "minioadmin"),
+        secure=False
+    )
+    bucket = os.getenv("MINIO_BUCKET_UPLOADS", "curatore-uploads")
+
+    # Ensure bucket exists
+    if not minio_client.bucket_exists(bucket):
+        minio_client.make_bucket(bucket)
+
+    # Build path: {org_id}/sam/{date_folder}/{filename}
+    object_key = f"{DEFAULT_ORG_ID}/sam/{date_folder}/{filename}"
+
     try:
-        print(f"Uploading {filename} via backend API...")
-        document_id = upload_file_to_backend(
-            file_content=json_bytes,
-            filename=filename,
+        print(f"Uploading {filename} directly to MinIO...")
+        minio_client.put_object(
+            bucket_name=bucket,
+            object_name=object_key,
+            data=BytesIO(json_bytes),
+            length=len(json_bytes),
             content_type="application/json",
             metadata={
                 "source": "sam.gov",
@@ -1350,11 +1402,10 @@ async def write_output(opportunities, pulled_at):
                 "naics_matched_count": str(matched_count),
                 "target_naics_codes": ",".join(sorted(TARGET_NAICS_CODES)),
                 "date": POSTED_FROM,
-            },
-            api_url=os.getenv("API_URL", "http://localhost:8000"),
-            api_key=os.getenv("API_KEY"),
+            }
         )
-        print(f"✓ Upload successful - Document ID: {document_id}")
+        print(f"✓ Upload successful")
+        print(f"  Path: {bucket}/{object_key}")
 
         # TODO: API Rate Limit Handling
         # SAM.gov API has limits: 1000 requests/hour, 10 requests/second
@@ -1369,10 +1420,10 @@ async def write_output(opportunities, pulled_at):
         # For now, all data is fetched in a single run. If rate limits are hit,
         # the script will fail and can be re-run after the rate limit window resets.
 
-        return document_id
+        return object_key
 
     except Exception as e:
-        raise RuntimeError(f"Failed to upload via backend API: {e}")
+        raise RuntimeError(f"Failed to upload to MinIO: {e}")
 
 
 async def main():
@@ -1415,10 +1466,11 @@ async def main():
 
         # Get timestamp for all uploads
         pulled_at = datetime.now(timezone.utc)
+        date_folder = f"pull_{pulled_at.strftime('%Y%m%d')}"
 
-        # Upload consolidated JSON file via backend API
+        # Upload consolidated JSON file directly to MinIO with date-based folder
         print("Uploading consolidated JSON to object storage...")
-        document_id = await write_output(opportunities, pulled_at)
+        json_object_key = await write_output(opportunities, pulled_at, date_folder)
         print()
 
         # Download resource files for NAICS-matched opportunities
@@ -1434,7 +1486,7 @@ async def main():
         # Generate daily summary report with LLM analysis
         summary_result = None
         if naics_matched_count > 0:
-            summary_result = await generate_daily_summary(opportunities, pulled_at, resource_results)
+            summary_result = await generate_daily_summary(opportunities, pulled_at, resource_results, date_folder)
 
         # Summary
         print("=" * 80)
@@ -1444,36 +1496,43 @@ async def main():
         print(f"  - {naics_matched_count} match target NAICS codes")
         print()
         print("Consolidated JSON file:")
-        print(f"  Document ID: {document_id}")
-        print(f"  Includes full descriptions for all opportunities")
-        print(f"  View in frontend: http://localhost:3000/storage")
+        print(f"  Path: {json_object_key}")
+        print(f"  Includes full descriptions for all NAICS-matched opportunities")
         print()
         if total_files_downloaded > 0:
             print(f"Resource files:")
             print(f"  Downloaded: {total_files_downloaded} files from {len(resource_results)} opportunities")
             print(f"  All files organized by solicitation number")
-            print(f"  View in frontend: http://localhost:3000/storage")
             print()
         if summary_result:
             print(f"Daily Summary Reports:")
             if 'md' in summary_result:
                 print(f"  Markdown Report:")
-                print(f"    Document ID: {summary_result['md']}")
+                print(f"    Path: {summary_result['md']}")
             if 'pdf' in summary_result:
                 print(f"  PDF Report:")
-                print(f"    Document ID: {summary_result['pdf']}")
+                print(f"    Path: {summary_result['pdf']}")
             print(f"  AI-powered analysis of {naics_matched_count} opportunities")
             print()
         print(f"Organization: {DEFAULT_ORG_ID}")
         print()
+        print("Date-based folder structure:")
+        print(f"  {DEFAULT_ORG_ID}/sam/{date_folder}/")
+
+        # Extract date portion for display (remove "pull_" prefix)
+        date_str = date_folder.replace("pull_", "")
+        print(f"    ├── sam_pull_{date_str}.json")
+        print(f"    ├── sam_pull_summary_{date_str}.md")
+        print(f"    └── sam_pull_summary_{date_str}.pdf")
+        print()
         print("View in frontend:")
         print(f"  http://localhost:3000/storage")
-        print(f"  Navigate to: Default Storage > {DEFAULT_ORG_ID} > sam/")
+        print(f"  Navigate to: Default Storage > {DEFAULT_ORG_ID} > sam/ > {date_folder}/")
         print()
         print("View in MinIO Console:")
         print(f"  http://localhost:9001")
         print(f"  Login: minioadmin/minioadmin")
-        print(f"  Browse: curatore-uploads/{DEFAULT_ORG_ID}/sam/")
+        print(f"  Browse: curatore-uploads/{DEFAULT_ORG_ID}/sam/{date_folder}/")
         print()
 
     except Exception as e:

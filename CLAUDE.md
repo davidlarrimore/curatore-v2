@@ -824,9 +824,7 @@ When updating a page to match the design system:
 - [ ] `/process` (Document Processing)
 - [ ] `/jobs` (Job List)
 - [ ] `/jobs/[id]` (Job Details)
-- [ ] `/settings` (User Settings)
-- [ ] `/settings-admin` (Admin Settings)
-- [ ] `/users` (User Management)
+- [ ] `/settings-admin` (Admin Settings - includes Users tab)
 - [ ] `/storage` (Storage Management)
 - [x] `/connections` (Reference implementation)
 

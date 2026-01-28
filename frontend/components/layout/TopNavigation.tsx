@@ -5,7 +5,6 @@ import { useState } from 'react'
 import { usePathname, useRouter } from 'next/navigation'
 import {
   Menu,
-  Settings,
   RotateCcw,
   HelpCircle,
   Activity,
@@ -82,14 +81,12 @@ export function TopNavigation({
 
       const friendlyNames: Record<string, string> = {
         'process': 'Processing',
-        'settings': 'Settings',
         'settings-admin': 'Admin Settings',
         'connections': 'Connections',
         'login': 'Login',
         'analytics': 'Analytics',
         'batch': 'Batch Processing',
         'jobs': 'Jobs',
-        'users': 'Users',
         'storage': 'Storage'
       }
 
@@ -193,14 +190,6 @@ export function TopNavigation({
               title="Connections"
             >
               <LinkIcon className="w-4 h-4" />
-            </button>
-
-            <button
-              onClick={() => router.push('/settings')}
-              className="hidden sm:flex p-2 rounded-lg text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-              title="Settings"
-            >
-              <Settings className="w-4 h-4" />
             </button>
 
             <button

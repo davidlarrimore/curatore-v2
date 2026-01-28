@@ -137,11 +137,6 @@ export function AppLayout({ children }: AppLayoutProps) {
             e.preventDefault()
             setSidebarOpen(prev => !prev)
             break
-          case ',':
-            e.preventDefault()
-            // Navigate to settings
-            window.location.href = '/settings'
-            break
           case 'j':
             e.preventDefault()
             // Navigate to jobs page

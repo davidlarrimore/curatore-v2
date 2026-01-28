@@ -119,14 +119,14 @@ The following mechanisms prevent redirect loops:
 
 **Steps**:
 1. Logout completely
-2. Navigate to `http://localhost:3000/settings`
+2. Navigate to `http://localhost:3000/users`
 3. Verify redirect to login
 4. DON'T login yet - navigate to `http://localhost:3000/connections`
 5. Now login
 
 **Expected**:
 - ✓ After login, redirect to `/connections` (last attempted page)
-- ✓ Not redirected to `/settings` (first attempt)
+- ✓ Not redirected to `/users` (first attempt)
 
 **Status**: ☐ Pass ☐ Fail
 

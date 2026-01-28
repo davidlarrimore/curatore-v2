@@ -146,8 +146,19 @@ function StorageContent() {
     setError('')
     setSuccessMessage('')
     try {
-      // Use presigned URL for download
-      const blob = await objectStorageApi.downloadFile(artifact.document_id, artifact.artifact_type as any)
+      // Check if document_id is a valid UUID, otherwise use bucket/key
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      const isValidUuid = artifact.document_id && uuidRegex.test(artifact.document_id)
+
+      let blob: Blob
+      if (isValidUuid) {
+        // Use document_id based download for standard artifacts
+        blob = await objectStorageApi.downloadFile(artifact.document_id, artifact.artifact_type as any)
+      } else {
+        // Use bucket/key based download for custom path artifacts (e.g., SAM files)
+        blob = await objectStorageApi.downloadObject(artifact.bucket, artifact.object_key, false, token)
+      }
+
       utils.downloadBlob(blob, artifact.original_filename)
       setSuccessMessage(`Downloaded ${artifact.original_filename}`)
     } catch (err: any) {
@@ -332,7 +343,19 @@ function StorageContent() {
     setPreviewError(null)
 
     try {
-      const blob = await objectStorageApi.downloadFile(artifact.document_id, artifact.artifact_type as any)
+      // Check if document_id is a valid UUID, otherwise use bucket/key
+      const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+      const isValidUuid = artifact.document_id && uuidRegex.test(artifact.document_id)
+
+      let blob: Blob
+      if (isValidUuid) {
+        // Use document_id based download for standard artifacts
+        blob = await objectStorageApi.downloadFile(artifact.document_id, artifact.artifact_type as any)
+      } else {
+        // Use bucket/key based download for custom path artifacts (e.g., SAM files)
+        blob = await objectStorageApi.downloadObject(artifact.bucket, artifact.object_key, true, token)
+      }
+
       setPreviewBlob(blob)
     } catch (err: any) {
       console.error('Preview failed:', err)
