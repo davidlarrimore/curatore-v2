@@ -121,6 +121,17 @@ function AssetDetailContent() {
     }
   }, [token, assetId])
 
+  // Auto-poll when asset is processing
+  useEffect(() => {
+    if (asset?.status === 'pending') {
+      const intervalId = setInterval(() => {
+        loadAssetData()
+      }, 3000) // Poll every 3 seconds
+
+      return () => clearInterval(intervalId)
+    }
+  }, [asset?.status])
+
   const loadAssetData = async () => {
     if (!token || !assetId) return
 
@@ -172,15 +183,25 @@ function AssetDetailContent() {
   const handleReextract = async () => {
     if (!token || !assetId) return
 
+    if (!confirm('Re-extract this document? This will create a new extraction run.')) {
+      return
+    }
+
     setIsReextracting(true)
+    setError('')
     try {
-      await assetsApi.reextractAsset(token, assetId)
+      const run = await assetsApi.reextractAsset(token, assetId)
+
+      // Show success message
+      alert(`✅ Re-extraction started successfully!\n\nRun ID: ${run.id}\n\nThe page will refresh in a moment to show the new extraction status.`)
+
       // Reload asset data to show new run
       setTimeout(() => {
         loadAssetData()
-      }, 1000)
+      }, 2000)
     } catch (err: any) {
-      alert(`Failed to trigger re-extraction: ${err.message}`)
+      setError(`Failed to trigger re-extraction: ${err.message}`)
+      alert(`❌ Failed to trigger re-extraction: ${err.message}`)
     } finally {
       setIsReextracting(false)
     }
@@ -318,8 +339,10 @@ function AssetDetailContent() {
                 disabled={isReextracting || asset.status === 'pending'}
                 className="gap-2"
               >
-                <RefreshCw className={`w-4 h-4 ${isReextracting ? 'animate-spin' : ''}`} />
-                <span>Re-extract</span>
+                <RefreshCw className={`w-4 h-4 ${isReextracting || asset.status === 'pending' ? 'animate-spin' : ''}`} />
+                <span>
+                  {isReextracting ? 'Starting...' : asset.status === 'pending' ? 'Processing...' : 'Re-extract'}
+                </span>
               </Button>
             </div>
           </div>
