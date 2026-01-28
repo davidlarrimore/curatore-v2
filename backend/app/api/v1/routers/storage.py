@@ -49,6 +49,7 @@ from ....dependencies import get_current_user
 from ....services.artifact_service import artifact_service
 from ....services.database_service import database_service
 from ....services.minio_service import get_minio_service
+from ....services.upload_integration_service import upload_integration_service
 from ..models import (
     ConfirmUploadResponse,
     StorageHealthResponse,
@@ -258,7 +259,31 @@ async def proxy_upload(
                 file_size=info.get("size") if info else file_size,
                 etag=info.get("etag") if info else None,
             )
-            await session.commit()
+
+            # ============================================================
+            # Phase 0 Integration: Create Asset and trigger extraction
+            # ============================================================
+            try:
+                asset, run, extraction = await upload_integration_service.create_asset_and_trigger_extraction(
+                    session=session,
+                    artifact=artifact,
+                    uploader_id=current_user.id,
+                    additional_metadata={
+                        "upload_type": "proxy",
+                        "document_id": document_id,
+                    },
+                )
+                await session.commit()
+
+                logger.info(
+                    f"Phase 0: Created asset {asset.id}, run {run.id}, "
+                    f"extraction {extraction.id} for document {document_id}"
+                )
+            except Exception as e:
+                logger.error(f"Phase 0 integration failed for document {document_id}: {e}")
+                # Don't fail the upload - Phase 0 is additive
+                # Extraction can be triggered manually if needed
+            # ============================================================
 
             logger.info(
                 f"Proxied upload complete for document={document_id}, "

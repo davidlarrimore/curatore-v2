@@ -1421,3 +1421,135 @@ class ProtectedBucketsResponse(BaseModel):
                 "protected_buckets": ["curatore-processed", "curatore-temp"]
             }
         }
+
+
+# =========================================================================
+# PHASE 0: ASSET AND RUN MODELS
+# =========================================================================
+
+class AssetResponse(BaseModel):
+    """Asset response model."""
+    id: str = Field(..., description="Asset UUID")
+    organization_id: str = Field(..., description="Organization UUID")
+    source_type: str = Field(..., description="Source type (upload, sharepoint, web_scrape, sam_gov)")
+    source_metadata: Dict[str, Any] = Field(..., description="Source provenance metadata")
+    original_filename: str = Field(..., description="Original filename")
+    content_type: Optional[str] = Field(None, description="MIME type")
+    file_size: Optional[int] = Field(None, description="File size in bytes")
+    file_hash: Optional[str] = Field(None, description="SHA-256 hash")
+    raw_bucket: str = Field(..., description="Object storage bucket for raw content")
+    raw_object_key: str = Field(..., description="Object storage key for raw content")
+    status: str = Field(..., description="Asset status (pending, ready, failed, deleted)")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Update timestamp")
+    created_by: Optional[str] = Field(None, description="User UUID who created the asset")
+
+    class Config:
+        from_attributes = True
+
+
+class ExtractionResultResponse(BaseModel):
+    """Extraction result response model."""
+    id: str = Field(..., description="Extraction result UUID")
+    asset_id: str = Field(..., description="Asset UUID")
+    run_id: str = Field(..., description="Run UUID")
+    extractor_version: str = Field(..., description="Extractor version used")
+    status: str = Field(..., description="Extraction status (pending, running, completed, failed)")
+    extracted_bucket: Optional[str] = Field(None, description="Bucket for extracted content")
+    extracted_object_key: Optional[str] = Field(None, description="Key for extracted markdown")
+    structure_metadata: Optional[Dict[str, Any]] = Field(None, description="Structural metadata")
+    warnings: List[str] = Field(default_factory=list, description="Non-fatal warnings")
+    errors: List[str] = Field(default_factory=list, description="Errors (if failed)")
+    extraction_time_seconds: Optional[float] = Field(None, description="Extraction time")
+    created_at: datetime = Field(..., description="Creation timestamp")
+
+    class Config:
+        from_attributes = True
+
+
+class AssetVersionResponse(BaseModel):
+    """Asset version response model (Phase 1)."""
+    id: str = Field(..., description="Asset version UUID")
+    asset_id: str = Field(..., description="Parent asset UUID")
+    version_number: int = Field(..., description="Version number")
+    raw_bucket: str = Field(..., description="Object storage bucket")
+    raw_object_key: str = Field(..., description="Object storage key")
+    file_size: Optional[int] = Field(None, description="File size in bytes")
+    file_hash: Optional[str] = Field(None, description="SHA-256 hash")
+    content_type: Optional[str] = Field(None, description="MIME type")
+    is_current: bool = Field(..., description="Whether this is the current version")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    created_by: Optional[str] = Field(None, description="User UUID who created this version")
+
+    class Config:
+        from_attributes = True
+
+
+class AssetWithExtractionResponse(BaseModel):
+    """Asset with latest extraction result."""
+    asset: AssetResponse
+    extraction: Optional[ExtractionResultResponse] = None
+
+
+class AssetVersionHistoryResponse(BaseModel):
+    """Asset with version history (Phase 1)."""
+    asset: AssetResponse
+    versions: List[AssetVersionResponse] = Field(default_factory=list, description="Version history (newest first)")
+    total_versions: int = Field(..., description="Total number of versions")
+
+
+class RunLogEventResponse(BaseModel):
+    """Run log event response model."""
+    id: str = Field(..., description="Log event UUID")
+    run_id: str = Field(..., description="Run UUID")
+    level: str = Field(..., description="Log level (INFO, WARN, ERROR)")
+    event_type: str = Field(..., description="Event type (start, progress, retry, error, summary)")
+    message: str = Field(..., description="Human-readable message")
+    context: Optional[Dict[str, Any]] = Field(None, description="Machine-readable context")
+    created_at: datetime = Field(..., description="Event timestamp")
+
+    class Config:
+        from_attributes = True
+
+
+class RunResponse(BaseModel):
+    """Run response model."""
+    id: str = Field(..., description="Run UUID")
+    organization_id: str = Field(..., description="Organization UUID")
+    run_type: str = Field(..., description="Run type (extraction, processing, experiment, system_maintenance, sync)")
+    origin: str = Field(..., description="Run origin (user, system, scheduled)")
+    status: str = Field(..., description="Run status (pending, running, completed, failed, cancelled)")
+    input_asset_ids: List[str] = Field(default_factory=list, description="Input asset UUIDs")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Run configuration")
+    progress: Optional[Dict[str, Any]] = Field(None, description="Progress tracking")
+    results_summary: Optional[Dict[str, Any]] = Field(None, description="Results summary")
+    error_message: Optional[str] = Field(None, description="Error message (if failed)")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    started_at: Optional[datetime] = Field(None, description="Start timestamp")
+    completed_at: Optional[datetime] = Field(None, description="Completion timestamp")
+    created_by: Optional[str] = Field(None, description="User UUID who created the run")
+
+    class Config:
+        from_attributes = True
+
+
+class RunWithLogsResponse(BaseModel):
+    """Run with log events."""
+    run: RunResponse
+    logs: List[RunLogEventResponse] = Field(default_factory=list)
+
+
+class AssetsListResponse(BaseModel):
+    """Paginated assets list response."""
+    items: List[AssetResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class RunsListResponse(BaseModel):
+    """Paginated runs list response."""
+    items: List[RunResponse]
+    total: int
+    limit: int
+    offset: int

@@ -853,3 +853,452 @@ class Artifact(Base):
 
     def __repr__(self) -> str:
         return f"<Artifact(id={self.id}, document_id={self.document_id}, type={self.artifact_type})>"
+
+
+# ============================================================================
+# Phase 0 Models: Asset-Centric Architecture
+# ============================================================================
+
+
+class Asset(Base):
+    """
+    Asset model representing a document with full provenance tracking.
+
+    Assets are the canonical representation of documents in Curatore. Each asset
+    has immutable raw content stored in object storage, automatic extraction,
+    and full provenance information.
+
+    This model is part of Phase 0: Stabilization & Baseline Observability.
+
+    Attributes:
+        id: Unique asset identifier
+        organization_id: Organization that owns this asset
+        source_type: Where asset came from (upload, sharepoint, web_scrape, sam_gov)
+        source_metadata: JSONB with source-specific details (URL, timestamp, uploader, etc.)
+        original_filename: Original filename from source
+        content_type: MIME type of the asset
+        file_size: File size in bytes
+        file_hash: SHA-256 hash for content deduplication
+        raw_bucket: Object storage bucket for raw content
+        raw_object_key: Object storage key for raw content
+        status: Asset status (pending, ready, failed, deleted)
+        created_at: When asset was created
+        updated_at: When asset was last updated
+        created_by: User who created this asset (nullable for system ingestion)
+
+    Relationships:
+        organization: Organization that owns this asset
+        user: User who created this asset
+        extraction_results: List of extraction attempts for this asset
+        runs_as_input: Runs that used this asset as input
+
+    Asset Lifecycle:
+        1. Asset created with raw content in object storage
+        2. Automatic extraction triggered (creates ExtractionResult + Run)
+        3. Asset becomes "ready" when extraction succeeds
+        4. Asset may be reprocessed by multiple Runs
+    """
+
+    __tablename__ = "assets"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Source provenance
+    source_type = Column(String(50), nullable=False, index=True)  # upload, sharepoint, web_scrape, sam_gov
+    source_metadata = Column(JSON, nullable=False, default=dict, server_default="{}")
+
+    # File metadata
+    original_filename = Column(String(500), nullable=False)
+    content_type = Column(String(255), nullable=True)
+    file_size = Column(Integer, nullable=True)
+    file_hash = Column(String(64), nullable=True, index=True)  # SHA-256 for deduplication
+
+    # Object storage reference
+    raw_bucket = Column(String(255), nullable=False)
+    raw_object_key = Column(String(1024), nullable=False)
+
+    # Status
+    status = Column(String(50), nullable=False, default="pending", index=True)  # pending, ready, failed, deleted
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+    created_by = Column(
+        UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Phase 1: Version tracking
+    current_version_number = Column(Integer, nullable=True, default=1)  # Track current version
+
+    # Relationships
+    organization = relationship("Organization")
+    user = relationship("User")
+    versions = relationship(
+        "AssetVersion", back_populates="asset", cascade="all, delete-orphan", order_by="AssetVersion.version_number"
+    )
+    extraction_results = relationship(
+        "ExtractionResult",
+        back_populates="asset",
+        cascade="all, delete-orphan",
+        foreign_keys="ExtractionResult.asset_id",
+    )
+
+    # Indexes for common queries
+    __table_args__ = (
+        Index("ix_assets_org_created", "organization_id", "created_at"),
+        Index("ix_assets_org_status", "organization_id", "status"),
+        Index("ix_assets_hash", "file_hash"),
+        Index("ix_assets_bucket_key", "raw_bucket", "raw_object_key", unique=True),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Asset(id={self.id}, filename={self.original_filename}, status={self.status})>"
+
+
+class AssetVersion(Base):
+    """
+    AssetVersion model for immutable asset version tracking (Phase 1).
+
+    Each time an asset's raw content changes, a new version is created.
+    Versions are immutable - the raw content never changes after creation.
+    Each version can have its own extraction results.
+
+    This enables:
+    - Version history (see all past versions of a document)
+    - Re-extraction (extract any version again)
+    - Non-destructive updates (old versions remain accessible)
+
+    Attributes:
+        id: Unique version identifier
+        asset_id: Parent asset
+        version_number: Sequential version number (1, 2, 3, ...)
+        raw_bucket: Object storage bucket for this version's raw content
+        raw_object_key: Object storage key for this version's raw content
+        file_size: File size in bytes
+        file_hash: SHA-256 hash of file content
+        content_type: MIME type
+        created_at: When this version was created
+        created_by: User who created this version (nullable for system)
+        is_current: Whether this is the current active version
+
+    Relationships:
+        asset: Parent asset
+        extraction_results: Extraction results for this specific version
+
+    Version Lifecycle:
+        1. User uploads new version of file
+        2. New AssetVersion created with version_number++
+        3. Asset.current_version_id updated to point to new version
+        4. Automatic extraction triggered for new version
+        5. Old versions remain accessible for history
+    """
+
+    __tablename__ = "asset_versions"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    asset_id = Column(
+        UUID(), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    version_number = Column(Integer, nullable=False)
+
+    # Raw content reference (immutable)
+    raw_bucket = Column(String(255), nullable=False)
+    raw_object_key = Column(String(1024), nullable=False)
+
+    # File metadata (snapshot at creation time)
+    file_size = Column(Integer, nullable=True)
+    file_hash = Column(String(64), nullable=True)  # SHA-256
+    content_type = Column(String(255), nullable=True)
+
+    # Version tracking
+    is_current = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    created_by = Column(
+        UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Relationships
+    asset = relationship("Asset", back_populates="versions")
+    extraction_results = relationship(
+        "ExtractionResult",
+        back_populates="asset_version",
+        cascade="all, delete-orphan",
+        foreign_keys="ExtractionResult.asset_version_id",
+    )
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_asset_versions_asset_id", "asset_id"),
+        Index("ix_asset_versions_asset_version", "asset_id", "version_number", unique=True),
+        Index("ix_asset_versions_current", "asset_id", "is_current"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AssetVersion(id={self.id}, asset_id={self.asset_id}, version={self.version_number})>"
+
+
+class Run(Base):
+    """
+    Run model representing any execution in Curatore.
+
+    Runs are the universal execution tracking mechanism. Every background activity
+    (extraction, processing, experiments, sync, maintenance) is represented as a Run.
+    Runs are fully observable with structured logging and progress tracking.
+
+    This model is part of Phase 0: Stabilization & Baseline Observability.
+
+    Attributes:
+        id: Unique run identifier
+        organization_id: Organization context for this run
+        run_type: Type of run (extraction, processing, experiment, system_maintenance, sync)
+        origin: Who/what triggered the run (user, system, scheduled)
+        status: Current run status (pending, running, completed, failed, cancelled)
+        input_asset_ids: JSON array of asset IDs used as input
+        config: JSONB with run-specific configuration
+        progress: JSONB with progress tracking (current, total, unit, percent)
+        results_summary: JSONB with aggregated results after completion
+        error_message: Error message if run failed
+        started_at: When run started executing
+        completed_at: When run completed (success or failure)
+        created_at: When run was created
+        created_by: User who created this run (nullable for system runs)
+
+    Relationships:
+        organization: Organization context for this run
+        user: User who created this run
+        extraction_results: Extraction results produced by this run
+        log_events: Structured log events for this run
+
+    Run Status Transitions (Strict):
+        pending → running → completed
+        pending → running → failed
+        pending → running → cancelled
+
+    Run Types:
+        - extraction: Automatic document extraction (system-triggered)
+        - processing: User-triggered document processing
+        - experiment: Experimental metadata generation
+        - system_maintenance: GC, orphan cleanup, etc.
+        - sync: Output synchronization to external systems
+    """
+
+    __tablename__ = "runs"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Run metadata
+    run_type = Column(String(50), nullable=False, index=True)
+    origin = Column(String(50), nullable=False, default="user")  # user, system, scheduled
+
+    # Run status
+    status = Column(String(50), nullable=False, default="pending", index=True)
+
+    # Input and configuration
+    input_asset_ids = Column(JSON, nullable=False, default=list, server_default="[]")
+    config = Column(JSON, nullable=False, default=dict, server_default="{}")
+
+    # Progress tracking
+    progress = Column(JSON, nullable=True)  # {current, total, unit, percent}
+
+    # Results
+    results_summary = Column(JSON, nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+    created_by = Column(
+        UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Relationships
+    organization = relationship("Organization")
+    user = relationship("User")
+    extraction_results = relationship(
+        "ExtractionResult", back_populates="run", cascade="all, delete-orphan"
+    )
+    log_events = relationship(
+        "RunLogEvent", back_populates="run", cascade="all, delete-orphan"
+    )
+
+    # Indexes for common queries
+    __table_args__ = (
+        Index("ix_runs_org_created", "organization_id", "created_at"),
+        Index("ix_runs_org_status", "organization_id", "status"),
+        Index("ix_runs_type_status", "run_type", "status"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<Run(id={self.id}, type={self.run_type}, status={self.status})>"
+
+
+class ExtractionResult(Base):
+    """
+    ExtractionResult model tracking document extraction attempts.
+
+    Extraction is automatic platform infrastructure in Curatore. Every asset gets
+    extracted to canonical markdown, and extraction attempts are tracked here.
+    ExtractionResults are always produced by a Run and are version-tracked.
+
+    This model is part of Phase 0: Stabilization & Baseline Observability.
+
+    Attributes:
+        id: Unique extraction result identifier
+        asset_id: Asset that was extracted
+        run_id: Run that performed the extraction
+        extractor_version: Version of extraction engine used (e.g., "markitdown-1.0")
+        status: Extraction status (pending, running, completed, failed)
+        extracted_bucket: Object storage bucket for extracted content
+        extracted_object_key: Object storage key for extracted markdown
+        structure_metadata: JSONB with structural information (sections, pages, etc.)
+        warnings: JSON array of non-fatal warnings
+        errors: JSON array of errors (if failed)
+        extraction_time_seconds: Time taken to extract
+        created_at: When extraction started
+
+    Relationships:
+        asset: Asset that was extracted
+        run: Run that performed the extraction
+
+    Extraction Lifecycle:
+        1. Asset created → triggers automatic extraction Run
+        2. ExtractionResult created in "pending" status
+        3. Extraction executes → status becomes "running"
+        4. On success → status "completed", extracted content stored
+        5. On failure → status "failed", errors recorded (non-blocking)
+
+    Important Notes:
+        - Extraction failures are visible but non-blocking
+        - Multiple extraction attempts may exist per asset (version changes)
+        - Extraction is always attributed to a Run
+    """
+
+    __tablename__ = "extraction_results"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    asset_id = Column(
+        UUID(), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    run_id = Column(
+        UUID(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    # Phase 1: Link to specific asset version
+    asset_version_id = Column(
+        UUID(), ForeignKey("asset_versions.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+
+    # Extractor information
+    extractor_version = Column(String(100), nullable=False)
+
+    # Extraction status
+    status = Column(String(50), nullable=False, default="pending", index=True)
+
+    # Extracted content reference
+    extracted_bucket = Column(String(255), nullable=True)
+    extracted_object_key = Column(String(1024), nullable=True)
+
+    # Structural metadata (for hierarchical extraction in Phase 4+)
+    structure_metadata = Column(JSON, nullable=True)
+
+    # Warnings and errors
+    warnings = Column(JSON, nullable=False, default=list, server_default="[]")
+    errors = Column(JSON, nullable=False, default=list, server_default="[]")
+
+    # Performance metrics
+    extraction_time_seconds = Column(Float, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    asset = relationship("Asset", back_populates="extraction_results")
+    run = relationship("Run", back_populates="extraction_results")
+    asset_version = relationship("AssetVersion", back_populates="extraction_results")
+
+    # Indexes for common queries
+    __table_args__ = (
+        Index("ix_extraction_asset_status", "asset_id", "status"),
+        Index("ix_extraction_run", "run_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ExtractionResult(id={self.id}, asset_id={self.asset_id}, status={self.status})>"
+
+
+class RunLogEvent(Base):
+    """
+    RunLogEvent model for structured run logging.
+
+    Provides structured, queryable logging for all run activity. Stores
+    human-readable messages alongside machine-readable context for debugging,
+    auditing, and UI timelines. Replaces ad-hoc logging patterns.
+
+    This model is part of Phase 0: Stabilization & Baseline Observability.
+
+    Attributes:
+        id: Unique log event identifier
+        run_id: Run this event belongs to
+        level: Log level (INFO, WARN, ERROR)
+        event_type: Event classification (start, progress, retry, error, summary)
+        message: Human-readable message
+        context: JSONB with machine-readable context
+        created_at: When event occurred
+
+    Relationships:
+        run: Run this event belongs to
+
+    Log Levels:
+        - INFO: General progress and informational messages
+        - WARN: Non-critical issues or warnings
+        - ERROR: Errors and failures
+
+    Event Types:
+        - start: Run started
+        - progress: Progress update
+        - retry: Retry attempt
+        - error: Error occurred
+        - summary: Final summary (for maintenance runs)
+
+    Usage Pattern:
+        - Store events in DB for queryability
+        - UI shows structured events by default
+        - Full verbose logs (stack traces) go to object store if needed
+        - Progress events update Run.progress field
+    """
+
+    __tablename__ = "run_log_events"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    run_id = Column(
+        UUID(), ForeignKey("runs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Event details
+    level = Column(String(20), nullable=False, index=True)  # INFO, WARN, ERROR
+    event_type = Column(String(50), nullable=False, index=True)  # start, progress, retry, error, summary
+    message = Column(Text, nullable=False)
+    context = Column(JSON, nullable=True)  # Machine-readable details
+
+    # Timestamp
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+
+    # Relationships
+    run = relationship("Run", back_populates="log_events")
+
+    # Indexes for common queries
+    __table_args__ = (
+        Index("ix_run_log_run_created", "run_id", "created_at"),
+        Index("ix_run_log_level", "level"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<RunLogEvent(id={self.id}, run_id={self.run_id}, level={self.level}, type={self.event_type})>"

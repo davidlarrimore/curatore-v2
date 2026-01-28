@@ -1851,6 +1851,209 @@ export const usersApi = {
   },
 }
 
+// ============================================================================
+// Assets API (Phase 1)
+// ============================================================================
+
+export interface Asset {
+  id: string
+  organization_id: string
+  source_type: string
+  source_metadata: Record<string, any>
+  original_filename: string
+  content_type: string | null
+  file_size: number | null
+  file_hash: string | null
+  raw_bucket: string
+  raw_object_key: string
+  status: string
+  current_version_number: number | null
+  created_at: string
+  updated_at: string
+  created_by: string | null
+}
+
+export interface AssetVersion {
+  id: string
+  asset_id: string
+  version_number: number
+  raw_bucket: string
+  raw_object_key: string
+  file_size: number | null
+  file_hash: string | null
+  content_type: string | null
+  is_current: boolean
+  created_at: string
+  created_by: string | null
+}
+
+export interface ExtractionResult {
+  id: string
+  asset_id: string
+  run_id: string
+  asset_version_id: string | null
+  extractor_version: string
+  status: string
+  extracted_bucket: string | null
+  extracted_object_key: string | null
+  structure_metadata: Record<string, any> | null
+  warnings: string[]
+  errors: string[]
+  extraction_time_seconds: number | null
+  created_at: string
+}
+
+export interface Run {
+  id: string
+  organization_id: string
+  run_type: string
+  origin: string
+  status: string
+  input_asset_ids: string[]
+  config: Record<string, any>
+  progress: Record<string, any> | null
+  results_summary: Record<string, any> | null
+  error_message: string | null
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  created_by: string | null
+}
+
+export interface RunLogEvent {
+  id: string
+  run_id: string
+  level: string
+  event_type: string
+  message: string
+  context: Record<string, any> | null
+  created_at: string
+}
+
+export interface AssetWithExtraction {
+  asset: Asset
+  extraction: ExtractionResult | null
+}
+
+export interface AssetVersionHistory {
+  asset: Asset
+  versions: AssetVersion[]
+  total_versions: number
+}
+
+export const assetsApi = {
+  /**
+   * List assets for the organization
+   */
+  async listAssets(params?: {
+    source_type?: string
+    status?: string
+    limit?: number
+    offset?: number
+  }): Promise<{ items: Asset[]; total: number; limit: number; offset: number }> {
+    const searchParams = new URLSearchParams()
+    if (params?.source_type) searchParams.append('source_type', params.source_type)
+    if (params?.status) searchParams.append('status', params.status)
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/assets?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...authHeaders() },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get asset by ID
+   */
+  async getAsset(assetId: string): Promise<Asset> {
+    const url = apiUrl(`/assets/${assetId}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...authHeaders() },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get asset with latest extraction result
+   */
+  async getAssetWithExtraction(assetId: string): Promise<AssetWithExtraction> {
+    const url = apiUrl(`/assets/${assetId}/extraction`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...authHeaders() },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get runs for an asset
+   */
+  async getAssetRuns(assetId: string): Promise<Run[]> {
+    const url = apiUrl(`/assets/${assetId}/runs`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...authHeaders() },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Trigger manual re-extraction for an asset
+   */
+  async reextractAsset(assetId: string): Promise<Run> {
+    const url = apiUrl(`/assets/${assetId}/reextract`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders() },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get version history for an asset
+   */
+  async getAssetVersions(assetId: string): Promise<AssetVersionHistory> {
+    const url = apiUrl(`/assets/${assetId}/versions`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...authHeaders() },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get specific version of an asset
+   */
+  async getAssetVersion(assetId: string, versionNumber: number): Promise<AssetVersion> {
+    const url = apiUrl(`/assets/${assetId}/versions/${versionNumber}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...authHeaders() },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get run logs
+   */
+  async getRunLogs(runId: string, params?: {
+    level?: string
+    event_type?: string
+    limit?: number
+    offset?: number
+  }): Promise<{ run: Run; logs: RunLogEvent[] }> {
+    const searchParams = new URLSearchParams()
+    if (params?.level) searchParams.append('level', params.level)
+    if (params?.event_type) searchParams.append('event_type', params.event_type)
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/runs/${runId}/logs?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...authHeaders() },
+    })
+    return handleJson(res)
+  },
+}
+
 // Default export with all API modules
 export default {
   API_BASE_URL,
@@ -1867,5 +2070,6 @@ export default {
   storageApi,
   objectStorageApi,
   usersApi,
+  assetsApi,
   utils,
 }

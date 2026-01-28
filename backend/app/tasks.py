@@ -33,6 +33,7 @@ from .services.job_service import (
     append_job_log,
 )
 from .services.database_service import database_service
+from .services.extraction_orchestrator import extraction_orchestrator
 from .database.models import Job, JobDocument, JobLog
 from .config import settings
 
@@ -356,6 +357,80 @@ def update_document_content_task(self, document_id: str, payload: Dict[str, Any]
 
     storage_service.save_processing_result(result)
     return V1ProcessingResult.model_validate(result).model_dump()
+
+
+# ============================================================================
+# PHASE 0: EXTRACTION TASKS
+# ============================================================================
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def execute_extraction_task(
+    self,
+    asset_id: str,
+    run_id: str,
+    extraction_id: str,
+) -> Dict[str, Any]:
+    """
+    Execute automatic extraction for an Asset (Phase 0).
+
+    This task is triggered when an Asset is uploaded and orchestrates
+    the extraction process using extraction_orchestrator.
+
+    Args:
+        asset_id: Asset UUID string
+        run_id: Run UUID string
+        extraction_id: ExtractionResult UUID string
+
+    Returns:
+        Dict with extraction result details
+    """
+    from uuid import UUID
+
+    logger = logging.getLogger("curatore.tasks.extraction")
+    logger.info(f"Starting extraction task for asset {asset_id}")
+
+    try:
+        result = asyncio.run(
+            _execute_extraction_async(
+                asset_id=UUID(asset_id),
+                run_id=UUID(run_id),
+                extraction_id=UUID(extraction_id),
+            )
+        )
+
+        logger.info(f"Extraction completed for asset {asset_id}: {result.get('status')}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Extraction task failed for asset {asset_id}: {e}", exc_info=True)
+        raise
+
+
+async def _execute_extraction_async(
+    asset_id,
+    run_id,
+    extraction_id,
+) -> Dict[str, Any]:
+    """
+    Async wrapper for extraction orchestrator.
+
+    Args:
+        asset_id: Asset UUID
+        run_id: Run UUID
+        extraction_id: ExtractionResult UUID
+
+    Returns:
+        Dict with extraction result
+    """
+    async with database_service.get_session() as session:
+        result = await extraction_orchestrator.execute_extraction(
+            session=session,
+            asset_id=asset_id,
+            run_id=run_id,
+            extraction_id=extraction_id,
+        )
+        await session.commit()
+        return result
 
 
 # ============================================================================
