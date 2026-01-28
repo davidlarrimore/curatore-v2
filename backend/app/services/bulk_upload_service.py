@@ -210,75 +210,35 @@ class BulkUploadService:
 
         return analysis
 
-    async def apply_bulk_upload(
+    async def mark_assets_inactive(
         self,
         session: AsyncSession,
-        organization_id: UUID,
-        files: List[Tuple[str, bytes]],
-        user_id: Optional[UUID],
-        source_type: str = "upload",
-        mark_missing_inactive: bool = True,
-    ) -> Dict:
+        asset_ids: List[UUID],
+    ) -> List[UUID]:
         """
-        Apply bulk upload changes based on analysis.
+        Mark assets as inactive (non-destructive).
 
-        This method:
-        1. Creates new assets for new files
-        2. Creates new versions for updated files
-        3. Optionally marks missing files as inactive
-        4. Triggers automatic re-extraction for new/updated assets
+        Updates asset status to 'inactive' without deleting any data.
+        Preserves full history and allows reactivation if needed.
 
         Args:
             session: Database session
-            organization_id: Organization ID
-            files: List of (filename, file_bytes) tuples
-            user_id: User performing the upload
-            source_type: Source type for new assets
-            mark_missing_inactive: If True, mark missing assets as inactive
+            asset_ids: List of asset IDs to mark inactive
 
         Returns:
-            Dict with summary of applied changes and asset IDs
-
-        Example:
-            >>> result = await bulk_upload_service.apply_bulk_upload(
-            ...     session, org_id, files, user_id
-            ... )
-            >>> print(f"Created {result['created_count']} new assets")
+            List of successfully marked asset IDs
         """
-        # First analyze the upload
-        analysis = await self.analyze_bulk_upload(
-            session=session,
-            organization_id=organization_id,
-            files=files,
-            source_type=source_type,
-        )
+        marked = []
+        for asset_id in asset_ids:
+            asset = await asset_service.get_asset(session=session, asset_id=asset_id)
+            if asset:
+                # Update status to inactive
+                asset.status = "inactive"
+                session.add(asset)
+                marked.append(asset_id)
+                logger.info(f"Marked asset {asset_id} as inactive")
 
-        created_assets = []
-        updated_assets = []
-        marked_inactive = []
-
-        # TODO: Actual file upload to object storage and asset creation
-        # This will be implemented in the next step when we wire up the API endpoint
-        # For now, we just return the analysis
-
-        logger.info(
-            "Bulk upload would create %d assets, update %d assets, mark %d inactive",
-            len(analysis.new),
-            len(analysis.updated),
-            len(analysis.missing) if mark_missing_inactive else 0,
-        )
-
-        return {
-            "analysis": analysis.to_dict(),
-            "created_assets": created_assets,
-            "updated_assets": updated_assets,
-            "marked_inactive": marked_inactive,
-            "summary": {
-                "created_count": len(created_assets),
-                "updated_count": len(updated_assets),
-                "marked_inactive_count": len(marked_inactive),
-            },
-        }
+        return marked
 
 
 # Global service instance
