@@ -10,8 +10,9 @@ from typing import Optional, List, Dict, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
+from sqlalchemy import select, func
 
-from ....database.models import User
+from ....database.models import User, Asset
 from ....dependencies import get_current_user
 from ....services.database_service import database_service
 from ....services.asset_service import asset_service
@@ -829,8 +830,6 @@ async def get_collection_health(
             "last_updated": "2026-01-28T12:00:00Z"
         }
     """
-    from sqlalchemy import func
-
     async with database_service.get_session() as session:
         organization_id = current_user.organization_id
 
