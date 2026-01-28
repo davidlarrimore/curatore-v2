@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { Button } from './ui/Button'
 import {
   X,
@@ -10,7 +10,6 @@ import {
   AlertTriangle,
   RefreshCw,
   Loader2,
-  FolderUp,
   ArrowRight,
 } from 'lucide-react'
 import { assetsApi, type BulkUploadAnalysis } from '@/lib/api'
@@ -20,6 +19,7 @@ interface BulkUploadModalProps {
   onClose: () => void
   onSuccess?: () => void
   token: string | undefined
+  preselectedFiles?: File[]
 }
 
 export default function BulkUploadModal({
@@ -27,6 +27,7 @@ export default function BulkUploadModal({
   onClose,
   onSuccess,
   token,
+  preselectedFiles,
 }: BulkUploadModalProps) {
   const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [analysis, setAnalysis] = useState<BulkUploadAnalysis | null>(null)
@@ -35,6 +36,28 @@ export default function BulkUploadModal({
   const [error, setError] = useState('')
   const [step, setStep] = useState<'select' | 'preview' | 'complete'>('select')
   const fileInputRef = useRef<HTMLInputElement>(null)
+
+  // Auto-analyze when preselected files are provided
+  useEffect(() => {
+    if (isOpen && preselectedFiles && preselectedFiles.length > 0) {
+      setSelectedFiles(preselectedFiles)
+      setIsAnalyzing(true)
+      setError('')
+
+      assetsApi.previewBulkUpload(token, preselectedFiles)
+        .then(result => {
+          setAnalysis(result)
+          setStep('preview')
+        })
+        .catch((err: any) => {
+          setError(err.message || 'Failed to analyze upload')
+          setStep('select')
+        })
+        .finally(() => {
+          setIsAnalyzing(false)
+        })
+    }
+  }, [isOpen, preselectedFiles, token])
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files
@@ -127,13 +150,13 @@ export default function BulkUploadModal({
             </button>
             <div className="flex items-center gap-4">
               <div className="w-12 h-12 rounded-xl bg-white/10 backdrop-blur-sm flex items-center justify-center">
-                <FolderUp className="w-6 h-6 text-white" />
+                <Upload className="w-6 h-6 text-white" />
               </div>
               <div>
-                <h2 className="text-2xl font-bold text-white">Bulk Upload</h2>
+                <h2 className="text-2xl font-bold text-white">Upload Files</h2>
                 <p className="text-indigo-100 text-sm mt-0.5">
                   {step === 'select' && 'Select files to upload'}
-                  {step === 'preview' && 'Review changes before applying'}
+                  {step === 'preview' && 'Review changes before uploading'}
                   {step === 'complete' && 'Upload complete!'}
                 </p>
               </div>

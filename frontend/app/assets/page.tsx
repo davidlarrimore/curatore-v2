@@ -20,7 +20,6 @@ import {
   FileCode,
   AlertTriangle,
   Upload,
-  FolderUp,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import BulkUploadModal from '@/components/BulkUploadModal'
@@ -67,6 +66,7 @@ function AssetsContent() {
   const [limit] = useState(20)
   const [isUploading, setIsUploading] = useState(false)
   const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false)
+  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
   const [collectionHealth, setCollectionHealth] = useState<CollectionHealth | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
@@ -137,6 +137,14 @@ function AssetsContent() {
     fileInputRef.current?.click()
   }
 
+  /**
+   * Smart upload handler - always analyzes files first, then:
+   * - Shows preview modal if changes detected or many files (4+)
+   * - Auto-skips with notification if all files unchanged (<4 files)
+   *
+   * This eliminates the need for separate "Upload" vs "Bulk Upload" buttons
+   * while still giving users control when it matters.
+   */
   const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const files = event.target.files
     if (!files || files.length === 0 || !token) return
@@ -144,45 +152,42 @@ function AssetsContent() {
     setIsUploading(true)
     setError('')
     setSuccessMessage('')
-    let successCount = 0
-    let failCount = 0
 
     try {
-      for (const file of Array.from(files)) {
-        try {
-          // Upload file using the proxy upload endpoint
-          const formData = new FormData()
-          formData.append('file', file)
+      const fileArray = Array.from(files)
 
-          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/storage/upload/proxy`, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${token}`,
-            },
-            body: formData,
-          })
+      // Step 1: Always analyze the upload first
+      const analysis = await assetsApi.previewBulkUpload(token, fileArray)
 
-          if (!response.ok) {
-            throw new Error(`Upload failed: ${response.statusText}`)
-          }
+      // Step 2: Decide whether to show preview or auto-apply
+      const hasChanges = analysis.counts.new > 0 ||
+                         analysis.counts.updated > 0 ||
+                         analysis.counts.missing > 0
+      const manyFiles = fileArray.length >= 4
 
-          successCount++
-        } catch (err: any) {
-          console.error(`Failed to upload ${file.name}:`, err)
-          failCount++
+      // Show preview if:
+      // - There are changes (new/updated/missing files)
+      // - User is uploading many files (4+)
+      const shouldShowPreview = hasChanges || manyFiles
+
+      if (shouldShowPreview) {
+        // Open preview modal for user review
+        setSelectedFiles(fileArray)
+        setIsBulkUploadOpen(true)
+      } else {
+        // Auto-skip for simple cases (all unchanged, few files)
+        if (analysis.counts.unchanged > 0) {
+          setSuccessMessage(
+            `${analysis.counts.unchanged} file(s) already up to date - no changes needed`
+          )
+          setTimeout(() => setSuccessMessage(''), 5000)
+        } else {
+          setSuccessMessage('No files to upload')
+          setTimeout(() => setSuccessMessage(''), 3000)
         }
       }
-
-      // Show result
-      if (successCount > 0) {
-        setSuccessMessage(`Successfully uploaded ${successCount} file(s)${failCount > 0 ? `. ${failCount} failed` : ''}`)
-        // Reload assets to show new uploads
-        await loadAssets()
-        // Clear success message after 5 seconds
-        setTimeout(() => setSuccessMessage(''), 5000)
-      } else {
-        setError('Failed to upload files')
-      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to analyze upload')
     } finally {
       setIsUploading(false)
       // Reset file input
@@ -298,20 +303,12 @@ function AssetsContent() {
             </div>
             <div className="flex items-center gap-3">
               <Button
-                onClick={() => setIsBulkUploadOpen(true)}
-                className="gap-2 shadow-lg shadow-purple-500/25"
-              >
-                <FolderUp className="w-4 h-4" />
-                <span className="hidden sm:inline">Bulk Upload</span>
-                <span className="sm:hidden">Bulk</span>
-              </Button>
-              <Button
                 onClick={handleUploadClick}
                 disabled={isUploading}
                 className="gap-2 shadow-lg shadow-indigo-500/25"
               >
                 <Upload className={`w-4 h-4 ${isUploading ? 'animate-pulse' : ''}`} />
-                <span className="hidden sm:inline">{isUploading ? 'Uploading...' : 'Upload'}</span>
+                <span className="hidden sm:inline">{isUploading ? 'Analyzing...' : 'Upload Files'}</span>
                 <span className="sm:hidden">+</span>
               </Button>
               <Button
@@ -681,12 +678,19 @@ function AssetsContent() {
         )}
       </div>
 
-      {/* Bulk Upload Modal */}
+      {/* Smart Upload Modal - opens automatically when needed */}
       <BulkUploadModal
         isOpen={isBulkUploadOpen}
-        onClose={() => setIsBulkUploadOpen(false)}
-        onSuccess={loadAssets}
+        onClose={() => {
+          setIsBulkUploadOpen(false)
+          setSelectedFiles([])
+        }}
+        onSuccess={() => {
+          loadAssets()
+          loadCollectionHealth()
+        }}
         token={token}
+        preselectedFiles={selectedFiles}
       />
     </div>
   )
