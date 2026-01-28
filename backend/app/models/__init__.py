@@ -130,7 +130,7 @@ class ProcessingOptions(BaseModel):
     Example:
         options = ProcessingOptions(
             ocr_settings=OCRSettings(),
-            extraction_engine="extraction-service"
+            extraction_engine="docling-external"
         )
     """
     ocr_settings: Optional[OCRSettings] = Field(
@@ -138,8 +138,8 @@ class ProcessingOptions(BaseModel):
         description="OCR configuration for image processing"
     )
     extraction_engine: Optional[str] = Field(
-        default="extraction-service",
-        description="Extraction engine to use (e.g., 'extraction-service', 'docling')",
+        default="docling-external",
+        description="Extraction engine to use (e.g., 'docling-external', 'extraction-service', 'docling')",
     )
 
 

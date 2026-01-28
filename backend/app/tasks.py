@@ -138,7 +138,7 @@ def process_document_task(
     logger = logging.getLogger("curatore.api")
     # Log which extraction engine will be used
     try:
-        engine = (domain_options.extraction_engine or "extraction-service").lower()
+        engine = (domain_options.extraction_engine or "docling-external").lower()
         has_docling = bool(getattr(document_service, "docling_base", None))
         has_extraction = bool(getattr(document_service, "extract_base", None))
 

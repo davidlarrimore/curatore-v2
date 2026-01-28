@@ -139,7 +139,7 @@ class ExtractionConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     default_engine: str = Field(
-        default="extraction-service",
+        default="docling-external",
         description="Default engine to use when none specified"
     )
     engines: List[ExtractionEngineConfig] = Field(

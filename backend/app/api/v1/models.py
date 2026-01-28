@@ -503,8 +503,8 @@ class V1ProcessingOptions(BaseModel):
     """
 
     extraction_engine: Optional[str] = Field(
-        default="extraction-service",
-        description="Extraction engine to use (e.g., 'extraction-service', 'docling')",
+        default="docling-external",
+        description="Extraction engine to use (e.g., 'docling-external', 'extraction-service', 'docling')",
     )
 
     def to_domain(self) -> ProcessingOptions:
