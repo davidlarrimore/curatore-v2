@@ -172,15 +172,31 @@ function AssetDetailContent() {
   }, [activeTab, extraction])
 
   const loadExtractedContent = async () => {
-    if (!extraction?.extracted_object_key) return
+    if (!extraction?.extracted_object_key || !extraction?.extracted_bucket || !token) return
 
     setIsLoadingContent(true)
     try {
-      // TODO: Implement content fetching from object storage
-      // For now, show placeholder
-      setExtractedContent('# Extracted Content\n\nContent will be loaded from object storage...')
+      // Download extracted content from object storage via proxy
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+      const params = new URLSearchParams({
+        bucket: extraction.extracted_bucket,
+        key: extraction.extracted_object_key,
+      })
+
+      const response = await fetch(`${apiUrl}/api/v1/storage/object/download?${params}`, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error(`Failed to download content: ${response.statusText}`)
+      }
+
+      const content = await response.text()
+      setExtractedContent(content)
     } catch (err: any) {
-      setExtractedContent(`Error loading content: ${err.message}`)
+      setExtractedContent(`# Error Loading Content\n\n${err.message}`)
     } finally {
       setIsLoadingContent(false)
     }
