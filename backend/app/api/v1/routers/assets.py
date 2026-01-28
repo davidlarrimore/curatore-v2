@@ -65,7 +65,26 @@ async def list_assets(
         )
 
         return AssetsListResponse(
-            items=[AssetResponse.model_validate(a) for a in assets],
+            items=[
+                AssetResponse(
+                    id=str(a.id),
+                    organization_id=str(a.organization_id),
+                    source_type=a.source_type,
+                    source_metadata=a.source_metadata or {},
+                    original_filename=a.original_filename,
+                    content_type=a.content_type,
+                    file_size=a.file_size,
+                    file_hash=a.file_hash,
+                    raw_bucket=a.raw_bucket,
+                    raw_object_key=a.raw_object_key,
+                    status=a.status,
+                    current_version_number=a.current_version_number,
+                    created_at=a.created_at,
+                    updated_at=a.updated_at,
+                    created_by=str(a.created_by) if a.created_by else None,
+                )
+                for a in assets
+            ],
             total=total,
             limit=limit,
             offset=offset,
@@ -93,7 +112,23 @@ async def get_asset(
         if asset.organization_id != current_user.organization_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
-        return AssetResponse.model_validate(asset)
+        return AssetResponse(
+            id=str(asset.id),
+            organization_id=str(asset.organization_id),
+            source_type=asset.source_type,
+            source_metadata=asset.source_metadata or {},
+            original_filename=asset.original_filename,
+            content_type=asset.content_type,
+            file_size=asset.file_size,
+            file_hash=asset.file_hash,
+            raw_bucket=asset.raw_bucket,
+            raw_object_key=asset.raw_object_key,
+            status=asset.status,
+            current_version_number=asset.current_version_number,
+            created_at=asset.created_at,
+            updated_at=asset.updated_at,
+            created_by=str(asset.created_by) if asset.created_by else None,
+        )
 
 
 @router.get(
@@ -123,8 +158,37 @@ async def get_asset_with_extraction(
             raise HTTPException(status_code=403, detail="Access denied")
 
         return AssetWithExtractionResponse(
-            asset=AssetResponse.model_validate(asset),
-            extraction=ExtractionResultResponse.model_validate(extraction) if extraction else None,
+            asset=AssetResponse(
+                id=str(asset.id),
+                organization_id=str(asset.organization_id),
+                source_type=asset.source_type,
+                source_metadata=asset.source_metadata or {},
+                original_filename=asset.original_filename,
+                content_type=asset.content_type,
+                file_size=asset.file_size,
+                file_hash=asset.file_hash,
+                raw_bucket=asset.raw_bucket,
+                raw_object_key=asset.raw_object_key,
+                status=asset.status,
+                current_version_number=asset.current_version_number,
+                created_at=asset.created_at,
+                updated_at=asset.updated_at,
+                created_by=str(asset.created_by) if asset.created_by else None,
+            ),
+            extraction=ExtractionResultResponse(
+                id=str(extraction.id),
+                asset_id=str(extraction.asset_id),
+                run_id=str(extraction.run_id),
+                extractor_version=extraction.extractor_version,
+                asset_version_id=str(extraction.asset_version_id) if extraction.asset_version_id else None,
+                status=extraction.status,
+                extraction_time_seconds=extraction.extraction_time_seconds,
+                output_bucket=extraction.output_bucket,
+                output_object_key=extraction.output_object_key,
+                error_message=extraction.error_message,
+                metadata=extraction.metadata or {},
+                created_at=extraction.created_at,
+            ) if extraction else None,
         )
 
 
@@ -151,7 +215,25 @@ async def get_runs_for_asset(
         # Get runs
         runs = await run_service.get_runs_by_asset(session=session, asset_id=asset_id)
 
-        return [RunResponse.model_validate(r) for r in runs]
+        return [
+            RunResponse(
+                id=str(r.id),
+                organization_id=str(r.organization_id),
+                run_type=r.run_type,
+                origin=r.origin,
+                status=r.status,
+                input_asset_ids=[str(aid) for aid in (r.input_asset_ids or [])],
+                config=r.config or {},
+                progress=r.progress,
+                results_summary=r.results_summary,
+                error_message=r.error_message,
+                created_at=r.created_at,
+                started_at=r.started_at,
+                completed_at=r.completed_at,
+                created_by=str(r.created_by) if r.created_by else None,
+            )
+            for r in runs
+        ]
 
 
 @router.post(
