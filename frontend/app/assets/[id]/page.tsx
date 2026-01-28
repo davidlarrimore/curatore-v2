@@ -327,6 +327,12 @@ function AssetDetailContent() {
                     {statusConfig.icon}
                     <span>{statusConfig.label}</span>
                   </div>
+                  {asset.status === 'pending' && (
+                    <div className="inline-flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span className="font-medium">Extracting...</span>
+                    </div>
+                  )}
                   {asset.current_version_number && (
                     <span className="text-xs text-gray-500 dark:text-gray-400">
                       Version {asset.current_version_number}
@@ -343,10 +349,10 @@ function AssetDetailContent() {
                 variant="secondary"
                 onClick={handleReextract}
                 disabled={isReextracting || asset.status === 'pending'}
-                className="gap-2"
+                className="gap-2 whitespace-nowrap opacity-100 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 <RefreshCw className={`w-4 h-4 ${isReextracting || asset.status === 'pending' ? 'animate-spin' : ''}`} />
-                <span>
+                <span className="whitespace-nowrap">
                   {isReextracting ? 'Starting...' : asset.status === 'pending' ? 'Processing...' : 'Re-extract'}
                 </span>
               </Button>
