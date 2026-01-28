@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { assetsApi } from '@/lib/api'
@@ -19,6 +19,7 @@ import {
   FolderOpen,
   FileCode,
   AlertTriangle,
+  Upload,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
@@ -61,6 +62,8 @@ function AssetsContent() {
   const [sourceTypeFilter, setSourceTypeFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
   const [limit] = useState(20)
+  const [isUploading, setIsUploading] = useState(false)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadAssets = useCallback(async () => {
     if (!token) return
@@ -91,6 +94,61 @@ function AssetsContent() {
 
   const handleRefresh = () => {
     loadAssets()
+  }
+
+  const handleUploadClick = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const files = event.target.files
+    if (!files || files.length === 0 || !token) return
+
+    setIsUploading(true)
+    let successCount = 0
+    let failCount = 0
+
+    try {
+      for (const file of Array.from(files)) {
+        try {
+          // Upload file using the proxy upload endpoint
+          const formData = new FormData()
+          formData.append('file', file)
+
+          const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/storage/upload/proxy`, {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
+            body: formData,
+          })
+
+          if (!response.ok) {
+            throw new Error(`Upload failed: ${response.statusText}`)
+          }
+
+          successCount++
+        } catch (err: any) {
+          console.error(`Failed to upload ${file.name}:`, err)
+          failCount++
+        }
+      }
+
+      // Show result
+      if (successCount > 0) {
+        alert(`Successfully uploaded ${successCount} file(s)${failCount > 0 ? `, ${failCount} failed` : ''}`)
+        // Reload assets to show new uploads
+        await loadAssets()
+      } else {
+        alert('Failed to upload files')
+      }
+    } finally {
+      setIsUploading(false)
+      // Reset file input
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
+    }
   }
 
   const handleViewAsset = (assetId: string) => {
@@ -185,15 +243,35 @@ function AssetsContent() {
                 </p>
               </div>
             </div>
-            <Button
-              variant="secondary"
-              onClick={handleRefresh}
-              disabled={isLoading}
-              className="gap-2"
-            >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline">Refresh</span>
-            </Button>
+            <div className="flex items-center gap-3">
+              <Button
+                onClick={handleUploadClick}
+                disabled={isUploading}
+                className="gap-2 shadow-lg shadow-indigo-500/25"
+              >
+                <Upload className={`w-4 h-4 ${isUploading ? 'animate-pulse' : ''}`} />
+                <span>{isUploading ? 'Uploading...' : 'Upload'}</span>
+              </Button>
+              <Button
+                variant="secondary"
+                onClick={handleRefresh}
+                disabled={isLoading}
+                className="gap-2"
+              >
+                <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">Refresh</span>
+              </Button>
+            </div>
+
+            {/* Hidden file input */}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              accept=".pdf,.doc,.docx,.txt,.md,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg"
+              onChange={handleFileSelect}
+              className="hidden"
+            />
           </div>
 
           {/* Stats Bar */}
@@ -309,11 +387,22 @@ function AssetsContent() {
                   ? 'No assets found'
                   : 'No assets yet'}
               </h3>
-              <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto">
+              <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto mb-8">
                 {searchTerm || statusFilter !== 'all' || sourceTypeFilter !== 'all'
                   ? 'Try adjusting your filters or search term.'
                   : 'Upload documents or connect data sources to get started.'}
               </p>
+              {!searchTerm && statusFilter === 'all' && sourceTypeFilter === 'all' && (
+                <Button
+                  onClick={handleUploadClick}
+                  size="lg"
+                  className="gap-2 shadow-lg shadow-indigo-500/25"
+                  disabled={isUploading}
+                >
+                  <Upload className="w-5 h-5" />
+                  {isUploading ? 'Uploading...' : 'Upload your first document'}
+                </Button>
+              )}
             </div>
           </div>
         ) : (
