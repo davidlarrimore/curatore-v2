@@ -208,7 +208,9 @@ async def proxy_upload(
     # Generate IDs (using full UUID format)
     document_id = str(uuid.uuid4())
     filename = file.filename or "unknown"
-    object_key = f"{organization_id}/{document_id}/uploaded/{filename}"
+    # Simplified flat structure: all uploads in org's uploads folder
+    # Use document_id prefix to avoid filename collisions
+    object_key = f"{organization_id}/uploads/{document_id}-{filename}"
 
     # Get bucket name from settings
     bucket = settings.minio_bucket_uploads

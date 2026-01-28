@@ -149,8 +149,9 @@ def extract_document_id_from_artifact_key(key: str) -> Optional[str]:
     Extract document ID from an artifact storage key.
 
     Artifact keys follow the pattern:
-    - {org_id}/{document_id}/uploaded/{filename}
-    - {org_id}/{document_id}/processed/{filename}
+    - New format: {org_id}/uploads/{document_id}-{filename}
+    - Old format: {org_id}/{document_id}/uploaded/{filename} (legacy)
+    - Old format: {org_id}/{document_id}/processed/{filename} (legacy)
 
     Args:
         key: Storage key to parse
@@ -159,6 +160,10 @@ def extract_document_id_from_artifact_key(key: str) -> Optional[str]:
         Extracted document ID if found and valid, None otherwise
 
     Examples:
+        >>> extract_document_id_from_artifact_key(
+        ...     "org123/uploads/550e8400-e29b-41d4-a716-446655440000-file.pdf"
+        ... )
+        '550e8400-e29b-41d4-a716-446655440000'
         >>> extract_document_id_from_artifact_key(
         ...     "org123/550e8400-e29b-41d4-a716-446655440000/uploaded/file.pdf"
         ... )
@@ -173,10 +178,18 @@ def extract_document_id_from_artifact_key(key: str) -> Optional[str]:
     if len(parts) < 3:
         return None
 
+    # Check if new format: {org_id}/uploads/{document_id}-{filename}
+    if parts[1] == 'uploads':
+        # Extract UUID from filename prefix (first 36 characters)
+        filename = parts[2]
+        if len(filename) >= 36:
+            potential_doc_id = filename[:36]
+            if is_valid_uuid(potential_doc_id):
+                return potential_doc_id.lower()
+
+    # Check if old format: {org_id}/{document_id}/uploaded|processed/{filename}
     # Document ID should be the second part (after org_id)
     potential_doc_id = parts[1]
-
-    # Validate as UUID
     if is_valid_uuid(potential_doc_id):
         return potential_doc_id.lower()
 
