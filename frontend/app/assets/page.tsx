@@ -66,10 +66,12 @@ function AssetsContent() {
   const [isUploading, setIsUploading] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  const loadAssets = useCallback(async () => {
+  const loadAssets = useCallback(async (silent = false) => {
     if (!token) return
 
-    setIsLoading(true)
+    if (!silent) {
+      setIsLoading(true)
+    }
     setError('')
 
     try {
@@ -83,15 +85,32 @@ function AssetsContent() {
       setAssets(response.items)
       setTotal(response.total)
     } catch (err: any) {
-      setError(err.message || 'Failed to load assets')
+      if (!silent) {
+        setError(err.message || 'Failed to load assets')
+      }
     } finally {
-      setIsLoading(false)
+      if (!silent) {
+        setIsLoading(false)
+      }
     }
   }, [token, statusFilter, sourceTypeFilter, page, limit])
 
   useEffect(() => {
     loadAssets()
   }, [loadAssets])
+
+  // Auto-poll when there are pending assets
+  useEffect(() => {
+    const hasPendingAssets = assets.some(asset => asset.status === 'pending')
+
+    if (hasPendingAssets) {
+      const intervalId = setInterval(() => {
+        loadAssets(true) // Silent polling - don't show loading spinner
+      }, 3000) // Poll every 3 seconds
+
+      return () => clearInterval(intervalId)
+    }
+  }, [assets, loadAssets])
 
   const handleRefresh = () => {
     loadAssets()
