@@ -630,21 +630,167 @@ function AssetDetailContent() {
 
           {activeTab === 'metadata' && (
             <div>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Metadata</h3>
-              <div className="space-y-4">
-                <div>
-                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Asset Metadata</h4>
-                  <pre className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg overflow-x-auto text-xs">
-                    {JSON.stringify(asset.source_metadata, null, 2)}
-                  </pre>
-                </div>
-                {extraction?.structure_metadata && (
-                  <div>
-                    <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Extraction Metadata</h4>
-                    <pre className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg overflow-x-auto text-xs">
-                      {JSON.stringify(extraction.structure_metadata, null, 2)}
+              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-6">Document Metadata</h3>
+              <div className="space-y-6">
+                {/* Extraction Info */}
+                {extraction && (
+                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                      <FileCode className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                      Extraction Information
+                    </h4>
+                    <dl className="grid grid-cols-2 gap-4">
+                      <div>
+                        <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Extractor Version</dt>
+                        <dd className="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-900/50 px-2 py-1 rounded">
+                          {extraction.extractor_version}
+                        </dd>
+                      </div>
+                      {extraction.structure_metadata?.extraction_info?.method && (
+                        <div>
+                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Extraction Method</dt>
+                          <dd className="text-sm font-medium text-gray-900 dark:text-white">
+                            {extraction.structure_metadata.extraction_info.method}
+                          </dd>
+                        </div>
+                      )}
+                      {extraction.extraction_time_seconds && (
+                        <div>
+                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Processing Time</dt>
+                          <dd className="text-sm font-medium text-gray-900 dark:text-white">
+                            {extraction.extraction_time_seconds.toFixed(2)}s
+                          </dd>
+                        </div>
+                      )}
+                      <div>
+                        <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Status</dt>
+                        <dd className="text-sm font-medium text-gray-900 dark:text-white capitalize">
+                          {extraction.status}
+                        </dd>
+                      </div>
+                    </dl>
+                  </div>
+                )}
+
+                {/* File Info */}
+                {extraction?.structure_metadata?.file_info && (
+                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />
+                      File Information
+                    </h4>
+                    <dl className="grid grid-cols-2 gap-4">
+                      {extraction.structure_metadata.file_info.filename && (
+                        <div className="col-span-2">
+                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Filename</dt>
+                          <dd className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                            {extraction.structure_metadata.file_info.filename}
+                          </dd>
+                        </div>
+                      )}
+                      {extraction.structure_metadata.file_info.extension && (
+                        <div>
+                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">File Type</dt>
+                          <dd className="text-sm font-medium text-gray-900 dark:text-white uppercase">
+                            {extraction.structure_metadata.file_info.extension.replace('.', '')}
+                          </dd>
+                        </div>
+                      )}
+                      {extraction.structure_metadata.file_info.size_human && (
+                        <div>
+                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">File Size</dt>
+                          <dd className="text-sm font-medium text-gray-900 dark:text-white">
+                            {extraction.structure_metadata.file_info.size_human}
+                          </dd>
+                        </div>
+                      )}
+                    </dl>
+                  </div>
+                )}
+
+                {/* Content Statistics */}
+                {extraction?.structure_metadata?.content_info && (
+                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                      <Tag className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      Content Statistics
+                    </h4>
+                    <dl className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                      {extraction.structure_metadata.content_info.character_count !== undefined && (
+                        <div>
+                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Characters</dt>
+                          <dd className="text-sm font-semibold text-gray-900 dark:text-white">
+                            {extraction.structure_metadata.content_info.character_count.toLocaleString()}
+                          </dd>
+                        </div>
+                      )}
+                      {extraction.structure_metadata.content_info.word_count !== undefined && (
+                        <div>
+                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Words</dt>
+                          <dd className="text-sm font-semibold text-gray-900 dark:text-white">
+                            {extraction.structure_metadata.content_info.word_count.toLocaleString()}
+                          </dd>
+                        </div>
+                      )}
+                      {extraction.structure_metadata.content_info.line_count !== undefined && (
+                        <div>
+                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Lines</dt>
+                          <dd className="text-sm font-semibold text-gray-900 dark:text-white">
+                            {extraction.structure_metadata.content_info.line_count.toLocaleString()}
+                          </dd>
+                        </div>
+                      )}
+                    </dl>
+                  </div>
+                )}
+
+                {/* Document Properties (PDF/Office metadata) */}
+                {extraction?.structure_metadata?.document_properties && Object.keys(extraction.structure_metadata.document_properties).length > 0 && (
+                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                      <FileText className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                      Document Properties
+                    </h4>
+                    <dl className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {Object.entries(extraction.structure_metadata.document_properties).map(([key, value]) => (
+                        <div key={key}>
+                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1 capitalize">
+                            {key.replace(/_/g, ' ')}
+                          </dt>
+                          <dd className="text-sm font-medium text-gray-900 dark:text-white break-words">
+                            {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                  </div>
+                )}
+
+                {/* Source Metadata (from Asset) */}
+                {asset.source_metadata && Object.keys(asset.source_metadata).length > 0 && (
+                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                      <FolderOpen className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                      Source Metadata
+                    </h4>
+                    <pre className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg overflow-x-auto text-xs text-gray-900 dark:text-gray-100">
+                      {JSON.stringify(asset.source_metadata, null, 2)}
                     </pre>
                   </div>
+                )}
+
+                {/* Raw Extraction Metadata (collapsed by default) */}
+                {extraction?.structure_metadata && (
+                  <details className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700">
+                    <summary className="px-5 py-4 cursor-pointer text-sm font-semibold text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                      Raw Metadata (Advanced)
+                    </summary>
+                    <div className="px-5 pb-5">
+                      <pre className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg overflow-x-auto text-xs text-gray-900 dark:text-gray-100 max-h-96 overflow-y-auto">
+                        {JSON.stringify(extraction.structure_metadata, null, 2)}
+                      </pre>
+                    </div>
+                  </details>
                 )}
               </div>
             </div>
@@ -735,13 +881,24 @@ function AssetDetailContent() {
                               )}
                             </div>
                             <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 flex-wrap">
                                 <p className="text-sm font-medium text-gray-900 dark:text-white capitalize">
                                   {run.run_type}
                                 </p>
                                 <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 capitalize">
                                   {run.origin}
                                 </span>
+                                {/* Show extraction system/method if available */}
+                                {run.config?.extraction_method && (
+                                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300">
+                                    {run.config.extraction_method}
+                                  </span>
+                                )}
+                                {run.config?.extractor_version && (
+                                  <span className="px-2 py-0.5 text-xs font-mono rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
+                                    {run.config.extractor_version}
+                                  </span>
+                                )}
                               </div>
                               <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
                                 {formatDate(run.created_at)}
