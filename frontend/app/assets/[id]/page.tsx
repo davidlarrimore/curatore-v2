@@ -113,6 +113,7 @@ function AssetDetailContent() {
   const [isReextracting, setIsReextracting] = useState(false)
   const [isLoadingContent, setIsLoadingContent] = useState(false)
   const [error, setError] = useState('')
+  const [successMessage, setSuccessMessage] = useState('')
 
   // Load asset data
   useEffect(() => {
@@ -209,19 +210,20 @@ function AssetDetailContent() {
 
     setIsReextracting(true)
     setError('')
+    setSuccessMessage('')
     try {
       const run = await assetsApi.reextractAsset(token, assetId)
 
       // Show success message
-      alert(`✅ Re-extraction started successfully!\n\nRun ID: ${run.id}\n\nThe page will refresh in a moment to show the new extraction status.`)
+      setSuccessMessage(`Re-extraction started successfully (Run ID: ${run.id.substring(0, 8)}...)`)
 
       // Reload asset data to show new run
       setTimeout(() => {
         loadAssetData()
-      }, 2000)
+        setSuccessMessage('')
+      }, 3000)
     } catch (err: any) {
       setError(`Failed to trigger re-extraction: ${err.message}`)
-      alert(`❌ Failed to trigger re-extraction: ${err.message}`)
     } finally {
       setIsReextracting(false)
     }
@@ -372,6 +374,30 @@ function AssetDetailContent() {
               </Button>
             </div>
           </div>
+
+          {/* Success Message */}
+          {successMessage && (
+            <div className="mt-6 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/50 p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
+                  <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                </div>
+                <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">{successMessage}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Error Message */}
+          {error && (
+            <div className="mt-6 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/50 p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
+                </div>
+                <p className="text-sm font-medium text-red-800 dark:text-red-200">{error}</p>
+              </div>
+            </div>
+          )}
 
           {/* Asset Info Cards */}
           <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mt-6">

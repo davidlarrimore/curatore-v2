@@ -57,6 +57,7 @@ function AssetsContent() {
   const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
+  const [successMessage, setSuccessMessage] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
   const [statusFilter, setStatusFilter] = useState<string>('all')
   const [sourceTypeFilter, setSourceTypeFilter] = useState<string>('all')
@@ -105,6 +106,8 @@ function AssetsContent() {
     if (!files || files.length === 0 || !token) return
 
     setIsUploading(true)
+    setError('')
+    setSuccessMessage('')
     let successCount = 0
     let failCount = 0
 
@@ -136,11 +139,13 @@ function AssetsContent() {
 
       // Show result
       if (successCount > 0) {
-        alert(`Successfully uploaded ${successCount} file(s)${failCount > 0 ? `, ${failCount} failed` : ''}`)
+        setSuccessMessage(`Successfully uploaded ${successCount} file(s)${failCount > 0 ? `. ${failCount} failed` : ''}`)
         // Reload assets to show new uploads
         await loadAssets()
+        // Clear success message after 5 seconds
+        setTimeout(() => setSuccessMessage(''), 5000)
       } else {
-        alert('Failed to upload files')
+        setError('Failed to upload files')
       }
     } finally {
       setIsUploading(false)
@@ -351,6 +356,18 @@ function AssetsContent() {
             </div>
           </div>
         </div>
+
+        {/* Success Message */}
+        {successMessage && (
+          <div className="mb-6 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/50 p-4">
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
+                <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+              </div>
+              <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">{successMessage}</p>
+            </div>
+          </div>
+        )}
 
         {/* Error State */}
         {error && (
