@@ -1940,6 +1940,46 @@ export interface AssetVersionHistory {
   total_versions: number
 }
 
+// ======================================================================
+// BULK UPLOAD INTERFACES (Phase 2)
+// ======================================================================
+
+export interface BulkUploadFileInfo {
+  filename: string
+  file_size: number
+  file_hash: string
+  asset_id?: string
+  current_version?: number
+  old_file_hash?: string
+  status?: string
+}
+
+export interface BulkUploadAnalysis {
+  unchanged: BulkUploadFileInfo[]
+  updated: BulkUploadFileInfo[]
+  new: BulkUploadFileInfo[]
+  missing: BulkUploadFileInfo[]
+  counts: {
+    unchanged: number
+    updated: number
+    new: number
+    missing: number
+    total_uploaded: number
+  }
+}
+
+export interface BulkUploadApplyResult {
+  analysis: BulkUploadAnalysis
+  created_assets: string[]
+  updated_assets: string[]
+  marked_inactive: string[]
+  summary: {
+    created_count: number
+    updated_count: number
+    marked_inactive_count: number
+  }
+}
+
 export const assetsApi = {
   /**
    * List assets for the organization
@@ -2048,6 +2088,43 @@ export const assetsApi = {
     const url = apiUrl(`/runs/${runId}/logs?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Preview bulk upload changes (Phase 2)
+   */
+  async previewBulkUpload(token: string | undefined, files: File[], sourceType: string = 'upload'): Promise<BulkUploadAnalysis> {
+    const formData = new FormData()
+    files.forEach(file => formData.append('files', file))
+
+    const url = apiUrl(`/assets/bulk-upload/preview?source_type=${sourceType}`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Apply bulk upload changes (Phase 2)
+   */
+  async applyBulkUpload(
+    token: string | undefined,
+    files: File[],
+    sourceType: string = 'upload',
+    markMissingInactive: boolean = true
+  ): Promise<BulkUploadApplyResult> {
+    const formData = new FormData()
+    files.forEach(file => formData.append('files', file))
+
+    const url = apiUrl(`/assets/bulk-upload/apply?source_type=${sourceType}&mark_missing_inactive=${markMissingInactive}`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: formData,
     })
     return handleJson(res)
   },

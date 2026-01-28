@@ -20,8 +20,10 @@ import {
   FileCode,
   AlertTriangle,
   Upload,
+  FolderUp,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
+import BulkUploadModal from '@/components/BulkUploadModal'
 
 interface Asset {
   id: string
@@ -64,6 +66,7 @@ function AssetsContent() {
   const [page, setPage] = useState(1)
   const [limit] = useState(20)
   const [isUploading, setIsUploading] = useState(false)
+  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadAssets = useCallback(async (silent = false) => {
@@ -281,12 +284,21 @@ function AssetsContent() {
             </div>
             <div className="flex items-center gap-3">
               <Button
+                onClick={() => setIsBulkUploadOpen(true)}
+                className="gap-2 shadow-lg shadow-purple-500/25"
+              >
+                <FolderUp className="w-4 h-4" />
+                <span className="hidden sm:inline">Bulk Upload</span>
+                <span className="sm:hidden">Bulk</span>
+              </Button>
+              <Button
                 onClick={handleUploadClick}
                 disabled={isUploading}
                 className="gap-2 shadow-lg shadow-indigo-500/25"
               >
                 <Upload className={`w-4 h-4 ${isUploading ? 'animate-pulse' : ''}`} />
-                <span>{isUploading ? 'Uploading...' : 'Upload'}</span>
+                <span className="hidden sm:inline">{isUploading ? 'Uploading...' : 'Upload'}</span>
+                <span className="sm:hidden">+</span>
               </Button>
               <Button
                 variant="secondary"
@@ -611,6 +623,14 @@ function AssetsContent() {
           </>
         )}
       </div>
+
+      {/* Bulk Upload Modal */}
+      <BulkUploadModal
+        isOpen={isBulkUploadOpen}
+        onClose={() => setIsBulkUploadOpen(false)}
+        onSuccess={loadAssets}
+        token={token}
+      />
     </div>
   )
 }
