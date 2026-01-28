@@ -103,7 +103,7 @@ class ExtractionServiceEngine(BaseExtractionEngine):
                     content_type = response.headers.get('content-type', '').lower()
                     if 'application/json' in content_type:
                         data = response.json()
-                        markdown_content = data.get('markdown', '') or data.get('content', '')
+                        markdown_content = data.get('content_markdown', '') or data.get('markdown', '') or data.get('content', '')
                     else:
                         # Assume text/plain response
                         markdown_content = response.text
