@@ -174,7 +174,7 @@ export function extractDocumentIdFromArtifactKey(
   // Document ID should be the second part (after org_id)
   const potentialDocId = parts[1];
 
-  if (isValidDocumentId(potentialDocId, true)) {
+  if (isValidDocumentId(potentialDocId)) {
     return potentialDocId.toLowerCase();
   }
 
@@ -201,5 +201,5 @@ export function isDocumentId(value: unknown): value is string {
   if (typeof value !== 'string') {
     return false;
   }
-  return isValidDocumentId(value, true);
+  return isValidDocumentId(value);
 }

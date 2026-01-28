@@ -689,7 +689,7 @@ function AssetsContent() {
           loadAssets()
           loadCollectionHealth()
         }}
-        token={token}
+        token={token ?? undefined}
         preselectedFiles={selectedFiles}
       />
     </div>

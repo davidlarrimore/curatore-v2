@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { assetsApi } from '@/lib/api'
+import { assetsApi, type Run } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import {
   FileText,
@@ -67,23 +67,6 @@ interface AssetVersion {
   content_type: string | null
   is_current: boolean
   created_at: string
-  created_by: string | null
-}
-
-interface Run {
-  id: string
-  organization_id: string
-  run_type: string
-  origin: string
-  status: string
-  input_asset_ids: string[]
-  config: Record<string, any>
-  progress: number | null
-  results_summary: Record<string, any> | null
-  error_message: string | null
-  created_at: string
-  started_at: string | null
-  completed_at: string | null
   created_by: string | null
 }
 

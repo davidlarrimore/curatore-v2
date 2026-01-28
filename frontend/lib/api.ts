@@ -74,7 +74,7 @@ async function handleBlob(res: Response): Promise<Blob> {
  */
 function validateAndEncodeDocumentId(documentId: string): string {
   // Validate format (throws DocumentIdError if invalid)
-  const validated = validateDocumentId(documentId, true, true)
+  const validated = validateDocumentId(documentId)
 
   // Encode for use in URL path
   return encodeURIComponent(validated)
