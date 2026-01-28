@@ -506,28 +506,89 @@ function AssetDetailContent() {
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
           {activeTab === 'original' && (
             <div>
-              <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">Original File</h3>
-              <div className="space-y-4">
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-500 dark:text-gray-400">Storage Bucket</span>
-                  <span className="font-mono text-xs text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 px-2 py-0.5 rounded">
-                    {asset.raw_bucket}
-                  </span>
-                </div>
-                <div className="flex items-center justify-between text-sm">
-                  <span className="text-gray-500 dark:text-gray-400">Object Key</span>
-                  <span className="font-mono text-xs text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 px-2 py-0.5 rounded truncate max-w-[300px]">
-                    {asset.raw_object_key}
-                  </span>
-                </div>
-                {asset.file_hash && (
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-500 dark:text-gray-400">File Hash (SHA-256)</span>
-                    <span className="font-mono text-xs text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 px-2 py-0.5 rounded truncate max-w-[300px]">
-                      {asset.file_hash}
-                    </span>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Original File</h3>
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    if (!token) return
+                    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+                    const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
+                    window.open(url + `&inline=false`, '_blank')
+                  }}
+                  className="gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  Download
+                </Button>
+              </div>
+
+              {/* Preview based on content type */}
+              <div className="mb-6">
+                {asset.content_type?.startsWith('image/') ? (
+                  <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                    <img
+                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
+                      alt={asset.original_filename}
+                      className="max-w-full h-auto"
+                    />
+                  </div>
+                ) : asset.content_type === 'application/pdf' ? (
+                  <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden" style={{ height: '600px' }}>
+                    <iframe
+                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
+                      className="w-full h-full"
+                      title={asset.original_filename}
+                    />
+                  </div>
+                ) : (
+                  <div className="p-8 text-center border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
+                    <FileText className="w-12 h-12 mx-auto mb-3 text-gray-400" />
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                      Preview not available for this file type
+                    </p>
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        if (!token) return
+                        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+                        const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
+                        window.open(url, '_blank')
+                      }}
+                      className="gap-2"
+                    >
+                      <Download className="w-4 h-4" />
+                      Download File
+                    </Button>
                   </div>
                 )}
+              </div>
+
+              {/* File Details */}
+              <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+                <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-3">File Details</h4>
+                <div className="space-y-3">
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-500 dark:text-gray-400">Storage Bucket</span>
+                    <span className="font-mono text-xs text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 px-2 py-0.5 rounded">
+                      {asset.raw_bucket}
+                    </span>
+                  </div>
+                  <div className="flex items-center justify-between text-sm">
+                    <span className="text-gray-500 dark:text-gray-400">Object Key</span>
+                    <span className="font-mono text-xs text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 px-2 py-0.5 rounded truncate max-w-[300px]">
+                      {asset.raw_object_key}
+                    </span>
+                  </div>
+                  {asset.file_hash && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-500 dark:text-gray-400">File Hash (SHA-256)</span>
+                      <span className="font-mono text-xs text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 px-2 py-0.5 rounded truncate max-w-[300px]">
+                        {asset.file_hash}
+                      </span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
