@@ -1891,7 +1891,6 @@ export interface ExtractionResult {
   id: string
   asset_id: string
   run_id: string
-  asset_version_id: string | null
   extractor_version: string
   status: string
   extracted_bucket: string | null
@@ -1945,7 +1944,7 @@ export const assetsApi = {
   /**
    * List assets for the organization
    */
-  async listAssets(params?: {
+  async listAssets(token: string | undefined, params?: {
     source_type?: string
     status?: string
     limit?: number
@@ -1959,7 +1958,7 @@ export const assetsApi = {
 
     const url = apiUrl(`/assets?${searchParams.toString()}`)
     const res = await fetch(url, {
-      headers: { ...jsonHeaders, ...authHeaders() },
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -1967,10 +1966,10 @@ export const assetsApi = {
   /**
    * Get asset by ID
    */
-  async getAsset(assetId: string): Promise<Asset> {
+  async getAsset(token: string | undefined, assetId: string): Promise<Asset> {
     const url = apiUrl(`/assets/${assetId}`)
     const res = await fetch(url, {
-      headers: { ...jsonHeaders, ...authHeaders() },
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -1978,10 +1977,10 @@ export const assetsApi = {
   /**
    * Get asset with latest extraction result
    */
-  async getAssetWithExtraction(assetId: string): Promise<AssetWithExtraction> {
+  async getAssetWithExtraction(token: string | undefined, assetId: string): Promise<AssetWithExtraction> {
     const url = apiUrl(`/assets/${assetId}/extraction`)
     const res = await fetch(url, {
-      headers: { ...jsonHeaders, ...authHeaders() },
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -1989,10 +1988,10 @@ export const assetsApi = {
   /**
    * Get runs for an asset
    */
-  async getAssetRuns(assetId: string): Promise<Run[]> {
+  async getAssetRuns(token: string | undefined, assetId: string): Promise<Run[]> {
     const url = apiUrl(`/assets/${assetId}/runs`)
     const res = await fetch(url, {
-      headers: { ...jsonHeaders, ...authHeaders() },
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2000,11 +1999,11 @@ export const assetsApi = {
   /**
    * Trigger manual re-extraction for an asset
    */
-  async reextractAsset(assetId: string): Promise<Run> {
+  async reextractAsset(token: string | undefined, assetId: string): Promise<Run> {
     const url = apiUrl(`/assets/${assetId}/reextract`)
     const res = await fetch(url, {
       method: 'POST',
-      headers: { ...jsonHeaders, ...authHeaders() },
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2012,10 +2011,10 @@ export const assetsApi = {
   /**
    * Get version history for an asset
    */
-  async getAssetVersions(assetId: string): Promise<AssetVersionHistory> {
+  async getAssetVersions(token: string | undefined, assetId: string): Promise<AssetVersionHistory> {
     const url = apiUrl(`/assets/${assetId}/versions`)
     const res = await fetch(url, {
-      headers: { ...jsonHeaders, ...authHeaders() },
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2023,10 +2022,10 @@ export const assetsApi = {
   /**
    * Get specific version of an asset
    */
-  async getAssetVersion(assetId: string, versionNumber: number): Promise<AssetVersion> {
+  async getAssetVersion(token: string | undefined, assetId: string, versionNumber: number): Promise<AssetVersion> {
     const url = apiUrl(`/assets/${assetId}/versions/${versionNumber}`)
     const res = await fetch(url, {
-      headers: { ...jsonHeaders, ...authHeaders() },
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2034,7 +2033,7 @@ export const assetsApi = {
   /**
    * Get run logs
    */
-  async getRunLogs(runId: string, params?: {
+  async getRunLogs(token: string | undefined, runId: string, params?: {
     level?: string
     event_type?: string
     limit?: number
@@ -2048,7 +2047,7 @@ export const assetsApi = {
 
     const url = apiUrl(`/runs/${runId}/logs?${searchParams.toString()}`)
     const res = await fetch(url, {
-      headers: { ...jsonHeaders, ...authHeaders() },
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },

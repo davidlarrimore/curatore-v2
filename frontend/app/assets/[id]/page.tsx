@@ -46,13 +46,13 @@ interface ExtractionResult {
   asset_id: string
   run_id: string
   extractor_version: string
-  asset_version_id: string | null
   status: string
   extraction_time_seconds: number | null
-  output_bucket: string | null
-  output_object_key: string | null
-  error_message: string | null
-  metadata: Record<string, any>
+  extracted_bucket: string | null
+  extracted_object_key: string | null
+  structure_metadata: Record<string, any> | null
+  warnings: string[]
+  errors: string[]
   created_at: string
 }
 
@@ -155,7 +155,7 @@ function AssetDetailContent() {
   }, [activeTab, extraction])
 
   const loadExtractedContent = async () => {
-    if (!extraction?.output_object_key) return
+    if (!extraction?.extracted_object_key) return
 
     setIsLoadingContent(true)
     try {
@@ -519,11 +519,11 @@ function AssetDetailContent() {
                     {JSON.stringify(asset.source_metadata, null, 2)}
                   </pre>
                 </div>
-                {extraction?.metadata && (
+                {extraction?.structure_metadata && (
                   <div>
                     <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Extraction Metadata</h4>
                     <pre className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg overflow-x-auto text-xs">
-                      {JSON.stringify(extraction.metadata, null, 2)}
+                      {JSON.stringify(extraction.structure_metadata, null, 2)}
                     </pre>
                   </div>
                 )}
