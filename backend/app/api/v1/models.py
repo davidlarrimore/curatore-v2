@@ -1553,3 +1553,50 @@ class RunsListResponse(BaseModel):
     total: int
     limit: int
     offset: int
+
+
+# =========================================================================
+# BULK UPLOAD MODELS (Phase 2)
+# =========================================================================
+
+class BulkUploadFileInfo(BaseModel):
+    """Information about a file in bulk upload analysis."""
+    filename: str = Field(..., description="Filename")
+    file_size: int = Field(..., description="File size in bytes")
+    file_hash: str = Field(..., description="SHA-256 content hash")
+    asset_id: Optional[str] = Field(None, description="Existing asset ID (for unchanged/updated)")
+    current_version: Optional[int] = Field(None, description="Current version number")
+    old_file_hash: Optional[str] = Field(None, description="Previous file hash (for updated files)")
+    status: Optional[str] = Field(None, description="Asset status (for missing files)")
+
+
+class BulkUploadAnalysisResponse(BaseModel):
+    """Result of bulk upload analysis."""
+    unchanged: List[BulkUploadFileInfo] = Field(default_factory=list, description="Files that match existing assets")
+    updated: List[BulkUploadFileInfo] = Field(default_factory=list, description="Files with same name but different content")
+    new: List[BulkUploadFileInfo] = Field(default_factory=list, description="Files not seen before")
+    missing: List[BulkUploadFileInfo] = Field(default_factory=list, description="Assets in DB but not in upload")
+    counts: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Summary counts (unchanged, updated, new, missing, total_uploaded)"
+    )
+
+
+class BulkUploadApplyRequest(BaseModel):
+    """Request to apply bulk upload changes."""
+    mark_missing_inactive: bool = Field(
+        default=True,
+        description="Whether to mark missing files as inactive"
+    )
+
+
+class BulkUploadApplyResponse(BaseModel):
+    """Result of applying bulk upload changes."""
+    analysis: BulkUploadAnalysisResponse = Field(..., description="Upload analysis")
+    created_assets: List[str] = Field(default_factory=list, description="IDs of created assets")
+    updated_assets: List[str] = Field(default_factory=list, description="IDs of updated assets")
+    marked_inactive: List[str] = Field(default_factory=list, description="IDs of assets marked inactive")
+    summary: Dict[str, int] = Field(
+        default_factory=dict,
+        description="Summary counts (created_count, updated_count, marked_inactive_count)"
+    )

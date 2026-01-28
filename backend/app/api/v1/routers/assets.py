@@ -9,7 +9,7 @@ import logging
 from typing import Optional, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 
 from ....database.models import User
 from ....dependencies import get_current_user
@@ -26,6 +26,8 @@ from ..models import (
     ExtractionResultResponse,
     RunResponse,
     AssetsListResponse,
+    BulkUploadAnalysisResponse,
+    BulkUploadFileInfo,
 )
 
 logger = logging.getLogger("curatore.api.assets")
@@ -449,4 +451,88 @@ async def get_asset_version(
             is_current=version.is_current,
             created_at=version.created_at,
             created_by=str(version.created_by) if version.created_by else None,
+        )
+
+
+# =========================================================================
+# BULK UPLOAD ENDPOINTS (Phase 2)
+# =========================================================================
+
+@router.post(
+    "/bulk-upload/preview",
+    response_model=BulkUploadAnalysisResponse,
+    summary="Preview bulk upload changes",
+    description="Analyze bulk file upload and preview changes without persisting (Phase 2).",
+)
+async def preview_bulk_upload(
+    files: List[UploadFile],
+    source_type: str = Query("upload", description="Source type for the upload"),
+    current_user: User = Depends(get_current_user),
+) -> BulkUploadAnalysisResponse:
+    """
+    Preview bulk upload changes.
+
+    Analyzes uploaded files and categorizes them as:
+    - Unchanged: Files that match existing assets (same filename + content hash)
+    - Updated: Files with same filename but different content
+    - New: Files not seen before in organization
+    - Missing: Assets in database but not in upload batch
+
+    This endpoint does not persist any changes. Use the apply endpoint
+    after reviewing the preview.
+
+    Args:
+        files: List of files to analyze
+        source_type: Source type filter for matching existing assets
+        current_user: Authenticated user making the request
+
+    Returns:
+        BulkUploadAnalysisResponse with categorized files and counts
+
+    Example:
+        POST /api/v1/assets/bulk-upload/preview
+        Content-Type: multipart/form-data
+
+        files: [file1.pdf, file2.pdf, file3.pdf]
+        source_type: upload
+
+        Response:
+        {
+            "unchanged": [...],
+            "updated": [...],
+            "new": [...],
+            "missing": [...],
+            "counts": {
+                "unchanged": 5,
+                "updated": 2,
+                "new": 3,
+                "missing": 1,
+                "total_uploaded": 10
+            }
+        }
+    """
+    from ....services.bulk_upload_service import bulk_upload_service
+
+    # Read file contents
+    file_list = []
+    for file in files:
+        content = await file.read()
+        file_list.append((file.filename, content))
+        await file.seek(0)  # Reset file pointer
+
+    async with database_service.get_session() as session:
+        analysis = await bulk_upload_service.analyze_bulk_upload(
+            session=session,
+            organization_id=current_user.organization_id,
+            files=file_list,
+            source_type=source_type,
+        )
+
+        # Convert analysis to response model
+        return BulkUploadAnalysisResponse(
+            unchanged=[BulkUploadFileInfo(**item) for item in analysis.unchanged],
+            updated=[BulkUploadFileInfo(**item) for item in analysis.updated],
+            new=[BulkUploadFileInfo(**item) for item in analysis.new],
+            missing=[BulkUploadFileInfo(**item) for item in analysis.missing],
+            counts=analysis.to_dict()["counts"],
         )
