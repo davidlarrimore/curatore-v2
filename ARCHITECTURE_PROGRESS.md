@@ -30,6 +30,8 @@ Import/Ingest → Canonicalization (Auto Extraction) → Processing & Experiment
 
 **Goal**: Make existing behavior explicit, traceable, and safe to evolve.
 
+**Status**: 🎉 **PHASE 0 COMPLETE** - All backend and frontend tasks done! All acceptance criteria met.
+
 ### Backend Tasks
 - [x] Normalize `Asset`, `Run`, and `ExtractionResult` concepts in code ✅ DONE
   - Added `Asset` model for document representation with provenance
@@ -68,15 +70,28 @@ Import/Ingest → Canonicalization (Auto Extraction) → Processing & Experiment
 - [x] Introduce structured run logging (`RunLogEvent` model) ✅ DONE
 
 ### Frontend Tasks
-- [ ] Surface extraction status consistently (`Uploading`, `Processing`, `Ready`, `Needs Attention`)
-- [ ] Add basic run visibility (read-only timeline per document)
-- [ ] Clearly distinguish raw file vs extracted content in UI
+- [x] Surface extraction status consistently (`Uploading`, `Processing`, `Ready`, `Needs Attention`) ✅ DONE
+  - Enhanced assets list page with descriptive status labels
+  - "Extracting Content" for pending, "Extraction Complete" for ready, "Needs Attention" for failed
+  - Status descriptions explain what's happening
+- [x] Add basic run visibility (read-only timeline per document) ✅ DONE
+  - History tab in asset detail view shows processing runs timeline
+  - Run status indicators with timestamps and origin tracking
+- [x] Clearly distinguish raw file vs extracted content in UI ✅ DONE
+  - Added Content column showing raw file and markdown availability
+  - Visual indicators: gray dot for raw, green dot for extracted, animated blue for extracting
+  - Stats bar uses extraction-focused language ("extracted", "extracting", "need attention")
 
 ### Acceptance Criteria
-- [ ] All uploads create traceable Asset records
-- [ ] Extraction runs are visible in UI with structured logs
-- [ ] Failed extractions don't block user workflow
-- [ ] System is deployable and observable
+- [x] All uploads create traceable Asset records ✅ DONE
+  - Verified via upload_integration_service and Asset model
+- [x] Extraction runs are visible in UI with structured logs ✅ DONE
+  - Asset detail view History tab shows all runs with logs
+- [x] Failed extractions don't block user workflow ✅ DONE
+  - "Needs Attention" status allows users to view details and retry
+  - Re-extract button available in asset detail view
+- [x] System is deployable and observable ✅ DONE
+  - Testing guide available, APIs functional, UI complete
 
 **Notes**:
 - Phase 0 establishes debugging foundation for all future work
@@ -464,3 +479,13 @@ curl http://localhost:8000/api/v1/runs | jq
     - Re-extraction is safe and traceable (Run with origin="user")
     - Document detail view is consistent across all sources (unified design)
   - 🚀 Ready for Phase 2: Bulk Upload Updates & Collection Health
+- **2026-01-28**: ✅ Phase 0 frontend polish completed
+  - Enhanced assets list page with descriptive extraction status labels
+  - Added Content column distinguishing raw file vs extracted markdown
+  - Updated stats bar and filters with extraction-focused language
+  - Visual improvements: status descriptions, animated indicators, hover effects
+- **2026-01-28**: 🎉 **PHASE 0 COMPLETE** - Stabilization & Baseline Observability DONE!
+  - ✅ All backend tasks complete (models, services, APIs, automatic extraction)
+  - ✅ All frontend tasks complete (status visibility, run timeline, content distinction)
+  - ✅ All acceptance criteria met
+  - 🚀 System is now fully observable and traceable
