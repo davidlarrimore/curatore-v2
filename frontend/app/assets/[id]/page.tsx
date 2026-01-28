@@ -125,17 +125,19 @@ function AssetDetailContent() {
   useEffect(() => {
     if (asset?.status === 'pending') {
       const intervalId = setInterval(() => {
-        loadAssetData()
-      }, 3000) // Poll every 3 seconds
+        loadAssetData(true) // Silent polling - don't show loading spinner
+      }, 5000) // Poll every 5 seconds (reduced from 3)
 
       return () => clearInterval(intervalId)
     }
   }, [asset?.status])
 
-  const loadAssetData = async () => {
+  const loadAssetData = async (silent = false) => {
     if (!token || !assetId) return
 
-    setIsLoading(true)
+    if (!silent) {
+      setIsLoading(true)
+    }
     setError('')
 
     try {
@@ -152,9 +154,13 @@ function AssetDetailContent() {
       const runsData = await assetsApi.getAssetRuns(token, assetId)
       setRuns(runsData)
     } catch (err: any) {
-      setError(err.message || 'Failed to load asset')
+      if (!silent) {
+        setError(err.message || 'Failed to load asset')
+      }
     } finally {
-      setIsLoading(false)
+      if (!silent) {
+        setIsLoading(false)
+      }
     }
   }
 
