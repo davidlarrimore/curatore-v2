@@ -178,12 +178,10 @@ function AssetDetailContent() {
     try {
       // Download extracted content from object storage via proxy
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-      const params = new URLSearchParams({
-        bucket: extraction.extracted_bucket,
-        key: extraction.extracted_object_key,
-      })
+      // Manually encode the key to preserve special characters like +
+      const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(extraction.extracted_bucket)}&key=${encodeURIComponent(extraction.extracted_object_key)}`
 
-      const response = await fetch(`${apiUrl}/api/v1/storage/object/download?${params}`, {
+      const response = await fetch(url, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
