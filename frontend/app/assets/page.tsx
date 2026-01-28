@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { assetsApi } from '@/lib/api'
+import { assetsApi, type CollectionHealth } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import {
   FileText,
@@ -67,6 +67,7 @@ function AssetsContent() {
   const [limit] = useState(20)
   const [isUploading, setIsUploading] = useState(false)
   const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false)
+  const [collectionHealth, setCollectionHealth] = useState<CollectionHealth | null>(null)
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadAssets = useCallback(async (silent = false) => {
@@ -98,9 +99,22 @@ function AssetsContent() {
     }
   }, [token, statusFilter, sourceTypeFilter, page, limit])
 
+  const loadCollectionHealth = useCallback(async () => {
+    if (!token) return
+
+    try {
+      const health = await assetsApi.getCollectionHealth(token)
+      setCollectionHealth(health)
+    } catch (err: any) {
+      // Silently fail - health is not critical
+      console.error('Failed to load collection health:', err)
+    }
+  }, [token])
+
   useEffect(() => {
     loadAssets()
-  }, [loadAssets])
+    loadCollectionHealth()
+  }, [loadAssets, loadCollectionHealth])
 
   // Auto-poll when there are pending assets
   useEffect(() => {
@@ -321,6 +335,49 @@ function AssetsContent() {
               className="hidden"
             />
           </div>
+
+          {/* Collection Health */}
+          {collectionHealth && collectionHealth.total_assets > 0 && (
+            <div className="mt-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Collection Health</h3>
+                <div className="flex items-center gap-2">
+                  <div className={`w-2 h-2 rounded-full ${collectionHealth.extraction_coverage >= 90 ? 'bg-emerald-500' : collectionHealth.extraction_coverage >= 70 ? 'bg-amber-500' : 'bg-red-500'}`}></div>
+                  <span className={`text-sm font-medium ${collectionHealth.extraction_coverage >= 90 ? 'text-emerald-600 dark:text-emerald-400' : collectionHealth.extraction_coverage >= 70 ? 'text-amber-600 dark:text-amber-400' : 'text-red-600 dark:text-red-400'}`}>
+                    {collectionHealth.extraction_coverage >= 90 ? 'Healthy' : collectionHealth.extraction_coverage >= 70 ? 'Good' : 'Needs Attention'}
+                  </span>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                <div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Extraction Coverage</p>
+                  <div className="flex items-baseline gap-2">
+                    <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                      {collectionHealth.extraction_coverage}%
+                    </p>
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Total Assets</p>
+                  <p className="text-2xl font-bold text-gray-900 dark:text-white">
+                    {collectionHealth.total_assets}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Failed Extractions</p>
+                  <p className="text-2xl font-bold text-amber-600 dark:text-amber-400">
+                    {collectionHealth.status_breakdown.failed}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Multi-Version Assets</p>
+                  <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
+                    {collectionHealth.version_stats.multi_version_assets}
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Stats Bar */}
           {!isLoading && assets.length > 0 && (

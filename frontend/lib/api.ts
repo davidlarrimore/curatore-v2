@@ -1980,6 +1980,22 @@ export interface BulkUploadApplyResult {
   }
 }
 
+export interface CollectionHealth {
+  total_assets: number
+  extraction_coverage: number
+  status_breakdown: {
+    ready: number
+    pending: number
+    failed: number
+    inactive: number
+  }
+  version_stats: {
+    multi_version_assets: number
+    total_versions: number
+  }
+  last_updated: string | null
+}
+
 export const assetsApi = {
   /**
    * List assets for the organization
@@ -2125,6 +2141,17 @@ export const assetsApi = {
       method: 'POST',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: formData,
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get collection health metrics (Phase 2)
+   */
+  async getCollectionHealth(token: string | undefined): Promise<CollectionHealth> {
+    const url = apiUrl('/assets/health')
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },

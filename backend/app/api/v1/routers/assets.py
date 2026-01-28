@@ -6,7 +6,7 @@ Provides endpoints for querying assets, extraction status, and related runs.
 """
 
 import logging
-from typing import Optional, List
+from typing import Optional, List, Dict, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
@@ -782,3 +782,112 @@ async def apply_bulk_upload(
                 "marked_inactive_count": len(marked_inactive),
             },
         )
+
+
+@router.get(
+    "/health",
+    summary="Get collection health metrics",
+    description="Get organization-wide collection health metrics (Phase 2).",
+)
+async def get_collection_health(
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Get collection health metrics for the organization.
+
+    Returns organization-wide statistics including:
+    - Total assets
+    - Extraction coverage (percentage of assets with successful extraction)
+    - Failed extractions count
+    - Inactive assets count
+    - Version distribution
+    - Last updated timestamp
+
+    Args:
+        current_user: Authenticated user making the request
+
+    Returns:
+        Dict with collection health metrics
+
+    Example:
+        GET /api/v1/assets/health
+
+        Response:
+        {
+            "total_assets": 150,
+            "extraction_coverage": 92.0,
+            "status_breakdown": {
+                "ready": 138,
+                "pending": 5,
+                "failed": 2,
+                "inactive": 5
+            },
+            "version_stats": {
+                "multi_version_assets": 25,
+                "total_versions": 180
+            },
+            "last_updated": "2026-01-28T12:00:00Z"
+        }
+    """
+    from sqlalchemy import func
+
+    async with database_service.get_session() as session:
+        organization_id = current_user.organization_id
+
+        # Total assets
+        stmt = select(func.count(Asset.id)).where(
+            Asset.organization_id == organization_id
+        )
+        result = await session.execute(stmt)
+        total_assets = result.scalar() or 0
+
+        # Status breakdown
+        stmt = select(
+            Asset.status,
+            func.count(Asset.id)
+        ).where(
+            Asset.organization_id == organization_id
+        ).group_by(Asset.status)
+        result = await session.execute(stmt)
+        status_counts = {row[0]: row[1] for row in result}
+
+        # Version stats
+        stmt = select(func.count(Asset.id)).where(
+            Asset.organization_id == organization_id,
+            Asset.current_version_number > 1
+        )
+        result = await session.execute(stmt)
+        multi_version_assets = result.scalar() or 0
+
+        stmt = select(func.sum(Asset.current_version_number)).where(
+            Asset.organization_id == organization_id
+        )
+        result = await session.execute(stmt)
+        total_versions = result.scalar() or 0
+
+        # Last updated
+        stmt = select(func.max(Asset.updated_at)).where(
+            Asset.organization_id == organization_id
+        )
+        result = await session.execute(stmt)
+        last_updated = result.scalar()
+
+        # Calculate extraction coverage
+        ready_count = status_counts.get('ready', 0)
+        extraction_coverage = (ready_count / total_assets * 100) if total_assets > 0 else 0
+
+        return {
+            "total_assets": total_assets,
+            "extraction_coverage": round(extraction_coverage, 1),
+            "status_breakdown": {
+                "ready": status_counts.get('ready', 0),
+                "pending": status_counts.get('pending', 0),
+                "failed": status_counts.get('failed', 0),
+                "inactive": status_counts.get('inactive', 0),
+            },
+            "version_stats": {
+                "multi_version_assets": multi_version_assets,
+                "total_versions": int(total_versions) if total_versions else 0,
+            },
+            "last_updated": last_updated.isoformat() if last_updated else None,
+        }
