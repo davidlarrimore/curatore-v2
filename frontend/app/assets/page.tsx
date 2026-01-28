@@ -183,31 +183,43 @@ function AssetsContent() {
     switch (status) {
       case 'ready':
         return {
-          label: 'Ready',
+          label: 'Extraction Complete',
+          shortLabel: 'Ready',
+          description: 'Content extracted and ready to use',
           icon: <CheckCircle className="w-4 h-4" />,
           bgColor: 'bg-emerald-50 dark:bg-emerald-900/20',
           textColor: 'text-emerald-700 dark:text-emerald-400',
+          borderColor: 'border-emerald-200 dark:border-emerald-800',
         }
       case 'pending':
         return {
-          label: 'Processing',
+          label: 'Extracting Content',
+          shortLabel: 'Processing',
+          description: 'Converting document to markdown',
           icon: <Loader2 className="w-4 h-4 animate-spin" />,
           bgColor: 'bg-blue-50 dark:bg-blue-900/20',
           textColor: 'text-blue-700 dark:text-blue-400',
+          borderColor: 'border-blue-200 dark:border-blue-800',
         }
       case 'failed':
         return {
-          label: 'Failed',
-          icon: <XCircle className="w-4 h-4" />,
-          bgColor: 'bg-red-50 dark:bg-red-900/20',
-          textColor: 'text-red-700 dark:text-red-400',
+          label: 'Needs Attention',
+          shortLabel: 'Failed',
+          description: 'Extraction failed - click to view details',
+          icon: <AlertTriangle className="w-4 h-4" />,
+          bgColor: 'bg-amber-50 dark:bg-amber-900/20',
+          textColor: 'text-amber-700 dark:text-amber-400',
+          borderColor: 'border-amber-200 dark:border-amber-800',
         }
       default:
         return {
           label: status,
+          shortLabel: status,
+          description: 'Unknown status',
           icon: <AlertTriangle className="w-4 h-4" />,
           bgColor: 'bg-gray-50 dark:bg-gray-900/20',
           textColor: 'text-gray-700 dark:text-gray-400',
+          borderColor: 'border-gray-200 dark:border-gray-700',
         }
     }
   }
@@ -303,27 +315,27 @@ function AssetsContent() {
             <div className="mt-6 flex flex-wrap items-center gap-4 text-sm">
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
                 <span className="font-medium">{stats.total}</span>
-                <span>total</span>
+                <span>total assets</span>
               </div>
               {stats.ready > 0 && (
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400">
-                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                  <CheckCircle className="w-3.5 h-3.5" />
                   <span className="font-medium">{stats.ready}</span>
-                  <span>ready</span>
+                  <span>extracted</span>
                 </div>
               )}
               {stats.processing > 0 && (
                 <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400">
-                  <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
                   <span className="font-medium">{stats.processing}</span>
-                  <span>processing</span>
+                  <span>extracting</span>
                 </div>
               )}
               {stats.failed > 0 && (
-                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400">
-                  <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400">
+                  <AlertTriangle className="w-3.5 h-3.5" />
                   <span className="font-medium">{stats.failed}</span>
-                  <span>failed</span>
+                  <span>need attention</span>
                 </div>
               )}
             </div>
@@ -353,9 +365,9 @@ function AssetsContent() {
                 className="w-full px-4 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
               >
                 <option value="all">All Statuses</option>
-                <option value="ready">Ready</option>
-                <option value="pending">Processing</option>
-                <option value="failed">Failed</option>
+                <option value="ready">✓ Extraction Complete</option>
+                <option value="pending">↻ Extracting Content</option>
+                <option value="failed">⚠ Needs Attention</option>
               </select>
             </div>
 
@@ -453,7 +465,10 @@ function AssetsContent() {
                         Document
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        Status
+                        Extraction Status
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Content
                       </th>
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         Source
@@ -464,9 +479,6 @@ function AssetsContent() {
                       <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         Created
                       </th>
-                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        Version
-                      </th>
                     </tr>
                   </thead>
                   <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
@@ -476,33 +488,74 @@ function AssetsContent() {
                         <tr
                           key={asset.id}
                           onClick={() => handleViewAsset(asset.id)}
-                          className="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
+                          className="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors group"
                         >
                           <td className="px-6 py-4">
                             <div className="flex items-center gap-3">
-                              <div className="w-10 h-10 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 flex items-center justify-center flex-shrink-0">
+                              <div className="w-10 h-10 rounded-lg bg-gradient-to-br from-indigo-50 to-purple-50 dark:from-indigo-900/20 dark:to-purple-900/20 border border-indigo-100 dark:border-indigo-800 flex items-center justify-center flex-shrink-0">
                                 <FileText className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
                               </div>
                               <div className="min-w-0 flex-1">
-                                <div className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                                <div className="text-sm font-medium text-gray-900 dark:text-white truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
                                   {asset.original_filename}
                                 </div>
-                                <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
-                                  {asset.id.substring(0, 8)}...
+                                <div className="flex items-center gap-2 mt-0.5">
+                                  <div className="text-xs text-gray-500 dark:text-gray-400 font-mono">
+                                    {asset.id.substring(0, 8)}
+                                  </div>
+                                  {asset.current_version_number && (
+                                    <>
+                                      <span className="text-gray-300 dark:text-gray-600">•</span>
+                                      <div className="text-xs text-gray-500 dark:text-gray-400">
+                                        v{asset.current_version_number}
+                                      </div>
+                                    </>
+                                  )}
                                 </div>
                               </div>
                             </div>
                           </td>
+                          <td className="px-6 py-4">
+                            <div className="flex flex-col gap-1.5">
+                              <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${statusConfig.bgColor} ${statusConfig.textColor} w-fit`}>
+                                {statusConfig.icon}
+                                <span>{statusConfig.shortLabel}</span>
+                              </div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400">
+                                {statusConfig.description}
+                              </div>
+                            </div>
+                          </td>
                           <td className="px-6 py-4 whitespace-nowrap">
-                            <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${statusConfig.bgColor} ${statusConfig.textColor}`}>
-                              {statusConfig.icon}
-                              <span>{statusConfig.label}</span>
+                            <div className="flex flex-col gap-1.5">
+                              {/* Raw file indicator */}
+                              <div className="flex items-center gap-2">
+                                <div className="w-1.5 h-1.5 rounded-full bg-gray-400 dark:bg-gray-500"></div>
+                                <span className="text-xs text-gray-600 dark:text-gray-400">Raw file</span>
+                              </div>
+                              {/* Extracted content indicator */}
+                              {asset.status === 'ready' ? (
+                                <div className="flex items-center gap-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
+                                  <span className="text-xs text-emerald-700 dark:text-emerald-400 font-medium">Markdown</span>
+                                </div>
+                              ) : asset.status === 'pending' ? (
+                                <div className="flex items-center gap-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-blue-400 animate-pulse"></div>
+                                  <span className="text-xs text-blue-600 dark:text-blue-400">Extracting...</span>
+                                </div>
+                              ) : (
+                                <div className="flex items-center gap-2">
+                                  <div className="w-1.5 h-1.5 rounded-full bg-gray-300 dark:bg-gray-600"></div>
+                                  <span className="text-xs text-gray-400 dark:text-gray-500">Not extracted</span>
+                                </div>
+                              )}
                             </div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center gap-2">
                               <div className="text-sm text-gray-900 dark:text-white capitalize">
-                                {asset.source_type}
+                                {asset.source_type.replace('_', ' ')}
                               </div>
                             </div>
                           </td>
@@ -514,11 +567,6 @@ function AssetsContent() {
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="text-sm text-gray-500 dark:text-gray-400">
                               {formatDate(asset.created_at)}
-                            </div>
-                          </td>
-                          <td className="px-6 py-4 whitespace-nowrap">
-                            <div className="text-sm text-gray-500 dark:text-gray-400">
-                              {asset.current_version_number ? `v${asset.current_version_number}` : '-'}
                             </div>
                           </td>
                         </tr>
