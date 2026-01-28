@@ -71,6 +71,13 @@ export function LeftSidebar({
     },
     ...(isAuthenticated ? [
       {
+        name: 'Assets',
+        href: '/assets',
+        icon: FileText,
+        current: pathname?.startsWith('/assets'),
+        gradient: 'from-indigo-500 to-blue-600'
+      },
+      {
         name: 'Jobs',
         href: '/jobs',
         icon: Briefcase,

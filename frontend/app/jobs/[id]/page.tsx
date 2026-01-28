@@ -664,8 +664,13 @@ export default function JobDetailPage() {
                       {job.documents.map((doc) => (
                         <tr key={doc.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
                           <td className="px-6 py-4">
-                            <div className="text-sm font-medium text-gray-900 dark:text-white truncate max-w-md">{getDocumentDisplayName(doc)}</div>
-                            <div className="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5">{doc.document_id}</div>
+                            <button
+                              onClick={() => router.push(`/assets/${doc.document_id}`)}
+                              className="text-left hover:text-indigo-600 dark:hover:text-indigo-400 transition-colors"
+                            >
+                              <div className="text-sm font-medium text-gray-900 dark:text-white truncate max-w-md hover:underline">{getDocumentDisplayName(doc)}</div>
+                              <div className="text-xs text-gray-500 dark:text-gray-400 font-mono mt-0.5">{doc.document_id}</div>
+                            </button>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <span className={`inline-flex items-center px-2.5 py-1 text-xs font-semibold rounded-full ${getStatusColor(doc.status)}`}>

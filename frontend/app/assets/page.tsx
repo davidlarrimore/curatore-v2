@@ -1,0 +1,443 @@
+'use client'
+
+import { useState, useEffect, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
+import { useAuth } from '@/lib/auth-context'
+import { assetsApi } from '@/lib/api'
+import { Button } from '@/components/ui/Button'
+import {
+  FileText,
+  RefreshCw,
+  Search,
+  Filter,
+  ChevronLeft,
+  ChevronRight,
+  Loader2,
+  CheckCircle,
+  XCircle,
+  Clock,
+  FolderOpen,
+  FileCode,
+  AlertTriangle,
+} from 'lucide-react'
+import ProtectedRoute from '@/components/auth/ProtectedRoute'
+
+interface Asset {
+  id: string
+  organization_id: string
+  source_type: string
+  source_metadata: Record<string, any>
+  original_filename: string
+  content_type: string | null
+  file_size: number | null
+  file_hash: string | null
+  raw_bucket: string
+  raw_object_key: string
+  status: string
+  current_version_number: number | null
+  created_at: string
+  updated_at: string
+  created_by: string | null
+}
+
+export default function AssetsPage() {
+  return (
+    <ProtectedRoute>
+      <AssetsContent />
+    </ProtectedRoute>
+  )
+}
+
+function AssetsContent() {
+  const router = useRouter()
+  const { token } = useAuth()
+
+  const [assets, setAssets] = useState<Asset[]>([])
+  const [total, setTotal] = useState(0)
+  const [isLoading, setIsLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [searchTerm, setSearchTerm] = useState('')
+  const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [sourceTypeFilter, setSourceTypeFilter] = useState<string>('all')
+  const [page, setPage] = useState(1)
+  const [limit] = useState(20)
+
+  const loadAssets = useCallback(async () => {
+    if (!token) return
+
+    setIsLoading(true)
+    setError('')
+
+    try {
+      const response = await assetsApi.listAssets(token, {
+        status: statusFilter === 'all' ? undefined : statusFilter,
+        source_type: sourceTypeFilter === 'all' ? undefined : sourceTypeFilter,
+        limit,
+        offset: (page - 1) * limit,
+      })
+
+      setAssets(response.items)
+      setTotal(response.total)
+    } catch (err: any) {
+      setError(err.message || 'Failed to load assets')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [token, statusFilter, sourceTypeFilter, page, limit])
+
+  useEffect(() => {
+    loadAssets()
+  }, [loadAssets])
+
+  const handleRefresh = () => {
+    loadAssets()
+  }
+
+  const handleViewAsset = (assetId: string) => {
+    router.push(`/assets/${assetId}`)
+  }
+
+  const getStatusConfig = (status: string) => {
+    switch (status) {
+      case 'ready':
+        return {
+          label: 'Ready',
+          icon: <CheckCircle className="w-4 h-4" />,
+          bgColor: 'bg-emerald-50 dark:bg-emerald-900/20',
+          textColor: 'text-emerald-700 dark:text-emerald-400',
+        }
+      case 'pending':
+        return {
+          label: 'Processing',
+          icon: <Loader2 className="w-4 h-4 animate-spin" />,
+          bgColor: 'bg-blue-50 dark:bg-blue-900/20',
+          textColor: 'text-blue-700 dark:text-blue-400',
+        }
+      case 'failed':
+        return {
+          label: 'Failed',
+          icon: <XCircle className="w-4 h-4" />,
+          bgColor: 'bg-red-50 dark:bg-red-900/20',
+          textColor: 'text-red-700 dark:text-red-400',
+        }
+      default:
+        return {
+          label: status,
+          icon: <AlertTriangle className="w-4 h-4" />,
+          bgColor: 'bg-gray-50 dark:bg-gray-900/20',
+          textColor: 'text-gray-700 dark:text-gray-400',
+        }
+    }
+  }
+
+  const formatBytes = (bytes: number | null) => {
+    if (!bytes) return 'Unknown'
+    const sizes = ['Bytes', 'KB', 'MB', 'GB']
+    const i = Math.floor(Math.log(bytes) / Math.log(1024))
+    return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`
+  }
+
+  const formatDate = (dateString: string) => {
+    const date = new Date(dateString)
+    const now = new Date()
+    const diff = now.getTime() - date.getTime()
+    const seconds = Math.floor(diff / 1000)
+    const minutes = Math.floor(seconds / 60)
+    const hours = Math.floor(minutes / 60)
+    const days = Math.floor(hours / 24)
+
+    if (days > 0) return `${days}d ago`
+    if (hours > 0) return `${hours}h ago`
+    if (minutes > 0) return `${minutes}m ago`
+    return 'Just now'
+  }
+
+  const filteredAssets = assets.filter(asset =>
+    searchTerm ? asset.original_filename.toLowerCase().includes(searchTerm.toLowerCase()) : true
+  )
+
+  const totalPages = Math.ceil(total / limit)
+
+  // Calculate stats
+  const stats = {
+    total: total,
+    ready: assets.filter(a => a.status === 'ready').length,
+    processing: assets.filter(a => a.status === 'pending').length,
+    failed: assets.filter(a => a.status === 'failed').length,
+  }
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        {/* Header */}
+        <div className="mb-8">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25">
+                <FileText className="w-6 h-6" />
+              </div>
+              <div>
+                <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
+                  Assets
+                </h1>
+                <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                  View and manage all your documents
+                </p>
+              </div>
+            </div>
+            <Button
+              variant="secondary"
+              onClick={handleRefresh}
+              disabled={isLoading}
+              className="gap-2"
+            >
+              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+              <span className="hidden sm:inline">Refresh</span>
+            </Button>
+          </div>
+
+          {/* Stats Bar */}
+          {!isLoading && assets.length > 0 && (
+            <div className="mt-6 flex flex-wrap items-center gap-4 text-sm">
+              <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
+                <span className="font-medium">{stats.total}</span>
+                <span>total</span>
+              </div>
+              {stats.ready > 0 && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400">
+                  <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
+                  <span className="font-medium">{stats.ready}</span>
+                  <span>ready</span>
+                </div>
+              )}
+              {stats.processing > 0 && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400">
+                  <span className="w-2 h-2 rounded-full bg-blue-500 animate-pulse"></span>
+                  <span className="font-medium">{stats.processing}</span>
+                  <span>processing</span>
+                </div>
+              )}
+              {stats.failed > 0 && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400">
+                  <span className="w-2 h-2 rounded-full bg-red-500"></span>
+                  <span className="font-medium">{stats.failed}</span>
+                  <span>failed</span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Filters */}
+        <div className="mb-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            {/* Search */}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search by filename..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="w-full pl-10 pr-4 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+              />
+            </div>
+
+            {/* Status Filter */}
+            <div>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value)}
+                className="w-full px-4 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+              >
+                <option value="all">All Statuses</option>
+                <option value="ready">Ready</option>
+                <option value="pending">Processing</option>
+                <option value="failed">Failed</option>
+              </select>
+            </div>
+
+            {/* Source Type Filter */}
+            <div>
+              <select
+                value={sourceTypeFilter}
+                onChange={(e) => setSourceTypeFilter(e.target.value)}
+                className="w-full px-4 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+              >
+                <option value="all">All Sources</option>
+                <option value="upload">Upload</option>
+                <option value="sharepoint">SharePoint</option>
+                <option value="web_scrape">Web Scrape</option>
+                <option value="sam_gov">SAM.gov</option>
+              </select>
+            </div>
+          </div>
+        </div>
+
+        {/* Error State */}
+        {error && (
+          <div className="mb-6 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/50 p-4">
+            <div className="flex items-center gap-3">
+              <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
+              </div>
+              <p className="text-sm font-medium text-red-800 dark:text-red-200">{error}</p>
+            </div>
+          </div>
+        )}
+
+        {/* Loading State */}
+        {isLoading ? (
+          <div className="flex flex-col items-center justify-center py-16">
+            <div className="w-12 h-12 rounded-full border-4 border-gray-200 dark:border-gray-700 border-t-indigo-500 animate-spin"></div>
+            <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Loading assets...</p>
+          </div>
+        ) : filteredAssets.length === 0 ? (
+          /* Empty State */
+          <div className="relative overflow-hidden rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50 px-6 py-16 text-center">
+            <div className="absolute inset-0 pointer-events-none">
+              <div className="absolute -top-24 -right-24 w-64 h-64 rounded-full bg-gradient-to-br from-indigo-500/5 to-purple-500/5 blur-3xl"></div>
+              <div className="absolute -bottom-24 -left-24 w-64 h-64 rounded-full bg-gradient-to-br from-blue-500/5 to-cyan-500/5 blur-3xl"></div>
+            </div>
+
+            <div className="relative">
+              <div className="mx-auto w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-xl shadow-indigo-500/25 mb-6">
+                <FileText className="w-10 h-10 text-white" />
+              </div>
+              <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
+                {searchTerm || statusFilter !== 'all' || sourceTypeFilter !== 'all'
+                  ? 'No assets found'
+                  : 'No assets yet'}
+              </h3>
+              <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto">
+                {searchTerm || statusFilter !== 'all' || sourceTypeFilter !== 'all'
+                  ? 'Try adjusting your filters or search term.'
+                  : 'Upload documents or connect data sources to get started.'}
+              </p>
+            </div>
+          </div>
+        ) : (
+          <>
+            {/* Assets Table */}
+            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                  <thead className="bg-gray-50 dark:bg-gray-900/50">
+                    <tr>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Document
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Status
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Source
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Size
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Created
+                      </th>
+                      <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Version
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                    {filteredAssets.map((asset) => {
+                      const statusConfig = getStatusConfig(asset.status)
+                      return (
+                        <tr
+                          key={asset.id}
+                          onClick={() => handleViewAsset(asset.id)}
+                          className="hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
+                        >
+                          <td className="px-6 py-4">
+                            <div className="flex items-center gap-3">
+                              <div className="w-10 h-10 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 flex items-center justify-center flex-shrink-0">
+                                <FileText className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                              </div>
+                              <div className="min-w-0 flex-1">
+                                <div className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                                  {asset.original_filename}
+                                </div>
+                                <div className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
+                                  {asset.id.substring(0, 8)}...
+                                </div>
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${statusConfig.bgColor} ${statusConfig.textColor}`}>
+                              {statusConfig.icon}
+                              <span>{statusConfig.label}</span>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center gap-2">
+                              <div className="text-sm text-gray-900 dark:text-white capitalize">
+                                {asset.source_type}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                              {formatBytes(asset.file_size)}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                              {formatDate(asset.created_at)}
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="text-sm text-gray-500 dark:text-gray-400">
+                              {asset.current_version_number ? `v${asset.current_version_number}` : '-'}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Pagination */}
+            {totalPages > 1 && (
+              <div className="mt-6 flex items-center justify-between">
+                <div className="text-sm text-gray-500 dark:text-gray-400">
+                  Showing {(page - 1) * limit + 1} to {Math.min(page * limit, total)} of {total} assets
+                </div>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="secondary"
+                    onClick={() => setPage(p => Math.max(1, p - 1))}
+                    disabled={page === 1}
+                    className="gap-2"
+                  >
+                    <ChevronLeft className="w-4 h-4" />
+                    Previous
+                  </Button>
+                  <div className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Page {page} of {totalPages}
+                  </div>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setPage(p => Math.min(totalPages, p + 1))}
+                    disabled={page === totalPages}
+                    className="gap-2"
+                  >
+                    Next
+                    <ChevronRight className="w-4 h-4" />
+                  </Button>
+                </div>
+              </div>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  )
+}
