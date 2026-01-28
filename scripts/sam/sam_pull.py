@@ -305,7 +305,7 @@ TARGET_NAICS_CODES = {
     "541330",
 }
 
-POSTED_FROM = (datetime.now(timezone.utc) - timedelta(days=7)).strftime("%m/%d/%Y")
+POSTED_FROM = (datetime.now(timezone.utc) - timedelta(days=1)).strftime("%m/%d/%Y")
 POSTED_TO = datetime.now(timezone.utc).strftime("%m/%d/%Y")
 
 HEADERS = {

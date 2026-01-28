@@ -13,6 +13,49 @@ Curatore v2 is a RAG-ready document processing and optimization platform. It con
 - **Optional Docling**: External document converter for rich PDFs/Office docs
 - **Optional Object Storage**: S3-compatible storage (MinIO/AWS S3) with integrated MinIO SDK
 
+## 🚧 ONGOING: Architecture Refactor (Multi-Session Project)
+
+**Status**: Phase 0 (Stabilization & Baseline Observability) - IN PROGRESS
+**Started**: 2026-01-28
+
+### Quick Start for Each Session
+
+1. **Read progress tracker first**: `/ARCHITECTURE_PROGRESS.md` (~300 lines)
+2. **Only reference full requirements when needed**: `/UPDATED_DATA_ARCHITECTURE.md` (~1400 lines)
+3. **Update progress tracker** as you complete tasks
+
+### Project Summary
+
+Curatore is evolving from a document processing tool into a curation-first platform that:
+- Separates import, canonicalization, processing, and output sync
+- Treats extraction as automatic infrastructure (not per-workflow config)
+- Prioritizes experimentation speed over premature automation
+- Maintains DB as source of truth with strict object store layout
+
+### Core Architectural Principles
+1. **Extraction is infrastructure** - Automatic, opinionated, consistent
+2. **Experimentation precedes automation** - Test/compare before pipelines
+3. **Artifacts are first-class** - Every output is addressable and reusable
+4. **Separation of concerns** - Import ≠ Processing ≠ Output Sync
+5. **UI explains outcomes** - Users see assets/results, not jobs/queues
+
+### Implementation Phases (0-7)
+- **Phase 0** (Current): Stabilization - Make behavior explicit and traceable
+- **Phase 1**: Asset versioning and Document Detail View
+- **Phase 2**: Bulk upload updates and collection health
+- **Phase 3**: Flexible metadata and experimentation core
+- **Phase 4**: Web scraping as durable data source
+- **Phase 5**: System maintenance and scheduling
+- **Phase 6**: Optional integrations (vector DB, webhooks)
+- **Phase 7**: SAM.gov native domain integration
+
+### Token Efficiency Strategy
+- Each session reads progress tracker (~300 lines) instead of full requirements (~1400 lines)
+- Reference specific sections of UPDATED_DATA_ARCHITECTURE.md only when needed
+- Saves ~15,000 tokens per session startup
+
+---
+
 ## Development Commands
 
 ### Starting the Application
