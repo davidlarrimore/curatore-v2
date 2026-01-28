@@ -17,6 +17,9 @@ class Settings(BaseModel):
     # File Upload Limits
     MAX_FILE_SIZE: int = Field(default=int(os.getenv("MAX_FILE_SIZE", "52428800")))  # 50MB
 
+    # Upload Directory
+    UPLOAD_DIR: str = Field(default=os.getenv("UPLOAD_DIR", "/tmp/extraction_uploads"))
+
     # OCR
     OCR_LANG: str = Field(default=os.getenv("OCR_LANG", "eng"))
     OCR_PSM: str = Field(default=os.getenv("OCR_PSM", "3"))
