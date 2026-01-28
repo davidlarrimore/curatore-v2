@@ -1563,7 +1563,7 @@ class BulkUploadFileInfo(BaseModel):
     """Information about a file in bulk upload analysis."""
     filename: str = Field(..., description="Filename")
     file_size: int = Field(..., description="File size in bytes")
-    file_hash: str = Field(..., description="SHA-256 content hash")
+    file_hash: Optional[str] = Field(None, description="SHA-256 content hash (may be None for old assets)")
     asset_id: Optional[str] = Field(None, description="Existing asset ID (for unchanged/updated)")
     current_version: Optional[int] = Field(None, description="Current version number")
     old_file_hash: Optional[str] = Field(None, description="Previous file hash (for updated files)")

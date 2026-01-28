@@ -1947,10 +1947,10 @@ export interface AssetVersionHistory {
 export interface BulkUploadFileInfo {
   filename: string
   file_size: number
-  file_hash: string
+  file_hash: string | null
   asset_id?: string
   current_version?: number
-  old_file_hash?: string
+  old_file_hash?: string | null
   status?: string
 }
 
