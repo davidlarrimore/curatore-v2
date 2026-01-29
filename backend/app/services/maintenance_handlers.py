@@ -208,47 +208,104 @@ async def handle_orphan_detection(
     config: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Find orphaned objects in the system.
+    Find and fix orphaned objects in the system.
 
     Orphaned objects include:
+    - Assets stuck in "pending" status without extraction runs
     - Assets without any extraction results
     - Artifacts without corresponding assets
     - Runs without results (stuck in pending/running)
 
-    This is a detection-only task that reports findings.
-    Actual cleanup should be triggered separately.
+    This handler both detects AND fixes certain issues:
+    - Assets stuck in "pending" for >1 hour are marked as "failed"
+    - Stuck runs (>24h) are marked as "failed"
 
     Args:
         session: Database session
         run: Run context for tracking
-        config: Task configuration
+        config: Task configuration (auto_fix: bool = True)
 
     Returns:
         Dict with detection results:
         {
             "orphaned_assets": int,
+            "stuck_pending_assets": int,
+            "stuck_pending_fixed": int,
             "orphaned_artifacts": int,
             "stuck_runs": int,
+            "stuck_runs_fixed": int,
             "details": {...}
         }
     """
+    auto_fix = config.get("auto_fix", True)
+
     await _log_event(
         session, run.id, "INFO", "start",
-        "Starting orphan detection",
+        f"Starting orphan detection (auto_fix={auto_fix})",
+        {"auto_fix": auto_fix}
     )
 
     orphaned_assets = 0
+    stuck_pending_assets = 0
+    stuck_pending_fixed = 0
     orphaned_artifacts = 0
     stuck_runs = 0
+    stuck_runs_fixed = 0
     details = {
         "orphaned_asset_ids": [],
+        "stuck_pending_asset_ids": [],
         "orphaned_artifact_ids": [],
         "stuck_run_ids": [],
     }
 
     try:
-        # 1. Find assets without extraction results (older than 1 hour)
-        cutoff = datetime.utcnow() - timedelta(hours=1)
+        # 1. Find assets stuck in "pending" status (older than 1 hour)
+        # These are assets where extraction was never triggered or silently failed
+        pending_cutoff = datetime.utcnow() - timedelta(hours=1)
+
+        stuck_pending_result = await session.execute(
+            select(Asset)
+            .where(
+                and_(
+                    Asset.status == "pending",
+                    Asset.created_at < pending_cutoff,
+                )
+            )
+            .limit(500)
+        )
+        stuck_pending_list = list(stuck_pending_result.scalars().all())
+        stuck_pending_assets = len(stuck_pending_list)
+        details["stuck_pending_asset_ids"] = [str(a.id) for a in stuck_pending_list[:20]]
+
+        if stuck_pending_assets > 0:
+            await _log_event(
+                session, run.id, "WARN", "progress",
+                f"Found {stuck_pending_assets} assets stuck in 'pending' status",
+                {"count": stuck_pending_assets, "sample_ids": details["stuck_pending_asset_ids"][:5]}
+            )
+
+            # Auto-fix: Mark stuck pending assets as "failed"
+            if auto_fix:
+                for asset in stuck_pending_list:
+                    asset.status = "failed"
+                    asset.updated_at = datetime.utcnow()
+                    # Add note in source_metadata about why it failed
+                    asset.source_metadata = {
+                        **asset.source_metadata,
+                        "auto_failed_reason": "Stuck in pending status - extraction never completed",
+                        "auto_failed_at": datetime.utcnow().isoformat(),
+                    }
+                    stuck_pending_fixed += 1
+
+                await session.flush()
+                await _log_event(
+                    session, run.id, "INFO", "fix",
+                    f"Marked {stuck_pending_fixed} stuck assets as 'failed'",
+                    {"fixed_count": stuck_pending_fixed}
+                )
+
+        # 2. Find assets with "ready" status but no extraction results (older than 1 hour)
+        extraction_cutoff = datetime.utcnow() - timedelta(hours=1)
 
         # Get all asset IDs that have extraction results
         assets_with_extraction = await session.execute(
@@ -262,7 +319,7 @@ async def handle_orphan_detection(
             .where(
                 and_(
                     Asset.status == "ready",
-                    Asset.created_at < cutoff,
+                    Asset.created_at < extraction_cutoff,
                     ~Asset.id.in_(extraction_asset_ids) if extraction_asset_ids else True,
                 )
             )
@@ -272,13 +329,14 @@ async def handle_orphan_detection(
         orphaned_assets = len(orphan_assets)
         details["orphaned_asset_ids"] = [str(a.id) for a in orphan_assets[:20]]
 
-        await _log_event(
-            session, run.id, "INFO", "progress",
-            f"Found {orphaned_assets} assets without extraction results",
-            {"count": orphaned_assets}
-        )
+        if orphaned_assets > 0:
+            await _log_event(
+                session, run.id, "WARN", "progress",
+                f"Found {orphaned_assets} 'ready' assets without extraction results",
+                {"count": orphaned_assets}
+            )
 
-        # 2. Find stuck runs (pending/running for more than 24 hours)
+        # 3. Find stuck runs (pending/running for more than 24 hours)
         stuck_cutoff = datetime.utcnow() - timedelta(hours=24)
         stuck_runs_result = await session.execute(
             select(Run)
@@ -294,13 +352,29 @@ async def handle_orphan_detection(
         stuck_runs = len(stuck_run_list)
         details["stuck_run_ids"] = [str(r.id) for r in stuck_run_list[:20]]
 
-        await _log_event(
-            session, run.id, "INFO", "progress",
-            f"Found {stuck_runs} stuck runs",
-            {"count": stuck_runs}
-        )
+        if stuck_runs > 0:
+            await _log_event(
+                session, run.id, "WARN", "progress",
+                f"Found {stuck_runs} stuck runs (pending/running > 24h)",
+                {"count": stuck_runs}
+            )
 
-        # 3. Find orphaned artifacts (documents that no longer exist)
+            # Auto-fix: Mark stuck runs as "failed"
+            if auto_fix:
+                for stuck_run in stuck_run_list:
+                    stuck_run.status = "failed"
+                    stuck_run.completed_at = datetime.utcnow()
+                    stuck_run.error_message = "Auto-failed: Run stuck in pending/running for >24 hours"
+                    stuck_runs_fixed += 1
+
+                await session.flush()
+                await _log_event(
+                    session, run.id, "INFO", "fix",
+                    f"Marked {stuck_runs_fixed} stuck runs as 'failed'",
+                    {"fixed_count": stuck_runs_fixed}
+                )
+
+        # 4. Find orphaned artifacts (documents that no longer exist)
         # This is a lightweight check - just count artifacts with missing documents
         artifact_count_result = await session.execute(
             select(func.count(Artifact.id))
@@ -319,17 +393,22 @@ async def handle_orphan_detection(
 
     summary = {
         "orphaned_assets": orphaned_assets,
+        "stuck_pending_assets": stuck_pending_assets,
+        "stuck_pending_fixed": stuck_pending_fixed,
         "orphaned_artifacts": orphaned_artifacts,
         "stuck_runs": stuck_runs,
+        "stuck_runs_fixed": stuck_runs_fixed,
+        "auto_fix": auto_fix,
         "details": details,
     }
 
     # Log warning if orphans found
-    total_orphans = orphaned_assets + stuck_runs
-    level = "WARN" if total_orphans > 0 else "INFO"
+    total_issues = orphaned_assets + stuck_pending_assets + stuck_runs
+    total_fixed = stuck_pending_fixed + stuck_runs_fixed
+    level = "WARN" if (total_issues - total_fixed) > 0 else "INFO"
     await _log_event(
         session, run.id, level, "summary",
-        f"Orphan detection complete: {total_orphans} issues found",
+        f"Orphan detection complete: {total_issues} issues found, {total_fixed} auto-fixed",
         summary
     )
 
