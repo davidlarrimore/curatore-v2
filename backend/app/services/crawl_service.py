@@ -67,6 +67,7 @@ from .run_service import run_service
 from .asset_service import asset_service
 from .scrape_service import scrape_service, extract_url_path
 from .minio_service import get_minio_service
+from .upload_integration_service import upload_integration_service
 
 logger = logging.getLogger("curatore.crawl_service")
 
@@ -430,6 +431,17 @@ class CrawlService:
                 existing_asset_id=existing.asset_id,
             )
 
+            # Trigger extraction for the updated asset
+            try:
+                await upload_integration_service.trigger_extraction(
+                    session=session,
+                    asset_id=asset_id,
+                )
+                logger.debug(f"Triggered extraction for updated asset {asset_id}")
+            except Exception as e:
+                logger.warning(f"Failed to trigger extraction for {asset_id}: {e}")
+                # Continue - extraction failure shouldn't block crawl
+
             # Update scraped asset metadata
             existing.crawl_run_id = crawl_run_id
             existing.crawl_depth = crawl_depth
@@ -460,6 +472,17 @@ class CrawlService:
             content_hash,
             crawl_run_id,
         )
+
+        # Trigger extraction for the new asset
+        try:
+            await upload_integration_service.trigger_extraction(
+                session=session,
+                asset_id=asset_id,
+            )
+            logger.debug(f"Triggered extraction for scraped asset {asset_id}")
+        except Exception as e:
+            logger.warning(f"Failed to trigger extraction for {asset_id}: {e}")
+            # Continue - extraction failure shouldn't block crawl
 
         # Create scraped asset record
         scraped_asset = await scrape_service.create_scraped_asset(
