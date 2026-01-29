@@ -2574,6 +2574,22 @@ export const scrapeApi = {
     return handleJson(res)
   },
 
+  /**
+   * Get extracted markdown content for a scraped asset
+   */
+  async getScrapedAssetContent(token: string | undefined, collectionId: string, scrapedAssetId: string): Promise<string> {
+    const url = apiUrl(`/scrape/collections/${collectionId}/assets/${scrapedAssetId}/content`)
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    if (!res.ok) {
+      let text: string | undefined
+      try { text = await res.text() } catch {}
+      httpError(res, text)
+    }
+    return res.text()
+  },
+
   // ========== Tree Browsing ==========
 
   /**

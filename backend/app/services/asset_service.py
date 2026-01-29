@@ -362,6 +362,38 @@ class AssetService:
         )
         return result.scalar_one_or_none()
 
+    async def get_asset_by_object_key(
+        self,
+        session: AsyncSession,
+        raw_bucket: str,
+        raw_object_key: str,
+    ) -> Optional[Asset]:
+        """
+        Find existing asset by storage path (bucket + object key).
+
+        Used to check for path collisions when using human-readable paths.
+
+        Args:
+            session: Database session
+            raw_bucket: Object storage bucket
+            raw_object_key: Object storage key
+
+        Returns:
+            Existing Asset instance or None
+        """
+        result = await session.execute(
+            select(Asset)
+            .where(
+                and_(
+                    Asset.raw_bucket == raw_bucket,
+                    Asset.raw_object_key == raw_object_key,
+                    Asset.status != "deleted",
+                )
+            )
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def count_assets_by_organization(
         self,
         session: AsyncSession,

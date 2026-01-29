@@ -260,6 +260,60 @@ extraction:
 
 
 # ============================================================================
+# Playwright Rendering Service Configuration (optional)
+# ============================================================================
+# Browser-based rendering service for JavaScript-heavy web scraping.
+# Required for crawling Single Page Applications (SPAs) and dynamic content.
+#
+# The Playwright service renders pages with a real browser, executes JavaScript,
+# and extracts content inline during crawl (no separate extraction job needed).
+#
+# If not configured here, falls back to PLAYWRIGHT_* environment variables
+
+playwright:
+  # Enable Playwright rendering service (optional, default: true if URL provided)
+  enabled: true
+
+  # Playwright service URL (required to enable)
+  # Examples:
+  #   - Docker: http://playwright:8011
+  #   - Local: http://localhost:8011
+  service_url: http://playwright:8011
+
+  # Request timeout in seconds (optional, default: 60)
+  # Total time allowed for page render + content extraction
+  timeout: 60
+
+  # Maximum retry attempts for failed requests (optional, default: 3)
+  max_retries: 3
+
+  # Browser pool size (optional, default: 3)
+  # Number of browser instances to maintain
+  browser_pool_size: 3
+
+  # Default viewport dimensions (optional)
+  default_viewport_width: 1920
+  default_viewport_height: 1080
+
+  # Default page load timeout in ms (optional, default: 30000)
+  default_timeout_ms: 30000
+
+  # Default wait for selector timeout in ms (optional, default: 5000)
+  default_wait_timeout_ms: 5000
+
+  # File extensions to identify as downloadable documents (optional)
+  # When crawling web pages, links to these file types will be extracted
+  document_extensions:
+    - ".pdf"
+    - ".docx"
+    - ".doc"
+    - ".xlsx"
+    - ".xls"
+    - ".pptx"
+    - ".ppt"
+
+
+# ============================================================================
 # Microsoft SharePoint Configuration (optional)
 # ============================================================================
 # Microsoft Graph API integration for SharePoint document retrieval

@@ -46,6 +46,9 @@ services:
       # Docling extract path is fixed per API (/v1/extract)
       - DOCLING_TIMEOUT=${DOCLING_TIMEOUT:-300}
       - DOCLING_VERIFY_SSL=true
+      # Playwright rendering service (for JavaScript-rendered web scraping)
+      - PLAYWRIGHT_SERVICE_URL=http://playwright:8011
+      - PLAYWRIGHT_TIMEOUT=${PLAYWRIGHT_TIMEOUT:-60}
       # SharePoint / Microsoft Graph
       - MS_TENANT_ID=${MS_TENANT_ID:-}
       - MS_CLIENT_ID=${MS_CLIENT_ID:-}
@@ -106,6 +109,9 @@ services:
       # Docling extract path is fixed per API (/v1/extract)
       - DOCLING_TIMEOUT=${DOCLING_TIMEOUT:-300}
       - DOCLING_VERIFY_SSL=true
+      # Playwright rendering service (match backend)
+      - PLAYWRIGHT_SERVICE_URL=http://playwright:8011
+      - PLAYWRIGHT_TIMEOUT=${PLAYWRIGHT_TIMEOUT:-60}
       # SharePoint / Microsoft Graph
       - MS_TENANT_ID=${MS_TENANT_ID:-}
       - MS_CLIENT_ID=${MS_CLIENT_ID:-}
@@ -224,6 +230,41 @@ services:
     # Run with reload for live dev edits
     command: uvicorn app.main:app --host 0.0.0.0 --port 8010 --reload
 
+
+  # --------------------------------------------------------------------------
+  # PLAYWRIGHT: Browser rendering service for JavaScript-heavy web scraping
+  # --------------------------------------------------------------------------
+  playwright:
+    build:
+      context: ./playwright-service
+      dockerfile: Dockerfile
+    container_name: curatore-playwright
+    restart: unless-stopped
+    ports:
+      - "8011:8011"
+    environment:
+      - PYTHONUNBUFFERED=1
+      - DEBUG=${DEBUG:-false}
+      - BROWSER_POOL_SIZE=${PLAYWRIGHT_BROWSER_POOL_SIZE:-3}
+      - BROWSER_HEADLESS=true
+      - DEFAULT_TIMEOUT_MS=${PLAYWRIGHT_DEFAULT_TIMEOUT_MS:-30000}
+      - DEFAULT_WAIT_TIMEOUT_MS=${PLAYWRIGHT_DEFAULT_WAIT_TIMEOUT_MS:-5000}
+    volumes:
+      # Hot-reload playwright service code
+      - ./playwright-service/app:/app/app
+    deploy:
+      resources:
+        limits:
+          memory: 4G
+        reservations:
+          memory: 2G
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    # Run with reload for live dev edits
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8011 --reload
 
   # --------------------------------------------------------------------------
   # DOCLING: As a second Extraction Engine option

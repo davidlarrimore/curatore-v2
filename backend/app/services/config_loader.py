@@ -27,6 +27,7 @@ from app.models.config_models import (
     LLMConfig,
     ExtractionConfig,
     ExtractionEngineConfig,
+    PlaywrightConfig,
     SharePointConfig,
     EmailConfig,
     QueueConfig,
@@ -195,6 +196,9 @@ class ConfigLoader:
             if config.extraction is None:
                 logger.warning("Extraction configuration not found (optional)")
 
+            if config.playwright is None:
+                logger.warning("Playwright configuration not found (optional)")
+
             if config.sharepoint is None:
                 logger.warning("SharePoint configuration not found (optional)")
 
@@ -307,6 +311,21 @@ class ConfigLoader:
             return None
         return config.minio
 
+    def get_playwright_config(self) -> Optional[PlaywrightConfig]:
+        """
+        Get typed Playwright configuration.
+
+        Returns:
+            PlaywrightConfig instance or None if not configured
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        config = self.get_config()
+        if config is None:
+            return None
+        return config.playwright
+
     def has_llm_config(self) -> bool:
         """Check if LLM configuration is available."""
         return self.get_llm_config() is not None
@@ -326,6 +345,10 @@ class ConfigLoader:
     def has_minio_config(self) -> bool:
         """Check if MinIO configuration is available."""
         return self.get_minio_config() is not None
+
+    def has_playwright_config(self) -> bool:
+        """Check if Playwright configuration is available."""
+        return self.get_playwright_config() is not None
 
     # -------------------------------------------------------------------------
     # Extraction engine convenience methods

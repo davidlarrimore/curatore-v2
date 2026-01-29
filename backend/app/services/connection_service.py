@@ -684,6 +684,173 @@ class ExtractionConnectionType(BaseConnectionType):
 
 
 # =========================================================================
+# PLAYWRIGHT CONNECTION TYPE
+# =========================================================================
+
+
+class PlaywrightConfigSchema(BaseModel):
+    """Playwright rendering service configuration schema."""
+
+    service_url: str = Field(..., description="Playwright service URL")
+    timeout: int = Field(default=60, ge=1, le=600, description="Request timeout in seconds")
+    max_retries: int = Field(default=3, ge=0, le=10, description="Maximum retry attempts")
+    browser_pool_size: int = Field(default=3, ge=1, le=20, description="Browser pool size")
+    default_viewport_width: int = Field(default=1920, ge=320, le=3840, description="Default viewport width")
+    default_viewport_height: int = Field(default=1080, ge=240, le=2160, description="Default viewport height")
+    default_timeout_ms: int = Field(default=30000, ge=1000, le=120000, description="Default page load timeout (ms)")
+    default_wait_timeout_ms: int = Field(default=5000, ge=100, le=60000, description="Default wait for selector timeout (ms)")
+    document_extensions: List[str] = Field(
+        default=[".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"],
+        description="Document extensions to detect"
+    )
+
+
+class PlaywrightConnectionType(BaseConnectionType):
+    """Playwright rendering service connection type."""
+
+    connection_type = "playwright"
+    display_name = "Playwright Rendering"
+    description = "Browser-based rendering service for JavaScript-heavy web scraping"
+
+    def get_config_schema(self) -> Dict[str, Any]:
+        """Get JSON schema for Playwright configuration."""
+        return {
+            "type": "object",
+            "properties": {
+                "service_url": {
+                    "type": "string",
+                    "title": "Service URL",
+                    "description": "Playwright service URL (e.g., http://playwright:8011)",
+                    "default": "http://playwright:8011"
+                },
+                "timeout": {
+                    "type": "integer",
+                    "title": "Timeout (seconds)",
+                    "description": "Request timeout in seconds",
+                    "default": 60,
+                    "minimum": 1,
+                    "maximum": 600
+                },
+                "max_retries": {
+                    "type": "integer",
+                    "title": "Max Retries",
+                    "description": "Maximum retry attempts for failed requests",
+                    "default": 3,
+                    "minimum": 0,
+                    "maximum": 10
+                },
+                "browser_pool_size": {
+                    "type": "integer",
+                    "title": "Browser Pool Size",
+                    "description": "Number of browser instances to maintain",
+                    "default": 3,
+                    "minimum": 1,
+                    "maximum": 20
+                },
+                "default_viewport_width": {
+                    "type": "integer",
+                    "title": "Viewport Width",
+                    "description": "Default browser viewport width",
+                    "default": 1920,
+                    "minimum": 320,
+                    "maximum": 3840
+                },
+                "default_viewport_height": {
+                    "type": "integer",
+                    "title": "Viewport Height",
+                    "description": "Default browser viewport height",
+                    "default": 1080,
+                    "minimum": 240,
+                    "maximum": 2160
+                },
+                "default_timeout_ms": {
+                    "type": "integer",
+                    "title": "Page Load Timeout (ms)",
+                    "description": "Default page load timeout in milliseconds",
+                    "default": 30000,
+                    "minimum": 1000,
+                    "maximum": 120000
+                },
+                "default_wait_timeout_ms": {
+                    "type": "integer",
+                    "title": "Wait Timeout (ms)",
+                    "description": "Default wait for selector timeout in milliseconds",
+                    "default": 5000,
+                    "minimum": 100,
+                    "maximum": 60000
+                },
+                "document_extensions": {
+                    "type": "array",
+                    "title": "Document Extensions",
+                    "description": "File extensions to identify as downloadable documents",
+                    "items": {"type": "string"},
+                    "default": [".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"]
+                }
+            },
+            "required": ["service_url"]
+        }
+
+    def validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate Playwright configuration."""
+        try:
+            validated = PlaywrightConfigSchema(**config)
+            return validated.model_dump()
+        except ValidationError as e:
+            raise ValueError(f"Invalid Playwright configuration: {e}")
+
+    async def test_connection(self, config: Dict[str, Any]) -> ConnectionTestResult:
+        """Test Playwright service connection by calling health endpoint."""
+        try:
+            service_url = config["service_url"].rstrip("/")
+            timeout = config.get("timeout", 60)
+
+            async with httpx.AsyncClient(timeout=float(timeout)) as client:
+                # Try health endpoint
+                response = await client.get(f"{service_url}/health")
+
+                if response.status_code == 200:
+                    health_data = {}
+                    try:
+                        health_data = response.json()
+                    except Exception:
+                        pass
+
+                    return ConnectionTestResult(
+                        success=True,
+                        status="healthy",
+                        message="Playwright service is responding",
+                        details={
+                            "url": service_url,
+                            "browser_pool_size": health_data.get("browser_pool_size"),
+                            "active_contexts": health_data.get("active_contexts"),
+                            "status": health_data.get("status", "healthy"),
+                        }
+                    )
+                else:
+                    return ConnectionTestResult(
+                        success=False,
+                        status="unhealthy",
+                        message=f"Playwright service returned status {response.status_code}",
+                        error=f"HTTP {response.status_code}: {response.text[:200]}"
+                    )
+
+        except httpx.TimeoutException:
+            return ConnectionTestResult(
+                success=False,
+                status="unhealthy",
+                message="Connection timeout",
+                error=f"Request timed out after {timeout} seconds"
+            )
+        except Exception as e:
+            return ConnectionTestResult(
+                success=False,
+                status="unhealthy",
+                message="Failed to test Playwright connection",
+                error=str(e)
+            )
+
+
+# =========================================================================
 # CONNECTION TYPE REGISTRY
 # =========================================================================
 
@@ -761,6 +928,7 @@ class ConnectionService:
         self._registry.register(SharePointConnectionType())
         self._registry.register(LLMConnectionType())
         self._registry.register(ExtractionConnectionType())
+        self._registry.register(PlaywrightConnectionType())
 
         self._logger.info("Connection service initialized")
 
@@ -1261,5 +1429,101 @@ async def sync_default_connections_from_env(
     except Exception as e:
         results["extraction"] = "error"
         logger.error(f"Failed to sync Extraction Service connection: {e}")
+
+    # -------------------------------------------------------------------------
+    # Playwright Connection
+    # -------------------------------------------------------------------------
+    try:
+        playwright_config = None
+        try:
+            playwright_config = config_loader.get_playwright_config()
+        except Exception as e:
+            logger.warning("Failed to load Playwright config from config.yml: %s", e)
+
+        # Fall back to environment variable
+        service_url = os.environ.get("PLAYWRIGHT_SERVICE_URL") or (
+            playwright_config.service_url if playwright_config else None
+        )
+
+        if service_url:
+            # Build config from config.yml or env vars
+            config: Dict[str, Any] = {
+                "service_url": service_url,
+            }
+
+            if playwright_config:
+                config["timeout"] = playwright_config.timeout
+                config["max_retries"] = playwright_config.max_retries
+                config["browser_pool_size"] = playwright_config.browser_pool_size
+                config["default_viewport_width"] = playwright_config.default_viewport_width
+                config["default_viewport_height"] = playwright_config.default_viewport_height
+                config["default_timeout_ms"] = playwright_config.default_timeout_ms
+                config["default_wait_timeout_ms"] = playwright_config.default_wait_timeout_ms
+                config["document_extensions"] = playwright_config.document_extensions
+            else:
+                # Defaults from environment or hardcoded
+                config["timeout"] = int(os.environ.get("PLAYWRIGHT_TIMEOUT", "60"))
+                config["max_retries"] = 3
+                config["browser_pool_size"] = int(os.environ.get("PLAYWRIGHT_BROWSER_POOL_SIZE", "3"))
+                config["default_viewport_width"] = 1920
+                config["default_viewport_height"] = 1080
+                config["default_timeout_ms"] = int(os.environ.get("PLAYWRIGHT_DEFAULT_TIMEOUT_MS", "30000"))
+                config["default_wait_timeout_ms"] = int(os.environ.get("PLAYWRIGHT_DEFAULT_WAIT_TIMEOUT_MS", "5000"))
+                config["document_extensions"] = [".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"]
+
+            # Query for existing managed Playwright connection
+            result = await session.execute(
+                select(Connection).where(
+                    Connection.organization_id == organization_id,
+                    Connection.connection_type == "playwright",
+                    Connection.is_managed == True,
+                )
+            )
+            existing = result.scalar_one_or_none()
+
+            # Determine if enabled (from config.yml or default True)
+            is_enabled = playwright_config.enabled if playwright_config else True
+
+            if existing:
+                # Update if config changed
+                config_changed = existing.config != config
+                active_changed = existing.is_active != is_enabled
+
+                if config_changed or active_changed:
+                    existing.config = config
+                    existing.is_active = is_enabled
+                    existing.updated_at = datetime.utcnow()
+                    await session.commit()
+                    results["playwright"] = "updated"
+                    logger.info("Updated managed Playwright connection")
+                else:
+                    results["playwright"] = "unchanged"
+            else:
+                # Create new managed connection
+                new_connection = Connection(
+                    organization_id=organization_id,
+                    name="Default Playwright",
+                    description="Auto-managed Playwright rendering service connection",
+                    connection_type="playwright",
+                    config=config,
+                    is_active=is_enabled,
+                    is_default=True,
+                    is_managed=True,
+                    managed_by="config.yml: playwright or PLAYWRIGHT_SERVICE_URL",
+                    scope="organization",
+                )
+                session.add(new_connection)
+                await session.commit()
+                results["playwright"] = "created"
+                logger.info("Created managed Playwright connection")
+        else:
+            results["playwright"] = "skipped"
+            logger.debug(
+                "Skipping Playwright connection sync - missing PLAYWRIGHT_SERVICE_URL"
+            )
+
+    except Exception as e:
+        results["playwright"] = "error"
+        logger.error(f"Failed to sync Playwright connection: {e}")
 
     return results

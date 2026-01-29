@@ -665,6 +665,62 @@ async def health_check_llm() -> Dict[str, Any]:
         }
 
 
+@router.get("/system/health/playwright", tags=["System"])
+async def health_check_playwright() -> Dict[str, Any]:
+    """Health check for Playwright rendering service component.
+
+    Verifies:
+    - Playwright service URL is configured
+    - Service is reachable and responding
+    """
+    playwright_url = (getattr(settings, "playwright_service_url", None) or "").rstrip("/")
+    if not playwright_url:
+        return {
+            "status": "not_configured",
+            "message": "Playwright service not configured (missing PLAYWRIGHT_SERVICE_URL)",
+            "configured": False
+        }
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            health_url = f"{playwright_url}/health"
+            try:
+                resp = await client.get(health_url)
+                if resp.status_code == 200:
+                    health_data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+                    return {
+                        "status": "healthy",
+                        "message": "Playwright service is responding",
+                        "url": playwright_url,
+                        "configured": True,
+                        "browser_pool_size": health_data.get("browser_pool_size"),
+                        "active_contexts": health_data.get("active_contexts"),
+                    }
+                else:
+                    return {
+                        "status": "degraded",
+                        "message": f"Playwright returned status {resp.status_code}",
+                        "url": playwright_url,
+                        "configured": True
+                    }
+            except httpx.HTTPStatusError:
+                return {
+                    "status": "unknown",
+                    "message": "Playwright service configured but health endpoint not available",
+                    "url": playwright_url,
+                    "configured": True
+                }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Playwright service error: {str(e)}",
+            "url": playwright_url,
+            "configured": True
+        }
+
+
 @router.get("/system/health/sharepoint", tags=["System"])
 async def health_check_sharepoint() -> Dict[str, Any]:
     """Health check for SharePoint / Microsoft Graph API connectivity.
@@ -788,6 +844,7 @@ async def comprehensive_health() -> Dict[str, Any]:
     - Docling Service (if configured)
     - LLM Connection
     - SharePoint / Microsoft Graph (if configured)
+    - Playwright Rendering Service (if configured)
     - Object Storage (S3/MinIO) (if enabled)
 
     Returns detailed status for each component with timestamps and error messages.
@@ -988,7 +1045,13 @@ async def comprehensive_health() -> Dict[str, Any]:
     if sharepoint_status.get("status") in ["unhealthy", "degraded"]:
         issues.append(f"SharePoint: {sharepoint_status.get('message')}")
 
-    # 8. Object Storage (S3/MinIO)
+    # 8. Playwright Rendering Service
+    playwright_status = await health_check_playwright()
+    health_report["components"]["playwright"] = playwright_status
+    if playwright_status.get("status") == "unhealthy":
+        issues.append(f"Playwright: {playwright_status.get('message')}")
+
+    # 9. Object Storage (S3/MinIO)
     storage_status = await health_check_storage()
     health_report["components"]["object_storage"] = storage_status
     if storage_status.get("status") == "unhealthy":

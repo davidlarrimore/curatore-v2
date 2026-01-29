@@ -108,14 +108,24 @@ class UploadIntegrationService:
 
         return asset
 
+    # Content types that are already extracted inline (no separate extraction needed)
+    INLINE_EXTRACTED_CONTENT_TYPES = {
+        "text/html",
+        "application/xhtml+xml",
+    }
+
     async def trigger_extraction(
         self,
         session: AsyncSession,
         asset_id: UUID,
         extractor_version: Optional[str] = None,
-    ) -> Tuple[Run, ExtractionResult]:
+    ) -> Optional[Tuple[Run, ExtractionResult]]:
         """
-        Trigger automatic extraction for an Asset (Phase 1: with version tracking).
+        Trigger automatic extraction for an Asset with content-type routing.
+
+        Routes extraction based on content type:
+        - HTML content: Skip (already extracted inline by Playwright during crawl)
+        - Binary files (PDF, DOCX, etc.): Route to Docling/MarkItDown
 
         Creates an extraction Run and ExtractionResult record. The actual
         extraction execution will be handled by Celery workers. Links extraction
@@ -127,12 +137,20 @@ class UploadIntegrationService:
             extractor_version: Extractor version to use (defaults to config.yml default engine)
 
         Returns:
-            Tuple of (Run, ExtractionResult)
+            Tuple of (Run, ExtractionResult) or None if skipped (HTML content)
         """
         # Get asset
         asset = await asset_service.get_asset(session, asset_id)
         if not asset:
             raise ValueError(f"Asset {asset_id} not found")
+
+        # Content-type routing: HTML is already extracted inline by Playwright
+        if asset.content_type in self.INLINE_EXTRACTED_CONTENT_TYPES:
+            logger.info(
+                f"Skipping extraction for HTML asset {asset_id} "
+                f"(content_type={asset.content_type}) - already extracted inline"
+            )
+            return None
 
         # Get extractor version from config if not provided
         if not extractor_version:
@@ -212,11 +230,12 @@ class UploadIntegrationService:
         uploader_id: Optional[UUID] = None,
         additional_metadata: Optional[dict] = None,
         extractor_version: Optional[str] = None,
-    ) -> Tuple[Asset, Run, ExtractionResult]:
+    ) -> Tuple[Asset, Optional[Run], Optional[ExtractionResult]]:
         """
         Convenience method: Create Asset and trigger extraction in one call.
 
         This is the main entry point for integrating Phase 0 models with uploads.
+        Note: For HTML content, extraction is skipped (inline extraction via Playwright).
 
         Args:
             session: Database session
@@ -226,7 +245,8 @@ class UploadIntegrationService:
             extractor_version: Extractor version
 
         Returns:
-            Tuple of (Asset, Run, ExtractionResult)
+            Tuple of (Asset, Run, ExtractionResult) - Run and ExtractionResult may be None
+            if extraction was skipped (HTML content already extracted inline)
         """
         # Create asset
         asset = await self.create_asset_from_upload(
@@ -236,14 +256,18 @@ class UploadIntegrationService:
             additional_metadata=additional_metadata,
         )
 
-        # Trigger extraction
-        run, extraction = await self.trigger_extraction(
+        # Trigger extraction (may return None for HTML content)
+        result = await self.trigger_extraction(
             session=session,
             asset_id=asset.id,
             extractor_version=extractor_version,
         )
 
-        return (asset, run, extraction)
+        if result:
+            run, extraction = result
+            return (asset, run, extraction)
+        else:
+            return (asset, None, None)
 
     async def link_asset_to_document_id(
         self,

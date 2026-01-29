@@ -197,16 +197,20 @@ python scripts/sharepoint/sharepoint_process.py
                             │             └──────────────┘
                             │                     │
                             ▼                     ▼
-                    ┌──────────────┐     ┌──────────────┐
-                    │  Extraction  │     │   Storage    │
-                    │   Service    │     │  (/app/files)│
-                    └──────────────┘     └──────────────┘
-                            │
-                            ▼
-                    ┌──────────────┐
-                    │   Docling    │
-                    │  (Optional)  │
-                    └──────────────┘
+        ┌──────────────┬──────────────┐  ┌──────────────┐
+        │  Extraction  │  Playwright  │  │   Storage    │
+        │   Service    │   Service    │  │   (MinIO)    │
+        └──────────────┴──────────────┘  └──────────────┘
+                │               │
+                ▼               │
+        ┌──────────────┐        │
+        │   Docling    │        │
+        │  (Optional)  │        │
+        └──────────────┘        │
+                                │
+        Content-Type Routing: ──┘
+        - HTML → Playwright (inline extraction)
+        - PDF/DOCX → Extraction Service/Docling
 ```
 
 ### Backend Service Layer
@@ -603,16 +607,33 @@ asyncio.run(check())
 
 ### Extraction Engines
 
-Curatore supports multiple extraction engines selected per job:
+Curatore supports multiple extraction engines with content-type-based routing:
 
-- **`extraction-service`**: Uses the internal extraction-service microservice (recommended)
-- **`docling`**: Uses Docling Serve for rich PDFs and Office documents
+| Content Type | Extraction Engine | Notes |
+|--------------|-------------------|-------|
+| HTML (web pages) | **Playwright** | Inline extraction during crawl |
+| PDF, DOCX, PPTX | **Extraction Service** or **Docling** | Separate extraction job |
+| Images | **Extraction Service** (Tesseract OCR) | Separate extraction job |
+
+**Content-Type Routing** (automatic):
+- HTML content (`text/html`) is extracted inline by Playwright during web crawl
+- Binary files (PDF, DOCX, etc.) go through the normal extraction pipeline
+- Routing is handled automatically by `upload_integration_service.trigger_extraction()`
 
 **Extraction Service** (`extraction-service/`):
 - Standalone FastAPI microservice on port 8010
 - Handles PDF, DOCX, PPTX, TXT, Images with OCR
 - Uses MarkItDown and Tesseract for conversions
 - Endpoint: `POST /api/v1/extract`
+
+**Playwright Service** (`playwright-service/`):
+- Browser-based rendering for JavaScript-heavy web scraping
+- Standalone FastAPI microservice on port 8011
+- Inline extraction: content is extracted during crawl (no separate job)
+- Uses Chromium via Playwright for full JS rendering
+- Extracts: HTML, markdown, links, document links
+- Endpoint: `POST /api/v1/render`
+- Configured via `PLAYWRIGHT_SERVICE_URL` (default: `http://playwright:8011`)
 
 **Docling** (optional):
 - External image/document converter
@@ -674,22 +695,75 @@ Frontend → Backend API → MinIO/S3
 
 **BREAKING CHANGE (v2.3+):** All file operations are now proxied through the backend. Presigned URLs are deprecated but still available for backward compatibility.
 
-**Object Storage Structure:**
+**Object Storage Structure (v2.4+):**
+
+Storage paths are now **human-readable and navigable**, organized by content source:
+
 ```
-MinIO/S3 Buckets:
-├── curatore-uploads/           # Uploaded source files
-│   └── {org_id}/
-│       └── {document_id}/
-│           └── uploaded/
-│               └── {filename}
-├── curatore-processed/         # Processed markdown files
-│   └── {org_id}/
-│       └── {document_id}/
-│           └── processed/
-│               └── {filename}.md
-└── curatore-temp/              # Temporary processing files
-    └── {job_id}/
-        └── {temp_files}
+curatore-uploads/                              # Raw/source files
+└── {org_id}/
+    ├── uploads/                               # File uploads (UUID-based)
+    │   └── {asset_uuid}/
+    │       └── {filename}
+    │
+    ├── scrape/                                # Web scraping (collection-based)
+    │   └── {collection_slug}/
+    │       ├── pages/                         # Scraped web pages
+    │       │   ├── _index.html               # Root page (/)
+    │       │   ├── about.html                # /about
+    │       │   ├── article/                  # /article/*
+    │       │   │   ├── some-article.html
+    │       │   │   └── another-article.html
+    │       │   └── services/
+    │       │       └── consulting.html
+    │       │
+    │       └── documents/                     # Downloaded documents
+    │           ├── capability-statement.pdf
+    │           └── quarterly-report.docx
+    │
+    └── sharepoint/                            # SharePoint (folder-based)
+        └── {site_name}/
+            └── {folder_path}/
+                └── {filename}
+
+curatore-processed/                            # Extracted markdown (mirrors structure)
+└── {org_id}/
+    ├── uploads/
+    │   └── {asset_uuid}/
+    │       └── {filename}.md
+    │
+    └── scrape/
+        └── {collection_slug}/
+            ├── pages/
+            │   ├── _index.md
+            │   ├── about.md
+            │   └── article/
+            │       └── some-article.md
+            │
+            └── documents/
+                └── capability-statement.md
+
+curatore-temp/                                 # Temporary processing files
+└── {org_id}/
+    └── {hash_prefix}/
+        └── {filename}
+```
+
+**Key Service**: `backend/app/services/storage_path_service.py`
+
+```python
+from app.services.storage_path_service import storage_paths
+
+# Web scraping paths
+raw_html = storage_paths.scrape_page(org_id, "amivero", url)
+extracted_md = storage_paths.scrape_page(org_id, "amivero", url, extracted=True)
+doc_path = storage_paths.scrape_document(org_id, "amivero", "report.pdf")
+
+# Upload paths (UUID-based for deduplication)
+upload_path = storage_paths.upload(org_id, asset_id, "document.pdf")
+
+# SharePoint paths (preserves folder structure)
+sp_path = storage_paths.sharepoint(org_id, "MySite", "Documents/Reports", "q4.xlsx")
 ```
 
 **Key Features:**
@@ -739,6 +813,7 @@ See `.env.example` for complete configuration options
 - `GET /api/v1/storage/object/presigned` (marked deprecated in OpenAPI docs)
 
 **Key Files:**
+- `backend/app/services/storage_path_service.py`: Human-readable path generation for all content types
 - `backend/app/services/minio_service.py`: MinIO SDK integration
 - `backend/app/services/artifact_service.py`: Database tracking for stored files
 - `backend/app/api/v1/routers/storage.py`: Presigned URL endpoints
@@ -1177,9 +1252,10 @@ When `ENABLE_AUTH=true`, external service connections (SharePoint, LLM, etc.) ca
 
 **Connection Types**:
 - `sharepoint`: Microsoft SharePoint/Graph API connection
-- `openai`: OpenAI API connection (or compatible endpoints)
-- `smtp`: SMTP email server connection
-- Custom types can be added by extending the Connection model
+- `llm`: OpenAI-compatible LLM API connection (OpenAI, Ollama, LM Studio, etc.)
+- `extraction`: Document extraction service connection (extraction-service or Docling)
+- `playwright`: Playwright rendering service for JavaScript-heavy web scraping
+- Custom types can be added by extending the BaseConnectionType class
 
 **Typical Flow**:
 1. User creates connection via `POST /api/v1/connections` with credentials
@@ -1740,6 +1816,52 @@ Helper scripts in `scripts/sharepoint/` provide standalone functionality:
 - Pagination support for large folders
 - Automatic OAuth token management
 
+### Web Scraping with Playwright
+
+Curatore uses Playwright for JavaScript-rendered web scraping with inline content extraction.
+
+**Key Features**:
+- Full JavaScript rendering via Chromium browser
+- Inline extraction: Markdown is extracted during crawl (no separate job)
+- Automatic document discovery: Finds PDFs, DOCXs linked on pages
+- Content-type routing: HTML → Playwright, binary files → Docling
+
+**ScrapeCollection crawl_config Schema**:
+
+```json
+{
+  // Crawl behavior
+  "max_depth": 3,                    // Maximum link-following depth
+  "max_pages": 100,                  // Maximum pages to crawl
+  "delay_seconds": 1.0,              // Rate limiting between requests
+  "follow_external_links": false,    // Stay on same domain
+
+  // Playwright rendering options
+  "wait_for_selector": ".main-content",  // CSS selector to wait for
+  "wait_timeout_ms": 5000,               // Wait timeout (ms)
+  "viewport_width": 1920,                // Browser viewport width
+  "viewport_height": 1080,               // Browser viewport height
+  "render_timeout_ms": 30000,            // Total render timeout (ms)
+
+  // Document discovery
+  "download_documents": false,           // Auto-download discovered PDFs/DOCXs
+  "document_extensions": [".pdf", ".docx", ".doc", ".xlsx", ".pptx"]
+}
+```
+
+**Crawl Workflow**:
+
+1. **Create Collection**: Define seed URLs and crawl config
+2. **Playwright Renders**: Page is loaded with full JS execution
+3. **Inline Extraction**: HTML → Markdown during crawl (no queue)
+4. **Asset Created**: Asset status = "ready" immediately
+5. **Documents Discovered**: If `download_documents=true`, PDFs are downloaded
+6. **Binary Extraction**: Downloaded documents go through Docling pipeline
+
+**Environment Variables**:
+- `PLAYWRIGHT_SERVICE_URL`: Playwright service endpoint (default: `http://playwright:8011`)
+- `PLAYWRIGHT_TIMEOUT`: Request timeout in seconds (default: `60`)
+
 ### Job Management Workflow
 
 The job management system provides batch document processing with tracking, concurrency control, and retention policies:
@@ -1920,6 +2042,12 @@ Base URL: `http://localhost:8000/api/v1`
 - `GET /storage/download/{document_id}/presigned` - Get presigned URL for download (deprecated)
 - `GET /storage/object/presigned` - Get presigned URL for any object (deprecated)
 
+**Rendering** (Playwright):
+- `POST /render` - Render URL and extract all content (HTML, markdown, links)
+- `POST /render/extract` - Extract text content in specified format (markdown, text, html)
+- `POST /render/links` - Extract all links from a URL (including document links)
+- `GET /render/status` - Check Playwright rendering service status
+
 **System**:
 - `GET /health` - API health check
 - `GET /llm/status` - LLM connection status
@@ -1934,6 +2062,7 @@ Base URL: `http://localhost:8000/api/v1`
 - `GET /system/health/docling` - Docling service health check
 - `GET /system/health/llm` - LLM connection health check
 - `GET /system/health/sharepoint` - SharePoint / Microsoft Graph health check
+- `GET /system/health/playwright` - Playwright rendering service health check
 - `GET /system/health/storage` - Object storage (S3/MinIO) health check
 - `GET /system/health/comprehensive` - Comprehensive health check for all components
 
@@ -1954,6 +2083,7 @@ All backend services follow comprehensive documentation standards (see existing 
 - `3000`: Frontend (Next.js)
 - `8000`: Backend API (FastAPI)
 - `8010`: Extraction Service
+- `8011`: Playwright Rendering Service
 - `6379`: Redis
 - `5151`: Docling (when enabled, maps to internal 5001)
 - `9000`: MinIO S3 API (when using MinIO profile)

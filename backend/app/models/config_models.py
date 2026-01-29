@@ -359,6 +359,69 @@ class QueueConfig(BaseModel):
     )
 
 
+class PlaywrightConfig(BaseModel):
+    """
+    Playwright rendering service configuration.
+
+    Browser-based rendering for JavaScript-heavy web scraping.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable Playwright rendering service"
+    )
+    service_url: str = Field(
+        description="Playwright service URL (e.g., http://playwright:8011)"
+    )
+    timeout: int = Field(
+        default=60,
+        ge=1,
+        le=600,
+        description="Request timeout in seconds"
+    )
+    max_retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Maximum retry attempts"
+    )
+    browser_pool_size: int = Field(
+        default=3,
+        ge=1,
+        le=20,
+        description="Number of browser instances to maintain"
+    )
+    default_viewport_width: int = Field(
+        default=1920,
+        ge=320,
+        le=3840,
+        description="Default browser viewport width"
+    )
+    default_viewport_height: int = Field(
+        default=1080,
+        ge=240,
+        le=2160,
+        description="Default browser viewport height"
+    )
+    default_timeout_ms: int = Field(
+        default=30000,
+        ge=1000,
+        le=120000,
+        description="Default page load timeout in milliseconds"
+    )
+    default_wait_timeout_ms: int = Field(
+        default=5000,
+        ge=100,
+        le=60000,
+        description="Default wait for selector timeout in milliseconds"
+    )
+    document_extensions: List[str] = Field(
+        default=[".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"],
+        description="File extensions to identify as downloadable documents"
+    )
+
+
 class MinIOConfig(BaseModel):
     """
     MinIO/S3 object storage configuration.
@@ -438,6 +501,10 @@ class AppConfig(BaseModel):
     extraction: Optional[ExtractionConfig] = Field(
         default=None,
         description="Extraction service configuration"
+    )
+    playwright: Optional[PlaywrightConfig] = Field(
+        default=None,
+        description="Playwright rendering service configuration"
     )
     sharepoint: Optional[SharePointConfig] = Field(
         default=None,

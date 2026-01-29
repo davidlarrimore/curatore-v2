@@ -34,6 +34,7 @@ from ..services.run_service import run_service
 from ..services.extraction_result_service import extraction_result_service
 from ..services.run_log_service import run_log_service
 from ..services.minio_service import get_minio_service
+from ..services.storage_path_service import storage_paths
 from ..services.document_service import document_service
 from ..models import OCRSettings, ProcessingOptions
 from ..config import settings
@@ -171,7 +172,7 @@ class ExtractionOrchestrator:
             )
 
             extracted_bucket = settings.minio_bucket_processed
-            extracted_key = f"{asset.organization_id}/{asset_id}/extracted/{asset.original_filename}.md"
+            extracted_key = self._get_extracted_path(asset)
 
             minio.put_object(
                 bucket=extracted_bucket,
@@ -268,6 +269,43 @@ class ExtractionOrchestrator:
                     shutil.rmtree(temp_dir)
                 except Exception as e:
                     logger.warning(f"Failed to cleanup temp directory {temp_dir}: {e}")
+
+    def _get_extracted_path(self, asset) -> str:
+        """
+        Generate the appropriate storage path for extracted content based on asset source type.
+
+        Args:
+            asset: Asset instance
+
+        Returns:
+            Storage path for extracted markdown
+
+        Path structures by source type:
+            - upload: {org}/uploads/{asset_id}/{filename}.md
+            - web_scrape_document: {org}/scrape/{collection}/documents/{filename}.md
+            - sharepoint: {org}/sharepoint/{site}/{path}/{filename}.md
+            - other: {org}/uploads/{asset_id}/{filename}.md (fallback)
+        """
+        org_id = str(asset.organization_id)
+        asset_id = str(asset.id)
+        filename = asset.original_filename
+
+        if asset.source_type == "web_scrape_document":
+            # Web scrape documents use collection-based paths
+            source_meta = asset.source_metadata or {}
+            collection_slug = source_meta.get("collection_name", "unknown").lower().replace(" ", "-")
+            return storage_paths.scrape_document(org_id, collection_slug, filename, extracted=True)
+
+        elif asset.source_type == "sharepoint":
+            # SharePoint files preserve folder structure
+            source_meta = asset.source_metadata or {}
+            site_name = source_meta.get("site_name", "unknown")
+            folder_path = source_meta.get("folder_path", "")
+            return storage_paths.sharepoint(org_id, site_name, folder_path, filename, extracted=True)
+
+        else:
+            # Uploads and other sources use UUID-based paths
+            return storage_paths.upload(org_id, asset_id, filename, extracted=True)
 
     async def _extract_content(
         self,

@@ -39,6 +39,8 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
 from sqlalchemy import select
 
+from fastapi.responses import PlainTextResponse
+
 from app.api.v1.models import (
     ScrapeCollectionResponse,
     ScrapeCollectionCreateRequest,
@@ -62,6 +64,8 @@ from app.services.scrape_service import scrape_service
 from app.services.crawl_service import crawl_service
 from app.services.run_service import run_service
 from app.services.database_service import database_service
+from app.services.extraction_result_service import extraction_result_service
+from app.services.minio_service import get_minio_service
 
 # Initialize router
 router = APIRouter(prefix="/scrape", tags=["Web Scraping"])
@@ -816,6 +820,91 @@ async def get_scraped_asset(
             )
 
         return _scraped_asset_to_response(scraped)
+
+
+@router.get(
+    "/collections/{collection_id}/assets/{scraped_asset_id}/content",
+    response_class=PlainTextResponse,
+    summary="Get scraped asset content",
+    description="Get the extracted markdown content for a scraped asset."
+)
+async def get_scraped_asset_content(
+    collection_id: str,
+    scraped_asset_id: str,
+    current_user: User = Depends(get_current_user),
+) -> PlainTextResponse:
+    """
+    Get extracted markdown content for a scraped asset.
+
+    Args:
+        collection_id: Collection UUID
+        scraped_asset_id: ScrapedAsset UUID
+        current_user: Current authenticated user
+
+    Returns:
+        PlainTextResponse: Markdown content
+    """
+    async with database_service.get_session() as session:
+        collection = await scrape_service.get_collection(session, UUID(collection_id))
+
+        if not collection:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Collection not found"
+            )
+
+        if collection.organization_id != current_user.organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Collection not found"
+            )
+
+        scraped = await scrape_service.get_scraped_asset(session, UUID(scraped_asset_id))
+
+        if not scraped or str(scraped.collection_id) != collection_id:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Scraped asset not found"
+            )
+
+        # Get the associated asset's extraction result
+        extraction = await extraction_result_service.get_latest_extraction_for_asset(
+            session, scraped.asset_id
+        )
+
+        if not extraction:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No extraction result found for this asset"
+            )
+
+        if extraction.status != "completed":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Extraction not completed (status: {extraction.status})"
+            )
+
+        if not extraction.extracted_bucket or not extraction.extracted_object_key:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="No extracted content available"
+            )
+
+        # Fetch content from MinIO
+        try:
+            minio_svc = get_minio_service()
+            content_bytes = minio_svc.get_object(
+                extraction.extracted_bucket,
+                extraction.extracted_object_key
+            )
+            content = content_bytes.read().decode("utf-8")
+            return PlainTextResponse(content=content, media_type="text/markdown")
+        except Exception as e:
+            logger.error(f"Failed to fetch content from MinIO: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to retrieve content"
+            )
 
 
 @router.post(

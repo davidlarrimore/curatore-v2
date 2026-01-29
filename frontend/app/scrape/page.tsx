@@ -310,6 +310,8 @@ function CreateCollectionModal({
   const [rootUrl, setRootUrl] = useState('')
   const [description, setDescription] = useState('')
   const [mode, setMode] = useState<'record_preserving' | 'snapshot'>('record_preserving')
+  const [downloadDocuments, setDownloadDocuments] = useState(true)
+  const [maxDepth, setMaxDepth] = useState<number>(0) // 0 = unlimited
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -326,6 +328,10 @@ function CreateCollectionModal({
         root_url: rootUrl,
         description: description || undefined,
         collection_mode: mode,
+        crawl_config: {
+          download_documents: downloadDocuments,
+          max_depth: maxDepth,
+        },
       })
       onCreated()
     } catch (err: any) {
@@ -439,6 +445,62 @@ function CreateCollectionModal({
               </label>
             </div>
           </div>
+
+          {/* Crawl Depth */}
+          <div className="space-y-1.5">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              Crawl Depth
+            </label>
+            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
+              How many levels deep to crawl from the root URL
+            </p>
+            <div className="grid grid-cols-4 gap-2">
+              {[
+                { value: 1, label: '1 Level' },
+                { value: 2, label: '2 Levels' },
+                { value: 3, label: '3 Levels' },
+                { value: 0, label: 'All' },
+              ].map((option) => (
+                <label
+                  key={option.value}
+                  className={`flex items-center justify-center p-3 rounded-lg border cursor-pointer transition-all ${
+                    maxDepth === option.value
+                      ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400'
+                      : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300'
+                  }`}
+                >
+                  <input
+                    type="radio"
+                    name="maxDepth"
+                    value={option.value}
+                    checked={maxDepth === option.value}
+                    onChange={() => setMaxDepth(option.value)}
+                    className="sr-only"
+                  />
+                  <span className="text-sm font-medium">{option.label}</span>
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Download Documents Toggle */}
+          <label className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+            <div>
+              <p className="text-sm font-medium text-gray-900 dark:text-white">Download Documents</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                Automatically download PDFs, DOCX, and other documents found on pages
+              </p>
+            </div>
+            <div className="relative">
+              <input
+                type="checkbox"
+                checked={downloadDocuments}
+                onChange={(e) => setDownloadDocuments(e.target.checked)}
+                className="sr-only peer"
+              />
+              <div className="w-11 h-6 bg-gray-200 peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+            </div>
+          </label>
 
           {/* Actions */}
           <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">

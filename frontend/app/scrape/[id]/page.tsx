@@ -26,6 +26,12 @@ import {
   CheckCircle,
   XCircle,
   Info,
+  Eye,
+  X,
+  Copy,
+  Check,
+  Download,
+  FileDown,
 } from 'lucide-react'
 
 interface PageProps {
@@ -137,11 +143,18 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'assets' | 'tree' | 'sources'>('assets')
-  const [assetFilter, setAssetFilter] = useState<'all' | 'page' | 'record'>('all')
+  const [assetFilter, setAssetFilter] = useState<'all' | 'page' | 'record' | 'document'>('all')
   const [crawling, setCrawling] = useState(false)
   const [crawlStatus, setCrawlStatus] = useState<CrawlStatus | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
+
+  // Content viewer state
+  const [contentViewerOpen, setContentViewerOpen] = useState(false)
+  const [contentViewerAsset, setContentViewerAsset] = useState<ScrapedAsset | null>(null)
+  const [contentViewerContent, setContentViewerContent] = useState<string | null>(null)
+  const [contentViewerLoading, setContentViewerLoading] = useState(false)
+  const [contentCopied, setContentCopied] = useState(false)
 
   const isAdmin = user?.role === 'org_admin' || user?.role === 'admin'
 
@@ -328,6 +341,53 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
     }
   }
 
+  async function handleViewContent(asset: ScrapedAsset) {
+    if (!token) return
+    setContentViewerAsset(asset)
+    setContentViewerOpen(true)
+    setContentViewerLoading(true)
+    setContentViewerContent(null)
+    setContentCopied(false)
+
+    try {
+      const content = await scrapeApi.getScrapedAssetContent(token, collectionId, asset.id)
+      setContentViewerContent(content)
+    } catch (err: any) {
+      addToast('error', err.message || 'Failed to load content')
+      setContentViewerContent(null)
+    } finally {
+      setContentViewerLoading(false)
+    }
+  }
+
+  async function handleCopyContent() {
+    if (!contentViewerContent) return
+    try {
+      await navigator.clipboard.writeText(contentViewerContent)
+      setContentCopied(true)
+      setTimeout(() => setContentCopied(false), 2000)
+    } catch {
+      addToast('error', 'Failed to copy to clipboard')
+    }
+  }
+
+  async function handleToggleDownloadDocuments() {
+    if (!token || !collection) return
+    const newValue = !collection.crawl_config?.download_documents
+    try {
+      const updated = await scrapeApi.updateCollection(token, collectionId, {
+        crawl_config: {
+          ...collection.crawl_config,
+          download_documents: newValue,
+        },
+      })
+      setCollection(updated)
+      addToast('success', `Document download ${newValue ? 'enabled' : 'disabled'}`)
+    } catch (err: any) {
+      addToast('error', err.message || 'Failed to update setting')
+    }
+  }
+
   async function handleNavigatePath(path: string) {
     if (!token) return
     setCurrentPath(path)
@@ -339,7 +399,7 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
     }
   }
 
-  async function handleFilterAssets(filter: 'all' | 'page' | 'record') {
+  async function handleFilterAssets(filter: 'all' | 'page' | 'record' | 'document') {
     if (!token) return
     setAssetFilter(filter)
     try {
@@ -561,6 +621,38 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
           </div>
         </div>
 
+        {/* Crawl Settings Indicator */}
+        <div className="flex flex-wrap items-center gap-3 mb-6">
+          <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">Settings:</span>
+          {isAdmin ? (
+            <button
+              onClick={handleToggleDownloadDocuments}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium transition-colors ${
+                collection.crawl_config?.download_documents
+                  ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/40'
+                  : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+              }`}
+              title="Click to toggle document download"
+            >
+              <FileDown className="w-3.5 h-3.5" />
+              Document Download: {collection.crawl_config?.download_documents ? 'Enabled' : 'Disabled'}
+            </button>
+          ) : (
+            <div className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium ${
+              collection.crawl_config?.download_documents
+                ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400'
+                : 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
+            }`}>
+              <FileDown className="w-3.5 h-3.5" />
+              Document Download: {collection.crawl_config?.download_documents ? 'Enabled' : 'Disabled'}
+            </div>
+          )}
+          <div className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400">
+            <Settings className="w-3.5 h-3.5" />
+            Mode: {collection.collection_mode === 'record_preserving' ? 'Record Preserving' : 'Snapshot'}
+          </div>
+        </div>
+
         {/* Toast Notifications */}
         <div className="fixed top-4 right-4 z-50 space-y-2">
           {toasts.map((toast) => (
@@ -696,7 +788,7 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
             {/* Filter */}
             <div className="flex items-center gap-2 mb-4">
               <span className="text-sm text-gray-500 dark:text-gray-400">Filter:</span>
-              {(['all', 'page', 'record'] as const).map((filter) => (
+              {(['all', 'page', 'document', 'record'] as const).map((filter) => (
                 <button
                   key={filter}
                   onClick={() => handleFilterAssets(filter)}
@@ -706,7 +798,7 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
                       : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
                   }`}
                 >
-                  {filter === 'all' ? 'All' : filter === 'page' ? 'Pages' : 'Records'}
+                  {filter === 'all' ? 'All' : filter === 'page' ? 'Pages' : filter === 'document' ? 'Documents' : 'Records'}
                 </button>
               ))}
             </div>
@@ -774,16 +866,26 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
                           {formatDate(asset.created_at)}
                         </td>
                         <td className="px-4 py-3 text-right">
-                          {asset.asset_subtype === 'page' && (
+                          <div className="flex items-center justify-end gap-2">
                             <button
-                              onClick={() => handlePromoteToRecord(asset.id)}
-                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded transition-colors"
-                              title="Promote to Record"
+                              onClick={() => handleViewContent(asset)}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+                              title="View Content"
                             >
-                              <ArrowUpCircle className="w-4 h-4" />
-                              Promote
+                              <Eye className="w-4 h-4" />
+                              View
                             </button>
-                          )}
+                            {asset.asset_subtype === 'page' && (
+                              <button
+                                onClick={() => handlePromoteToRecord(asset.id)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded transition-colors"
+                                title="Promote to Record"
+                              >
+                                <ArrowUpCircle className="w-4 h-4" />
+                                Promote
+                              </button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     ))}
@@ -958,6 +1060,82 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
                 )}
               </>
             )}
+          </div>
+        )}
+
+        {/* Content Viewer Modal */}
+        {contentViewerOpen && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+            {/* Backdrop */}
+            <div
+              className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+              onClick={() => setContentViewerOpen(false)}
+            />
+
+            {/* Modal */}
+            <div className="relative bg-white dark:bg-gray-800 rounded-2xl shadow-2xl w-full max-w-4xl max-h-[90vh] flex flex-col overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+                <div className="flex-1 min-w-0">
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white truncate">
+                    {contentViewerAsset?.url_path || contentViewerAsset?.url || 'Content Viewer'}
+                  </h2>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 truncate">
+                    {contentViewerAsset?.url}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 ml-4">
+                  <button
+                    onClick={handleCopyContent}
+                    disabled={!contentViewerContent}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 hover:bg-gray-200 dark:hover:bg-gray-600 rounded-lg disabled:opacity-50 transition-colors"
+                    title="Copy to clipboard"
+                  >
+                    {contentCopied ? (
+                      <>
+                        <Check className="w-4 h-4 text-emerald-500" />
+                        Copied
+                      </>
+                    ) : (
+                      <>
+                        <Copy className="w-4 h-4" />
+                        Copy
+                      </>
+                    )}
+                  </button>
+                  <button
+                    onClick={() => setContentViewerOpen(false)}
+                    className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded-lg transition-colors"
+                  >
+                    <X className="w-5 h-5" />
+                  </button>
+                </div>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 overflow-auto p-6">
+                {contentViewerLoading ? (
+                  <div className="flex flex-col items-center justify-center py-12">
+                    <Loader2 className="w-8 h-8 text-indigo-500 animate-spin mb-4" />
+                    <p className="text-sm text-gray-500 dark:text-gray-400">Loading content...</p>
+                  </div>
+                ) : contentViewerContent ? (
+                  <pre className="whitespace-pre-wrap font-mono text-sm text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-900 rounded-xl p-4 overflow-auto">
+                    {contentViewerContent}
+                  </pre>
+                ) : (
+                  <div className="flex flex-col items-center justify-center py-12 text-center">
+                    <AlertTriangle className="w-12 h-12 text-amber-500 mb-4" />
+                    <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+                      No Content Available
+                    </h3>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 max-w-md">
+                      The extracted content for this page is not available. This may happen if the extraction is still in progress or failed.
+                    </p>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>

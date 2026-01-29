@@ -28,6 +28,10 @@ Usage:
 
     # Cleanup only (skip bucket recreation)
     python -m app.commands.cleanup_storage --skip-recreate
+
+    # Also clean web scraping database records (ScrapedAssets, Assets, Runs)
+    # Use this when storage path structure changes to re-crawl with new paths
+    python -m app.commands.cleanup_storage --scrape
 """
 
 import asyncio
@@ -41,7 +45,7 @@ from uuid import UUID
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from sqlalchemy import select, delete
-from app.database.models import Artifact, Asset
+from app.database.models import Artifact, Asset, ScrapedAsset, ScrapeSource, ScrapeCollection, ExtractionResult, Run
 from app.services.database_service import database_service
 from app.services.minio_service import get_minio_service
 
@@ -49,7 +53,7 @@ logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
 
 
-def confirm_cleanup(org_id: Optional[UUID] = None, bucket: Optional[str] = None) -> bool:
+def confirm_cleanup(org_id: Optional[UUID] = None, bucket: Optional[str] = None, include_scrape: bool = False) -> bool:
     """Prompt user for confirmation before destructive operation."""
     print("\n" + "=" * 70)
     print("⚠️  DESTRUCTIVE OPERATION - STORAGE CLEANUP")
@@ -66,6 +70,12 @@ def confirm_cleanup(org_id: Optional[UUID] = None, bucket: Optional[str] = None)
     print("    • All objects in MinIO/S3 storage (within scope)")
     print("    • All artifact records from database")
     print("    • Asset file_hash values will be set to NULL")
+    if include_scrape:
+        print("    • All ScrapedAsset records (web scraping)")
+        print("    • All Assets created by web scraping")
+        print("    • All ExtractionResults for scraped content")
+        print("    • All scrape/extraction Runs")
+        print("    • Collection stats will be reset (collections preserved)")
     print("\n  This operation CANNOT be undone!")
     print("=" * 70)
 
@@ -162,6 +172,142 @@ async def cleanup_artifacts(
         return 0
 
 
+async def cleanup_scrape_records(
+    session,
+    org_id: Optional[UUID] = None,
+    dry_run: bool = False
+) -> dict:
+    """
+    Clean up web scraping database records.
+
+    This removes ScrapedAssets, Assets (web_scrape type), ExtractionResults,
+    and Runs related to web scraping. Collections and Sources are preserved.
+
+    Args:
+        session: Database session
+        org_id: Optional organization ID to limit scope
+        dry_run: If True, only count what would be deleted
+
+    Returns:
+        Dict with counts of deleted records
+    """
+    counts = {
+        "scraped_assets": 0,
+        "assets": 0,
+        "extraction_results": 0,
+        "runs": 0,
+    }
+
+    try:
+        # Get collections to process
+        stmt = select(ScrapeCollection)
+        if org_id:
+            stmt = stmt.where(ScrapeCollection.organization_id == org_id)
+        result = await session.execute(stmt)
+        collections = result.scalars().all()
+
+        collection_ids = [c.id for c in collections]
+
+        if not collection_ids:
+            logger.info("  No scrape collections found")
+            return counts
+
+        # Count/delete ScrapedAssets
+        stmt = select(ScrapedAsset).where(ScrapedAsset.collection_id.in_(collection_ids))
+        result = await session.execute(stmt)
+        scraped_assets = result.scalars().all()
+        counts["scraped_assets"] = len(scraped_assets)
+
+        # Get asset IDs for these scraped assets
+        asset_ids = [sa.asset_id for sa in scraped_assets]
+
+        if asset_ids:
+            # Count/delete ExtractionResults for these assets
+            stmt = select(ExtractionResult).where(ExtractionResult.asset_id.in_(asset_ids))
+            result = await session.execute(stmt)
+            extraction_results = result.scalars().all()
+            counts["extraction_results"] = len(extraction_results)
+
+            # Get run IDs from extraction results
+            run_ids = list(set(er.run_id for er in extraction_results if er.run_id))
+
+            if not dry_run:
+                # Delete extraction results
+                await session.execute(
+                    delete(ExtractionResult).where(ExtractionResult.asset_id.in_(asset_ids))
+                )
+
+            # Count/delete Runs (scrape and extraction types for these assets)
+            if run_ids:
+                stmt = select(Run).where(Run.id.in_(run_ids))
+                result = await session.execute(stmt)
+                runs = result.scalars().all()
+                counts["runs"] = len(runs)
+
+                if not dry_run:
+                    await session.execute(delete(Run).where(Run.id.in_(run_ids)))
+
+            # Count/delete Assets
+            stmt = select(Asset).where(Asset.id.in_(asset_ids))
+            result = await session.execute(stmt)
+            assets = result.scalars().all()
+            counts["assets"] = len(assets)
+
+            if not dry_run:
+                # Delete scraped assets first (foreign key constraint)
+                await session.execute(
+                    delete(ScrapedAsset).where(ScrapedAsset.collection_id.in_(collection_ids))
+                )
+                # Then delete assets
+                await session.execute(delete(Asset).where(Asset.id.in_(asset_ids)))
+
+        # Also delete any orphaned scrape runs
+        stmt = select(Run).where(
+            Run.run_type == "scrape",
+            Run.organization_id.in_([c.organization_id for c in collections])
+        )
+        result = await session.execute(stmt)
+        scrape_runs = result.scalars().all()
+        scrape_run_count = len(scrape_runs)
+
+        if scrape_run_count > 0 and not dry_run:
+            await session.execute(
+                delete(Run).where(
+                    Run.run_type == "scrape",
+                    Run.organization_id.in_([c.organization_id for c in collections])
+                )
+            )
+        counts["runs"] += scrape_run_count
+
+        # Reset collection stats and last_crawl references
+        if not dry_run:
+            for collection in collections:
+                collection.last_crawl_at = None
+                collection.last_crawl_run_id = None
+                collection.stats = {"page_count": 0, "record_count": 0, "promoted_count": 0}
+
+            await session.commit()
+
+        if dry_run:
+            logger.info(f"  [DRY RUN] Would delete {counts['scraped_assets']} scraped assets")
+            logger.info(f"  [DRY RUN] Would delete {counts['assets']} assets")
+            logger.info(f"  [DRY RUN] Would delete {counts['extraction_results']} extraction results")
+            logger.info(f"  [DRY RUN] Would delete {counts['runs']} runs")
+        else:
+            logger.info(f"  Deleted {counts['scraped_assets']} scraped assets")
+            logger.info(f"  Deleted {counts['assets']} assets")
+            logger.info(f"  Deleted {counts['extraction_results']} extraction results")
+            logger.info(f"  Deleted {counts['runs']} runs")
+            logger.info(f"  Reset {len(collections)} collection stats")
+
+        return counts
+
+    except Exception as e:
+        logger.error(f"Failed to clean scrape records: {e}")
+        await session.rollback()
+        return counts
+
+
 async def reset_asset_hashes(
     session,
     org_id: Optional[UUID] = None,
@@ -212,6 +358,47 @@ async def reset_asset_hashes(
         return 0
 
 
+async def create_org_folder_structure(minio, bucket_name: str, org_id: str, dry_run: bool = False):
+    """
+    Create organization folder structure in a bucket.
+
+    Creates the standard folder hierarchy:
+        {org_id}/
+        ├── uploads/
+        ├── scrape/
+        ├── sharepoint/
+        └── temp/
+
+    Args:
+        minio: MinIO service instance
+        bucket_name: Bucket name
+        org_id: Organization ID string
+        dry_run: If True, only show what would be created
+    """
+    from io import BytesIO
+
+    # Define subfolders based on storage path service structure
+    subfolders = ["uploads", "scrape", "sharepoint", "temp"]
+
+    for subfolder in subfolders:
+        folder_path = f"{org_id}/{subfolder}/.keep"
+
+        if dry_run:
+            logger.info(f"  [DRY RUN] Would create: {bucket_name}/{org_id}/{subfolder}/")
+        else:
+            try:
+                # MinIO/S3 doesn't have "folders" - create a .keep file to establish path
+                minio.client.put_object(
+                    bucket_name,
+                    folder_path,
+                    data=BytesIO(b""),
+                    length=0,
+                )
+                logger.info(f"  ✓ Created: {bucket_name}/{org_id}/{subfolder}/")
+            except Exception as e:
+                logger.error(f"  ✗ Failed to create {bucket_name}/{org_id}/{subfolder}/: {e}")
+
+
 async def recreate_storage_structure(minio, org_id: Optional[UUID] = None, dry_run: bool = False):
     """
     Recreate buckets and default folder structure after cleanup.
@@ -255,30 +442,14 @@ async def recreate_storage_structure(minio, org_id: Optional[UUID] = None, dry_r
         except Exception as e:
             logger.error(f"Failed to create/configure bucket {bucket_name}: {e}")
 
-    # Create default organization folders if org_id provided
+    # Create organization folders
+    org_to_create = None
+
     if org_id:
-        logger.info(f"\nCreating organization folders for {org_id}...")
-        for bucket_name, _, _ in buckets:
-            try:
-                # Create .keep file to ensure folder exists
-                folder_path = f"{org_id}/.keep"
-
-                if dry_run:
-                    logger.info(f"[DRY RUN] Would create folder: {bucket_name}/{org_id}/")
-                else:
-                    # MinIO/S3 doesn't have "folders" - create a .keep file to establish path
-                    minio.client.put_object(
-                        bucket_name,
-                        folder_path,
-                        data=b"",
-                        length=0,
-                    )
-                    logger.info(f"✓ Created folder: {bucket_name}/{org_id}/")
-            except Exception as e:
-                logger.error(f"Failed to create folder in {bucket_name}: {e}")
-
-    # Get default organization if no org_id specified
+        org_to_create = str(org_id)
+        org_name = f"Organization {org_id}"
     elif not dry_run:
+        # Get default organization if no org_id specified
         try:
             from app.config import settings
             from app.database.models import Organization
@@ -297,25 +468,30 @@ async def recreate_storage_structure(minio, org_id: Optional[UUID] = None, dry_r
                     default_org = result.scalar_one_or_none()
 
                 if default_org:
-                    logger.info(f"\nCreating folders for default organization: {default_org.name} ({default_org.id})")
-                    for bucket_name, _, _ in buckets:
-                        try:
-                            folder_path = f"{default_org.id}/.keep"
-                            minio.client.put_object(
-                                bucket_name,
-                                folder_path,
-                                data=b"",
-                                length=0,
-                            )
-                            logger.info(f"✓ Created folder: {bucket_name}/{default_org.id}/")
-                        except Exception as e:
-                            logger.error(f"Failed to create folder in {bucket_name}: {e}")
+                    org_to_create = str(default_org.id)
+                    org_name = default_org.name
                 else:
-                    logger.warning("No default organization found. Skipping folder creation.")
+                    logger.warning("\nNo default organization found. Skipping folder creation.")
                     logger.warning("Run 'python -m app.commands.seed --create-admin' to create one.")
 
         except Exception as e:
-            logger.error(f"Failed to create default organization folders: {e}")
+            logger.error(f"Failed to get default organization: {e}")
+
+    # Create folders for the organization
+    if org_to_create:
+        logger.info(f"\nCreating folder structure for organization: {org_name} ({org_to_create})")
+
+        # Create in uploads bucket (primary storage)
+        logger.info(f"\n{minio.bucket_uploads}:")
+        await create_org_folder_structure(minio, minio.bucket_uploads, org_to_create, dry_run)
+
+        # Create in processed bucket (extracted content)
+        logger.info(f"\n{minio.bucket_processed}:")
+        await create_org_folder_structure(minio, minio.bucket_processed, org_to_create, dry_run)
+
+        # Create in temp bucket (temporary files)
+        logger.info(f"\n{minio.bucket_temp}:")
+        await create_org_folder_structure(minio, minio.bucket_temp, org_to_create, dry_run)
 
     logger.info("\n✓ Storage structure recreated")
 
@@ -326,6 +502,7 @@ async def cleanup_storage(
     force: bool = False,
     dry_run: bool = False,
     skip_recreate: bool = False,
+    include_scrape: bool = False,
 ):
     """
     Clean up storage and artifacts, then recreate bucket structure.
@@ -336,6 +513,7 @@ async def cleanup_storage(
         force: Skip confirmation prompt
         dry_run: Show what would be deleted without actually deleting
         skip_recreate: Skip recreation of bucket structure (cleanup only)
+        include_scrape: Also delete web scraping database records (ScrapedAssets, etc.)
     """
 
     # Get MinIO service
@@ -346,17 +524,20 @@ async def cleanup_storage(
 
     # Confirm operation (unless force or dry-run)
     if not dry_run and not force:
-        if not confirm_cleanup(org_id, bucket):
+        if not confirm_cleanup(org_id, bucket, include_scrape):
             logger.info("Cleanup cancelled by user")
             return 0
 
     logger.info("\n" + "=" * 70)
     logger.info("Starting storage cleanup...")
+    if include_scrape:
+        logger.info("(Including web scraping database records)")
     logger.info("=" * 70 + "\n")
 
     total_objects = 0
     total_artifacts = 0
     total_assets = 0
+    scrape_counts = {}
 
     # Determine which buckets to clean
     buckets_to_clean = []
@@ -386,7 +567,13 @@ async def cleanup_storage(
     async with database_service.get_session() as session:
         total_artifacts = await cleanup_artifacts(session, org_id, bucket, dry_run)
 
-    # Reset asset hashes
+    # Clean up web scraping records if requested
+    if include_scrape:
+        logger.info("\nCleaning web scraping database records...")
+        async with database_service.get_session() as session:
+            scrape_counts = await cleanup_scrape_records(session, org_id, dry_run)
+
+    # Reset asset hashes (only for non-scrape assets if scrape cleanup was done)
     logger.info("\nResetting asset file_hash values...")
     async with database_service.get_session() as session:
         total_assets = await reset_asset_hashes(session, org_id, dry_run)
@@ -402,6 +589,9 @@ async def cleanup_storage(
     logger.info(f"  Objects {'would be' if dry_run else ''} deleted: {total_objects}")
     logger.info(f"  Artifacts {'would be' if dry_run else ''} deleted: {total_artifacts}")
     logger.info(f"  Assets {'would be' if dry_run else ''} reset: {total_assets}")
+    if include_scrape and scrape_counts:
+        logger.info(f"  Scraped assets {'would be' if dry_run else ''} deleted: {scrape_counts.get('scraped_assets', 0)}")
+        logger.info(f"  Scrape-related assets {'would be' if dry_run else ''} deleted: {scrape_counts.get('assets', 0)}")
     if not skip_recreate and not bucket:
         logger.info(f"  Buckets {'would be' if dry_run else ''} recreated: {len(buckets_to_clean)}")
     logger.info("=" * 70 + "\n")
@@ -440,6 +630,11 @@ if __name__ == "__main__":
         action="store_true",
         help="Skip recreation of bucket structure (cleanup only)"
     )
+    parser.add_argument(
+        "--scrape",
+        action="store_true",
+        help="Also delete web scraping database records (ScrapedAssets, Assets, Runs)"
+    )
 
     args = parser.parse_args()
 
@@ -450,6 +645,7 @@ if __name__ == "__main__":
             force=args.force,
             dry_run=args.dry_run,
             skip_recreate=args.skip_recreate,
+            include_scrape=args.scrape,
         )
     )
     sys.exit(exit_code)
