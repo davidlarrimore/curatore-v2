@@ -275,7 +275,7 @@ class UploadIntegrationService:
         session: AsyncSession,
         asset_id: UUID,
         user_id: Optional[UUID] = None,
-        extractor_version: str = "markitdown-1.0",
+        extractor_version: Optional[str] = None,
     ) -> Tuple[Run, ExtractionResult]:
         """
         Trigger manual re-extraction for an existing Asset (Phase 1).
@@ -287,7 +287,7 @@ class UploadIntegrationService:
             session: Database session
             asset_id: Asset UUID to re-extract
             user_id: User requesting the re-extraction
-            extractor_version: Extractor version to use
+            extractor_version: Extractor version to use (defaults to config.yml default engine)
 
         Returns:
             Tuple of (Run, ExtractionResult)
@@ -295,6 +295,15 @@ class UploadIntegrationService:
         Raises:
             ValueError: If asset not found or not in a re-extractable state
         """
+        # Get extractor version from config if not provided
+        if not extractor_version:
+            from .config_loader import config_loader
+            default_engine = config_loader.get_default_extraction_engine()
+            if default_engine:
+                extractor_version = f"{default_engine.name}-{default_engine.engine_type}"
+            else:
+                extractor_version = "extraction-service"
+
         # Get asset
         asset = await asset_service.get_asset(session, asset_id)
         if not asset:
