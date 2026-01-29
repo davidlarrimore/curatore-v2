@@ -25,6 +25,7 @@ from typing import List, Optional
 from sqlalchemy import (
     Boolean,
     Column,
+    Date,
     DateTime,
     Float,
     ForeignKey,
@@ -1867,3 +1868,771 @@ class ScheduledTask(Base):
 
     def __repr__(self) -> str:
         return f"<ScheduledTask(id={self.id}, name={self.name}, enabled={self.enabled})>"
+
+
+# ============================================================================
+# Phase 7 Models: SAM.gov Domain Integration
+# ============================================================================
+
+
+class SamSearch(Base):
+    """
+    SamSearch model for managing SAM.gov opportunity searches (Phase 7).
+
+    A search defines a set of filters for pulling opportunities from SAM.gov API.
+    Similar to ScrapeCollection for web scraping, this is the top-level entity
+    for organizing SAM.gov data ingestion.
+
+    Key Concepts:
+    - Each search has a unique configuration (NAICS codes, agencies, etc.)
+    - Searches can be scheduled for automatic pulls
+    - Tracks solicitation and notice counts for quick stats
+    - Supports multiple pull frequencies (manual, hourly, daily)
+
+    Attributes:
+        id: Unique search identifier
+        organization_id: Organization that owns this search
+        name: Display name for the search
+        slug: URL-friendly identifier (unique within org)
+        description: Optional description
+        search_config: JSONB with filter configuration
+        status: Search status (active, paused, archived)
+        is_active: Whether search is enabled
+        last_pull_at: Timestamp of last pull
+        last_pull_status: Status of last pull (success, failed, partial)
+        last_pull_run_id: Run ID of last pull
+        pull_frequency: How often to pull (manual, hourly, daily)
+        solicitation_count: Denormalized count of solicitations
+        notice_count: Denormalized count of notices
+
+    search_config Example:
+        {
+            "naics_codes": ["541512", "541519"],
+            "psc_codes": ["D302", "D307"],
+            "set_aside_codes": ["SBA", "8A"],
+            "agencies": ["DEPT OF DEFENSE"],
+            "notice_types": ["o", "p", "k"],
+            "posted_from": "2024-01-01",
+            "posted_to": "2024-12-31",
+            "active_only": true,
+            "keyword": "software development"
+        }
+
+    Relationships:
+        organization: Organization that owns this search
+        solicitations: Solicitations found by this search
+        last_pull_run: Most recent pull Run
+    """
+
+    __tablename__ = "sam_searches"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Search metadata
+    name = Column(String(255), nullable=False)
+    slug = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Search configuration (NAICS, agencies, dates, etc.)
+    search_config = Column(JSON, nullable=False, default=dict, server_default="{}")
+
+    # Status
+    status = Column(String(50), nullable=False, default="active", index=True)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+
+    # Pull tracking
+    last_pull_at = Column(DateTime, nullable=True)
+    last_pull_status = Column(String(50), nullable=True)  # success, failed, partial
+    last_pull_run_id = Column(
+        UUID(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
+    )
+    pull_frequency = Column(String(50), nullable=False, default="manual")  # manual, hourly, daily
+
+    # Denormalized counts
+    solicitation_count = Column(Integer, nullable=False, default=0)
+    notice_count = Column(Integer, nullable=False, default=0)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+    created_by = Column(
+        UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Relationships
+    organization = relationship("Organization", backref="sam_searches")
+    solicitations = relationship(
+        "SamSolicitation",
+        back_populates="search",
+        cascade="all, delete-orphan",
+    )
+    last_pull_run = relationship("Run", foreign_keys=[last_pull_run_id])
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_sam_searches_org_slug", "organization_id", "slug", unique=True),
+        Index("ix_sam_searches_org_status", "organization_id", "status"),
+        Index("ix_sam_searches_org_active", "organization_id", "is_active"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SamSearch(id={self.id}, name={self.name}, status={self.status})>"
+
+
+class SamAgency(Base):
+    """
+    SamAgency model for SAM.gov agency reference data (Phase 7).
+
+    Stores agency information from SAM.gov for denormalization and display.
+    Agencies are the top-level organizational units in federal contracting.
+
+    Attributes:
+        id: Unique agency identifier
+        code: SAM.gov agency code (e.g., "DOD", "HHS")
+        name: Full agency name
+        abbreviation: Common abbreviation
+        is_active: Whether agency is currently active
+
+    Relationships:
+        sub_agencies: List of sub-agencies under this agency
+    """
+
+    __tablename__ = "sam_agencies"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    code = Column(String(50), nullable=False, unique=True, index=True)
+    name = Column(String(500), nullable=False)
+    abbreviation = Column(String(50), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    sub_agencies = relationship(
+        "SamSubAgency",
+        back_populates="agency",
+        cascade="all, delete-orphan",
+    )
+
+    def __repr__(self) -> str:
+        return f"<SamAgency(id={self.id}, code={self.code}, name={self.name})>"
+
+
+class SamSubAgency(Base):
+    """
+    SamSubAgency model for SAM.gov sub-agency reference data (Phase 7).
+
+    Sub-agencies are organizational units within agencies that issue contracts.
+    Examples: Army, Navy, Air Force under DOD.
+
+    Attributes:
+        id: Unique sub-agency identifier
+        agency_id: Parent agency
+        code: SAM.gov sub-agency code
+        name: Full sub-agency name
+        abbreviation: Common abbreviation
+        is_active: Whether sub-agency is currently active
+
+    Relationships:
+        agency: Parent agency
+        solicitations: Solicitations from this sub-agency
+    """
+
+    __tablename__ = "sam_sub_agencies"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    agency_id = Column(
+        UUID(), ForeignKey("sam_agencies.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    code = Column(String(50), nullable=False, index=True)
+    name = Column(String(500), nullable=False)
+    abbreviation = Column(String(50), nullable=True)
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    agency = relationship("SamAgency", back_populates="sub_agencies")
+    solicitations = relationship("SamSolicitation", back_populates="sub_agency")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_sam_sub_agencies_agency_code", "agency_id", "code", unique=True),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SamSubAgency(id={self.id}, code={self.code}, name={self.name})>"
+
+
+class SamSolicitation(Base):
+    """
+    SamSolicitation model for tracking federal contract opportunities (Phase 7).
+
+    Represents a single solicitation/opportunity from SAM.gov. Solicitations
+    go through a lifecycle (posted → active → awarded/cancelled) and may
+    have multiple notices (amendments, modifications).
+
+    Key Concepts:
+    - notice_id is the SAM.gov unique identifier
+    - solicitation_number is the contract number
+    - Multiple notices track version history (amendments)
+    - Attachments become Assets for extraction
+
+    Notice Types:
+    - o: Combined Synopsis/Solicitation
+    - p: Presolicitation
+    - k: Sources Sought
+    - r: Special Notice
+    - s: Award Notice
+    - a: Amendment
+
+    Attributes:
+        id: Unique solicitation identifier
+        organization_id: Organization that owns this solicitation
+        search_id: Search that found this solicitation
+        sub_agency_id: Issuing sub-agency (optional)
+        notice_id: SAM.gov unique notice ID
+        solicitation_number: Contract number
+        title: Opportunity title
+        description: Full description
+        notice_type: Type code (o, p, k, r, s)
+        naics_code: NAICS classification
+        psc_code: Product/Service code
+        set_aside_code: Set-aside type (SBA, 8A, etc.)
+        status: Opportunity status (active, awarded, cancelled)
+        posted_date: Original post date
+        response_deadline: Due date for responses
+        archive_date: When opportunity was archived
+        ui_link: Link to SAM.gov UI
+        api_link: Link to SAM.gov API
+        notice_count: Number of notices/versions
+        attachment_count: Number of attachments
+
+    Relationships:
+        organization: Owning organization
+        search: Search that found this
+        sub_agency: Issuing sub-agency
+        notices: Version history
+        attachments: Linked files
+        summaries: LLM-generated summaries
+    """
+
+    __tablename__ = "sam_solicitations"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    search_id = Column(
+        UUID(), ForeignKey("sam_searches.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sub_agency_id = Column(
+        UUID(), ForeignKey("sam_sub_agencies.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # SAM.gov identifiers
+    notice_id = Column(String(100), nullable=False, unique=True, index=True)
+    solicitation_number = Column(String(255), nullable=True, index=True)
+
+    # Opportunity details
+    title = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    notice_type = Column(String(50), nullable=False, index=True)  # o, p, k, r, s
+
+    # Organization hierarchy (parsed from fullParentPathName: AGENCY.BUREAU.OFFICE)
+    agency_name = Column(String(500), nullable=True, index=True)
+    bureau_name = Column(String(500), nullable=True, index=True)
+    office_name = Column(String(500), nullable=True)
+    full_parent_path = Column(String(1000), nullable=True)  # Original fullParentPathName
+
+    # Classification
+    naics_code = Column(String(20), nullable=True, index=True)
+    psc_code = Column(String(20), nullable=True, index=True)
+    set_aside_code = Column(String(50), nullable=True, index=True)
+
+    # Status
+    status = Column(String(50), nullable=False, default="active", index=True)
+    # active, awarded, cancelled, archived
+
+    # Important dates
+    posted_date = Column(DateTime, nullable=True, index=True)
+    response_deadline = Column(DateTime, nullable=True, index=True)
+    archive_date = Column(DateTime, nullable=True)
+
+    # Links
+    ui_link = Column(String(1000), nullable=True)
+    api_link = Column(String(1000), nullable=True)
+
+    # Contact information (JSONB for flexibility)
+    contact_info = Column(JSON, nullable=True)
+
+    # Place of performance (JSONB)
+    place_of_performance = Column(JSON, nullable=True)
+
+    # Denormalized counts
+    notice_count = Column(Integer, nullable=False, default=1)
+    attachment_count = Column(Integer, nullable=False, default=0)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    organization = relationship("Organization", backref="sam_solicitations")
+    search = relationship("SamSearch", back_populates="solicitations")
+    sub_agency = relationship("SamSubAgency", back_populates="solicitations")
+    notices = relationship(
+        "SamNotice",
+        back_populates="solicitation",
+        cascade="all, delete-orphan",
+        order_by="SamNotice.version_number",
+    )
+    attachments = relationship(
+        "SamAttachment",
+        back_populates="solicitation",
+        cascade="all, delete-orphan",
+    )
+    summaries = relationship(
+        "SamSolicitationSummary",
+        back_populates="solicitation",
+        cascade="all, delete-orphan",
+    )
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_sam_solicitations_org_search", "organization_id", "search_id"),
+        Index("ix_sam_solicitations_org_status", "organization_id", "status"),
+        Index("ix_sam_solicitations_deadline", "response_deadline"),
+        Index("ix_sam_solicitations_posted", "posted_date"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SamSolicitation(id={self.id}, notice_id={self.notice_id}, title={self.title[:50]}...)>"
+
+
+class SamNotice(Base):
+    """
+    SamNotice model for tracking solicitation version history (Phase 7).
+
+    Each time a solicitation is amended or modified, a new notice is created.
+    This enables tracking changes over time and comparing versions.
+
+    Key Concepts:
+    - version_number=1 is the original posting
+    - version_number>1 represents amendments
+    - Raw JSON is stored in object storage for full data preservation
+    - changes_summary can be AI-generated to explain differences
+
+    Attributes:
+        id: Unique notice identifier
+        solicitation_id: Parent solicitation
+        sam_notice_id: SAM.gov notice ID for this version
+        notice_type: Type code (same as solicitation, or 'a' for amendment)
+        version_number: Sequential version (1=original, 2+=amendments)
+        title: Title at this version
+        description: Description at this version
+        posted_date: When this version was posted
+        response_deadline: Deadline at this version
+        raw_json_bucket: MinIO bucket for raw JSON
+        raw_json_key: MinIO key for raw JSON
+        changes_summary: AI-generated summary of changes from previous version
+
+    Relationships:
+        solicitation: Parent solicitation
+        attachments: Attachments added in this notice
+    """
+
+    __tablename__ = "sam_notices"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    solicitation_id = Column(
+        UUID(), ForeignKey("sam_solicitations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # SAM.gov identifiers
+    sam_notice_id = Column(String(100), nullable=False, index=True)
+    notice_type = Column(String(50), nullable=False)  # o, p, k, r, s, a (amendment)
+
+    # Version tracking
+    version_number = Column(Integer, nullable=False, default=1)
+
+    # Snapshot of data at this version
+    title = Column(Text, nullable=True)
+    description = Column(Text, nullable=True)
+    posted_date = Column(DateTime, nullable=True)
+    response_deadline = Column(DateTime, nullable=True)
+
+    # Raw API response storage
+    raw_json_bucket = Column(String(255), nullable=True)
+    raw_json_key = Column(String(500), nullable=True)
+
+    # Change tracking
+    changes_summary = Column(Text, nullable=True)  # AI-generated or manual
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    solicitation = relationship("SamSolicitation", back_populates="notices")
+    attachments = relationship(
+        "SamAttachment",
+        back_populates="notice",
+        cascade="all, delete-orphan",
+    )
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_sam_notices_sol_version", "solicitation_id", "version_number", unique=True),
+        Index("ix_sam_notices_sam_id", "sam_notice_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SamNotice(id={self.id}, solicitation_id={self.solicitation_id}, version={self.version_number})>"
+
+
+class SamAttachment(Base):
+    """
+    SamAttachment model linking SAM.gov attachments to Assets (Phase 7).
+
+    Attachments are files associated with solicitations (SOWs, pricing templates,
+    etc.). When downloaded, they become Assets and trigger automatic extraction.
+
+    Key Concepts:
+    - resource_id is SAM.gov's identifier for the attachment
+    - asset_id links to the downloaded Asset (nullable until downloaded)
+    - download_status tracks the download lifecycle
+    - Downloading creates an Asset with source_type='sam_gov'
+
+    Attributes:
+        id: Unique attachment identifier
+        solicitation_id: Parent solicitation
+        notice_id: Notice that introduced this attachment
+        asset_id: Linked Asset after download
+        resource_id: SAM.gov resource identifier
+        filename: Original filename
+        file_type: File extension (pdf, docx, etc.)
+        file_size: Size in bytes
+        download_url: SAM.gov download URL
+        download_status: pending, downloaded, failed, skipped
+        downloaded_at: When file was downloaded
+        download_error: Error message if download failed
+
+    Relationships:
+        solicitation: Parent solicitation
+        notice: Notice that introduced this
+        asset: Downloaded Asset
+    """
+
+    __tablename__ = "sam_attachments"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    solicitation_id = Column(
+        UUID(), ForeignKey("sam_solicitations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    notice_id = Column(
+        UUID(), ForeignKey("sam_notices.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    asset_id = Column(
+        UUID(), ForeignKey("assets.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # SAM.gov identifiers
+    resource_id = Column(String(255), nullable=False, index=True)
+
+    # File metadata
+    filename = Column(String(500), nullable=False)
+    file_type = Column(String(100), nullable=True)  # pdf, docx, xlsx, etc.
+    file_size = Column(Integer, nullable=True)  # bytes
+    description = Column(Text, nullable=True)
+
+    # Download information
+    download_url = Column(String(1000), nullable=True)
+    download_status = Column(String(50), nullable=False, default="pending", index=True)
+    # pending, downloading, downloaded, failed, skipped
+    downloaded_at = Column(DateTime, nullable=True)
+    download_error = Column(Text, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    solicitation = relationship("SamSolicitation", back_populates="attachments")
+    notice = relationship("SamNotice", back_populates="attachments")
+    asset = relationship("Asset", backref="sam_attachment")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_sam_attachments_sol_status", "solicitation_id", "download_status"),
+        Index("ix_sam_attachments_resource", "resource_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SamAttachment(id={self.id}, filename={self.filename}, status={self.download_status})>"
+
+
+class SamSolicitationSummary(Base):
+    """
+    SamSolicitationSummary model for LLM-generated analysis (Phase 7).
+
+    Stores AI-generated summaries and analysis of solicitations. Integrates
+    with the AssetMetadata experiment system for comparing different prompts
+    and models.
+
+    Key Concepts:
+    - Multiple summaries can exist per solicitation (experiments)
+    - is_canonical marks the promoted/active summary
+    - Links to AssetMetadata for experiment tracking
+    - Structured extraction (key_requirements, compliance_checklist)
+
+    Summary Types:
+    - full: Comprehensive analysis
+    - executive: Brief executive summary
+    - technical: Technical requirements focus
+    - compliance: Compliance/eligibility focus
+
+    Attributes:
+        id: Unique summary identifier
+        solicitation_id: Parent solicitation
+        asset_metadata_id: Link to experiment system
+        summary_type: Type of summary (full, executive, technical)
+        is_canonical: Whether this is the active summary
+        model: LLM model used
+        prompt_template: Prompt used for generation
+        summary: Generated summary text
+        key_requirements: Structured key requirements (JSONB)
+        compliance_checklist: Compliance items (JSONB)
+        confidence_score: Quality/confidence score
+        token_count: Tokens used for generation
+
+    Relationships:
+        solicitation: Parent solicitation
+        asset_metadata: Experiment tracking
+    """
+
+    __tablename__ = "sam_solicitation_summaries"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    solicitation_id = Column(
+        UUID(), ForeignKey("sam_solicitations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    asset_metadata_id = Column(
+        UUID(), ForeignKey("asset_metadata.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # Summary classification
+    summary_type = Column(String(50), nullable=False, default="full")
+    # full, executive, technical, compliance
+    is_canonical = Column(Boolean, nullable=False, default=False, index=True)
+
+    # Generation metadata
+    model = Column(String(100), nullable=False)
+    prompt_template = Column(Text, nullable=True)
+    prompt_version = Column(String(50), nullable=True)
+
+    # Generated content
+    summary = Column(Text, nullable=False)
+    key_requirements = Column(JSON, nullable=True)
+    # Example: [{"category": "Technical", "requirement": "...", "mandatory": true}]
+    compliance_checklist = Column(JSON, nullable=True)
+    # Example: [{"item": "Small Business", "eligible": true, "notes": "..."}]
+
+    # Quality metrics
+    confidence_score = Column(Float, nullable=True)
+    token_count = Column(Integer, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    promoted_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    solicitation = relationship("SamSolicitation", back_populates="summaries")
+    asset_metadata = relationship("AssetMetadata", backref="sam_summaries")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_sam_summaries_sol_canonical", "solicitation_id", "is_canonical"),
+        Index("ix_sam_summaries_sol_type", "solicitation_id", "summary_type"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SamSolicitationSummary(id={self.id}, type={self.summary_type}, canonical={self.is_canonical})>"
+
+
+class SamApiUsage(Base):
+    """
+    Tracks daily SAM.gov API usage per organization.
+
+    SAM.gov enforces a 1,000 calls per day limit. This model tracks
+    usage to prevent going over limits and to show users their
+    remaining API budget.
+
+    Attributes:
+        id: Unique usage record identifier
+        organization_id: Organization this usage belongs to
+        date: The date this usage record is for (UTC)
+        search_calls: Number of search API calls
+        detail_calls: Number of opportunity detail calls
+        attachment_calls: Number of attachment download calls
+        total_calls: Total API calls (computed)
+        daily_limit: Maximum allowed calls per day
+        reset_at: When the daily limit resets (midnight UTC next day)
+
+    Usage:
+        - Each organization has one record per day
+        - Reset daily at midnight UTC
+        - Used to check limits before making API calls
+    """
+
+    __tablename__ = "sam_api_usage"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Date for this usage record (one per day per org)
+    date = Column(Date, nullable=False, index=True)
+
+    # Call counts by type
+    search_calls = Column(Integer, nullable=False, default=0)
+    detail_calls = Column(Integer, nullable=False, default=0)
+    attachment_calls = Column(Integer, nullable=False, default=0)
+
+    # Total and limits
+    total_calls = Column(Integer, nullable=False, default=0)
+    daily_limit = Column(Integer, nullable=False, default=1000)
+
+    # Reset timing
+    reset_at = Column(DateTime, nullable=False)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    organization = relationship("Organization", backref="sam_api_usage")
+
+    # Unique constraint: one record per org per day
+    __table_args__ = (
+        Index("ix_sam_api_usage_org_date", "organization_id", "date", unique=True),
+    )
+
+    @property
+    def remaining_calls(self) -> int:
+        """Calculate remaining API calls for today."""
+        return max(0, self.daily_limit - self.total_calls)
+
+    @property
+    def usage_percent(self) -> float:
+        """Calculate usage percentage."""
+        if self.daily_limit == 0:
+            return 100.0
+        return (self.total_calls / self.daily_limit) * 100
+
+    def __repr__(self) -> str:
+        return f"<SamApiUsage(org={self.organization_id}, date={self.date}, used={self.total_calls}/{self.daily_limit})>"
+
+
+class SamQueuedRequest(Base):
+    """
+    Stores deferred SAM.gov API calls when rate limit is exceeded.
+
+    When an organization exceeds their daily API limit, requests
+    are queued here for execution after the limit resets.
+
+    Attributes:
+        id: Unique queued request identifier
+        organization_id: Organization this request belongs to
+        request_type: Type of request (search, detail, attachment)
+        status: Request status (pending, processing, completed, failed, cancelled)
+        request_params: JSON parameters for the request
+        search_id: Associated search (if applicable)
+        solicitation_id: Associated solicitation (if applicable)
+        attachment_id: Associated attachment (if applicable)
+        scheduled_for: Earliest time to execute (after limit reset)
+        priority: Priority order (lower = higher priority)
+        attempts: Number of execution attempts
+        last_error: Last error message if failed
+        result: Stored result after successful execution
+
+    Lifecycle:
+        1. Created when API limit exceeded
+        2. Picked up by scheduled task after limit resets
+        3. Executed and marked completed/failed
+        4. Cleaned up after retention period
+    """
+
+    __tablename__ = "sam_queued_requests"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Request type and status
+    request_type = Column(String(50), nullable=False)  # search, detail, attachment
+    status = Column(String(50), nullable=False, default="pending", index=True)
+    # pending, processing, completed, failed, cancelled
+
+    # Request parameters (stored as JSON)
+    request_params = Column(JSON, nullable=False, default=dict)
+    # Example for search: {"naics_codes": ["541512"], "posted_from": "2024-01-01"}
+    # Example for detail: {"notice_id": "abc123"}
+    # Example for attachment: {"resource_id": "xyz789", "download_url": "https://..."}
+
+    # Related entities (optional, for context)
+    search_id = Column(UUID(), ForeignKey("sam_searches.id", ondelete="SET NULL"), nullable=True)
+    solicitation_id = Column(UUID(), ForeignKey("sam_solicitations.id", ondelete="SET NULL"), nullable=True)
+    attachment_id = Column(UUID(), ForeignKey("sam_attachments.id", ondelete="SET NULL"), nullable=True)
+
+    # Scheduling
+    scheduled_for = Column(DateTime, nullable=False, index=True)  # When to execute
+    priority = Column(Integer, nullable=False, default=100)  # Lower = higher priority
+
+    # Execution tracking
+    attempts = Column(Integer, nullable=False, default=0)
+    max_attempts = Column(Integer, nullable=False, default=3)
+    last_attempt_at = Column(DateTime, nullable=True)
+    last_error = Column(Text, nullable=True)
+
+    # Result storage (for completed requests)
+    result = Column(JSON, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    # Relationships
+    organization = relationship("Organization", backref="sam_queued_requests")
+    search = relationship("SamSearch", backref="queued_requests")
+    solicitation = relationship("SamSolicitation", backref="queued_requests")
+    attachment = relationship("SamAttachment", backref="queued_requests")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_sam_queued_org_status", "organization_id", "status"),
+        Index("ix_sam_queued_scheduled", "status", "scheduled_for"),
+        Index("ix_sam_queued_priority", "status", "priority", "scheduled_for"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SamQueuedRequest(id={self.id}, type={self.request_type}, status={self.status})>"

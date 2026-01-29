@@ -443,6 +443,134 @@ async def _execute_extraction_async(
 
 
 # ============================================================================
+# STARTUP RECOVERY TASK - Recover orphaned extractions after restart
+# ============================================================================
+
+
+@shared_task(bind=True)
+def recover_orphaned_extractions(
+    self,
+    max_age_hours: int = 24,
+    limit: int = 100,
+) -> Dict[str, Any]:
+    """
+    Recover orphaned extractions after service restart.
+
+    This task finds extractions that were in "pending" or "running" state
+    when the service crashed/restarted and re-queues them for processing.
+
+    Should be called:
+    1. On worker startup (via celery signal)
+    2. Periodically via scheduled task (as backup)
+
+    Args:
+        max_age_hours: Only recover extractions created within this window
+        limit: Maximum number of extractions to recover per invocation
+
+    Returns:
+        Dict with recovery statistics
+    """
+    logger = logging.getLogger("curatore.tasks.recovery")
+    logger.info(f"Starting orphaned extraction recovery (max_age={max_age_hours}h, limit={limit})")
+
+    try:
+        result = asyncio.run(
+            _recover_orphaned_extractions_async(max_age_hours, limit)
+        )
+        logger.info(f"Recovery complete: {result}")
+        return result
+    except Exception as e:
+        logger.error(f"Recovery failed: {e}", exc_info=True)
+        return {"status": "failed", "error": str(e)}
+
+
+async def _recover_orphaned_extractions_async(
+    max_age_hours: int,
+    limit: int,
+) -> Dict[str, Any]:
+    """
+    Async implementation of orphaned extraction recovery.
+    """
+    from .database.models import Run, ExtractionResult, Asset
+    from .services.upload_integration_service import upload_integration_service
+    from sqlalchemy import or_
+
+    logger = logging.getLogger("curatore.tasks.recovery")
+    cutoff = datetime.utcnow() - timedelta(hours=max_age_hours)
+
+    recovered = 0
+    skipped = 0
+    errors = []
+
+    async with database_service.get_session() as session:
+        # Find orphaned extractions (pending/running but old enough to be stuck)
+        # We check extractions older than 10 minutes to avoid recovering tasks
+        # that are legitimately still processing
+        stale_cutoff = datetime.utcnow() - timedelta(minutes=10)
+
+        result = await session.execute(
+            select(ExtractionResult)
+            .where(
+                and_(
+                    ExtractionResult.status.in_(["pending", "running"]),
+                    ExtractionResult.created_at >= cutoff,  # Within recovery window
+                    ExtractionResult.created_at < stale_cutoff,  # But old enough to be stuck
+                )
+            )
+            .limit(limit)
+        )
+        orphaned_extractions = result.scalars().all()
+
+        logger.info(f"Found {len(orphaned_extractions)} potentially orphaned extractions")
+
+        for extraction in orphaned_extractions:
+            try:
+                # Get the associated asset
+                asset = await session.execute(
+                    select(Asset).where(Asset.id == extraction.asset_id)
+                )
+                asset = asset.scalar_one_or_none()
+
+                if not asset:
+                    logger.warning(f"Asset not found for extraction {extraction.id}, skipping")
+                    skipped += 1
+                    continue
+
+                # Check if asset already has a completed extraction
+                if asset.status == "ready":
+                    logger.info(f"Asset {asset.id} already ready, marking extraction as completed")
+                    extraction.status = "completed"
+                    skipped += 1
+                    continue
+
+                # Re-queue the extraction task
+                logger.info(f"Re-queuing extraction for asset {asset.id} (extraction={extraction.id})")
+
+                # Import here to avoid circular imports
+                execute_extraction_task.delay(
+                    asset_id=str(asset.id),
+                    run_id=str(extraction.run_id),
+                    extraction_id=str(extraction.id),
+                )
+
+                recovered += 1
+
+            except Exception as e:
+                logger.error(f"Failed to recover extraction {extraction.id}: {e}")
+                errors.append({"extraction_id": str(extraction.id), "error": str(e)})
+
+        await session.commit()
+
+    return {
+        "status": "success",
+        "recovered": recovered,
+        "skipped": skipped,
+        "errors": len(errors),
+        "error_details": errors[:10],  # Limit error details
+    }
+
+
+# ============================================================================
 # OPENSEARCH INDEXING TASKS (Phase 6)
 # ============================================================================
 
@@ -1623,3 +1751,432 @@ async def _check_job_completion(job_id: uuid.UUID) -> None:
         logging.getLogger("curatore.jobs").error(
             f"Failed to check job completion: {e}"
         )
+
+
+
+# ============================================================================
+# SAM.GOV TASKS (Phase 7)
+# ============================================================================
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def sam_pull_task(
+    self,
+    search_id: str,
+    organization_id: str,
+    max_pages: int = 10,
+    page_size: int = 100,
+    auto_download_attachments: bool = True,
+) -> Dict[str, Any]:
+    """
+    Celery task to pull opportunities from SAM.gov API.
+
+    This task fetches opportunities matching a search configuration and
+    creates/updates solicitations, notices, and attachments in the database.
+
+    Args:
+        search_id: SamSearch UUID string
+        organization_id: Organization UUID string
+        max_pages: Maximum pages to fetch (default 10)
+        page_size: Results per page (default 100)
+        auto_download_attachments: Whether to download attachments after pull (default True)
+
+    Returns:
+        Dict containing:
+            - search_id: The search UUID
+            - status: success, partial, or failed
+            - total_fetched: Number of opportunities fetched
+            - new_solicitations: Number of new solicitations created
+            - updated_solicitations: Number of solicitations updated
+            - new_notices: Number of notices created
+            - new_attachments: Number of attachments discovered
+            - attachment_downloads: Attachment download results (if auto_download enabled)
+            - errors: List of error details
+    """
+    from .services.sam_pull_service import sam_pull_service
+
+    logger = logging.getLogger("curatore.sam")
+    logger.info(f"Starting SAM pull task for search {search_id}")
+
+    try:
+        async def _pull():
+            async with database_service.get_session() as session:
+                return await sam_pull_service.pull_opportunities(
+                    session=session,
+                    search_id=uuid.UUID(search_id),
+                    organization_id=uuid.UUID(organization_id),
+                    max_pages=max_pages,
+                    page_size=page_size,
+                    auto_download_attachments=auto_download_attachments,
+                )
+
+        result = asyncio.run(_pull())
+
+        logger.info(
+            f"SAM pull completed: {result.get('new_solicitations', 0)} new, "
+            f"{result.get('updated_solicitations', 0)} updated"
+        )
+
+        if "attachment_downloads" in result:
+            ad = result["attachment_downloads"]
+            logger.info(
+                f"Attachment downloads: {ad.get('downloaded', 0)} downloaded, "
+                f"{ad.get('failed', 0)} failed"
+            )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"SAM pull task failed: {e}")
+        raise
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def sam_download_attachment_task(
+    self,
+    attachment_id: str,
+    organization_id: str,
+) -> Dict[str, Any]:
+    """
+    Celery task to download a single attachment from SAM.gov.
+
+    Downloads the attachment and creates an Asset for extraction.
+
+    Args:
+        attachment_id: SamAttachment UUID string
+        organization_id: Organization UUID string
+
+    Returns:
+        Dict containing:
+            - attachment_id: The attachment UUID
+            - asset_id: Created Asset UUID (if successful)
+            - status: downloaded or failed
+            - error: Error message (if failed)
+    """
+    from .services.sam_pull_service import sam_pull_service
+
+    logger = logging.getLogger("curatore.sam")
+    logger.info(f"Starting SAM attachment download task for {attachment_id}")
+
+    try:
+        async def _download():
+            async with database_service.get_session() as session:
+                asset = await sam_pull_service.download_attachment(
+                    session=session,
+                    attachment_id=uuid.UUID(attachment_id),
+                    organization_id=uuid.UUID(organization_id),
+                )
+                return asset
+
+        asset = asyncio.run(_download())
+
+        if asset:
+            logger.info(f"Attachment {attachment_id} downloaded -> Asset {asset.id}")
+            return {
+                "attachment_id": attachment_id,
+                "asset_id": str(asset.id),
+                "status": "downloaded",
+            }
+        else:
+            return {
+                "attachment_id": attachment_id,
+                "status": "failed",
+                "error": "Download failed - check attachment record for details",
+            }
+
+    except Exception as e:
+        logger.error(f"SAM attachment download task failed: {e}")
+        raise
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def sam_summarize_task(
+    self,
+    solicitation_id: str,
+    organization_id: str,
+    summary_type: str = "executive",
+    model: Optional[str] = None,
+    include_attachments: bool = True,
+) -> Dict[str, Any]:
+    """
+    Celery task to generate an LLM summary for a solicitation.
+
+    Args:
+        solicitation_id: SamSolicitation UUID string
+        organization_id: Organization UUID string
+        summary_type: Type of summary (executive, technical, compliance, full)
+        model: LLM model to use (None = default)
+        include_attachments: Whether to include extracted attachment content
+
+    Returns:
+        Dict containing:
+            - solicitation_id: The solicitation UUID
+            - summary_id: Created summary UUID (if successful)
+            - summary_type: Type of summary generated
+            - status: success or failed
+            - error: Error message (if failed)
+    """
+    from .services.sam_summarization_service import sam_summarization_service
+
+    logger = logging.getLogger("curatore.sam")
+    logger.info(f"Starting SAM summarize task for solicitation {solicitation_id}")
+
+    try:
+        async def _summarize():
+            async with database_service.get_session() as session:
+                return await sam_summarization_service.summarize_solicitation(
+                    session=session,
+                    solicitation_id=uuid.UUID(solicitation_id),
+                    organization_id=uuid.UUID(organization_id),
+                    summary_type=summary_type,
+                    model=model,
+                    include_attachments=include_attachments,
+                )
+
+        summary = asyncio.run(_summarize())
+
+        if summary:
+            logger.info(f"Summary {summary.id} generated for solicitation {solicitation_id}")
+            return {
+                "solicitation_id": solicitation_id,
+                "summary_id": str(summary.id),
+                "summary_type": summary_type,
+                "status": "success",
+            }
+        else:
+            return {
+                "solicitation_id": solicitation_id,
+                "summary_type": summary_type,
+                "status": "failed",
+                "error": "Summary generation failed",
+            }
+
+    except Exception as e:
+        logger.error(f"SAM summarize task failed: {e}")
+        raise
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def sam_batch_summarize_task(
+    self,
+    search_id: str,
+    organization_id: str,
+    summary_type: str = "executive",
+    model: Optional[str] = None,
+    limit: int = 10,
+) -> Dict[str, Any]:
+    """
+    Celery task to generate summaries for multiple solicitations.
+
+    Args:
+        search_id: SamSearch UUID string
+        organization_id: Organization UUID string
+        summary_type: Type of summary to generate
+        model: LLM model to use (None = default)
+        limit: Maximum solicitations to summarize
+
+    Returns:
+        Dict containing:
+            - search_id: The search UUID
+            - summary_type: Type of summary generated
+            - total_candidates: Total solicitations eligible
+            - processed: Number processed
+            - success: Number successfully summarized
+            - failed: Number failed
+            - errors: List of error details
+    """
+    from .services.sam_summarization_service import sam_summarization_service
+
+    logger = logging.getLogger("curatore.sam")
+    logger.info(f"Starting SAM batch summarize task for search {search_id}")
+
+    try:
+        async def _batch_summarize():
+            async with database_service.get_session() as session:
+                return await sam_summarization_service.batch_summarize(
+                    session=session,
+                    search_id=uuid.UUID(search_id),
+                    organization_id=uuid.UUID(organization_id),
+                    summary_type=summary_type,
+                    model=model,
+                    limit=limit,
+                )
+
+        result = asyncio.run(_batch_summarize())
+
+        logger.info(
+            f"Batch summarize completed: {result.get('success', 0)} succeeded, "
+            f"{result.get('failed', 0)} failed"
+        )
+
+        return {
+            "search_id": search_id,
+            "summary_type": summary_type,
+            **result,
+        }
+
+    except Exception as e:
+        logger.error(f"SAM batch summarize task failed: {e}")
+        raise
+
+
+@shared_task(bind=True)
+def sam_process_queued_requests_task(
+    self,
+    organization_id: Optional[str] = None,
+    limit: int = 50,
+) -> Dict[str, Any]:
+    """
+    Celery task to process queued SAM.gov API requests.
+
+    When API rate limits are exceeded, requests are queued for later execution.
+    This task processes pending requests that are past their scheduled time.
+
+    Should be scheduled to run regularly (e.g., every 5 minutes or hourly).
+
+    Args:
+        organization_id: Optional org to process (None = all orgs)
+        limit: Maximum requests to process in this run
+
+    Returns:
+        Dict containing:
+            - processed: Number of requests processed
+            - succeeded: Number that succeeded
+            - failed: Number that failed
+            - remaining: Number still pending
+            - errors: List of error details
+    """
+    from .services.sam_api_usage_service import sam_api_usage_service
+    from .services.sam_pull_service import sam_pull_service
+
+    logger = logging.getLogger("curatore.sam")
+    logger.info("Starting SAM queue processing task")
+
+    results = {
+        "processed": 0,
+        "succeeded": 0,
+        "failed": 0,
+        "remaining": 0,
+        "errors": [],
+    }
+
+    try:
+        async def _process_queue():
+            async with database_service.get_session() as session:
+                org_uuid = uuid.UUID(organization_id) if organization_id else None
+
+                # Get pending requests
+                pending = await sam_api_usage_service.get_pending_requests(
+                    session, org_uuid, limit
+                )
+
+                if not pending:
+                    logger.info("No pending SAM requests to process")
+                    return results
+
+                for request in pending:
+                    # Check rate limit before processing
+                    can_call, remaining = await sam_api_usage_service.check_limit(
+                        session, request.organization_id
+                    )
+
+                    if not can_call:
+                        logger.info(
+                            f"Rate limit still exceeded for org {request.organization_id}, "
+                            f"skipping request {request.id}"
+                        )
+                        continue
+
+                    # Mark as processing
+                    await sam_api_usage_service.mark_request_processing(
+                        session, request.id
+                    )
+                    results["processed"] += 1
+
+                    try:
+                        if request.request_type == "search":
+                            # Re-execute the search
+                            # This would typically be handled by re-triggering sam_pull_task
+                            # For now, we'll mark it completed with a note
+                            await sam_api_usage_service.mark_request_completed(
+                                session, request.id,
+                                result={"note": "Queued search should be re-triggered manually"}
+                            )
+                            results["succeeded"] += 1
+
+                        elif request.request_type == "attachment":
+                            # Process attachment download
+                            attachment_id = request.attachment_id or request.request_params.get("attachment_id")
+                            if attachment_id:
+                                asset = await sam_pull_service.download_attachment(
+                                    session=session,
+                                    attachment_id=uuid.UUID(str(attachment_id)),
+                                    organization_id=request.organization_id,
+                                    check_rate_limit=True,  # Will record the call
+                                )
+                                if asset:
+                                    await sam_api_usage_service.mark_request_completed(
+                                        session, request.id,
+                                        result={"asset_id": str(asset.id)}
+                                    )
+                                    results["succeeded"] += 1
+                                else:
+                                    await sam_api_usage_service.mark_request_failed(
+                                        session, request.id,
+                                        error="Attachment download failed"
+                                    )
+                                    results["failed"] += 1
+                            else:
+                                await sam_api_usage_service.mark_request_failed(
+                                    session, request.id,
+                                    error="No attachment_id in request params"
+                                )
+                                results["failed"] += 1
+
+                        elif request.request_type == "detail":
+                            # Detail requests are typically retried inline
+                            await sam_api_usage_service.mark_request_completed(
+                                session, request.id,
+                                result={"note": "Detail request should be re-triggered manually"}
+                            )
+                            results["succeeded"] += 1
+
+                        else:
+                            await sam_api_usage_service.mark_request_failed(
+                                session, request.id,
+                                error=f"Unknown request type: {request.request_type}"
+                            )
+                            results["failed"] += 1
+
+                    except Exception as e:
+                        logger.error(f"Error processing queued request {request.id}: {e}")
+                        await sam_api_usage_service.mark_request_failed(
+                            session, request.id,
+                            error=str(e)
+                        )
+                        results["failed"] += 1
+                        results["errors"].append({
+                            "request_id": str(request.id),
+                            "error": str(e),
+                        })
+
+                # Get remaining count
+                remaining_requests = await sam_api_usage_service.get_pending_requests(
+                    session, org_uuid, limit=1000
+                )
+                results["remaining"] = len(remaining_requests)
+
+                return results
+
+        result = asyncio.run(_process_queue())
+
+        logger.info(
+            f"SAM queue processing completed: {result['succeeded']} succeeded, "
+            f"{result['failed']} failed, {result['remaining']} remaining"
+        )
+
+        return result
+
+    except Exception as e:
+        logger.error(f"SAM queue processing task failed: {e}")
+        raise

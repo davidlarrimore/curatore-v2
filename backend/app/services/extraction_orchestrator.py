@@ -98,6 +98,55 @@ class ExtractionOrchestrator:
             logger.error(error)
             raise ValueError(error)
 
+        # =====================================================================
+        # RESTART RESILIENCE: Check if extraction already completed or failed
+        # This handles the case where a Celery task is re-delivered after restart
+        # =====================================================================
+        if extraction.status == "completed":
+            logger.info(
+                f"[Run {run_id}] Extraction already completed, skipping re-execution "
+                f"(idempotency check)"
+            )
+            return {
+                "status": "already_completed",
+                "asset_id": str(asset_id),
+                "run_id": str(run_id),
+                "extraction_id": str(extraction_id),
+                "message": "Extraction was already completed (task re-delivered after restart)",
+            }
+
+        if run.status == "completed":
+            logger.info(
+                f"[Run {run_id}] Run already completed, skipping re-execution"
+            )
+            return {
+                "status": "already_completed",
+                "asset_id": str(asset_id),
+                "run_id": str(run_id),
+                "extraction_id": str(extraction_id),
+                "message": "Run was already completed (task re-delivered after restart)",
+            }
+
+        # Handle restart scenario: if status is "running" but we're starting fresh,
+        # this means the previous execution was interrupted (worker crash/restart)
+        if extraction.status == "running" or run.status == "running":
+            logger.warning(
+                f"[Run {run_id}] Found in 'running' state - likely interrupted by restart. "
+                f"Resuming extraction..."
+            )
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="WARN",
+                event_type="restart",
+                message="Extraction resumed after service restart",
+                context={
+                    "previous_run_status": run.status,
+                    "previous_extraction_status": extraction.status,
+                },
+            )
+        # =====================================================================
+
         minio = get_minio_service()
         if not minio:
             error = "MinIO service unavailable"
@@ -108,7 +157,7 @@ class ExtractionOrchestrator:
         temp_dir = None
 
         try:
-            # Start the run
+            # Start the run (or re-start if resuming)
             await run_service.start_run(session, run_id)
             await extraction_result_service.update_extraction_status(session, extraction_id, "running")
 

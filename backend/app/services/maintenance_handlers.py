@@ -284,23 +284,56 @@ async def handle_orphan_detection(
                 {"count": stuck_pending_assets, "sample_ids": details["stuck_pending_asset_ids"][:5]}
             )
 
-            # Auto-fix: Mark stuck pending assets as "failed"
+            # Auto-fix: Re-trigger extraction for stuck pending assets
             if auto_fix:
+                # Import here to avoid circular imports
+                from .upload_integration_service import upload_integration_service
+
                 for asset in stuck_pending_list:
-                    asset.status = "failed"
-                    asset.updated_at = datetime.utcnow()
-                    # Add note in source_metadata about why it failed
-                    asset.source_metadata = {
-                        **asset.source_metadata,
-                        "auto_failed_reason": "Stuck in pending status - extraction never completed",
-                        "auto_failed_at": datetime.utcnow().isoformat(),
-                    }
-                    stuck_pending_fixed += 1
+                    try:
+                        # Reset asset status and re-trigger extraction
+                        asset.updated_at = datetime.utcnow()
+                        # Track retry in metadata
+                        retry_count = (asset.source_metadata or {}).get("extraction_retry_count", 0) + 1
+                        asset.source_metadata = {
+                            **(asset.source_metadata or {}),
+                            "extraction_retry_count": retry_count,
+                            "last_retry_at": datetime.utcnow().isoformat(),
+                            "retry_reason": "Stuck in pending status - auto-retrying extraction",
+                        }
+
+                        # Only retry up to 3 times to avoid infinite loops
+                        if retry_count <= 3:
+                            await session.flush()
+                            # Re-trigger extraction
+                            await upload_integration_service.trigger_extraction(
+                                session=session,
+                                asset_id=asset.id,
+                            )
+                            stuck_pending_fixed += 1
+                        else:
+                            # Too many retries, mark as failed
+                            asset.status = "failed"
+                            asset.source_metadata = {
+                                **asset.source_metadata,
+                                "auto_failed_reason": f"Exceeded max retries ({retry_count})",
+                                "auto_failed_at": datetime.utcnow().isoformat(),
+                            }
+                            logger.warning(f"Asset {asset.id} exceeded max retries, marking as failed")
+                    except Exception as e:
+                        logger.error(f"Failed to retry extraction for asset {asset.id}: {e}")
+                        # Mark as failed if we can't retry
+                        asset.status = "failed"
+                        asset.source_metadata = {
+                            **(asset.source_metadata or {}),
+                            "auto_failed_reason": f"Retry failed: {str(e)}",
+                            "auto_failed_at": datetime.utcnow().isoformat(),
+                        }
 
                 await session.flush()
                 await _log_event(
                     session, run.id, "INFO", "fix",
-                    f"Marked {stuck_pending_fixed} stuck assets as 'failed'",
+                    f"Re-triggered extraction for {stuck_pending_fixed} stuck assets",
                     {"fixed_count": stuck_pending_fixed}
                 )
 

@@ -1,0 +1,1523 @@
+"""
+SAM.gov Pull Service for Federal Opportunity Data Ingestion.
+
+Handles fetching data from the SAM.gov Opportunities API v2, creating/updating
+solicitations and notices, downloading attachments, and storing raw responses.
+
+Key Features:
+- SAM.gov Opportunities API v2 client with rate limiting
+- Opportunity search with configurable filters
+- Automatic solicitation/notice creation and updates
+- Attachment discovery and download tracking
+- Raw JSON storage in object storage for full data preservation
+
+API Documentation:
+- Opportunities API: https://open.gsa.gov/api/sam-entity-management/
+- Rate limits: 1000 requests per day for public API
+
+Usage:
+    from app.services.sam_pull_service import sam_pull_service
+
+    # Pull opportunities for a search
+    result = await sam_pull_service.pull_opportunities(
+        session=session,
+        search_id=search.id,
+        organization_id=org_id,
+    )
+
+    # Download an attachment
+    asset = await sam_pull_service.download_attachment(
+        session=session,
+        attachment_id=attachment.id,
+    )
+"""
+
+import asyncio
+import json
+import logging
+from datetime import datetime, timedelta
+from typing import Any, Dict, List, Optional, Tuple
+# Note: We don't use urljoin because it strips path for absolute endpoints
+from uuid import UUID
+
+import httpx
+
+from ..config import settings
+from ..database.models import (
+    Asset,
+    Artifact,
+    Run,
+    SamAttachment,
+    SamNotice,
+    SamSearch,
+    SamSolicitation,
+)
+from .sam_api_usage_service import sam_api_usage_service
+from .sam_service import sam_service
+
+logger = logging.getLogger("curatore.api.sam_pull_service")
+
+
+# SAM.gov Opportunities API v2 Base URL
+SAM_API_BASE_URL = "https://api.sam.gov/opportunities/v2"
+
+# Notice type mappings
+NOTICE_TYPE_MAP = {
+    "o": "Combined Synopsis/Solicitation",
+    "p": "Presolicitation",
+    "k": "Sources Sought",
+    "r": "Special Notice",
+    "s": "Sale of Surplus Property",
+    "g": "Grant Notice",
+    "a": "Award Notice",
+    "u": "Justification",
+    "i": "Intent to Bundle",
+    "m": "Modification",
+}
+
+
+class SamPullService:
+    """
+    Service for pulling data from SAM.gov Opportunities API.
+
+    Handles API communication, data transformation, and storage operations.
+    """
+
+    def __init__(self):
+        self.api_key: Optional[str] = None
+        self.base_url = SAM_API_BASE_URL
+        self.timeout = 60
+        self.rate_limit_delay = 0.5  # Delay between requests in seconds
+
+    async def _get_api_key_async(
+        self,
+        session=None,
+        organization_id: Optional[UUID] = None,
+    ) -> str:
+        """
+        Get SAM.gov API key from connection or settings.
+
+        Priority:
+            1. Instance api_key (if set via configure())
+            2. Database connection (if session and organization_id provided)
+            3. Environment variable (SAM_API_KEY)
+        """
+        # Check instance-level override first
+        if self.api_key:
+            return self.api_key
+
+        # Try database connection
+        if session and organization_id:
+            try:
+                from .connection_service import connection_service
+
+                connection = await connection_service.get_default_connection(
+                    session, organization_id, "sam_gov"
+                )
+
+                if connection and connection.is_active:
+                    config = connection.config
+                    api_key = config.get("api_key")
+                    if api_key:
+                        logger.debug(f"Using SAM.gov API key from connection for org {organization_id}")
+                        return api_key
+            except Exception as e:
+                logger.warning(f"Failed to get SAM.gov connection: {e}")
+                # Fall through to ENV fallback
+
+        # Fallback to environment variable
+        api_key = getattr(settings, "sam_api_key", None)
+        if api_key:
+            return api_key
+
+        raise ValueError(
+            "SAM.gov API key not configured. "
+            "Either create a SAM.gov connection in the UI or set SAM_API_KEY in environment."
+        )
+
+    def _get_api_key(self) -> str:
+        """Get SAM.gov API key from settings (sync version for backward compatibility)."""
+        if self.api_key:
+            return self.api_key
+
+        # Try getting from settings
+        api_key = getattr(settings, "sam_api_key", None)
+        if api_key:
+            return api_key
+
+        raise ValueError(
+            "SAM.gov API key not configured. "
+            "Either create a SAM.gov connection in the UI or set SAM_API_KEY in environment."
+        )
+
+    def configure(
+        self,
+        api_key: Optional[str] = None,
+        timeout: Optional[int] = None,
+    ):
+        """
+        Configure the pull service with custom settings.
+
+        Note: base_url is intentionally not configurable - SAM.gov API has a fixed
+        endpoint (https://api.sam.gov/opportunities/v2) that cannot be changed.
+        """
+        if api_key:
+            self.api_key = api_key
+        if timeout:
+            self.timeout = timeout
+
+    def _sanitize_path_component(self, value: str) -> str:
+        """
+        Sanitize a string for use as a path component.
+
+        Replaces special characters with underscores and limits length.
+
+        Args:
+            value: The string to sanitize
+
+        Returns:
+            Sanitized string safe for use in file paths
+        """
+        if not value:
+            return "unknown"
+
+        import re
+        # Replace special characters with underscores
+        sanitized = re.sub(r'[<>:"/\\|?*\x00-\x1f]', '_', value)
+        # Replace multiple underscores/spaces with single underscore
+        sanitized = re.sub(r'[\s_]+', '_', sanitized)
+        # Remove leading/trailing underscores and dots
+        sanitized = sanitized.strip('_.').strip()
+        # Limit length to 100 characters
+        if len(sanitized) > 100:
+            sanitized = sanitized[:100]
+        return sanitized or "unknown"
+
+    async def _make_request(
+        self,
+        endpoint: str,
+        params: Optional[Dict[str, Any]] = None,
+        session=None,
+        organization_id: Optional[UUID] = None,
+    ) -> Dict[str, Any]:
+        """
+        Make an authenticated request to SAM.gov API.
+
+        Args:
+            endpoint: API endpoint (e.g., "/search")
+            params: Query parameters
+            session: Optional database session for connection lookup
+            organization_id: Optional organization ID for connection lookup
+
+        Returns:
+            JSON response data
+
+        Raises:
+            httpx.HTTPError: On request failure
+        """
+        # Get API key (tries connection first, then env var)
+        api_key = await self._get_api_key_async(session, organization_id)
+
+        # Build URL (don't use urljoin as it strips the path for absolute endpoints)
+        url = self.base_url.rstrip("/") + endpoint
+
+        headers = {
+            "X-Api-Key": api_key,
+            "Accept": "application/json",
+        }
+
+        async with httpx.AsyncClient(timeout=self.timeout) as client:
+            response = await client.get(url, params=params, headers=headers)
+
+            # Log response details for debugging
+            if response.status_code != 200:
+                logger.error(
+                    f"SAM.gov API returned {response.status_code}: {response.text[:500] if response.text else 'No body'}"
+                )
+
+            response.raise_for_status()
+            return response.json()
+
+    def _convert_date_format(self, date_str: str) -> str:
+        """
+        Convert date from YYYY-MM-DD to MM/DD/YYYY format for SAM.gov API.
+
+        Args:
+            date_str: Date string in YYYY-MM-DD format
+
+        Returns:
+            Date string in MM/DD/YYYY format
+        """
+        try:
+            # Parse YYYY-MM-DD format
+            date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+            # Return MM/DD/YYYY format
+            return date_obj.strftime("%m/%d/%Y")
+        except ValueError:
+            # If already in MM/DD/YYYY or other format, return as-is
+            return date_str
+
+    def _build_search_params(
+        self,
+        search_config: Dict[str, Any],
+        limit: int = 100,
+        offset: int = 0,
+    ) -> Dict[str, Any]:
+        """
+        Build API query parameters from search configuration.
+
+        Args:
+            search_config: Search configuration from SamSearch.search_config
+            limit: Number of results per page
+            offset: Offset for pagination
+
+        Returns:
+            Query parameters dict for API request
+        """
+        params = {
+            "limit": limit,
+            "offset": offset,
+        }
+
+        # NAICS codes - SAM.gov API only supports filtering by ONE NAICS code
+        # If multiple NAICS codes are configured, we skip the API filter and
+        # filter locally after fetching results (see pull_opportunities)
+        naics_codes = search_config.get("naics_codes", [])
+        if len(naics_codes) == 1:
+            # Single NAICS - use API filter for efficiency
+            params["naics"] = naics_codes[0]
+        elif len(naics_codes) > 1:
+            # Multiple NAICS - skip API filter, will filter locally
+            logger.info(
+                f"Multiple NAICS codes configured ({len(naics_codes)}). "
+                "Fetching all results and filtering locally."
+            )
+
+        # PSC codes
+        if search_config.get("psc_codes"):
+            params["psc"] = ",".join(search_config["psc_codes"])
+
+        # Set-aside types
+        if search_config.get("set_aside_codes"):
+            params["typeOfSetAside"] = ",".join(search_config["set_aside_codes"])
+
+        # Notice types
+        if search_config.get("notice_types"):
+            params["ptype"] = ",".join(search_config["notice_types"])
+
+        # Keywords
+        if search_config.get("keyword"):
+            params["q"] = search_config["keyword"]
+
+        # Date range - SAM.gov requires MM/DD/YYYY format
+        # SAM.gov requires BOTH postedFrom AND postedTo when using date filtering
+        # We use predefined date range options for better UX
+        date_range = search_config.get("date_range", "last_30_days")
+        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+
+        # Translate date range option to actual dates
+        if date_range == "today":
+            posted_from_date = today
+            posted_to_date = today
+        elif date_range == "yesterday":
+            posted_from_date = today - timedelta(days=1)
+            posted_to_date = today - timedelta(days=1)
+        elif date_range == "last_7_days":
+            posted_from_date = today - timedelta(days=7)
+            posted_to_date = today
+        elif date_range == "last_90_days":
+            posted_from_date = today - timedelta(days=90)
+            posted_to_date = today
+        else:  # default to last_30_days
+            posted_from_date = today - timedelta(days=30)
+            posted_to_date = today
+
+        params["postedFrom"] = posted_from_date.strftime("%m/%d/%Y")
+        params["postedTo"] = posted_to_date.strftime("%m/%d/%Y")
+        logger.debug(f"Date range '{date_range}': {params['postedFrom']} to {params['postedTo']}")
+
+        # Response deadline - SAM.gov requires MM/DD/YYYY format
+        if search_config.get("deadline_from"):
+            params["rdlfrom"] = self._convert_date_format(search_config["deadline_from"])
+        if search_config.get("deadline_to"):
+            params["rdlto"] = self._convert_date_format(search_config["deadline_to"])
+
+        # Active only
+        if search_config.get("active_only", True):
+            params["active"] = "true"
+
+        # Organization/Agency filter by ID
+        if search_config.get("organization_id"):
+            params["organizationId"] = search_config["organization_id"]
+
+        # Organization/Agency filter by name (department)
+        if search_config.get("department"):
+            params["organizationName"] = search_config["department"]
+
+        return params
+
+    def _parse_opportunity(
+        self,
+        data: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Parse opportunity data from API response.
+
+        Args:
+            data: Raw opportunity data from API
+
+        Returns:
+            Parsed opportunity dict with normalized fields
+        """
+        # Extract dates
+        posted_date = None
+        if data.get("postedDate"):
+            try:
+                posted_date = datetime.fromisoformat(data["postedDate"].replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
+
+        response_deadline = None
+        if data.get("responseDeadLine"):
+            try:
+                response_deadline = datetime.fromisoformat(
+                    data["responseDeadLine"].replace("Z", "+00:00")
+                )
+            except (ValueError, AttributeError):
+                pass
+
+        archive_date = None
+        if data.get("archiveDate"):
+            try:
+                archive_date = datetime.fromisoformat(data["archiveDate"].replace("Z", "+00:00"))
+            except (ValueError, AttributeError):
+                pass
+
+        # Extract contact info
+        contact_info = None
+        if data.get("pointOfContact"):
+            contact_info = data["pointOfContact"]
+
+        # Extract place of performance
+        place_of_performance = None
+        if data.get("placeOfPerformance"):
+            place_of_performance = data["placeOfPerformance"]
+
+        # Parse organization hierarchy from fullParentPathName
+        # Format: AGENCY.BUREAU.OFFICE (e.g., "HOMELAND SECURITY, DEPARTMENT OF.US COAST GUARD.AVIATION LOGISTICS CENTER")
+        full_parent_path = data.get("fullParentPathName", "")
+        agency_name = None
+        bureau_name = None
+        office_name = None
+
+        if full_parent_path:
+            parts = full_parent_path.split(".")
+            if len(parts) >= 1:
+                agency_name = parts[0].strip() if parts[0] else None
+            if len(parts) >= 2:
+                bureau_name = parts[1].strip() if parts[1] else None
+            if len(parts) >= 3:
+                # Office may contain dots, so join remaining parts
+                office_name = ".".join(parts[2:]).strip() if parts[2:] else None
+
+        # Build UI link
+        notice_id = data.get("noticeId", "")
+        ui_link = f"https://sam.gov/opp/{notice_id}/view" if notice_id else None
+
+        return {
+            "notice_id": notice_id,
+            "solicitation_number": data.get("solicitationNumber"),
+            "title": data.get("title", "Untitled"),
+            "description": data.get("description"),
+            "notice_type": data.get("type", "o"),
+            "naics_code": data.get("naicsCode"),
+            "psc_code": data.get("classificationCode"),
+            "set_aside_code": data.get("typeOfSetAsideDescription"),
+            "posted_date": posted_date,
+            "response_deadline": response_deadline,
+            "archive_date": archive_date,
+            "ui_link": ui_link,
+            "api_link": data.get("uiLink"),
+            "contact_info": contact_info,
+            "place_of_performance": place_of_performance,
+            "agency_name": agency_name,
+            "bureau_name": bureau_name,
+            "office_name": office_name,
+            "full_parent_path": full_parent_path,
+            "attachments": data.get("resourceLinks", []),
+            "raw_data": data,
+        }
+
+    async def fetch_notice_description(
+        self,
+        notice_id: str,
+        session=None,
+        organization_id: Optional[UUID] = None,
+    ) -> Optional[str]:
+        """
+        Fetch the full HTML description for a notice from the SAM.gov description API.
+
+        The main search API returns a URL in the description field that points to
+        another API endpoint containing the full HTML description.
+
+        Args:
+            notice_id: SAM.gov notice ID
+            session: Optional database session for connection lookup
+            organization_id: Optional organization ID for connection lookup
+
+        Returns:
+            HTML description string or None if fetch fails
+        """
+        # Get API key
+        try:
+            api_key = await self._get_api_key_async(session, organization_id)
+        except ValueError:
+            logger.warning("No API key available for description fetch")
+            return None
+
+        # The description API is at a different path than the search API
+        # https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid={notice_id}
+        description_url = f"https://api.sam.gov/prod/opportunities/v1/noticedesc"
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.get(
+                    description_url,
+                    params={
+                        "noticeid": notice_id,
+                        "api_key": api_key,
+                    },
+                    headers={"Accept": "application/json"},
+                )
+                response.raise_for_status()
+
+                data = response.json()
+                description = data.get("description")
+
+                if description:
+                    logger.debug(f"Fetched description for notice {notice_id}: {len(description)} chars")
+                    return description
+
+                return None
+
+        except httpx.HTTPError as e:
+            logger.warning(f"Failed to fetch description for notice {notice_id}: {e}")
+            return None
+        except Exception as e:
+            logger.warning(f"Error fetching description for notice {notice_id}: {e}")
+            return None
+
+    async def search_opportunities(
+        self,
+        search_config: Dict[str, Any],
+        limit: int = 100,
+        offset: int = 0,
+        session=None,
+        organization_id: Optional[UUID] = None,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        Search for opportunities using SAM.gov API.
+
+        Args:
+            search_config: Search configuration
+            limit: Results per page
+            offset: Pagination offset
+            session: Optional database session for connection lookup
+            organization_id: Optional organization ID for connection lookup
+
+        Returns:
+            Tuple of (opportunities list, total count)
+        """
+        params = self._build_search_params(search_config, limit, offset)
+
+        try:
+            response = await self._make_request(
+                "/search", params, session=session, organization_id=organization_id
+            )
+
+            total = response.get("totalRecords", 0)
+            opportunities = []
+
+            for opp_data in response.get("opportunitiesData", []):
+                parsed = self._parse_opportunity(opp_data)
+                opportunities.append(parsed)
+
+            return opportunities, total
+
+        except httpx.HTTPError as e:
+            logger.error(f"SAM.gov API error: {e}")
+            raise
+
+    async def get_opportunity_details(
+        self,
+        notice_id: str,
+        session=None,
+        organization_id: Optional[UUID] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get detailed information for a specific opportunity.
+
+        Args:
+            notice_id: SAM.gov notice ID
+            session: Optional database session for connection lookup
+            organization_id: Optional organization ID for connection lookup
+
+        Returns:
+            Parsed opportunity data or None if not found
+        """
+        try:
+            response = await self._make_request(
+                f"/opportunities/{notice_id}",
+                session=session,
+                organization_id=organization_id,
+            )
+
+            if response:
+                return self._parse_opportunity(response)
+            return None
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
+    async def pull_opportunities(
+        self,
+        session,  # AsyncSession
+        search_id: UUID,
+        organization_id: UUID,
+        max_pages: int = 10,
+        page_size: int = 100,
+        check_rate_limit: bool = True,
+        auto_download_attachments: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Pull opportunities for a search and update database.
+
+        This is the main entry point for pulling data from SAM.gov.
+
+        Args:
+            session: Database session
+            search_id: SamSearch UUID
+            organization_id: Organization UUID
+            max_pages: Maximum pages to fetch
+            page_size: Results per page
+            check_rate_limit: Whether to check/record API rate limits
+            auto_download_attachments: Whether to download attachments after pull
+
+        Returns:
+            Pull results summary
+        """
+        search = await sam_service.get_search(session, search_id)
+        if not search:
+            raise ValueError(f"Search not found: {search_id}")
+
+        search_config = search.search_config or {}
+
+        # Log NAICS filtering strategy
+        configured_naics = search_config.get("naics_codes", [])
+        if len(configured_naics) == 0:
+            logger.info(f"Starting pull for search {search_id}: No NAICS filter configured")
+        elif len(configured_naics) == 1:
+            logger.info(f"Starting pull for search {search_id}: NAICS filter via API: {configured_naics[0]}")
+        else:
+            logger.info(
+                f"Starting pull for search {search_id}: Local NAICS filter for {len(configured_naics)} codes: "
+                f"{', '.join(configured_naics)}"
+            )
+
+        results = {
+            "search_id": str(search_id),
+            "started_at": datetime.utcnow().isoformat(),
+            "total_fetched": 0,
+            "filtered_by_naics": 0,  # Count of opportunities filtered out by local NAICS check
+            "processed": 0,  # Count of opportunities that passed filters and were processed
+            "new_solicitations": 0,
+            "updated_solicitations": 0,
+            "new_notices": 0,
+            "new_attachments": 0,
+            "api_calls_made": 0,
+            "errors": [],
+        }
+
+        # Check rate limit before starting (if enabled)
+        if check_rate_limit:
+            can_call, remaining = await sam_api_usage_service.check_limit(
+                session, organization_id, required_calls=max_pages
+            )
+            if not can_call:
+                logger.warning(
+                    f"Rate limit exceeded for org {organization_id}. "
+                    f"Remaining: {remaining}, needed: {max_pages}"
+                )
+                results["status"] = "rate_limited"
+                results["error"] = f"API rate limit exceeded. Remaining calls: {remaining}"
+                results["rate_limit_remaining"] = remaining
+                return results
+
+        offset = 0
+        pages_fetched = 0
+
+        try:
+            while pages_fetched < max_pages:
+                # Check rate limit before each page (if enabled)
+                if check_rate_limit:
+                    can_call, remaining = await sam_api_usage_service.check_limit(
+                        session, organization_id
+                    )
+                    if not can_call:
+                        logger.warning(f"Rate limit reached mid-pull. Stopping at page {pages_fetched}")
+                        results["rate_limit_hit"] = True
+                        results["rate_limit_remaining"] = remaining
+                        break
+
+                # Fetch page of opportunities
+                opportunities, total = await self.search_opportunities(
+                    search_config,
+                    limit=page_size,
+                    offset=offset,
+                    session=session,
+                    organization_id=organization_id,
+                )
+
+                # Record the API call (if enabled)
+                if check_rate_limit:
+                    await sam_api_usage_service.record_call(
+                        session, organization_id, "search"
+                    )
+                    results["api_calls_made"] += 1
+
+                if not opportunities:
+                    break
+
+                results["total_fetched"] += len(opportunities)
+
+                # Local NAICS filtering - always applied when NAICS codes are configured
+                # This serves as a safety check even when API filter is used (single NAICS),
+                # and is required when multiple NAICS codes are configured (API only supports one)
+                configured_naics = search_config.get("naics_codes", [])
+                if configured_naics:
+                    # Filter opportunities to only include those matching configured NAICS
+                    original_count = len(opportunities)
+                    opportunities = [
+                        opp for opp in opportunities
+                        if opp.get("naics_code") in configured_naics
+                    ]
+                    filtered_count = original_count - len(opportunities)
+                    if filtered_count > 0:
+                        logger.info(
+                            f"Filtered {filtered_count} opportunities not matching "
+                            f"configured NAICS codes ({configured_naics}). {len(opportunities)} remaining."
+                        )
+                    results["filtered_by_naics"] += filtered_count
+
+                # Process each opportunity (those that passed NAICS filter)
+                for opp in opportunities:
+                    try:
+                        await self._process_opportunity(
+                            session=session,
+                            organization_id=organization_id,
+                            search_id=search_id,
+                            opportunity=opp,
+                            results=results,
+                            search_config=search_config,
+                        )
+                        results["processed"] += 1
+                    except Exception as e:
+                        logger.error(f"Error processing opportunity {opp.get('notice_id')}: {e}")
+                        results["errors"].append({
+                            "notice_id": opp.get("notice_id"),
+                            "error": str(e),
+                        })
+
+                # Check if we've fetched all results
+                offset += page_size
+                pages_fetched += 1
+
+                if offset >= total:
+                    break
+
+                # Rate limiting delay
+                await asyncio.sleep(self.rate_limit_delay)
+
+            # Update search status
+            await sam_service.update_search_pull_status(
+                session, search_id, "success" if not results["errors"] else "partial"
+            )
+            await sam_service.update_search_counts(session, search_id)
+
+            results["completed_at"] = datetime.utcnow().isoformat()
+            results["status"] = "success" if not results["errors"] else "partial"
+
+            # Auto-download attachments if enabled
+            # Check search_config for override, default to parameter value
+            # Always check for pending attachments, not just new ones
+            should_download = search_config.get("download_attachments", auto_download_attachments)
+            print(f"[SAM_DEBUG] Auto-download check: should_download={should_download}, auto_download_attachments={auto_download_attachments}")
+            logger.info(f"Auto-download check: should_download={should_download}, auto_download_attachments={auto_download_attachments}")
+            if should_download:
+                results["attachment_downloads"] = {
+                    "total": 0,
+                    "downloaded": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                    "errors": [],
+                }
+
+                # Get all pending attachments for ALL solicitations in this search
+                # This ensures we download attachments from previous pulls that weren't downloaded
+                solicitations, _ = await sam_service.list_solicitations(
+                    session,
+                    organization_id=organization_id,
+                    search_id=search_id,
+                    limit=1000,  # Get all solicitations for this search
+                )
+                print(f"[SAM_DEBUG] Found {len(solicitations)} solicitations for search {search_id}")
+                for sol in solicitations:
+                    print(f"[SAM_DEBUG] Processing solicitation: {sol.id} - {sol.title[:50] if sol.title else 'N/A'}...")
+                    download_result = await self.download_all_attachments(
+                        session=session,
+                        solicitation_id=sol.id,
+                        organization_id=organization_id,
+                    )
+                    results["attachment_downloads"]["total"] += download_result["total"]
+                    results["attachment_downloads"]["downloaded"] += download_result["downloaded"]
+                    results["attachment_downloads"]["failed"] += download_result["failed"]
+                    results["attachment_downloads"]["errors"].extend(download_result.get("errors", []))
+
+                # Only log if there were attachments to process
+                if results["attachment_downloads"]["total"] > 0:
+                    logger.info(
+                        f"Attachment download complete: {results['attachment_downloads']['downloaded']} downloaded, "
+                        f"{results['attachment_downloads']['failed']} failed out of {results['attachment_downloads']['total']} pending"
+                    )
+                else:
+                    logger.debug("No pending attachments to download")
+
+        except Exception as e:
+            import traceback
+            print(f"[SAM_DEBUG] EXCEPTION in pull_opportunities: {e}")
+            print(f"[SAM_DEBUG] Traceback: {traceback.format_exc()}")
+            logger.error(f"Pull failed for search {search_id}: {e}")
+            await sam_service.update_search_pull_status(session, search_id, "failed")
+            results["status"] = "failed"
+            results["error"] = str(e)
+
+        return results
+
+    async def _process_opportunity(
+        self,
+        session,  # AsyncSession
+        organization_id: UUID,
+        search_id: UUID,
+        opportunity: Dict[str, Any],
+        results: Dict[str, Any],
+        search_config: Optional[Dict[str, Any]] = None,
+    ):
+        """
+        Process a single opportunity - create/update solicitation and notices.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            search_id: SamSearch UUID
+            opportunity: Parsed opportunity data
+            results: Results dict to update
+            search_config: Optional search configuration (for download_attachments setting)
+        """
+        notice_id = opportunity.get("notice_id")
+        if not notice_id:
+            logger.warning("Skipping opportunity without notice_id")
+            return
+
+        # Fetch full HTML description from the notice description API
+        # The search API returns a URL in the description field, not the actual description
+        description = opportunity.get("description")
+        if description and description.startswith("http"):
+            # The description field is a URL - fetch the actual description
+            logger.debug(f"Fetching full description for notice {notice_id}")
+            full_description = await self.fetch_notice_description(
+                notice_id, session, organization_id
+            )
+            if full_description:
+                description = full_description
+                # Add rate limiting delay after description fetch
+                await asyncio.sleep(self.rate_limit_delay)
+
+        # Check if solicitation already exists
+        existing = await sam_service.get_solicitation_by_notice_id(session, notice_id)
+
+        if existing:
+            # Update existing solicitation
+            await sam_service.update_solicitation(
+                session,
+                solicitation_id=existing.id,
+                title=opportunity.get("title"),
+                description=description,
+                response_deadline=opportunity.get("response_deadline"),
+            )
+            results["updated_solicitations"] += 1
+            solicitation = existing
+        else:
+            # Create new solicitation
+            solicitation = await sam_service.create_solicitation(
+                session=session,
+                organization_id=organization_id,
+                search_id=search_id,
+                notice_id=notice_id,
+                title=opportunity.get("title", "Untitled"),
+                notice_type=opportunity.get("notice_type", "o"),
+                solicitation_number=opportunity.get("solicitation_number"),
+                description=description,
+                naics_code=opportunity.get("naics_code"),
+                psc_code=opportunity.get("psc_code"),
+                set_aside_code=opportunity.get("set_aside_code"),
+                posted_date=opportunity.get("posted_date"),
+                response_deadline=opportunity.get("response_deadline"),
+                ui_link=opportunity.get("ui_link"),
+                api_link=opportunity.get("api_link"),
+                contact_info=opportunity.get("contact_info"),
+                place_of_performance=opportunity.get("place_of_performance"),
+                agency_name=opportunity.get("agency_name"),
+                bureau_name=opportunity.get("bureau_name"),
+                office_name=opportunity.get("office_name"),
+                full_parent_path=opportunity.get("full_parent_path"),
+            )
+            results["new_solicitations"] += 1
+
+        # Check for new notices (amendments)
+        # For simplicity, we create a notice for each pull if it's new
+        latest_notice = await sam_service.get_latest_notice(session, solicitation.id)
+
+        if not latest_notice:
+            # Create initial notice
+            notice = await sam_service.create_notice(
+                session=session,
+                solicitation_id=solicitation.id,
+                sam_notice_id=notice_id,
+                notice_type=opportunity.get("notice_type", "o"),
+                version_number=1,
+                title=opportunity.get("title"),
+                description=description,  # Use fetched HTML description
+                posted_date=opportunity.get("posted_date"),
+                response_deadline=opportunity.get("response_deadline"),
+            )
+            results["new_notices"] += 1
+        else:
+            notice = latest_notice
+
+        # Process attachments - only if enabled in search config
+        # The download_attachments setting controls whether we track attachments for download
+        download_attachments = True  # Default to True for backward compatibility
+        if search_config:
+            download_attachments = search_config.get("download_attachments", True)
+
+        if download_attachments:
+            attachments = opportunity.get("attachments", [])
+            for att_data in attachments:
+                await self._process_attachment(
+                    session=session,
+                    solicitation_id=solicitation.id,
+                    notice_id=notice.id,
+                    attachment_data=att_data,
+                    results=results,
+                )
+
+        # Update solicitation counts
+        await sam_service.update_solicitation_counts(session, solicitation.id)
+
+    async def _process_attachment(
+        self,
+        session,  # AsyncSession
+        solicitation_id: UUID,
+        notice_id: UUID,
+        attachment_data,  # Can be Dict[str, Any] or str (URL)
+        results: Dict[str, Any],
+    ):
+        """
+        Process an attachment record.
+
+        Includes deduplication by both resource_id and download_url to
+        prevent redundant downloads of the same file.
+
+        Args:
+            session: Database session
+            solicitation_id: Parent solicitation UUID
+            notice_id: Parent notice UUID
+            attachment_data: Attachment data from API (dict or URL string)
+            results: Results dict to update
+        """
+        # Handle both dict format and simple URL string format
+        if isinstance(attachment_data, str):
+            # SAM.gov resourceLinks is a list of URL strings
+            # URL format: https://sam.gov/api/prod/opps/v3/opportunities/resources/files/{resource_id}/download
+            download_url = attachment_data
+            # Extract resource_id from URL (the GUID before /download)
+            import re
+            match = re.search(r'/files/([a-f0-9]+)/download', attachment_data)
+            if match:
+                resource_id = match.group(1)
+            else:
+                # Fallback: use URL hash as resource_id
+                import hashlib
+                resource_id = hashlib.md5(attachment_data.encode()).hexdigest()
+            # Filename will be resolved during download from Content-Disposition header
+            # Use resource_id as placeholder for now
+            filename = f"pending_{resource_id}"
+            file_type = None
+            file_size = None
+            description = None
+        else:
+            resource_id = attachment_data.get("resourceId") or attachment_data.get("url", "")
+            download_url = attachment_data.get("url") or attachment_data.get("downloadUrl")
+            filename = attachment_data.get("name") or attachment_data.get("fileName") or f"pending_{resource_id}"
+            file_size = attachment_data.get("size")
+            description = attachment_data.get("description")
+            file_type = None
+            if filename and "." in filename and not filename.startswith("pending_"):
+                file_type = filename.rsplit(".", 1)[-1].lower()
+
+        if not resource_id:
+            return
+
+        # Check if attachment already exists by resource_id
+        existing = await sam_service.get_attachment_by_resource_id(session, resource_id)
+
+        if existing:
+            return
+
+        # Extract file type from filename if not already set
+        if not file_type and "." in filename:
+            file_type = filename.rsplit(".", 1)[-1].lower()
+
+        # Check for deduplication by download_url
+        # If another attachment with the same URL has already been downloaded,
+        # we can link to its asset instead of downloading again
+        existing_asset_id = None
+        if download_url:
+            existing_by_url = await sam_service.get_attachment_by_download_url(
+                session, download_url
+            )
+            if existing_by_url and existing_by_url.asset_id:
+                existing_asset_id = existing_by_url.asset_id
+                logger.info(
+                    f"Found existing download for URL: {download_url[:50]}... "
+                    f"Linking to Asset {existing_asset_id}"
+                )
+
+        # Create attachment record
+        # If we found an existing asset, the attachment is created as already downloaded
+        attachment = await sam_service.create_attachment(
+            session=session,
+            solicitation_id=solicitation_id,
+            notice_id=notice_id,
+            resource_id=resource_id,
+            filename=filename,
+            file_type=file_type,
+            file_size=file_size,
+            description=description,
+            download_url=download_url,
+        )
+
+        # If we found an existing asset, link to it and mark as downloaded
+        if existing_asset_id:
+            await sam_service.update_attachment_download_status(
+                session=session,
+                attachment_id=attachment.id,
+                status="downloaded",
+                asset_id=existing_asset_id,
+            )
+            # Track deduplication in results
+            if "deduplicated_attachments" not in results:
+                results["deduplicated_attachments"] = 0
+            results["deduplicated_attachments"] += 1
+        else:
+            results["new_attachments"] += 1
+
+    async def download_attachment(
+        self,
+        session,  # AsyncSession
+        attachment_id: UUID,
+        organization_id: UUID,
+        minio_service=None,
+        check_rate_limit: bool = True,
+    ) -> Optional[Asset]:
+        """
+        Download an attachment and create an Asset.
+
+        Args:
+            session: Database session
+            attachment_id: SamAttachment UUID
+            organization_id: Organization UUID
+            minio_service: MinIO service instance (optional)
+            check_rate_limit: Whether to check/record API rate limits
+
+        Returns:
+            Created Asset or None on failure
+        """
+        print(f"[SAM_DEBUG] download_attachment called: {attachment_id}")
+        attachment = await sam_service.get_attachment(session, attachment_id)
+        if not attachment:
+            print(f"[SAM_DEBUG] Attachment not found: {attachment_id}")
+            logger.error(f"Attachment not found: {attachment_id}")
+            return None
+
+        print(f"[SAM_DEBUG] Attachment found: status={attachment.download_status}, url={attachment.download_url[:50] if attachment.download_url else 'None'}...")
+        if attachment.download_status == "downloaded" and attachment.asset_id:
+            print(f"[SAM_DEBUG] Attachment already downloaded: {attachment_id}")
+            logger.info(f"Attachment {attachment_id} already downloaded")
+            return None
+
+        if not attachment.download_url:
+            print(f"[SAM_DEBUG] No download URL for attachment: {attachment_id}")
+            logger.error(f"No download URL for attachment {attachment_id}")
+            await sam_service.update_attachment_download_status(
+                session, attachment_id, "failed", error="No download URL"
+            )
+            return None
+
+        # Check rate limit before downloading (if enabled)
+        if check_rate_limit:
+            can_call, remaining = await sam_api_usage_service.check_limit(
+                session, organization_id
+            )
+            if not can_call:
+                logger.warning(
+                    f"Rate limit exceeded for attachment download. "
+                    f"Attachment {attachment_id}, remaining: {remaining}"
+                )
+                await sam_service.update_attachment_download_status(
+                    session, attachment_id, "pending", error="Rate limit exceeded - queued"
+                )
+                return None
+
+        # Update status to downloading
+        await sam_service.update_attachment_download_status(
+            session, attachment_id, "downloading"
+        )
+
+        try:
+            # Download file - API key goes as query parameter, not header
+            api_key = await self._get_api_key_async(session, organization_id)
+            download_url = attachment.download_url
+            # Add api_key as query parameter
+            if "?" in download_url:
+                download_url = f"{download_url}&api_key={api_key}"
+            else:
+                download_url = f"{download_url}?api_key={api_key}"
+
+            print(f"[SAM_DEBUG] Downloading from URL: {download_url[:100]}...")
+            async with httpx.AsyncClient(timeout=120, follow_redirects=True) as client:
+                response = await client.get(download_url)
+                print(f"[SAM_DEBUG] HTTP response: status={response.status_code}, content-length={len(response.content)}")
+                response.raise_for_status()
+
+                file_content = response.content
+                content_type = response.headers.get("content-type", "application/octet-stream")
+
+                # Extract real filename from Content-Disposition header
+                # Example: 'attachment; filename="Statement_of_Work.pdf"'
+                content_disposition = response.headers.get("content-disposition", "")
+                real_filename = None
+                if content_disposition:
+                    import re
+                    # Try to extract filename from Content-Disposition
+                    # Handle both filename="..." and filename*=UTF-8''...
+                    match = re.search(r'filename[*]?=["\']?([^"\';\r\n]+)["\']?', content_disposition)
+                    if match:
+                        real_filename = match.group(1).strip()
+                        # Handle URL-encoded filenames
+                        if real_filename.startswith("UTF-8''"):
+                            from urllib.parse import unquote
+                            real_filename = unquote(real_filename[7:])
+
+                # If no filename from header, try to guess from content type
+                if not real_filename:
+                    # Fallback to resource_id with extension from content type
+                    ext_map = {
+                        "application/pdf": ".pdf",
+                        "application/msword": ".doc",
+                        "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+                        "application/vnd.ms-excel": ".xls",
+                        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+                        "application/vnd.ms-powerpoint": ".ppt",
+                        "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+                        "text/plain": ".txt",
+                        "text/html": ".html",
+                        "application/zip": ".zip",
+                    }
+                    ext = ext_map.get(content_type, "")
+                    real_filename = f"{attachment.resource_id}{ext}"
+
+                logger.info(f"Resolved filename for attachment {attachment_id}: {real_filename}")
+
+            # Record the API call (if enabled)
+            if check_rate_limit:
+                await sam_api_usage_service.record_call(
+                    session, organization_id, "attachment"
+                )
+
+            # Get MinIO service if not provided
+            if minio_service is None:
+                from .minio_service import get_minio_service
+                minio_service = get_minio_service()
+
+            # Get solicitation for path building
+            solicitation = await sam_service.get_solicitation(
+                session, attachment.solicitation_id
+            )
+
+            # Build storage path following the SAM storage structure
+            # Format: {org_id}/sam/{agency_code}/{subagency_code}/solicitations/{number}/attachments/{filename}
+            sol_number = solicitation.solicitation_number or solicitation.notice_id
+            safe_sol_number = sol_number.replace("/", "_").replace("\\", "_")
+
+            # Build agency path if available
+            agency_code = self._sanitize_path_component(solicitation.agency_name or "unknown")
+            bureau_code = self._sanitize_path_component(solicitation.bureau_name or "general")
+
+            # Safe filename
+            safe_filename = self._sanitize_path_component(real_filename)
+
+            object_key = f"{organization_id}/sam/{agency_code}/{bureau_code}/solicitations/{safe_sol_number}/attachments/{safe_filename}"
+
+            # Upload to MinIO
+            bucket = getattr(settings, "minio_bucket_uploads", "curatore-uploads")
+
+            from io import BytesIO
+            data_stream = BytesIO(file_content)
+            minio_service.put_object(
+                bucket=bucket,
+                key=object_key,
+                data=data_stream,
+                length=len(file_content),
+                content_type=content_type,
+            )
+            logger.info(f"Uploaded attachment to {bucket}/{object_key}")
+
+            # Determine file type from filename
+            file_type = None
+            if "." in real_filename:
+                file_type = real_filename.rsplit(".", 1)[-1].lower()
+
+            # Update attachment with real filename and file info
+            await sam_service.update_attachment(
+                session,
+                attachment_id=attachment_id,
+                filename=real_filename,
+                file_type=file_type,
+                file_size=len(file_content),
+            )
+
+            # Check if asset already exists with same bucket/key (from previous failed attempt)
+            from sqlalchemy import select
+            existing_asset_result = await session.execute(
+                select(Asset).where(
+                    Asset.raw_bucket == bucket,
+                    Asset.raw_object_key == object_key,
+                )
+            )
+            asset = existing_asset_result.scalar_one_or_none()
+
+            if asset:
+                logger.info(f"Found existing asset {asset.id} for {object_key}, reusing")
+            else:
+                # Create new Asset
+                asset = Asset(
+                    organization_id=organization_id,
+                    source_type="sam_gov",
+                    source_metadata={
+                        "attachment_id": str(attachment_id),
+                        "solicitation_id": str(attachment.solicitation_id),
+                        "notice_id": str(attachment.notice_id) if attachment.notice_id else None,
+                        "resource_id": attachment.resource_id,
+                        "download_url": attachment.download_url,
+                        "downloaded_at": datetime.utcnow().isoformat(),
+                        "agency": solicitation.agency_name,
+                        "bureau": solicitation.bureau_name,
+                        "solicitation_number": sol_number,
+                    },
+                    original_filename=real_filename,
+                    content_type=content_type,
+                    file_size=len(file_content),
+                    raw_bucket=bucket,
+                    raw_object_key=object_key,
+                    status="pending",  # Will be updated after extraction
+                )
+
+                session.add(asset)
+                await session.commit()
+                await session.refresh(asset)
+
+            # Update attachment with asset link
+            await sam_service.update_attachment_download_status(
+                session, attachment_id, "downloaded", asset_id=asset.id
+            )
+
+            logger.info(f"Downloaded attachment {attachment_id} -> Asset {asset.id} ({real_filename})")
+
+            # Trigger extraction for the asset
+            try:
+                from .upload_integration_service import upload_integration_service
+                await upload_integration_service.trigger_extraction(
+                    session=session,
+                    asset_id=asset.id,
+                )
+                logger.info(f"Triggered extraction for Asset {asset.id}")
+            except Exception as e:
+                logger.warning(f"Failed to trigger extraction for Asset {asset.id}: {e}")
+
+            return asset
+
+        except httpx.HTTPError as e:
+            error_msg = f"HTTP error downloading attachment: {e}"
+            print(f"[SAM_DEBUG] HTTP ERROR: {error_msg}")
+            logger.error(error_msg)
+            try:
+                await session.rollback()
+                await sam_service.update_attachment_download_status(
+                    session, attachment_id, "failed", error=error_msg
+                )
+            except Exception:
+                pass  # Ignore errors updating status after rollback
+            return None
+        except Exception as e:
+            import traceback
+            error_msg = f"Error downloading attachment: {e}"
+            print(f"[SAM_DEBUG] EXCEPTION in download_attachment: {error_msg}")
+            print(f"[SAM_DEBUG] Traceback: {traceback.format_exc()}")
+            logger.error(error_msg)
+            try:
+                await session.rollback()
+                await sam_service.update_attachment_download_status(
+                    session, attachment_id, "failed", error=error_msg
+                )
+            except Exception:
+                pass  # Ignore errors updating status after rollback
+            return None
+
+    async def download_all_attachments(
+        self,
+        session,  # AsyncSession
+        solicitation_id: UUID,
+        organization_id: UUID,
+        minio_service=None,
+    ) -> Dict[str, Any]:
+        """
+        Download all pending attachments for a solicitation.
+
+        Args:
+            session: Database session
+            solicitation_id: SamSolicitation UUID
+            organization_id: Organization UUID
+            minio_service: MinIO service instance (optional)
+
+        Returns:
+            Download results summary
+        """
+        print(f"[SAM_DEBUG] download_all_attachments called for solicitation {solicitation_id}")
+        logger.info(f"download_all_attachments called for solicitation {solicitation_id}")
+        attachments = await sam_service.list_attachments(
+            session, solicitation_id, download_status="pending"
+        )
+        print(f"[SAM_DEBUG] Found {len(attachments)} pending attachments for solicitation {solicitation_id}")
+        logger.info(f"Found {len(attachments)} pending attachments for solicitation {solicitation_id}")
+
+        results = {
+            "total": len(attachments),
+            "downloaded": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        for attachment in attachments:
+            logger.info(f"Downloading attachment {attachment.id}: {attachment.filename}")
+            try:
+                asset = await self.download_attachment(
+                    session=session,
+                    attachment_id=attachment.id,
+                    organization_id=organization_id,
+                    minio_service=minio_service,
+                    check_rate_limit=True,
+                )
+                if asset:
+                    results["downloaded"] += 1
+                else:
+                    results["failed"] += 1
+            except Exception as e:
+                results["failed"] += 1
+                results["errors"].append({
+                    "attachment_id": str(attachment.id),
+                    "error": str(e),
+                })
+
+            # Rate limiting
+            await asyncio.sleep(0.5)
+
+        return results
+
+    async def test_connection(
+        self,
+        api_key: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Test connection to SAM.gov API.
+
+        Args:
+            api_key: Optional API key to test (uses configured key if not provided)
+
+        Returns:
+            Connection test results
+        """
+        if api_key:
+            self.api_key = api_key
+
+        try:
+            # Make a minimal search request
+            response = await self._make_request("/search", {"limit": 1})
+
+            return {
+                "success": True,
+                "status": "healthy",
+                "message": "Successfully connected to SAM.gov API",
+                "details": {
+                    "api_version": "v2",
+                    "total_opportunities": response.get("totalRecords", 0),
+                },
+            }
+
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 401:
+                return {
+                    "success": False,
+                    "status": "unhealthy",
+                    "message": "Authentication failed - invalid API key",
+                    "error": f"HTTP {e.response.status_code}",
+                }
+            elif e.response.status_code == 403:
+                return {
+                    "success": False,
+                    "status": "unhealthy",
+                    "message": "Access forbidden - check API key permissions",
+                    "error": f"HTTP {e.response.status_code}",
+                }
+            else:
+                return {
+                    "success": False,
+                    "status": "unhealthy",
+                    "message": f"API error: HTTP {e.response.status_code}",
+                    "error": str(e),
+                }
+        except httpx.TimeoutException:
+            return {
+                "success": False,
+                "status": "unhealthy",
+                "message": "Connection timeout",
+                "error": "Request timed out",
+            }
+        except Exception as e:
+            return {
+                "success": False,
+                "status": "unhealthy",
+                "message": "Connection failed",
+                "error": str(e),
+            }
+
+    async def preview_search(
+        self,
+        session,  # AsyncSession
+        organization_id: UUID,
+        search_config: Dict[str, Any],
+        limit: int = 10,
+        check_rate_limit: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Preview a search configuration without storing results.
+
+        This allows users to test their search filters and see
+        a sample of matching opportunities before saving the search.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID (for rate limiting)
+            search_config: Search configuration to test
+            limit: Number of sample results to return (default 10, max 25)
+            check_rate_limit: Whether to check/record API rate limits
+
+        Returns:
+            Preview results including sample opportunities and total count
+        """
+        # Limit preview results to avoid excessive API usage
+        limit = min(limit, 25)
+
+        # Check rate limit before testing (if enabled)
+        if check_rate_limit:
+            can_call, remaining = await sam_api_usage_service.check_limit(
+                session, organization_id
+            )
+            if not can_call:
+                return {
+                    "success": False,
+                    "error": "rate_limited",
+                    "message": f"API rate limit exceeded. Remaining calls: {remaining}",
+                    "remaining_calls": remaining,
+                }
+
+        try:
+            # Fetch sample opportunities
+            opportunities, total = await self.search_opportunities(
+                search_config, limit=limit, offset=0,
+                session=session, organization_id=organization_id,
+            )
+
+            # Record the API call (if enabled)
+            if check_rate_limit:
+                await sam_api_usage_service.record_call(
+                    session, organization_id, "search"
+                )
+
+            # Build preview response
+            preview_results = []
+            for opp in opportunities:
+                preview_results.append({
+                    "notice_id": opp.get("notice_id"),
+                    "title": opp.get("title"),
+                    "solicitation_number": opp.get("solicitation_number"),
+                    "notice_type": opp.get("notice_type"),
+                    "naics_code": opp.get("naics_code"),
+                    "psc_code": opp.get("psc_code"),
+                    "set_aside": opp.get("set_aside"),
+                    "posted_date": opp.get("posted_date").isoformat() if opp.get("posted_date") else None,
+                    "response_deadline": opp.get("response_deadline").isoformat() if opp.get("response_deadline") else None,
+                    "agency": opp.get("organization", {}).get("name") if isinstance(opp.get("organization"), dict) else None,
+                    "ui_link": opp.get("ui_link"),
+                    "attachments_count": len(opp.get("attachments", [])),
+                })
+
+            return {
+                "success": True,
+                "total_matching": total,
+                "sample_count": len(preview_results),
+                "sample_results": preview_results,
+                "search_config": search_config,
+                "message": f"Found {total} matching opportunities. Showing {len(preview_results)} samples.",
+            }
+
+        except httpx.HTTPError as e:
+            logger.error(f"SAM.gov API error during preview: {e}")
+            return {
+                "success": False,
+                "error": "api_error",
+                "message": f"API request failed: {e}",
+            }
+        except Exception as e:
+            logger.error(f"Error during search preview: {e}")
+            return {
+                "success": False,
+                "error": "unknown",
+                "message": str(e),
+            }
+
+
+# Singleton instance
+sam_pull_service = SamPullService()

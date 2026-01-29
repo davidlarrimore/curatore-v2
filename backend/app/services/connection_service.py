@@ -851,6 +851,164 @@ class PlaywrightConnectionType(BaseConnectionType):
 
 
 # =========================================================================
+# SAM.GOV CONNECTION TYPE
+# =========================================================================
+
+
+class SamGovConfigSchema(BaseModel):
+    """SAM.gov API configuration schema."""
+
+    api_key: str = Field(..., min_length=1, description="SAM.gov API key")
+    # Note: base_url is intentionally not configurable - SAM.gov API has a fixed endpoint
+    timeout: int = Field(default=60, ge=1, le=600, description="Request timeout in seconds")
+    rate_limit_delay: float = Field(
+        default=0.5, ge=0, le=10, description="Delay between requests in seconds"
+    )
+
+
+# SAM.gov API has a fixed endpoint that cannot be changed
+SAM_GOV_API_BASE_URL = "https://api.sam.gov/opportunities/v2"
+
+
+class SamGovConnectionType(BaseConnectionType):
+    """SAM.gov API connection type for federal opportunities data."""
+
+    connection_type = "sam_gov"
+    display_name = "SAM.gov API"
+    description = "Connect to SAM.gov Opportunities API for federal contract data"
+
+    def get_config_schema(self) -> Dict[str, Any]:
+        """Get JSON schema for SAM.gov configuration."""
+        return {
+            "type": "object",
+            "properties": {
+                "api_key": {
+                    "type": "string",
+                    "title": "API Key",
+                    "description": "SAM.gov API key from api.sam.gov",
+                    "writeOnly": True
+                },
+                # Note: base_url is intentionally not configurable - SAM.gov API has a fixed endpoint
+                "timeout": {
+                    "type": "integer",
+                    "title": "Timeout (seconds)",
+                    "description": "Request timeout in seconds",
+                    "default": 60,
+                    "minimum": 1,
+                    "maximum": 600
+                },
+                "rate_limit_delay": {
+                    "type": "number",
+                    "title": "Rate Limit Delay",
+                    "description": "Delay between API requests in seconds",
+                    "default": 0.5,
+                    "minimum": 0,
+                    "maximum": 10
+                }
+            },
+            "required": ["api_key"]
+        }
+
+    def validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate SAM.gov configuration."""
+        try:
+            validated = SamGovConfigSchema(**config)
+            return validated.model_dump()
+        except ValidationError as e:
+            raise ValueError(f"Invalid SAM.gov configuration: {e}")
+
+    async def test_connection(self, config: Dict[str, Any]) -> ConnectionTestResult:
+        """Test SAM.gov API connection by making a minimal search request."""
+        try:
+            api_key = config["api_key"]
+            # Use hardcoded SAM.gov API endpoint (not configurable)
+            base_url = SAM_GOV_API_BASE_URL.rstrip("/")
+            timeout = config.get("timeout", 60)
+
+            headers = {
+                "X-Api-Key": api_key,
+                "Accept": "application/json",
+            }
+
+            # SAM.gov API requires postedFrom and postedTo for search
+            from datetime import datetime, timedelta
+            today = datetime.now()
+            week_ago = today - timedelta(days=7)
+            posted_from = week_ago.strftime("%m/%d/%Y")
+            posted_to = today.strftime("%m/%d/%Y")
+
+            async with httpx.AsyncClient(timeout=float(timeout)) as client:
+                # Make a minimal search request to test connection
+                response = await client.get(
+                    f"{base_url}/search",
+                    params={
+                        "limit": 1,
+                        "postedFrom": posted_from,
+                        "postedTo": posted_to,
+                    },
+                    headers=headers,
+                )
+
+                if response.status_code == 200:
+                    try:
+                        data = response.json()
+                        total = data.get("totalRecords", 0)
+                        return ConnectionTestResult(
+                            success=True,
+                            status="healthy",
+                            message="Successfully connected to SAM.gov API",
+                            details={
+                                "api_version": "v2",
+                                "total_opportunities": total,
+                                "endpoint": base_url,
+                            }
+                        )
+                    except Exception:
+                        return ConnectionTestResult(
+                            success=True,
+                            status="healthy",
+                            message="Successfully connected to SAM.gov API",
+                            details={"endpoint": base_url}
+                        )
+                elif response.status_code == 401:
+                    return ConnectionTestResult(
+                        success=False,
+                        status="unhealthy",
+                        message="Authentication failed - invalid API key",
+                        error="HTTP 401 Unauthorized"
+                    )
+                elif response.status_code == 403:
+                    return ConnectionTestResult(
+                        success=False,
+                        status="unhealthy",
+                        message="Access forbidden - check API key permissions",
+                        error="HTTP 403 Forbidden"
+                    )
+                else:
+                    return ConnectionTestResult(
+                        success=False,
+                        status="unhealthy",
+                        message=f"SAM.gov API returned error",
+                        error=f"HTTP {response.status_code}: {response.text[:200]}"
+                    )
+
+        except httpx.TimeoutException:
+            return ConnectionTestResult(
+                success=False,
+                status="unhealthy",
+                message="Connection timeout",
+                error=f"Request timed out after {timeout} seconds"
+            )
+        except Exception as e:
+            return ConnectionTestResult(
+                success=False,
+                status="unhealthy",
+                message="Failed to test SAM.gov connection",
+                error=str(e)
+            )
+
+
+# =========================================================================
 # CONNECTION TYPE REGISTRY
 # =========================================================================
 
@@ -929,6 +1087,7 @@ class ConnectionService:
         self._registry.register(LLMConnectionType())
         self._registry.register(ExtractionConnectionType())
         self._registry.register(PlaywrightConnectionType())
+        self._registry.register(SamGovConnectionType())
 
         self._logger.info("Connection service initialized")
 

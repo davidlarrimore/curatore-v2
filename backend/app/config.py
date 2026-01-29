@@ -327,6 +327,24 @@ class Settings(BaseSettings):
         default=100000, description="Maximum content length to index (characters)"
     )
 
+    # =========================================================================
+    # SAM.GOV CONFIGURATION (Federal Opportunities API)
+    # =========================================================================
+    sam_api_key: Optional[str] = Field(
+        default=None, description="SAM.gov API key for federal opportunities data"
+    )
+    sam_enabled: bool = Field(
+        default=False, description="Enable SAM.gov integration"
+    )
+    # Note: SAM.gov API base URL is hardcoded (https://api.sam.gov/opportunities/v2)
+    # and not configurable since it's a fixed government endpoint
+    sam_timeout: int = Field(
+        default=60, description="SAM.gov API request timeout in seconds"
+    )
+    sam_rate_limit_delay: float = Field(
+        default=0.5, description="Delay between SAM.gov API requests in seconds"
+    )
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

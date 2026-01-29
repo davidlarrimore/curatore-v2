@@ -18,6 +18,7 @@ from .routers import (
     scheduled_tasks,
     render,
     search,
+    sam,
 )
 
 api_router = APIRouter()
@@ -42,5 +43,7 @@ api_router.include_router(scheduled_tasks.router)
 api_router.include_router(render.router)
 # Phase 6: Search endpoints
 api_router.include_router(search.router)
+# Phase 7: SAM.gov Integration endpoints
+api_router.include_router(sam.router)
 
 __all__ = ["api_router"]

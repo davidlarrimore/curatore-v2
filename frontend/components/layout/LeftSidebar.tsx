@@ -18,7 +18,8 @@ import {
   ChevronRight,
   LayoutDashboard,
   Globe,
-  Search
+  Search,
+  Building2
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import clsx from 'clsx'
@@ -99,6 +100,13 @@ export function LeftSidebar({
         icon: Globe,
         current: pathname?.startsWith('/scrape'),
         gradient: 'from-indigo-500 to-purple-600'
+      },
+      {
+        name: 'SAM.gov',
+        href: '/sam',
+        icon: Building2,
+        current: pathname?.startsWith('/sam'),
+        gradient: 'from-blue-500 to-indigo-600'
       },
       {
         name: 'Search',

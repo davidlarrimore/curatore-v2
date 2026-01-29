@@ -422,6 +422,56 @@ class PlaywrightConfig(BaseModel):
     )
 
 
+class SamConfig(BaseModel):
+    """
+    SAM.gov Opportunities API configuration.
+
+    Enables integration with SAM.gov for federal contract opportunity
+    data ingestion and analysis.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    enabled: bool = Field(
+        default=True,
+        description="Enable SAM.gov integration"
+    )
+    api_key: str = Field(
+        description="SAM.gov API key from api.sam.gov"
+    )
+    # Note: base_url is intentionally not configurable - SAM.gov API has a fixed endpoint
+    # that is hardcoded in sam_pull_service.py
+    timeout: int = Field(
+        default=60,
+        ge=1,
+        le=600,
+        description="Request timeout in seconds"
+    )
+    max_retries: int = Field(
+        default=3,
+        ge=0,
+        le=10,
+        description="Maximum retry attempts"
+    )
+    rate_limit_delay: float = Field(
+        default=0.5,
+        ge=0,
+        le=10,
+        description="Delay between requests in seconds for rate limiting"
+    )
+    max_pages_per_pull: int = Field(
+        default=10,
+        ge=1,
+        le=100,
+        description="Maximum pages to fetch per pull operation"
+    )
+    page_size: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        description="Number of results per page"
+    )
+
+
 class OpenSearchConfig(BaseModel):
     """
     OpenSearch full-text search service configuration.
@@ -578,6 +628,10 @@ class AppConfig(BaseModel):
     opensearch: Optional[OpenSearchConfig] = Field(
         default=None,
         description="OpenSearch full-text search configuration"
+    )
+    sam: Optional[SamConfig] = Field(
+        default=None,
+        description="SAM.gov Opportunities API configuration"
     )
 
     @classmethod

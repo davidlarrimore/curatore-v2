@@ -33,7 +33,19 @@ app.conf.update(
     task_time_limit=int(os.getenv("CELERY_TASK_TIME_LIMIT", "900")),
     result_expires=int(os.getenv("CELERY_RESULT_EXPIRES", "259200")),  # 3 days
     task_default_queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"),
-    task_routes={},
+    # Route maintenance/scheduled tasks to separate 'maintenance' queue
+    # This prevents them from being blocked by slow extraction tasks
+    task_routes={
+        # Scheduled task system
+        "app.tasks.check_scheduled_tasks": {"queue": "maintenance"},
+        "app.tasks.execute_scheduled_task_async": {"queue": "maintenance"},
+        # Recovery and maintenance
+        "app.tasks.recover_orphaned_extractions": {"queue": "maintenance"},
+        "app.tasks.cleanup_expired_jobs_task": {"queue": "maintenance"},
+        # SAM.gov queue processing (lightweight, shouldn't block on extractions)
+        "app.tasks.sam_process_queued_requests_task": {"queue": "maintenance"},
+        # All extraction/indexing tasks stay on default 'processing' queue
+    },
 )
 
 # ============================================================================
@@ -98,7 +110,7 @@ if job_cleanup_enabled:
     beat_schedule["cleanup-expired-jobs"] = {
         "task": "app.tasks.cleanup_expired_jobs_task",
         "schedule": job_cleanup_schedule,
-        "options": {"queue": "processing"},
+        "options": {"queue": "maintenance"},
     }
 
 # Add scheduled task checker (Phase 5)
@@ -110,10 +122,78 @@ if scheduled_task_check_enabled:
     beat_schedule["check-scheduled-tasks"] = {
         "task": "app.tasks.check_scheduled_tasks",
         "schedule": scheduled_task_check_interval,  # Every N seconds (default: 60)
-        "options": {"queue": "processing"},
+        "options": {"queue": "maintenance"},
+    }
+
+# Add SAM.gov queued request processor (Phase 7)
+# This processes API requests that were queued when rate limits were exceeded
+sam_queue_process_enabled = _bool(os.getenv("SAM_QUEUE_PROCESS_ENABLED", "true"), True)
+sam_queue_process_interval = int(os.getenv("SAM_QUEUE_PROCESS_INTERVAL", "300"))  # 5 minutes
+
+if sam_queue_process_enabled:
+    beat_schedule["sam-process-queued-requests"] = {
+        "task": "app.tasks.sam_process_queued_requests_task",
+        "schedule": sam_queue_process_interval,  # Every N seconds (default: 300 = 5 min)
+        "options": {"queue": "maintenance"},
+    }
+
+# Add orphaned extraction recovery task
+# This runs periodically as a backup to the worker_ready signal
+# Helps catch any extractions that slipped through or got stuck
+extraction_recovery_enabled = _bool(os.getenv("EXTRACTION_RECOVERY_ENABLED", "true"), True)
+extraction_recovery_interval = int(os.getenv("EXTRACTION_RECOVERY_INTERVAL", "900"))  # 15 minutes
+
+if extraction_recovery_enabled:
+    beat_schedule["recover-orphaned-extractions"] = {
+        "task": "app.tasks.recover_orphaned_extractions",
+        "schedule": extraction_recovery_interval,  # Every N seconds (default: 900 = 15 min)
+        "kwargs": {"max_age_hours": 24, "limit": 50},
+        "options": {"queue": "maintenance"},
     }
 
 app.conf.beat_schedule = beat_schedule
 
 app.conf.timezone = "UTC"
+
+
+# ============================================================================
+# WORKER STARTUP RECOVERY
+# ============================================================================
+# Run orphaned extraction recovery when worker starts up
+# This ensures any extractions stuck in pending/running state from a crash
+# are automatically recovered
+
+from celery.signals import worker_ready
+import logging
+
+_recovery_logger = logging.getLogger("curatore.celery.recovery")
+
+
+@worker_ready.connect
+def on_worker_ready(sender, **kwargs):
+    """
+    Handle worker startup - trigger recovery of orphaned extractions.
+
+    This runs when a Celery worker finishes initialization and is ready
+    to process tasks. We delay the recovery task slightly to ensure
+    all services are fully initialized.
+    """
+    recovery_enabled = _bool(os.getenv("CELERY_STARTUP_RECOVERY_ENABLED", "true"), True)
+
+    if not recovery_enabled:
+        _recovery_logger.info("Startup recovery disabled via CELERY_STARTUP_RECOVERY_ENABLED")
+        return
+
+    _recovery_logger.info("Worker ready - scheduling orphaned extraction recovery")
+
+    # Import here to avoid circular imports
+    from .tasks import recover_orphaned_extractions
+
+    # Delay recovery by 10 seconds to ensure all services are ready
+    recover_orphaned_extractions.apply_async(
+        kwargs={"max_age_hours": 24, "limit": 200},
+        countdown=10,
+    )
+
+    _recovery_logger.info("Orphaned extraction recovery task scheduled")
 

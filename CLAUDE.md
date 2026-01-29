@@ -1816,6 +1816,134 @@ Helper scripts in `scripts/sharepoint/` provide standalone functionality:
 - Pagination support for large folders
 - Automatic OAuth token management
 
+### SAM.gov Integration (Phase 7)
+
+SAM.gov integration enables searching, tracking, and analyzing federal contract opportunities:
+
+**Key Features:**
+- Search for opportunities by NAICS codes, PSC codes, agencies, keywords
+- Track solicitations and amendments over time
+- Download attachments and trigger automatic extraction
+- Generate LLM-powered summaries with compliance checklists
+- API rate limit tracking (1,000 calls/day) with usage display
+- Request queuing when over rate limit
+- Attachment deduplication by download URL
+
+**Important: Broad Search Strategy**
+
+The SAM.gov Opportunities API v2 has limited filtering capabilities. In particular:
+- You cannot filter by multiple NAICS codes in a single API call
+- Some filter combinations are not supported
+
+Because of these limitations, Curatore uses a "broad search, post-filter" approach:
+1. **API Searches are broad**: Fetches more results than strictly needed
+2. **Filtering happens in UI**: The frontend applies additional filters to narrow down results
+3. **Use `search_config` for client-side filtering**: Store filter criteria like multiple NAICS codes in `search_config`, but don't expect the API to enforce all of them
+
+**API Rate Limits:**
+- SAM.gov enforces a 1,000 API calls per day limit
+- Curatore tracks usage automatically via `SamApiUsage` model
+- The UI shows current usage and remaining calls
+- When limits are exceeded, requests are queued for the next day via `SamQueuedRequest`
+
+**SamSearch Configuration Options:**
+```json
+{
+  "naics_codes": ["541512", "541519"],    // Multiple NAICS for post-filtering
+  "psc_codes": ["D302"],                   // PSC codes
+  "set_aside_codes": ["SBA", "8A"],        // Set-aside types
+  "agencies": ["DEPT OF DEFENSE"],         // Agency filter
+  "notice_types": ["o", "p", "k"],         // Notice types to include
+  "keyword": "software",                   // Keyword search
+  "posted_from": "2024-01-01",             // Date range
+  "active_only": true,                     // Only active opportunities
+  "download_attachments": true             // Whether to track attachments for download
+}
+```
+
+**Database Models:**
+| Model | Purpose |
+|-------|---------|
+| `SamSearch` | Top-level search configuration (like ScrapeCollection) |
+| `SamSolicitation` | Individual opportunity tracking |
+| `SamNotice` | Version history (amendments, modifications) |
+| `SamAttachment` | Links to downloaded Assets |
+| `SamSolicitationSummary` | LLM-generated analysis |
+| `SamAgency`, `SamSubAgency` | Reference data for agencies |
+
+**API Endpoints:**
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/sam/searches` | List SAM searches |
+| POST | `/sam/searches` | Create search |
+| POST | `/sam/searches/preview` | Preview/test search config |
+| GET | `/sam/searches/{id}` | Get search details |
+| PATCH | `/sam/searches/{id}` | Update search |
+| DELETE | `/sam/searches/{id}` | Archive search |
+| POST | `/sam/searches/{id}/pull` | Trigger pull from SAM.gov |
+| GET | `/sam/solicitations` | List solicitations |
+| GET | `/sam/solicitations/{id}` | Get solicitation details |
+| POST | `/sam/solicitations/{id}/summarize` | Generate LLM summary |
+| GET | `/sam/notices/{id}` | Get notice details |
+| POST | `/sam/attachments/{id}/download` | Download attachment |
+| GET | `/sam/usage` | Get today's API usage |
+| GET | `/sam/usage/history` | Get usage history |
+| POST | `/sam/usage/estimate` | Estimate API impact of search |
+| GET | `/sam/usage/status` | Get full API status for dashboard |
+| GET | `/sam/queue` | Get queue statistics |
+
+**Celery Tasks:**
+- `sam_pull_task(search_id)` - Fetch data from SAM.gov API
+- `sam_download_attachment_task(attachment_id)` - Download single attachment
+- `sam_summarize_task(solicitation_id, config)` - Generate LLM summary
+- `sam_batch_summarize_task(search_id)` - Summarize multiple solicitations
+- `sam_process_queued_requests_task()` - Process queued requests (runs every 5 min)
+
+**Configuration:**
+```bash
+# Required
+SAM_API_KEY=your_api_key_from_api.sam.gov
+
+# Optional
+SAM_ENABLED=true
+SAM_BASE_URL=https://api.sam.gov/opportunities/v2
+SAM_TIMEOUT=60
+SAM_RATE_LIMIT_DELAY=0.5
+
+# Queue processing (for rate-limited requests)
+SAM_QUEUE_PROCESS_ENABLED=true
+SAM_QUEUE_PROCESS_INTERVAL=300  # Every 5 minutes
+```
+
+**Typical Workflow:**
+1. Create a search with filters (NAICS codes, agencies, etc.)
+2. Trigger a pull to fetch opportunities from SAM.gov
+3. Review solicitations in the UI
+4. Download attachments (creates Assets, triggers extraction)
+5. Generate summaries with LLM analysis
+
+**Storage Structure:**
+```
+curatore-uploads/
+└── {org_id}/
+    └── sam/
+        └── solicitations/
+            └── {solicitation_number}/
+                └── attachments/
+                    ├── sow.pdf
+                    └── pricing.xlsx
+
+curatore-processed/
+└── {org_id}/
+    └── sam/
+        └── solicitations/
+            └── {solicitation_number}/
+                └── attachments/
+                    ├── sow.md
+                    └── pricing.md
+```
+
 ### Web Scraping with Playwright
 
 Curatore uses Playwright for JavaScript-rendered web scraping with inline content extraction.
@@ -2047,6 +2175,30 @@ Base URL: `http://localhost:8000/api/v1`
 - `POST /render/extract` - Extract text content in specified format (markdown, text, html)
 - `POST /render/links` - Extract all links from a URL (including document links)
 - `GET /render/status` - Check Playwright rendering service status
+
+**SAM.gov** (Federal Opportunities):
+- `GET /sam/searches` - List SAM searches
+- `POST /sam/searches` - Create search
+- `GET /sam/searches/{id}` - Get search details
+- `PATCH /sam/searches/{id}` - Update search
+- `DELETE /sam/searches/{id}` - Archive search
+- `POST /sam/searches/{id}/pull` - Trigger pull from SAM.gov
+- `GET /sam/searches/{id}/stats` - Get search statistics
+- `GET /sam/solicitations` - List solicitations with filters
+- `GET /sam/solicitations/{id}` - Get solicitation details
+- `GET /sam/solicitations/{id}/notices` - List notices/versions
+- `GET /sam/solicitations/{id}/attachments` - List attachments
+- `GET /sam/solicitations/{id}/summaries` - List summaries
+- `POST /sam/solicitations/{id}/summarize` - Generate LLM summary
+- `POST /sam/solicitations/{id}/download-attachments` - Download all attachments
+- `GET /sam/notices/{id}` - Get notice details
+- `POST /sam/notices/{id}/generate-changes` - Generate change summary
+- `GET /sam/attachments/{id}` - Get attachment details
+- `POST /sam/attachments/{id}/download` - Download attachment
+- `GET /sam/summaries/{id}` - Get summary details
+- `POST /sam/summaries/{id}/promote` - Promote to canonical
+- `DELETE /sam/summaries/{id}` - Delete experimental summary
+- `GET /sam/agencies` - List agencies
 
 **System**:
 - `GET /health` - API health check

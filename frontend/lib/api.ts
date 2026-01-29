@@ -2903,6 +2903,488 @@ export const searchApi = {
   },
 }
 
+// ============================================================================
+// SAM.gov API (Phase 7)
+// ============================================================================
+
+export interface SamSearch {
+  id: string
+  organization_id: string
+  name: string
+  slug: string
+  description: string | null
+  search_config: Record<string, any>
+  status: 'active' | 'paused' | 'archived'
+  is_active: boolean
+  last_pull_at: string | null
+  last_pull_status: string | null
+  pull_frequency: 'manual' | 'hourly' | 'daily'
+  solicitation_count: number
+  notice_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface SamSolicitation {
+  id: string
+  organization_id: string
+  search_id: string
+  notice_id: string
+  solicitation_number: string | null
+  title: string
+  description: string | null
+  notice_type: string
+  naics_code: string | null
+  psc_code: string | null
+  set_aside_code: string | null
+  status: string
+  posted_date: string | null
+  response_deadline: string | null
+  ui_link: string | null
+  contact_info: Record<string, any> | null
+  // Organization hierarchy (parsed from fullParentPathName: AGENCY.BUREAU.OFFICE)
+  agency_name: string | null
+  bureau_name: string | null
+  office_name: string | null
+  full_parent_path: string | null
+  notice_count: number
+  attachment_count: number
+  created_at: string
+  updated_at: string
+}
+
+export interface SamNotice {
+  id: string
+  solicitation_id: string
+  sam_notice_id: string
+  notice_type: string
+  version_number: number
+  title: string | null
+  description: string | null
+  posted_date: string | null
+  response_deadline: string | null
+  changes_summary: string | null
+  created_at: string
+}
+
+export interface SamAttachment {
+  id: string
+  solicitation_id: string
+  notice_id: string | null
+  asset_id: string | null
+  resource_id: string
+  filename: string
+  file_type: string | null
+  file_size: number | null
+  description: string | null
+  download_status: string
+  downloaded_at: string | null
+  created_at: string
+}
+
+export interface SamSummary {
+  id: string
+  solicitation_id: string
+  summary_type: string
+  is_canonical: boolean
+  model: string
+  summary: string
+  key_requirements: Array<Record<string, any>> | null
+  compliance_checklist: Array<Record<string, any>> | null
+  confidence_score: number | null
+  token_count: number | null
+  created_at: string
+  promoted_at: string | null
+}
+
+export interface SamApiUsage {
+  date: string
+  search_calls: number
+  detail_calls: number
+  attachment_calls: number
+  total_calls: number
+  daily_limit: number
+  remaining_calls: number
+  usage_percent: number
+  reset_at: string
+  is_over_limit: boolean
+}
+
+export interface SamQueueStats {
+  pending: number
+  processing: number
+  completed: number
+  failed: number
+  ready_to_process: number
+  total: number
+}
+
+export interface SamApiStatus {
+  usage: SamApiUsage
+  queue: SamQueueStats
+  history: Array<Record<string, any>>
+}
+
+export interface SamPreviewResult {
+  notice_id: string
+  title: string
+  solicitation_number: string | null
+  notice_type: string
+  naics_code: string | null
+  psc_code: string | null
+  set_aside: string | null
+  posted_date: string | null
+  response_deadline: string | null
+  agency: string | null
+  ui_link: string | null
+  attachments_count: number
+}
+
+export interface SamAgency {
+  id: string
+  code: string
+  name: string
+  abbreviation: string | null
+}
+
+export const samApi = {
+  // ========== Searches ==========
+
+  async listSearches(token: string | undefined, params?: {
+    status?: string
+    is_active?: boolean
+    limit?: number
+    offset?: number
+  }): Promise<{ items: SamSearch[]; total: number; limit: number; offset: number }> {
+    const searchParams = new URLSearchParams()
+    if (params?.status) searchParams.append('status', params.status)
+    if (params?.is_active !== undefined) searchParams.append('is_active', String(params.is_active))
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/sam/searches?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getSearch(token: string | undefined, searchId: string): Promise<SamSearch> {
+    const res = await fetch(apiUrl(`/sam/searches/${searchId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async createSearch(token: string | undefined, data: {
+    name: string
+    description?: string
+    search_config: Record<string, any>
+    pull_frequency?: string
+  }): Promise<SamSearch> {
+    const res = await fetch(apiUrl('/sam/searches'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async updateSearch(token: string | undefined, searchId: string, data: {
+    name?: string
+    description?: string
+    search_config?: Record<string, any>
+    status?: string
+    is_active?: boolean
+    pull_frequency?: string
+  }): Promise<SamSearch> {
+    const res = await fetch(apiUrl(`/sam/searches/${searchId}`), {
+      method: 'PATCH',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteSearch(token: string | undefined, searchId: string): Promise<void> {
+    const res = await fetch(apiUrl(`/sam/searches/${searchId}`), {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      httpError(res, body.detail || 'Delete failed', body)
+    }
+  },
+
+  async triggerPull(token: string | undefined, searchId: string, params?: {
+    max_pages?: number
+    page_size?: number
+  }): Promise<Record<string, any>> {
+    const res = await fetch(apiUrl(`/sam/searches/${searchId}/pull`), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(params || {}),
+    })
+    return handleJson(res)
+  },
+
+  async previewSearch(token: string | undefined, data: {
+    search_config: Record<string, any>
+    limit?: number
+  }): Promise<{
+    success: boolean
+    total_matching?: number
+    sample_count?: number
+    sample_results?: SamPreviewResult[]
+    search_config?: Record<string, any>
+    message: string
+    error?: string
+    remaining_calls?: number
+  }> {
+    const res = await fetch(apiUrl('/sam/searches/preview'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  // ========== Solicitations ==========
+
+  async listSolicitations(token: string | undefined, params?: {
+    search_id?: string
+    status?: string
+    notice_type?: string
+    naics_code?: string
+    limit?: number
+    offset?: number
+  }): Promise<{ items: SamSolicitation[]; total: number; limit: number; offset: number }> {
+    const searchParams = new URLSearchParams()
+    if (params?.search_id) searchParams.append('search_id', params.search_id)
+    if (params?.status) searchParams.append('status', params.status)
+    if (params?.notice_type) searchParams.append('notice_type', params.notice_type)
+    if (params?.naics_code) searchParams.append('naics_code', params.naics_code)
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/sam/solicitations?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getSolicitation(token: string | undefined, solicitationId: string): Promise<SamSolicitation> {
+    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getSolicitationNotices(token: string | undefined, solicitationId: string): Promise<SamNotice[]> {
+    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/notices`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getSolicitationAttachments(token: string | undefined, solicitationId: string, params?: {
+    download_status?: string
+  }): Promise<SamAttachment[]> {
+    const searchParams = new URLSearchParams()
+    if (params?.download_status) searchParams.append('download_status', params.download_status)
+
+    const url = apiUrl(`/sam/solicitations/${solicitationId}/attachments?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getSolicitationSummaries(token: string | undefined, solicitationId: string, params?: {
+    summary_type?: string
+  }): Promise<SamSummary[]> {
+    const searchParams = new URLSearchParams()
+    if (params?.summary_type) searchParams.append('summary_type', params.summary_type)
+
+    const url = apiUrl(`/sam/solicitations/${solicitationId}/summaries?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async generateSummary(token: string | undefined, solicitationId: string, data: {
+    summary_type?: string
+    model?: string
+    include_attachments?: boolean
+  }): Promise<SamSummary> {
+    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/summarize`), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async downloadAllAttachments(token: string | undefined, solicitationId: string): Promise<Record<string, any>> {
+    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/download-attachments`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  // ========== Notices ==========
+
+  async getNotice(token: string | undefined, noticeId: string): Promise<SamNotice> {
+    const res = await fetch(apiUrl(`/sam/notices/${noticeId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async generateNoticeChanges(token: string | undefined, noticeId: string): Promise<{
+    notice_id: string
+    changes_summary: string
+  }> {
+    const res = await fetch(apiUrl(`/sam/notices/${noticeId}/generate-changes`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  // ========== Attachments ==========
+
+  async getAttachment(token: string | undefined, attachmentId: string): Promise<SamAttachment> {
+    const res = await fetch(apiUrl(`/sam/attachments/${attachmentId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async downloadAttachment(token: string | undefined, attachmentId: string): Promise<{
+    attachment_id: string
+    asset_id?: string
+    status: string
+    error?: string
+  }> {
+    const res = await fetch(apiUrl(`/sam/attachments/${attachmentId}/download`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  // ========== Summaries ==========
+
+  async getSummary(token: string | undefined, summaryId: string): Promise<SamSummary> {
+    const res = await fetch(apiUrl(`/sam/summaries/${summaryId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async promoteSummary(token: string | undefined, summaryId: string): Promise<SamSummary> {
+    const res = await fetch(apiUrl(`/sam/summaries/${summaryId}/promote`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  async deleteSummary(token: string | undefined, summaryId: string): Promise<void> {
+    const res = await fetch(apiUrl(`/sam/summaries/${summaryId}`), {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    })
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}))
+      httpError(res, body.detail || 'Delete failed', body)
+    }
+  },
+
+  // ========== Agencies ==========
+
+  async listAgencies(token: string | undefined): Promise<SamAgency[]> {
+    const res = await fetch(apiUrl('/sam/agencies'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  // ========== API Usage ==========
+
+  async getUsage(token: string | undefined): Promise<SamApiUsage> {
+    const res = await fetch(apiUrl('/sam/usage'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getUsageHistory(token: string | undefined, days: number = 30): Promise<{
+    items: Array<Record<string, any>>
+    days: number
+  }> {
+    const res = await fetch(apiUrl(`/sam/usage/history?days=${days}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async estimateImpact(token: string | undefined, data: {
+    search_config: Record<string, any>
+    max_pages?: number
+    page_size?: number
+  }): Promise<{
+    estimated_calls: number
+    breakdown: Record<string, number>
+    current_usage: number
+    remaining_before: number
+    remaining_after: number
+    will_exceed_limit: boolean
+    daily_limit: number
+  }> {
+    const res = await fetch(apiUrl('/sam/usage/estimate'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async getApiStatus(token: string | undefined, historyDays: number = 7): Promise<SamApiStatus> {
+    const res = await fetch(apiUrl(`/sam/usage/status?history_days=${historyDays}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getQueueStats(token: string | undefined): Promise<SamQueueStats> {
+    const res = await fetch(apiUrl('/sam/queue'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+}
+
 // Default export with all API modules
 export default {
   API_BASE_URL,
@@ -2923,5 +3405,6 @@ export default {
   scrapeApi,
   scheduledTasksApi,
   searchApi,
+  samApi,
   utils,
 }

@@ -591,3 +591,51 @@ opensearch:
   # Longer documents are truncated for indexing
   # Increase for full document search, decrease for faster indexing
   max_content_length: 100000
+
+
+# ============================================================================
+# SAM.gov API Configuration (Federal Opportunities)
+# ============================================================================
+# SAM.gov Opportunities API integration for federal contract data ingestion
+# and analysis. Enables searching, tracking, and summarizing federal
+# solicitations.
+#
+# Get an API key at: https://api.sam.gov
+#
+# Features:
+#   - Search for opportunities by NAICS, PSC, agency, keywords
+#   - Track solicitations and amendments over time
+#   - Download and extract attachments (SOWs, pricing templates, etc.)
+#   - Generate LLM-powered summaries and compliance checklists
+#
+# If not configured here, falls back to SAM_* environment variables
+
+sam:
+  # Enable SAM.gov integration (optional, default: true)
+  enabled: true
+
+  # SAM.gov API key (required)
+  # Get your API key at: https://api.sam.gov
+  # Recommended: Reference from environment for security
+  api_key: ${SAM_API_KEY}
+
+  # Note: API base URL is hardcoded to https://api.sam.gov/opportunities/v2
+  # and cannot be configured (SAM.gov has a fixed API endpoint)
+
+  # Request timeout in seconds (optional, default: 60)
+  timeout: 60
+
+  # Maximum retry attempts (optional, default: 3)
+  max_retries: 3
+
+  # Delay between API requests in seconds (optional, default: 0.5)
+  # Used for rate limiting to avoid hitting API limits
+  rate_limit_delay: 0.5
+
+  # Maximum pages to fetch per pull operation (optional, default: 10)
+  # Each page contains up to page_size results
+  max_pages_per_pull: 10
+
+  # Number of results per page (optional, default: 100)
+  # SAM.gov API supports up to 1000 per request
+  page_size: 100

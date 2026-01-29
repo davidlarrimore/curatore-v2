@@ -33,6 +33,7 @@ from app.models.config_models import (
     QueueConfig,
     MinIOConfig,
     OpenSearchConfig,
+    SamConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -373,6 +374,26 @@ class ConfigLoader:
         """Check if OpenSearch configuration is available and enabled."""
         opensearch_config = self.get_opensearch_config()
         return opensearch_config is not None and opensearch_config.enabled
+
+    def get_sam_config(self) -> Optional[SamConfig]:
+        """
+        Get typed SAM.gov configuration.
+
+        Returns:
+            SamConfig instance or None if not configured
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        config = self.get_config()
+        if config is None:
+            return None
+        return config.sam
+
+    def has_sam_config(self) -> bool:
+        """Check if SAM.gov configuration is available and enabled."""
+        sam_config = self.get_sam_config()
+        return sam_config is not None and sam_config.enabled
 
     # -------------------------------------------------------------------------
     # Extraction engine convenience methods
