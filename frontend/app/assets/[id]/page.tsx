@@ -631,6 +631,113 @@ function AssetDetailContent() {
                       title={asset.original_filename}
                     />
                   </div>
+                ) : asset.content_type === 'text/html' ? (
+                  <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden" style={{ height: '600px' }}>
+                    <iframe
+                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
+                      className="w-full h-full bg-white"
+                      title={asset.original_filename}
+                      sandbox="allow-same-origin"
+                    />
+                  </div>
+                ) : asset.content_type === 'text/plain' || asset.content_type === 'text/csv' || asset.content_type === 'text/markdown' ? (
+                  <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden" style={{ height: '600px' }}>
+                    <iframe
+                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
+                      className="w-full h-full bg-white dark:bg-gray-900"
+                      title={asset.original_filename}
+                    />
+                  </div>
+                ) : asset.content_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || asset.content_type === 'application/msword' ? (
+                  <div className="p-8 text-center border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/10 dark:to-indigo-900/10">
+                    <div className="w-16 h-16 mx-auto mb-4 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg">
+                      <FileText className="w-8 h-8 text-white" />
+                    </div>
+                    <p className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
+                      Microsoft Word Document
+                    </p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                      {asset.original_filename}
+                    </p>
+                    <div className="flex items-center justify-center gap-3">
+                      <Button
+                        variant="primary"
+                        onClick={() => {
+                          if (!token) return
+                          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+                          const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
+                          window.open(url, '_blank')
+                        }}
+                        className="gap-2"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download Document
+                      </Button>
+                    </div>
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-4">
+                      View the extracted markdown in the "Extracted Content" tab
+                    </p>
+                  </div>
+                ) : asset.content_type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || asset.content_type === 'application/vnd.ms-excel' ? (
+                  <div className="p-8 text-center border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-gradient-to-br from-emerald-50 to-green-50 dark:from-emerald-900/10 dark:to-green-900/10">
+                    <div className="w-16 h-16 mx-auto mb-4 rounded-xl bg-gradient-to-br from-emerald-500 to-green-600 flex items-center justify-center shadow-lg">
+                      <FileText className="w-8 h-8 text-white" />
+                    </div>
+                    <p className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
+                      Microsoft Excel Spreadsheet
+                    </p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                      {asset.original_filename}
+                    </p>
+                    <div className="flex items-center justify-center gap-3">
+                      <Button
+                        variant="primary"
+                        onClick={() => {
+                          if (!token) return
+                          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+                          const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
+                          window.open(url, '_blank')
+                        }}
+                        className="gap-2"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download Spreadsheet
+                      </Button>
+                    </div>
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-4">
+                      View the extracted markdown in the "Extracted Content" tab
+                    </p>
+                  </div>
+                ) : asset.content_type === 'application/vnd.openxmlformats-officedocument.presentationml.presentation' || asset.content_type === 'application/vnd.ms-powerpoint' ? (
+                  <div className="p-8 text-center border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-gradient-to-br from-orange-50 to-red-50 dark:from-orange-900/10 dark:to-red-900/10">
+                    <div className="w-16 h-16 mx-auto mb-4 rounded-xl bg-gradient-to-br from-orange-500 to-red-600 flex items-center justify-center shadow-lg">
+                      <FileText className="w-8 h-8 text-white" />
+                    </div>
+                    <p className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
+                      Microsoft PowerPoint Presentation
+                    </p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
+                      {asset.original_filename}
+                    </p>
+                    <div className="flex items-center justify-center gap-3">
+                      <Button
+                        variant="primary"
+                        onClick={() => {
+                          if (!token) return
+                          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+                          const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
+                          window.open(url, '_blank')
+                        }}
+                        className="gap-2"
+                      >
+                        <Download className="w-4 h-4" />
+                        Download Presentation
+                      </Button>
+                    </div>
+                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-4">
+                      View the extracted markdown in the "Extracted Content" tab
+                    </p>
+                  </div>
                 ) : (
                   <div className="p-8 text-center border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
                     <FileText className="w-12 h-12 mx-auto mb-3 text-gray-400" />

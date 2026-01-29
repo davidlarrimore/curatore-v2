@@ -17,6 +17,7 @@ from .routers import (
     scrape,
     scheduled_tasks,
     render,
+    search,
 )
 
 api_router = APIRouter()
@@ -39,5 +40,7 @@ api_router.include_router(scrape.router)
 api_router.include_router(scheduled_tasks.router)
 # General web rendering endpoints (Playwright)
 api_router.include_router(render.router)
+# Phase 6: Search endpoints
+api_router.include_router(search.router)
 
 __all__ = ["api_router"]

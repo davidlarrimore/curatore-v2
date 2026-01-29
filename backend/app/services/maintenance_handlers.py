@@ -661,6 +661,157 @@ async def handle_health_report(
 
 
 # =============================================================================
+# Handler: Search Reindex (Phase 6)
+# =============================================================================
+
+async def handle_search_reindex(
+    session: AsyncSession,
+    run: Run,
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Reindex all assets to OpenSearch for full-text search.
+
+    This handler:
+    1. Checks if OpenSearch is enabled
+    2. Iterates over all organizations (or specific org if configured)
+    3. Reindexes all assets with completed extractions
+    4. Reports indexing statistics
+
+    Args:
+        session: Database session
+        run: Run context for tracking
+        config: Task configuration:
+            - organization_id: Optional specific org to reindex
+            - batch_size: Batch size for bulk operations (default: 100)
+
+    Returns:
+        Dict with reindex statistics:
+        {
+            "status": "completed" | "disabled" | "failed",
+            "organizations_processed": int,
+            "total_assets": int,
+            "indexed": int,
+            "failed": int,
+            "errors": list
+        }
+    """
+    from .config_loader import config_loader
+    from .index_service import index_service
+    from ..config import settings
+
+    run_id = run.id
+
+    await _log_event(
+        session, run_id, "INFO", "progress",
+        "Starting search reindex maintenance task"
+    )
+
+    # Check if OpenSearch is enabled
+    opensearch_config = config_loader.get_opensearch_config()
+    if opensearch_config:
+        enabled = opensearch_config.enabled
+    else:
+        enabled = settings.opensearch_enabled
+
+    if not enabled:
+        await _log_event(
+            session, run_id, "INFO", "progress",
+            "OpenSearch is disabled, skipping reindex"
+        )
+        return {
+            "status": "disabled",
+            "message": "OpenSearch is not enabled",
+            "organizations_processed": 0,
+            "total_assets": 0,
+            "indexed": 0,
+            "failed": 0,
+        }
+
+    # Get configuration
+    specific_org_id = config.get("organization_id")
+    batch_size = config.get("batch_size", 100)
+
+    # Get organizations to process
+    if specific_org_id:
+        org_query = select(Organization).where(Organization.id == specific_org_id)
+    else:
+        org_query = select(Organization).where(Organization.is_active == True)
+
+    org_result = await session.execute(org_query)
+    organizations = list(org_result.scalars().all())
+
+    total_orgs = len(organizations)
+    total_assets = 0
+    total_indexed = 0
+    total_failed = 0
+    all_errors: List[str] = []
+
+    await _log_event(
+        session, run_id, "INFO", "progress",
+        f"Processing {total_orgs} organization(s) for reindex"
+    )
+
+    for org in organizations:
+        await _log_event(
+            session, run_id, "INFO", "progress",
+            f"Reindexing assets for organization: {org.name}"
+        )
+
+        try:
+            result = await index_service.reindex_organization(
+                session=session,
+                organization_id=org.id,
+                batch_size=batch_size,
+            )
+
+            org_total = result.get("total", 0)
+            org_indexed = result.get("indexed", 0)
+            org_failed = result.get("failed", 0)
+            org_errors = result.get("errors", [])
+
+            total_assets += org_total
+            total_indexed += org_indexed
+            total_failed += org_failed
+            all_errors.extend(org_errors[:5])  # Limit errors per org
+
+            await _log_event(
+                session, run_id, "INFO", "progress",
+                f"Organization {org.name}: {org_indexed}/{org_total} indexed, {org_failed} failed"
+            )
+
+        except Exception as e:
+            error_msg = f"Failed to reindex org {org.name}: {str(e)}"
+            logger.error(error_msg)
+            all_errors.append(error_msg)
+            await _log_event(
+                session, run_id, "ERROR", "error",
+                error_msg
+            )
+
+    # Final summary
+    await _log_event(
+        session, run_id, "INFO", "summary",
+        f"Search reindex completed: {total_indexed}/{total_assets} assets indexed across {total_orgs} organizations",
+        context={
+            "organizations_processed": total_orgs,
+            "total_assets": total_assets,
+            "indexed": total_indexed,
+            "failed": total_failed,
+        }
+    )
+
+    return {
+        "status": "completed",
+        "organizations_processed": total_orgs,
+        "total_assets": total_assets,
+        "indexed": total_indexed,
+        "failed": total_failed,
+        "errors": all_errors[:20],  # Limit total errors
+    }
+
+
+# =============================================================================
 # Handler Registry
 # =============================================================================
 
@@ -669,6 +820,7 @@ MAINTENANCE_HANDLERS = {
     "orphan.detect": handle_orphan_detection,
     "retention.enforce": handle_retention_enforcement,
     "health.report": handle_health_report,
+    "search.reindex": handle_search_reindex,
 }
 
 

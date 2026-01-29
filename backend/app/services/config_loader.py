@@ -32,6 +32,7 @@ from app.models.config_models import (
     EmailConfig,
     QueueConfig,
     MinIOConfig,
+    OpenSearchConfig,
 )
 
 logger = logging.getLogger(__name__)
@@ -208,6 +209,9 @@ class ConfigLoader:
             if config.minio is None:
                 logger.warning("MinIO configuration not found (optional)")
 
+            if config.opensearch is None:
+                logger.warning("OpenSearch configuration not found (optional)")
+
             # Queue is required
             if config.queue is None:
                 errors.append("Queue configuration is required")
@@ -349,6 +353,26 @@ class ConfigLoader:
     def has_playwright_config(self) -> bool:
         """Check if Playwright configuration is available."""
         return self.get_playwright_config() is not None
+
+    def get_opensearch_config(self) -> Optional[OpenSearchConfig]:
+        """
+        Get typed OpenSearch configuration.
+
+        Returns:
+            OpenSearchConfig instance or None if not configured
+
+        Raises:
+            ValueError: If configuration is invalid
+        """
+        config = self.get_config()
+        if config is None:
+            return None
+        return config.opensearch
+
+    def has_opensearch_config(self) -> bool:
+        """Check if OpenSearch configuration is available and enabled."""
+        opensearch_config = self.get_opensearch_config()
+        return opensearch_config is not None and opensearch_config.enabled
 
     # -------------------------------------------------------------------------
     # Extraction engine convenience methods

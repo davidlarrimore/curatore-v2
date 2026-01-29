@@ -524,3 +524,70 @@ minio:
   # Frontend uploads/downloads use presigned URLs for direct storage access
   # Lower = more secure, higher = more convenient
   presigned_expiry: 3600
+
+
+# ============================================================================
+# OpenSearch Configuration (Native Full-Text Search)
+# ============================================================================
+# OpenSearch provides full-text search across all indexed content (uploads,
+# SharePoint, web scrapes). Documents are automatically indexed after extraction.
+#
+# Quick Start:
+#   1. Enable OpenSearch: set enabled: true below
+#   2. Start with search profile: docker compose --profile search up -d
+#   3. Access search at: http://localhost:3000/search
+#
+# Architecture:
+#   - OpenSearch runs as a separate container (port 9200)
+#   - Assets are indexed after successful extraction
+#   - Indices are organization-scoped for multi-tenancy
+#   - Full-text search with relevance scoring and highlighting
+#
+# External Hosting:
+#   You can point to an externally hosted OpenSearch cluster:
+#   - AWS OpenSearch Service: https://your-domain.region.es.amazonaws.com
+#   - Self-hosted cluster: https://opensearch.your-domain.com
+#   - Set username/password if authentication is enabled
+#
+# If not configured here, falls back to OPENSEARCH_* environment variables
+
+opensearch:
+  # Enable OpenSearch full-text search (optional, default: false)
+  # Set to true to enable search functionality
+  enabled: false
+
+  # OpenSearch service URL (required if enabled)
+  # Examples:
+  #   - Docker: http://opensearch:9200
+  #   - Local: http://localhost:9200
+  #   - AWS OpenSearch: https://your-domain.region.es.amazonaws.com
+  #   - External: https://opensearch.your-domain.com:9200
+  service_url: http://opensearch:9200
+
+  # Authentication (optional, leave empty for no auth)
+  # Required for AWS OpenSearch or secured clusters
+  username: ${OPENSEARCH_USERNAME:-}
+  password: ${OPENSEARCH_PASSWORD:-}
+
+  # Verify SSL certificates (optional, default: false)
+  # - false: Disable SSL verification (development, self-signed certs)
+  # - true: Verify SSL (production, AWS OpenSearch)
+  verify_ssl: false
+
+  # Index prefix for all Curatore indices (optional, default: curatore)
+  # Indices are named: {prefix}-assets-{org_id}
+  # Example: curatore-assets-550e8400-e29b-41d4-a716-446655440000
+  index_prefix: curatore
+
+  # Request timeout in seconds (optional, default: 30)
+  # Increase for large indices or complex queries
+  timeout: 30
+
+  # Batch size for bulk indexing operations (optional, default: 100)
+  # Used during reindex operations
+  batch_size: 100
+
+  # Maximum content length to index (optional, default: 100000 characters)
+  # Longer documents are truncated for indexing
+  # Increase for full document search, decrease for faster indexing
+  max_content_length: 100000

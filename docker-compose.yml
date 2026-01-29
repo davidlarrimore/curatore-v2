@@ -68,6 +68,13 @@ services:
       - MINIO_BUCKET_PROCESSED=${MINIO_BUCKET_PROCESSED:-curatore-processed}
       - MINIO_BUCKET_TEMP=${MINIO_BUCKET_TEMP:-curatore-temp}
       - MINIO_PRESIGNED_EXPIRY=${MINIO_PRESIGNED_EXPIRY:-3600}
+      # OpenSearch (Native Full-Text Search)
+      - OPENSEARCH_ENABLED=${OPENSEARCH_ENABLED:-false}
+      - OPENSEARCH_ENDPOINT=opensearch:9200
+      - OPENSEARCH_USERNAME=${OPENSEARCH_USERNAME:-}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-}
+      - OPENSEARCH_VERIFY_SSL=${OPENSEARCH_VERIFY_SSL:-false}
+      - OPENSEARCH_INDEX_PREFIX=${OPENSEARCH_INDEX_PREFIX:-curatore}
     command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
     ports:
       - "8000:8000"
@@ -131,6 +138,13 @@ services:
       - MINIO_BUCKET_PROCESSED=${MINIO_BUCKET_PROCESSED:-curatore-processed}
       - MINIO_BUCKET_TEMP=${MINIO_BUCKET_TEMP:-curatore-temp}
       - MINIO_PRESIGNED_EXPIRY=${MINIO_PRESIGNED_EXPIRY:-3600}
+      # OpenSearch (Native Full-Text Search)
+      - OPENSEARCH_ENABLED=${OPENSEARCH_ENABLED:-false}
+      - OPENSEARCH_ENDPOINT=opensearch:9200
+      - OPENSEARCH_USERNAME=${OPENSEARCH_USERNAME:-}
+      - OPENSEARCH_PASSWORD=${OPENSEARCH_PASSWORD:-}
+      - OPENSEARCH_VERIFY_SSL=${OPENSEARCH_VERIFY_SSL:-false}
+      - OPENSEARCH_INDEX_PREFIX=${OPENSEARCH_INDEX_PREFIX:-curatore}
     volumes:
       - ./backend/app:/app/app
       # Database persistence (shared with backend)
@@ -306,5 +320,37 @@ services:
       timeout: 10s
       retries: 3
 
+  # --------------------------------------------------------------------------
+  # OPENSEARCH: Full-text search engine (optional, enable with OPENSEARCH_ENABLED=true)
+  # --------------------------------------------------------------------------
+  opensearch:
+    profiles:
+      - search
+    image: opensearchproject/opensearch:2.11.0
+    container_name: curatore-opensearch
+    environment:
+      - discovery.type=single-node
+      - plugins.security.disabled=true
+      - bootstrap.memory_lock=true
+      - "OPENSEARCH_JAVA_OPTS=-Xms512m -Xmx512m"
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    ports:
+      - "9200:9200"
+      - "9600:9600"
+    volumes:
+      - opensearch_data:/usr/share/opensearch/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9200/_cluster/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
 volumes:
   minio_data:
+  opensearch_data:

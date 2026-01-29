@@ -2,7 +2,7 @@
 
 > **Full Requirements**: See `/UPDATED_DATA_ARCHITECTURE.md` (1400+ lines)
 > **Start Date**: 2026-01-28
-> **Current Phase**: Phase 5 Complete - System Maintenance & Scheduling Maturity
+> **Current Phase**: Phase 6 Complete - Native Search with OpenSearch
 
 ---
 
@@ -462,24 +462,102 @@ while maintaining stable production metadata.
 
 ---
 
-## Phase 6: Optional Integrations & Automation ⏳ NOT STARTED
+## Phase 6: Native Search with OpenSearch ✅ COMPLETE
+
+**Goal**: Add native search capability to find documents and content across all sources.
+
+**Status**: 🎉 **PHASE 6 COMPLETE** - Full-text search with OpenSearch implemented!
+
+### Backend Tasks
+- [x] OpenSearch Infrastructure ✅ DONE
+  - Added OpenSearch 2.11.0 container to docker-compose.yml (with `search` profile)
+  - Added opensearch-py to requirements.txt
+  - Added OpenSearch config to config.py and config.yml
+  - Supports both local Docker and external OpenSearch clusters
+- [x] OpenSearch Client Service ✅ DONE
+  - Created opensearch_service.py with full-text search capabilities
+  - Organization-scoped indices for multi-tenancy
+  - Multi-match queries with relevance scoring
+  - Filtering by source type, content type, date range
+  - Highlighted search results with snippets
+- [x] Index Service ✅ DONE
+  - Created index_service.py for asset indexing
+  - Downloads markdown from MinIO for content indexing
+  - Handles bulk reindexing for organizations
+- [x] Celery Tasks ✅ DONE
+  - Added index_asset_task (triggered after extraction)
+  - Added reindex_organization_task (for bulk reindexing)
+- [x] Hook Indexing into Extraction ✅ DONE
+  - extraction_orchestrator.py triggers indexing after successful extraction
+- [x] Search API Router ✅ DONE
+  - POST /api/v1/search - Full-text search with filters
+  - GET /api/v1/search - Simple GET-based search
+  - GET /api/v1/search/stats - Index statistics
+  - POST /api/v1/search/reindex - Trigger full reindex (admin)
+  - GET /api/v1/search/health - OpenSearch health check
+- [x] Scheduled Maintenance Task ✅ DONE
+  - Added search.reindex handler to maintenance_handlers.py
+  - Added search_reindex scheduled task (weekly, disabled by default)
+  - Added --seed-scheduled-tasks argument to seed.py
+
+### Frontend Tasks
+- [x] Search Page ✅ DONE
+  - Created /search page with debounced search input
+  - Source type filter chips (All, Uploads, SharePoint, Web Scrapes)
+  - Results list with title, filename, source type badge
+  - Highlighted text snippets from matches
+  - Click to navigate to asset detail
+  - Pagination support
+  - Empty state and loading states
+- [x] Search API Client ✅ DONE
+  - Added searchApi to frontend/lib/api.ts
+  - TypeScript interfaces for SearchRequest, SearchHit, SearchResponse
+- [x] Navigation ✅ DONE
+  - Added Search link to sidebar (amber/orange gradient)
+
+### Bonus: Asset Detail Enhancements
+- [x] Added file preview support for more content types:
+  - HTML files (sandboxed iframe)
+  - Plain text, CSV, Markdown (iframe)
+  - Word documents (.docx, .doc) - styled download card
+  - Excel spreadsheets (.xlsx, .xls) - styled download card
+  - PowerPoint (.pptx, .ppt) - styled download card
+
+### Acceptance Criteria
+- [x] OpenSearch indexes assets after extraction ✅
+- [x] Full-text search works with filters and highlights ✅
+- [x] Search results link to asset detail pages ✅
+- [x] Reindex can be triggered via scheduled task or API ✅
+- [x] Configuration supports external OpenSearch clusters ✅
+
+**Dependencies**: Phase 5 complete ✅
+
+---
+
+## Phase 6.2: Optional Integrations & Automation ⏳ NOT STARTED
 
 **Goal**: Extend Curatore outward without destabilizing core.
 
 **IMPORTANT**: This phase is OPTIONAL and should NOT block earlier phases.
 
 ### Backend Tasks (Optional)
+- [ ] Semantic search (embeddings via OpenAI/local model)
 - [ ] Vector DB sync actions
 - [ ] OpenWebUI publication
 - [ ] External notifications/webhooks
 - [ ] Limited automation chaining for stabilized workflows
 
 ### Frontend Tasks (Optional)
+- [ ] Global search bar in header
+- [ ] Search suggestions/autocomplete
+- [ ] Saved searches
+- [ ] Search analytics
+- [ ] Faceted search
 - [ ] Output destination configuration
 - [ ] Sync history and status views
 - [ ] Automation opt-in controls
 
-**Dependencies**: Phase 5 complete (but this is optional/future work)
+**Dependencies**: Phase 6 complete (but this is optional/future work)
 
 ---
 
@@ -798,3 +876,16 @@ curl http://localhost:8000/api/v1/runs | jq
   - Max depth configuration (1, 2, 3, or unlimited)
   - Frontend: Documents filter, max depth selector in create modal
   - ✅ Successfully tested with amivero.com (73 pages crawled)
+- **2026-01-29**: 🎉 **PHASE 6 COMPLETE** - Native Search with OpenSearch
+  - Added OpenSearch 2.11.0 container to docker-compose.yml (search profile)
+  - Created opensearch_service.py with full-text search, multi-match queries, highlights
+  - Created index_service.py for asset indexing after extraction
+  - Added index_asset_task and reindex_organization_task Celery tasks
+  - Created search.py API router with search, stats, reindex, health endpoints
+  - Added OpenSearch configuration to config.yml and .env
+  - Created /search page with filters, highlights, and pagination
+  - Added Search link to sidebar navigation
+  - Added search.reindex scheduled maintenance task
+  - Added --seed-scheduled-tasks argument to seed.py
+  - Enhanced asset detail page with file preview for HTML, DOCX, XLSX, PPTX, text
+  - ✅ Successfully indexed 317 assets, search working end-to-end

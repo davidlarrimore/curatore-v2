@@ -34,8 +34,17 @@ from .services.job_service import (
 )
 from .services.database_service import database_service
 from .services.extraction_orchestrator import extraction_orchestrator
+from .services.config_loader import config_loader
 from .database.models import Job, JobDocument, JobLog
 from .config import settings
+
+
+def _is_opensearch_enabled() -> bool:
+    """Check if OpenSearch is enabled via config.yml or environment variables."""
+    opensearch_config = config_loader.get_opensearch_config()
+    if opensearch_config:
+        return opensearch_config.enabled
+    return _is_opensearch_enabled()
 
 
 class BaseTask(Task):
@@ -431,6 +440,175 @@ async def _execute_extraction_async(
         )
         await session.commit()
         return result
+
+
+# ============================================================================
+# OPENSEARCH INDEXING TASKS (Phase 6)
+# ============================================================================
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def index_asset_task(
+    self,
+    asset_id: str,
+) -> Dict[str, Any]:
+    """
+    Index an asset to OpenSearch after extraction (Phase 6).
+
+    This task is triggered when an asset's extraction completes successfully.
+    It downloads the extracted markdown from MinIO and indexes it to OpenSearch
+    for full-text search.
+
+    Args:
+        asset_id: Asset UUID string
+
+    Returns:
+        Dict with indexing result:
+        {
+            "asset_id": str,
+            "status": "indexed" | "skipped" | "failed",
+            "message": str
+        }
+    """
+    from uuid import UUID
+
+    logger = logging.getLogger("curatore.tasks.indexing")
+
+    # Check if OpenSearch is enabled
+    if not _is_opensearch_enabled():
+        logger.debug(f"OpenSearch disabled, skipping index for asset {asset_id}")
+        return {
+            "asset_id": asset_id,
+            "status": "skipped",
+            "message": "OpenSearch is disabled",
+        }
+
+    logger.info(f"Starting index task for asset {asset_id}")
+
+    try:
+        result = asyncio.run(_index_asset_async(UUID(asset_id)))
+
+        if result:
+            logger.info(f"Indexed asset {asset_id} to OpenSearch")
+            return {
+                "asset_id": asset_id,
+                "status": "indexed",
+                "message": "Successfully indexed to OpenSearch",
+            }
+        else:
+            logger.warning(f"Failed to index asset {asset_id}")
+            return {
+                "asset_id": asset_id,
+                "status": "failed",
+                "message": "Indexing returned False",
+            }
+
+    except Exception as e:
+        logger.error(f"Index task failed for asset {asset_id}: {e}", exc_info=True)
+        raise
+
+
+async def _index_asset_async(asset_id) -> bool:
+    """
+    Async wrapper for index service.
+
+    Args:
+        asset_id: Asset UUID
+
+    Returns:
+        True if indexed successfully
+    """
+    from .services.index_service import index_service
+
+    async with database_service.get_session() as session:
+        return await index_service.index_asset(session, asset_id)
+
+
+@shared_task(bind=True, autoretry_for=(), retry_kwargs={"max_retries": 0})
+def reindex_organization_task(
+    self,
+    organization_id: str,
+    batch_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Reindex all assets for an organization (Phase 6).
+
+    This task is triggered manually by admins to rebuild the search index
+    for an organization. Useful for migrations and recovery.
+
+    Args:
+        organization_id: Organization UUID string
+        batch_size: Optional batch size for bulk indexing
+
+    Returns:
+        Dict with reindex statistics:
+        {
+            "status": "completed" | "disabled" | "failed",
+            "total": int,
+            "indexed": int,
+            "failed": int,
+            "errors": list
+        }
+    """
+    from uuid import UUID
+
+    logger = logging.getLogger("curatore.tasks.indexing")
+
+    # Check if OpenSearch is enabled
+    if not _is_opensearch_enabled():
+        logger.info("OpenSearch disabled, skipping reindex")
+        return {
+            "status": "disabled",
+            "message": "OpenSearch is disabled",
+            "total": 0,
+            "indexed": 0,
+            "failed": 0,
+        }
+
+    logger.info(f"Starting reindex task for organization {organization_id}")
+
+    try:
+        result = asyncio.run(
+            _reindex_organization_async(UUID(organization_id), batch_size)
+        )
+
+        logger.info(
+            f"Reindex completed for org {organization_id}: "
+            f"{result.get('indexed', 0)}/{result.get('total', 0)} indexed"
+        )
+        return result
+
+    except Exception as e:
+        logger.error(f"Reindex task failed for org {organization_id}: {e}", exc_info=True)
+        return {
+            "status": "failed",
+            "message": str(e),
+            "total": 0,
+            "indexed": 0,
+            "failed": 0,
+        }
+
+
+async def _reindex_organization_async(
+    organization_id,
+    batch_size: Optional[int] = None,
+) -> Dict[str, Any]:
+    """
+    Async wrapper for organization reindex.
+
+    Args:
+        organization_id: Organization UUID
+        batch_size: Optional batch size
+
+    Returns:
+        Dict with reindex results
+    """
+    from .services.index_service import index_service
+
+    async with database_service.get_session() as session:
+        return await index_service.reindex_organization(
+            session, organization_id, batch_size
+        )
 
 
 # ============================================================================

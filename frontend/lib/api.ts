@@ -2746,6 +2746,163 @@ export const scheduledTasksApi = {
   },
 }
 
+// -------------------- Search API (Phase 6) --------------------
+
+/**
+ * Search request parameters
+ */
+export interface SearchRequest {
+  query: string
+  source_types?: string[]
+  content_types?: string[]
+  collection_ids?: string[]
+  date_from?: string
+  date_to?: string
+  limit?: number
+  offset?: number
+}
+
+/**
+ * Search result hit
+ */
+export interface SearchHit {
+  asset_id: string
+  score: number
+  title?: string
+  filename?: string
+  source_type?: string
+  content_type?: string
+  url?: string
+  created_at?: string
+  highlights: Record<string, string[]>
+}
+
+/**
+ * Search response
+ */
+export interface SearchResponse {
+  total: number
+  limit: number
+  offset: number
+  query: string
+  hits: SearchHit[]
+}
+
+/**
+ * Index statistics response
+ */
+export interface IndexStatsResponse {
+  enabled: boolean
+  status: string
+  index_name?: string
+  document_count?: number
+  size_bytes?: number
+  message?: string
+}
+
+/**
+ * Reindex response
+ */
+export interface ReindexResponse {
+  status: string
+  message: string
+  task_id?: string
+}
+
+/**
+ * Search health response
+ */
+export interface SearchHealthResponse {
+  enabled: boolean
+  status: string
+  index_prefix?: string
+  endpoint?: string
+  message?: string
+}
+
+export const searchApi = {
+  /**
+   * Search assets with full-text query
+   */
+  async search(token: string | undefined, request: SearchRequest): Promise<SearchResponse> {
+    const url = apiUrl('/search')
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(request),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Search assets with simple GET query
+   */
+  async searchSimple(
+    token: string | undefined,
+    query: string,
+    options?: {
+      source_types?: string[]
+      content_types?: string[]
+      limit?: number
+      offset?: number
+    }
+  ): Promise<SearchResponse> {
+    const params = new URLSearchParams({ q: query })
+    if (options?.source_types?.length) {
+      params.set('source_types', options.source_types.join(','))
+    }
+    if (options?.content_types?.length) {
+      params.set('content_types', options.content_types.join(','))
+    }
+    if (options?.limit !== undefined) {
+      params.set('limit', options.limit.toString())
+    }
+    if (options?.offset !== undefined) {
+      params.set('offset', options.offset.toString())
+    }
+
+    const url = apiUrl(`/search?${params.toString()}`)
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get search index statistics
+   */
+  async getStats(token: string | undefined): Promise<IndexStatsResponse> {
+    const url = apiUrl('/search/stats')
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Trigger reindex of all assets (admin only)
+   */
+  async reindexAll(token: string | undefined): Promise<ReindexResponse> {
+    const url = apiUrl('/search/reindex')
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Check search service health
+   */
+  async getHealth(token: string | undefined): Promise<SearchHealthResponse> {
+    const url = apiUrl('/search/health')
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+}
+
 // Default export with all API modules
 export default {
   API_BASE_URL,
@@ -2765,5 +2922,6 @@ export default {
   assetsApi,
   scrapeApi,
   scheduledTasksApi,
+  searchApi,
   utils,
 }

@@ -36,8 +36,17 @@ from ..services.run_log_service import run_log_service
 from ..services.minio_service import get_minio_service
 from ..services.storage_path_service import storage_paths
 from ..services.document_service import document_service
+from ..services.config_loader import config_loader
 from ..models import OCRSettings, ProcessingOptions
 from ..config import settings
+
+
+def _is_opensearch_enabled() -> bool:
+    """Check if OpenSearch is enabled via config.yml or environment variables."""
+    opensearch_config = config_loader.get_opensearch_config()
+    if opensearch_config:
+        return opensearch_config.enabled
+    return settings.opensearch_enabled
 
 logger = logging.getLogger("curatore.extraction_orchestrator")
 
@@ -228,6 +237,25 @@ class ExtractionOrchestrator:
                 f"Extraction successful for asset {asset_id}: "
                 f"run={run_id}, time={extraction_time:.2f}s"
             )
+
+            # Trigger OpenSearch indexing if enabled (Phase 6)
+            if _is_opensearch_enabled():
+                try:
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_id,
+                        level="INFO",
+                        event_type="progress",
+                        message="Queueing asset for search indexing...",
+                    )
+
+                    from ..tasks import index_asset_task
+                    index_asset_task.delay(asset_id=str(asset_id))
+
+                    logger.info(f"Queued asset {asset_id} for OpenSearch indexing")
+                except Exception as e:
+                    # Don't fail extraction if indexing queue fails
+                    logger.warning(f"Failed to queue asset {asset_id} for indexing: {e}")
 
             return {
                 "status": "success",

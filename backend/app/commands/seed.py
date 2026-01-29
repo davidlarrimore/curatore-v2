@@ -228,6 +228,16 @@ async def seed_scheduled_tasks() -> list:
             "enabled": True,
             "config": {},
         },
+        {
+            "name": "search_reindex",
+            "display_name": "Search Index Rebuild",
+            "description": "Rebuild the OpenSearch full-text search index for all assets. Useful after enabling search or recovering from index issues.",
+            "task_type": "search.reindex",
+            "scope_type": "global",
+            "schedule_expression": "0 2 * * 0",  # Weekly on Sunday at 2 AM UTC
+            "enabled": False,  # Disabled by default - enable when OpenSearch is configured
+            "config": {"batch_size": 100},
+        },
     ]
 
     created_tasks = []
@@ -264,6 +274,51 @@ async def seed_scheduled_tasks() -> list:
         await session.commit()
 
     return created_tasks
+
+
+async def seed_scheduled_tasks_only():
+    """
+    Seed only the scheduled tasks without creating organization or admin.
+
+    This is useful for adding new scheduled tasks to an existing database.
+    """
+    logger.info("=" * 80)
+    logger.info("SEEDING SCHEDULED TASKS ONLY")
+    logger.info("=" * 80)
+
+    try:
+        # Initialize database connection
+        logger.info("Initializing database connection...")
+        health = await database_service.health_check()
+        if health.get("status") != "healthy":
+            logger.error("Database is not healthy. Seeding aborted.")
+            sys.exit(1)
+
+        logger.info(f"Database connected: {health.get('database_type')}")
+        logger.info("")
+
+        # Seed scheduled tasks
+        scheduled_tasks = await seed_scheduled_tasks()
+        logger.info("")
+
+        # Display summary
+        logger.info("=" * 80)
+        logger.info("SEEDING COMPLETE")
+        logger.info("=" * 80)
+        logger.info(f"Scheduled Tasks: {len(scheduled_tasks)} created")
+        for task_name in scheduled_tasks:
+            logger.info(f"  - {task_name}")
+        logger.info("=" * 80)
+
+    except Exception as e:
+        logger.error(f"Seeding failed: {e}")
+        import traceback
+
+        traceback.print_exc()
+        sys.exit(1)
+    finally:
+        # Close database connection
+        await database_service.close()
 
 
 async def seed_database(create_admin: bool = True):
@@ -356,6 +411,9 @@ Examples:
   # Create only organization (no admin)
   python -m app.commands.seed
 
+  # Seed scheduled tasks only (for existing databases)
+  python -m app.commands.seed --seed-scheduled-tasks
+
 Environment Variables:
   ADMIN_EMAIL        Admin user email (default: admin@example.com)
   ADMIN_USERNAME     Admin username (default: admin)
@@ -384,6 +442,12 @@ Security:
         help="Enable verbose logging",
     )
 
+    parser.add_argument(
+        "--seed-scheduled-tasks",
+        action="store_true",
+        help="Seed scheduled tasks only (without creating organization or admin)",
+    )
+
     args = parser.parse_args()
 
     # Set log level
@@ -391,7 +455,10 @@ Security:
         logging.getLogger().setLevel(logging.DEBUG)
 
     # Run seeding
-    asyncio.run(seed_database(create_admin=args.create_admin))
+    if args.seed_scheduled_tasks:
+        asyncio.run(seed_scheduled_tasks_only())
+    else:
+        asyncio.run(seed_database(create_admin=args.create_admin))
 
 
 if __name__ == "__main__":

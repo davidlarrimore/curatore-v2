@@ -296,6 +296,37 @@ class Settings(BaseSettings):
         default=7, description="Retention period for temporary files in object storage (days)"
     )
 
+    # =========================================================================
+    # OPENSEARCH CONFIGURATION (Native Full-Text Search)
+    # =========================================================================
+    opensearch_enabled: bool = Field(
+        default=False, description="Enable native full-text search with OpenSearch"
+    )
+    opensearch_endpoint: str = Field(
+        default="opensearch:9200", description="OpenSearch endpoint (host:port)"
+    )
+    opensearch_username: str = Field(
+        default="", description="OpenSearch username (empty for no auth)"
+    )
+    opensearch_password: str = Field(
+        default="", description="OpenSearch password (empty for no auth)"
+    )
+    opensearch_verify_ssl: bool = Field(
+        default=False, description="Verify SSL for OpenSearch connections"
+    )
+    opensearch_index_prefix: str = Field(
+        default="curatore", description="Prefix for all Curatore indices"
+    )
+    opensearch_batch_size: int = Field(
+        default=100, description="Batch size for bulk indexing operations"
+    )
+    opensearch_search_timeout: float = Field(
+        default=30.0, description="Timeout (s) for search requests"
+    )
+    opensearch_max_content_length: int = Field(
+        default=100000, description="Maximum content length to index (characters)"
+    )
+
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"

@@ -422,6 +422,59 @@ class PlaywrightConfig(BaseModel):
     )
 
 
+class OpenSearchConfig(BaseModel):
+    """
+    OpenSearch full-text search service configuration.
+
+    Provides native full-text search across all indexed content (uploads,
+    SharePoint, web scrapes). Documents are automatically indexed after extraction.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    enabled: bool = Field(
+        default=False,
+        description="Enable OpenSearch full-text search"
+    )
+    service_url: str = Field(
+        default="http://opensearch:9200",
+        description="OpenSearch service URL (e.g., http://opensearch:9200)"
+    )
+    username: Optional[str] = Field(
+        default=None,
+        description="OpenSearch username (optional, empty for no auth)"
+    )
+    password: Optional[str] = Field(
+        default=None,
+        description="OpenSearch password (optional, empty for no auth)"
+    )
+    verify_ssl: bool = Field(
+        default=False,
+        description="Verify SSL certificates for OpenSearch connections"
+    )
+    index_prefix: str = Field(
+        default="curatore",
+        description="Prefix for all Curatore indices (indices named: {prefix}-assets-{org_id})"
+    )
+    timeout: int = Field(
+        default=30,
+        ge=1,
+        le=300,
+        description="Request timeout in seconds"
+    )
+    batch_size: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        description="Batch size for bulk indexing operations"
+    )
+    max_content_length: int = Field(
+        default=100000,
+        ge=1000,
+        le=1000000,
+        description="Maximum content length to index (characters, longer content is truncated)"
+    )
+
+
 class MinIOConfig(BaseModel):
     """
     MinIO/S3 object storage configuration.
@@ -521,6 +574,10 @@ class AppConfig(BaseModel):
     minio: Optional[MinIOConfig] = Field(
         default=None,
         description="MinIO/S3 object storage configuration"
+    )
+    opensearch: Optional[OpenSearchConfig] = Field(
+        default=None,
+        description="OpenSearch full-text search configuration"
     )
 
     @classmethod
