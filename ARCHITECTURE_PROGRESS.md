@@ -362,11 +362,14 @@ while maintaining stable production metadata.
 - [x] Re-crawl creates new versions, preserves history ✅ (content hash change detection)
 - [x] Hierarchical navigation works intuitively ✅ (Path Browser tab with breadcrumbs)
 
-### Known Limitations (See Backlog)
-- Current crawler is basic HTTP-only (no JavaScript rendering)
-- Works for server-rendered sites, not SPAs
-- Consider Scrapy or domain-specific approaches for production use
-- SAM.gov integration (Phase 7) may drive different requirements
+### Playwright Enhancement ✅ COMPLETE (2026-01-29)
+- Replaced httpx-based crawler with Playwright for JavaScript rendering
+- New playwright-service microservice with browser pool
+- Inline content extraction (no separate extraction job for web pages)
+- Document discovery and auto-download from crawled pages
+- Human-readable storage paths for scraped content
+- Max depth configuration (1, 2, 3, or unlimited)
+- URL normalization and deduplication fixes
 
 **Dependencies**: Phase 3 complete ✅
 
@@ -594,40 +597,25 @@ curl http://localhost:8000/api/v1/runs | jq
 
 ## Implementation Backlog (Future Considerations)
 
-### Web Crawling Maturity (Deferred)
+### Web Crawling Maturity ✅ RESOLVED (2026-01-29)
 
-**Context**: The current Phase 4 web crawling implementation is a basic proof-of-concept using httpx for HTTP requests and BeautifulSoup for link extraction. It works for simple server-rendered sites but has limitations.
+**Resolution**: Implemented Playwright-based web scraping as a microservice.
 
-**Current Limitations**:
-- No JavaScript rendering (SPAs like amivero.com return empty content)
-- No robots.txt support
-- No sitemap.xml parsing
-- Basic rate limiting (simple sleep between requests)
-- Single-threaded crawling
-- Running in FastAPI BackgroundTasks (not ideal for long-running crawls)
+**What was implemented**:
+- `playwright-service/` - New FastAPI microservice with browser pool
+- Chromium-based rendering for JavaScript-heavy sites (SPAs work now)
+- Inline content extraction (markdown from rendered DOM)
+- Document discovery (auto-find PDFs, DOCXs on pages)
+- Human-readable storage paths
+- Max depth and crawl configuration options
 
-**Future Options**:
-1. **Scrapy Integration** - Mature Python crawling framework
-   - Battle-tested, handles edge cases
-   - Built-in robots.txt, sitemaps, middleware
-   - Scrapy-Playwright plugin for JavaScript rendering
-   - Would run as Celery tasks with Scrapy spiders
+**Remaining considerations** (future work if needed):
+- robots.txt support
+- sitemap.xml parsing
+- Proxy rotation / fingerprint evasion
+- Authentication / login handling
 
-2. **Playwright/Puppeteer** - For JavaScript-heavy sites
-   - Full browser rendering
-   - Higher resource usage
-
-3. **Domain-Specific Approach** - For SAM.gov and similar
-   - API-first rather than scraping
-   - Custom extractors for known schemas
-   - May not need generic web crawling at all
-
-**Decision**: Deferred until use case is clearer. Current implementation sufficient for:
-- Testing the data model and UI
-- Server-rendered sites
-- Manual/semi-automated ingestion
-
-**Reference**: SAM.gov integration (Phase 7) may drive requirements here - API-based ingestion may be preferable to web scraping for structured government data.
+**Reference**: SAM.gov integration (Phase 7) will use API-based ingestion, not web scraping.
 
 ---
 
@@ -800,3 +788,13 @@ curl http://localhost:8000/api/v1/runs | jq
   - ✅ All frontend tasks complete (SystemMaintenanceTab, admin integration)
   - ✅ All acceptance criteria met
   - 🚀 System now self-maintains with observable scheduled tasks
+- **2026-01-29**: 🚀 **PLAYWRIGHT ENHANCEMENT** - Phase 4 Web Scraping Maturity
+  - Created playwright-service microservice with browser pool and Chromium
+  - Replaced httpx-based crawler with Playwright for JavaScript rendering
+  - Inline content extraction (markdown from rendered DOM, no separate extraction job)
+  - Document discovery and auto-download (PDFs, DOCXs found on pages)
+  - Human-readable storage paths ({org}/scrape/{collection}/pages|documents/)
+  - URL normalization and deduplication fixes
+  - Max depth configuration (1, 2, 3, or unlimited)
+  - Frontend: Documents filter, max depth selector in create modal
+  - ✅ Successfully tested with amivero.com (73 pages crawled)
