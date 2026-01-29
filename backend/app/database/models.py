@@ -1302,3 +1302,568 @@ class RunLogEvent(Base):
 
     def __repr__(self) -> str:
         return f"<RunLogEvent(id={self.id}, run_id={self.run_id}, level={self.level}, type={self.event_type})>"
+
+
+# ============================================================================
+# Phase 3 Models: Flexible Metadata & Experimentation
+# ============================================================================
+
+
+class AssetMetadata(Base):
+    """
+    AssetMetadata model for flexible, versioned document metadata (Phase 3).
+
+    Stores derived metadata as first-class artifacts, enabling LLM-driven iteration
+    without schema churn. Supports both canonical (production) and experimental
+    metadata, with explicit promotion mechanics.
+
+    Key Concepts:
+    - Metadata is stored as artifacts, not hard-coded columns
+    - Each asset can have multiple metadata types (topics, summary, tags, etc.)
+    - Canonical metadata: Single active version per type per asset, used by default
+    - Experimental metadata: Multiple variants, attributed to runs, promotable
+
+    Attributes:
+        id: Unique metadata identifier
+        asset_id: Asset this metadata belongs to
+        metadata_type: Type of metadata (e.g., "topics.v1", "summary.short.v1", "tags.llm.v1")
+        schema_version: Schema version for this metadata type
+        producer_run_id: Run that produced this metadata (nullable for system-generated)
+        is_canonical: Whether this is the canonical (production) metadata for its type
+        status: Lifecycle status (active, superseded, deprecated)
+        metadata_content: The actual metadata payload (JSONB)
+        metadata_object_ref: Optional object store reference for large payloads
+        created_at: When metadata was created
+        promoted_at: When metadata was promoted to canonical (if applicable)
+        promoted_from_id: ID of experimental metadata this was promoted from
+        superseded_at: When this metadata was superseded by newer canonical
+        superseded_by_id: ID of metadata that superseded this one
+
+    Relationships:
+        asset: Asset this metadata belongs to
+        producer_run: Run that produced this metadata
+        superseded_by: Metadata that superseded this one
+        supersedes: Metadata that this one superseded
+
+    Metadata Types (Examples):
+        - topics.v1: List of topics/themes
+        - summary.short.v1: Brief summary (1-2 sentences)
+        - summary.long.v1: Detailed summary
+        - tags.llm.v1: LLM-generated tags
+        - entities.v1: Extracted entities (people, orgs, etc.)
+        - classification.v1: Document classification
+
+    Status Transitions:
+        active → superseded (when newer canonical is promoted)
+        active → deprecated (when manually deprecated)
+
+    Promotion Flow:
+        1. Experimental metadata created by experiment Run
+        2. User compares experimental variants
+        3. User promotes selected experimental to canonical
+        4. Previous canonical (if any) marked superseded
+        5. Promoted metadata marked is_canonical=True
+
+    Usage:
+        # Create experimental metadata from run
+        metadata = AssetMetadata(
+            asset_id=asset_id,
+            metadata_type="summary.short.v1",
+            schema_version="1.0",
+            producer_run_id=run_id,
+            is_canonical=False,
+            status="active",
+            metadata_content={"summary": "Document describes..."},
+        )
+
+        # Promote to canonical
+        await asset_metadata_service.promote_to_canonical(metadata_id)
+    """
+
+    __tablename__ = "asset_metadata"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    asset_id = Column(
+        UUID(), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Metadata type and version
+    metadata_type = Column(String(100), nullable=False, index=True)  # e.g., "topics.v1", "summary.short.v1"
+    schema_version = Column(String(50), nullable=False, default="1.0")
+
+    # Attribution
+    producer_run_id = Column(
+        UUID(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # Canonical vs Experimental
+    is_canonical = Column(Boolean, nullable=False, default=False, index=True)
+
+    # Status (active, superseded, deprecated)
+    status = Column(String(50), nullable=False, default="active", index=True)
+
+    # Metadata content (JSONB for flexibility)
+    # For most metadata, this is the primary storage
+    metadata_content = Column(JSON, nullable=False, default=dict, server_default="{}")
+
+    # Optional object store reference for large payloads
+    metadata_object_ref = Column(String(1024), nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    promoted_at = Column(DateTime, nullable=True)  # When promoted to canonical
+    superseded_at = Column(DateTime, nullable=True)  # When superseded by newer canonical
+
+    # Promotion and supersession tracking
+    promoted_from_id = Column(
+        UUID(), ForeignKey("asset_metadata.id", ondelete="SET NULL"), nullable=True
+    )
+    superseded_by_id = Column(
+        UUID(), ForeignKey("asset_metadata.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Relationships
+    asset = relationship("Asset", backref="metadata_records")
+    producer_run = relationship("Run", backref="produced_metadata")
+    superseded_by = relationship(
+        "AssetMetadata",
+        foreign_keys=[superseded_by_id],
+        remote_side="AssetMetadata.id",
+        backref="supersedes",
+    )
+    promoted_from = relationship(
+        "AssetMetadata",
+        foreign_keys=[promoted_from_id],
+        remote_side="AssetMetadata.id",
+    )
+
+    # Indexes for common queries
+    __table_args__ = (
+        # Find canonical metadata for an asset
+        Index("ix_asset_metadata_asset_canonical", "asset_id", "is_canonical"),
+        # Find canonical metadata by type for an asset
+        Index("ix_asset_metadata_asset_type_canonical", "asset_id", "metadata_type", "is_canonical"),
+        # Find metadata by run
+        Index("ix_asset_metadata_run", "producer_run_id"),
+        # Find active metadata for an asset by type
+        Index("ix_asset_metadata_asset_type_status", "asset_id", "metadata_type", "status"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AssetMetadata(id={self.id}, asset_id={self.asset_id}, type={self.metadata_type}, canonical={self.is_canonical})>"
+
+
+# ============================================================================
+# Phase 4 Models: Web Scraping as Durable Data Source
+# ============================================================================
+
+
+class ScrapeCollection(Base):
+    """
+    ScrapeCollection model for managing web scraping collections (Phase 4).
+
+    A collection groups related scraped content from one or more URL sources.
+    Supports two behavioral modes:
+    - Snapshot Mode: Focus on current site state, pages are primary
+    - Record-Preserving Mode: Focus on durable records, never auto-delete
+
+    Key Concepts:
+    - Collections contain pages (ephemeral discovery assets) and records (durable assets)
+    - Records are promoted from pages and are never auto-deleted
+    - Re-crawls create new versions, preserving history
+    - Hierarchical path metadata enables tree-based browsing
+
+    Attributes:
+        id: Unique collection identifier
+        organization_id: Organization that owns this collection
+        name: Collection name (display)
+        slug: URL-friendly identifier (unique within org)
+        description: Optional description
+        collection_mode: snapshot or record_preserving
+        root_url: Primary URL for this collection
+        url_patterns: JSONB array of URL patterns to include/exclude
+        crawl_config: JSONB with crawl settings (depth, rate limit, etc.)
+        status: Collection status (active, paused, archived)
+        last_crawl_at: When collection was last crawled
+        last_crawl_run_id: Run ID of last crawl
+        stats: JSONB with collection statistics (page_count, record_count, etc.)
+
+    Relationships:
+        organization: Organization that owns this collection
+        sources: URL sources in this collection
+        crawl_runs: Runs associated with this collection
+    """
+
+    __tablename__ = "scrape_collections"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Collection metadata
+    name = Column(String(255), nullable=False)
+    slug = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Collection mode: snapshot or record_preserving
+    # - snapshot: Pages are primary, limited retention, focus on current state
+    # - record_preserving: Records promoted to permanent assets, never auto-delete
+    collection_mode = Column(String(50), nullable=False, default="record_preserving")
+
+    # Root URL and patterns
+    root_url = Column(String(2048), nullable=False)
+    url_patterns = Column(JSON, nullable=False, default=list, server_default="[]")
+    # url_patterns format: [{"pattern": "...", "type": "include|exclude"}]
+
+    # Crawl configuration
+    crawl_config = Column(JSON, nullable=False, default=dict, server_default="{}")
+    # crawl_config may include:
+    # - max_depth: Maximum crawl depth
+    # - max_pages: Maximum pages to crawl
+    # - rate_limit: Requests per second
+    # - user_agent: Custom user agent
+    # - follow_robots: Whether to respect robots.txt
+
+    # Status
+    status = Column(String(50), nullable=False, default="active", index=True)
+    # active, paused, archived
+
+    # Crawl tracking
+    last_crawl_at = Column(DateTime, nullable=True)
+    last_crawl_run_id = Column(
+        UUID(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Statistics (denormalized for performance)
+    stats = Column(JSON, nullable=False, default=dict, server_default="{}")
+    # stats may include: page_count, record_count, total_size, last_updated
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+    created_by = Column(
+        UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Relationships
+    organization = relationship("Organization")
+    sources = relationship(
+        "ScrapeSource",
+        back_populates="collection",
+        cascade="all, delete-orphan",
+    )
+    last_crawl_run = relationship("Run", foreign_keys=[last_crawl_run_id])
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_scrape_collections_org_slug", "organization_id", "slug", unique=True),
+        Index("ix_scrape_collections_org_status", "organization_id", "status"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ScrapeCollection(id={self.id}, name={self.name}, mode={self.collection_mode})>"
+
+
+class ScrapeSource(Base):
+    """
+    ScrapeSource model for URL sources within a collection (Phase 4).
+
+    Each source represents a specific URL or URL pattern to crawl within
+    a collection. Sources can be configured independently for crawl behavior.
+
+    Attributes:
+        id: Unique source identifier
+        collection_id: Parent collection
+        url: Source URL to crawl
+        source_type: Type of source (seed, discovered, manual)
+        is_active: Whether to include in crawls
+        crawl_config: Source-specific crawl config (overrides collection config)
+        last_crawl_at: When this source was last crawled
+        last_status: Status of last crawl (success, failed, skipped)
+        discovered_pages: Count of pages discovered from this source
+        created_at: When source was added
+
+    Relationships:
+        collection: Parent collection
+    """
+
+    __tablename__ = "scrape_sources"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    collection_id = Column(
+        UUID(), ForeignKey("scrape_collections.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Source URL
+    url = Column(String(2048), nullable=False)
+    source_type = Column(String(50), nullable=False, default="seed")
+    # seed: Manually added starting URL
+    # discovered: Found during crawl
+    # manual: Manually added specific page
+
+    # Status
+    is_active = Column(Boolean, nullable=False, default=True)
+
+    # Source-specific config (overrides collection config)
+    crawl_config = Column(JSON, nullable=True)
+
+    # Crawl tracking
+    last_crawl_at = Column(DateTime, nullable=True)
+    last_status = Column(String(50), nullable=True)  # success, failed, skipped
+    discovered_pages = Column(Integer, nullable=False, default=0)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    collection = relationship("ScrapeCollection", back_populates="sources")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_scrape_sources_collection_url", "collection_id", "url"),
+        Index("ix_scrape_sources_collection_active", "collection_id", "is_active"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ScrapeSource(id={self.id}, url={self.url[:50]}...)>"
+
+
+class ScrapedAsset(Base):
+    """
+    ScrapedAsset model linking assets to scrape collections (Phase 4).
+
+    This is a junction table that adds scrape-specific metadata to assets.
+    Supports hierarchical path metadata for tree-based browsing.
+
+    Key Concepts:
+    - Assets are created via normal Asset model
+    - ScrapedAsset adds scrape-specific context
+    - asset_subtype distinguishes pages from records
+    - url_path enables hierarchical browsing
+
+    Asset Subtypes:
+    - page: Ephemeral discovery asset (listings, navigation, indexes)
+    - record: Durable captured asset (RFPs, notices, attachments)
+
+    Attributes:
+        id: Unique identifier
+        asset_id: Reference to Asset
+        collection_id: Reference to ScrapeCollection
+        source_id: Reference to ScrapeSource (nullable)
+        asset_subtype: page or record
+        url: Original URL this asset was scraped from
+        url_path: Hierarchical path (e.g., "/opportunities/active/12345")
+        parent_url: URL of the page that linked to this asset
+        crawl_depth: Depth at which this was discovered
+        crawl_run_id: Run that discovered this asset
+        is_promoted: Whether page has been promoted to record
+        promoted_at: When promoted to record
+        promoted_by: User who promoted to record
+        scrape_metadata: JSONB with scrape-specific metadata
+
+    Relationships:
+        asset: The underlying Asset
+        collection: Parent collection
+        source: Source that discovered this
+        crawl_run: Run that discovered this
+    """
+
+    __tablename__ = "scraped_assets"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    asset_id = Column(
+        UUID(), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    collection_id = Column(
+        UUID(), ForeignKey("scrape_collections.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    source_id = Column(
+        UUID(), ForeignKey("scrape_sources.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # Asset subtype: page or record
+    # - page: Ephemeral, GC-eligible, discovery mechanism
+    # - record: Durable, never auto-deleted, first-class asset
+    asset_subtype = Column(String(50), nullable=False, default="page", index=True)
+
+    # URL and hierarchy
+    url = Column(String(2048), nullable=False)
+    url_path = Column(String(2048), nullable=True)  # Hierarchical path for tree browsing
+    parent_url = Column(String(2048), nullable=True)  # URL that linked to this
+
+    # Crawl context
+    crawl_depth = Column(Integer, nullable=False, default=0)
+    crawl_run_id = Column(
+        UUID(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # Promotion tracking (page → record)
+    is_promoted = Column(Boolean, nullable=False, default=False, index=True)
+    promoted_at = Column(DateTime, nullable=True)
+    promoted_by = Column(
+        UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Scrape-specific metadata
+    scrape_metadata = Column(JSON, nullable=False, default=dict, server_default="{}")
+    # May include: title, description, links_found, content_type, http_status, etc.
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    asset = relationship("Asset", backref="scraped_info")
+    collection = relationship("ScrapeCollection", backref="scraped_assets")
+    source = relationship("ScrapeSource", backref="scraped_assets")
+    crawl_run = relationship("Run", foreign_keys=[crawl_run_id])
+
+    # Indexes for common queries
+    __table_args__ = (
+        # Find all assets in a collection
+        Index("ix_scraped_assets_collection", "collection_id"),
+        # Find assets by URL path (tree browsing)
+        Index("ix_scraped_assets_collection_path", "collection_id", "url_path"),
+        # Find pages vs records
+        Index("ix_scraped_assets_collection_subtype", "collection_id", "asset_subtype"),
+        # Find promoted records
+        Index("ix_scraped_assets_collection_promoted", "collection_id", "is_promoted"),
+        # Find assets from specific crawl
+        Index("ix_scraped_assets_crawl_run", "crawl_run_id"),
+        # Ensure no duplicate URLs in collection
+        Index("ix_scraped_assets_collection_url", "collection_id", "url", unique=True),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ScrapedAsset(id={self.id}, url={self.url[:50]}..., subtype={self.asset_subtype})>"
+
+
+# ============================================================================
+# Phase 5 Models: System Maintenance & Scheduling
+# ============================================================================
+
+
+class ScheduledTask(Base):
+    """
+    ScheduledTask model for database-backed scheduled maintenance tasks (Phase 5).
+
+    This model enables admin visibility and control over scheduled tasks that
+    were previously hardcoded in Celery Beat configuration. Tasks can be
+    enabled/disabled, triggered manually, and have their schedules modified
+    at runtime without service restarts.
+
+    Key Concepts:
+    - Global tasks (organization_id=None) run system-wide maintenance
+    - Organization tasks run maintenance scoped to a specific org
+    - Tasks create Runs with run_type="system_maintenance" and origin="scheduled"
+    - Task execution is tracked via last_run_id linking to Run model
+
+    Task Types:
+    - gc.cleanup: Garbage collection (expired jobs, orphaned files)
+    - orphan.detect: Find orphaned objects (assets without extraction, etc.)
+    - retention.enforce: Enforce data retention policies
+    - health.report: Generate system health summary
+
+    Scope Types:
+    - global: Runs across all organizations
+    - organization: Runs for a specific organization
+
+    Attributes:
+        id: Unique task identifier
+        organization_id: Organization scope (nullable for global tasks)
+        name: Internal task name (unique, used for lookups)
+        display_name: Human-readable name for UI
+        description: Task description
+        task_type: Type of maintenance task
+        scope_type: global or organization
+        schedule_expression: Cron expression (e.g., "0 3 * * *" for daily 3 AM)
+        enabled: Whether task is active
+        config: JSONB for task-specific settings
+        last_run_id: Reference to most recent Run
+        last_run_at: When task last executed
+        last_run_status: Status of last run (success, failed)
+        next_run_at: Calculated next execution time
+        created_at: When task was created
+        updated_at: When task was last modified
+
+    Relationships:
+        organization: Organization this task belongs to (for scoped tasks)
+        last_run: Most recent Run for this task
+
+    Usage:
+        # Create a global cleanup task
+        task = ScheduledTask(
+            name="cleanup_expired_jobs",
+            display_name="Cleanup Expired Jobs",
+            task_type="gc.cleanup",
+            scope_type="global",
+            schedule_expression="0 3 * * *",  # Daily at 3 AM
+            enabled=True,
+            config={"dry_run": False}
+        )
+
+        # Trigger task manually
+        await scheduled_task_service.trigger_task_now(task.id)
+    """
+
+    __tablename__ = "scheduled_tasks"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+
+    # Task identification
+    name = Column(String(100), nullable=False, unique=True, index=True)
+    display_name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Task classification
+    task_type = Column(String(50), nullable=False, index=True)
+    # gc.cleanup, orphan.detect, retention.enforce, health.report
+    scope_type = Column(String(50), nullable=False, default="global")
+    # global, organization
+
+    # Schedule
+    schedule_expression = Column(String(100), nullable=False)  # Cron format: "0 3 * * *"
+    enabled = Column(Boolean, nullable=False, default=True, index=True)
+
+    # Configuration
+    config = Column(JSON, nullable=False, default=dict, server_default="{}")
+
+    # Execution tracking
+    last_run_id = Column(
+        UUID(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
+    )
+    last_run_at = Column(DateTime, nullable=True)
+    last_run_status = Column(String(50), nullable=True)  # success, failed
+    next_run_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    organization = relationship("Organization", backref="scheduled_tasks")
+    last_run = relationship("Run", foreign_keys=[last_run_id])
+
+    # Indexes for common queries
+    __table_args__ = (
+        Index("ix_scheduled_tasks_enabled", "enabled"),
+        Index("ix_scheduled_tasks_task_type", "task_type"),
+        Index("ix_scheduled_tasks_org_enabled", "organization_id", "enabled"),
+        Index("ix_scheduled_tasks_next_run", "next_run_at"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ScheduledTask(id={self.id}, name={self.name}, enabled={self.enabled})>"

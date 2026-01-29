@@ -101,6 +101,18 @@ if job_cleanup_enabled:
         "options": {"queue": "processing"},
     }
 
+# Add scheduled task checker (Phase 5)
+# This task runs every minute to check for due ScheduledTasks in the database
+scheduled_task_check_enabled = _bool(os.getenv("SCHEDULED_TASK_CHECK_ENABLED", "true"), True)
+scheduled_task_check_interval = int(os.getenv("SCHEDULED_TASK_CHECK_INTERVAL", "60"))
+
+if scheduled_task_check_enabled:
+    beat_schedule["check-scheduled-tasks"] = {
+        "task": "app.tasks.check_scheduled_tasks",
+        "schedule": scheduled_task_check_interval,  # Every N seconds (default: 60)
+        "options": {"queue": "processing"},
+    }
+
 app.conf.beat_schedule = beat_schedule
 
 app.conf.timezone = "UTC"

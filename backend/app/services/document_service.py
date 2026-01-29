@@ -891,8 +891,26 @@ class DocumentService:
         Returns:
             Instantiated extraction engine or None if not configured
         """
-        # Default to extraction-service if no engine specified
+        # Use default engine from config if no engine specified
         if not engine:
+            from .config_loader import config_loader
+            default_engine = config_loader.get_default_extraction_engine()
+            if default_engine:
+                self._logger.info(
+                    "Using default extraction engine from config: %s (%s)",
+                    default_engine.name, default_engine.engine_type
+                )
+                return ExtractionEngineFactory.from_config({
+                    "engine_type": default_engine.engine_type,
+                    "name": default_engine.name,
+                    "service_url": default_engine.service_url,
+                    "timeout": default_engine.timeout,
+                    "verify_ssl": default_engine.verify_ssl,
+                    "api_key": default_engine.api_key,
+                    "options": default_engine.options
+                })
+            # Fallback to extraction-service if no config
+            self._logger.warning("No default extraction engine in config, falling back to extraction-service")
             return ExtractionEngineFactory.create_engine(
                 engine_type="extraction-service",
                 name="default",

@@ -16,7 +16,8 @@ import {
   Briefcase,
   Zap,
   ChevronRight,
-  LayoutDashboard
+  LayoutDashboard,
+  Globe
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import clsx from 'clsx'
@@ -90,6 +91,13 @@ export function LeftSidebar({
         icon: LinkIcon,
         current: pathname === '/connections',
         gradient: 'from-blue-500 to-cyan-500'
+      },
+      {
+        name: 'Web Scraping',
+        href: '/scrape',
+        icon: Globe,
+        current: pathname?.startsWith('/scrape'),
+        gradient: 'from-indigo-500 to-purple-600'
       }
     ] : []),
     ...(isAuthenticated && user?.role === 'org_admin' ? [

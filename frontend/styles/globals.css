@@ -219,6 +219,10 @@
   .animate-slide-down {
     animation: slideDown 0.3s ease-out;
   }
+
+  .animate-slide-in {
+    animation: slideIn 0.3s ease-out;
+  }
   
   /* Focus management */
   .focus-visible-only {
@@ -254,12 +258,23 @@
 }
 
 @keyframes slideDown {
-  from { 
+  from {
     transform: translateY(-20px);
     opacity: 0;
   }
-  to { 
+  to {
     transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes slideIn {
+  from {
+    transform: translateX(100%);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
     opacity: 1;
   }
 }

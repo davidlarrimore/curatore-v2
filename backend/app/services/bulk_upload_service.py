@@ -145,6 +145,15 @@ class BulkUploadService:
         # Build index of existing assets by filename
         existing_by_filename = {}
         for asset in existing_assets:
+            # Skip assets without file_hash (indicates storage inconsistency)
+            if not asset.file_hash:
+                logger.error(
+                    f"Asset {asset.id} ({asset.original_filename}) has no file_hash. "
+                    "Storage may be inconsistent. Consider running storage cleanup: "
+                    "./scripts/cleanup_storage.sh --dry-run"
+                )
+                continue
+
             existing_by_filename[asset.original_filename] = {
                 "asset_id": str(asset.id),
                 "filename": asset.original_filename,
@@ -167,9 +176,8 @@ class BulkUploadService:
                 })
             else:
                 existing_info = existing_by_filename[filename]
-                # If existing asset has no hash, treat as updated (we now have a hash)
-                if existing_info["file_hash"] and upload_info["file_hash"] == existing_info["file_hash"]:
-                    # Unchanged file
+                if upload_info["file_hash"] == existing_info["file_hash"]:
+                    # Unchanged file (content matches)
                     analysis.unchanged.append({
                         "filename": filename,
                         "file_size": upload_info["file_size"],
@@ -178,12 +186,12 @@ class BulkUploadService:
                         "current_version": existing_info["current_version"],
                     })
                 else:
-                    # Updated file (or existing asset had no hash)
+                    # Updated file (content changed)
                     analysis.updated.append({
                         "filename": filename,
                         "file_size": upload_info["file_size"],
                         "file_hash": upload_info["file_hash"],
-                        "old_file_hash": existing_info["file_hash"],  # Can be None
+                        "old_file_hash": existing_info["file_hash"],
                         "asset_id": existing_info["asset_id"],
                         "current_version": existing_info["current_version"],
                     })
@@ -194,8 +202,8 @@ class BulkUploadService:
             if filename not in uploaded_filenames:
                 analysis.missing.append({
                     "filename": filename,
-                    "file_size": existing_info["file_size"] or 0,  # Default to 0 if None
-                    "file_hash": existing_info["file_hash"],  # Can be None for old assets
+                    "file_size": existing_info["file_size"],
+                    "file_hash": existing_info["file_hash"],
                     "asset_id": existing_info["asset_id"],
                     "current_version": existing_info["current_version"],
                     "status": existing_info["status"],

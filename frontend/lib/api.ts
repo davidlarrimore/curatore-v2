@@ -1947,10 +1947,10 @@ export interface AssetVersionHistory {
 export interface BulkUploadFileInfo {
   filename: string
   file_size: number
-  file_hash: string | null
+  file_hash: string
   asset_id?: string
   current_version?: number
-  old_file_hash?: string | null
+  old_file_hash?: string
   status?: string
 }
 
@@ -1994,6 +1994,62 @@ export interface CollectionHealth {
     total_versions: number
   }
   last_updated: string | null
+}
+
+// ======================================================================
+// ASSET METADATA INTERFACES (Phase 3)
+// ======================================================================
+
+export interface AssetMetadata {
+  id: string
+  asset_id: string
+  metadata_type: string
+  schema_version: string
+  producer_run_id: string | null
+  is_canonical: boolean
+  status: string
+  metadata_content: Record<string, any>
+  metadata_object_ref: string | null
+  created_at: string
+  promoted_at: string | null
+  superseded_at: string | null
+  promoted_from_id: string | null
+  superseded_by_id: string | null
+}
+
+export interface AssetMetadataList {
+  canonical: AssetMetadata[]
+  experimental: AssetMetadata[]
+  total_canonical: number
+  total_experimental: number
+  metadata_types: string[]
+}
+
+export interface AssetMetadataCreateRequest {
+  metadata_type: string
+  metadata_content: Record<string, any>
+  schema_version?: string
+  is_canonical?: boolean
+  producer_run_id?: string
+}
+
+export interface AssetMetadataPromoteResponse {
+  promoted: AssetMetadata
+  superseded: AssetMetadata | null
+  message: string
+}
+
+export interface AssetMetadataCompareResponse {
+  metadata_a: AssetMetadata
+  metadata_b: AssetMetadata
+  differences: {
+    metadata_type: { a: string; b: string; same: boolean }
+    is_canonical: { a: boolean; b: boolean }
+    keys_only_in_a: string[]
+    keys_only_in_b: string[]
+    keys_in_both: string[]
+    values_differ: string[]
+  }
 }
 
 export const assetsApi = {
@@ -2155,6 +2211,523 @@ export const assetsApi = {
     })
     return handleJson(res)
   },
+
+  // ======================================================================
+  // ASSET METADATA METHODS (Phase 3)
+  // ======================================================================
+
+  /**
+   * Get all metadata for an asset (canonical + experimental)
+   */
+  async getAssetMetadata(token: string | undefined, assetId: string, includeSupersceded: boolean = false): Promise<AssetMetadataList> {
+    const url = apiUrl(`/assets/${assetId}/metadata?include_superseded=${includeSupersceded}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Create new metadata for an asset
+   */
+  async createAssetMetadata(token: string | undefined, assetId: string, request: AssetMetadataCreateRequest): Promise<AssetMetadata> {
+    const url = apiUrl(`/assets/${assetId}/metadata`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(request),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get specific metadata by ID
+   */
+  async getSpecificMetadata(token: string | undefined, assetId: string, metadataId: string): Promise<AssetMetadata> {
+    const url = apiUrl(`/assets/${assetId}/metadata/${metadataId}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Promote experimental metadata to canonical
+   */
+  async promoteMetadata(token: string | undefined, assetId: string, metadataId: string): Promise<AssetMetadataPromoteResponse> {
+    const url = apiUrl(`/assets/${assetId}/metadata/${metadataId}/promote`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Delete or deprecate metadata
+   */
+  async deleteMetadata(token: string | undefined, assetId: string, metadataId: string, hardDelete: boolean = false): Promise<{ message: string; metadata_id: string }> {
+    const url = apiUrl(`/assets/${assetId}/metadata/${metadataId}?hard_delete=${hardDelete}`)
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Compare two metadata records
+   */
+  async compareMetadata(token: string | undefined, assetId: string, metadataIdA: string, metadataIdB: string): Promise<AssetMetadataCompareResponse> {
+    const url = apiUrl(`/assets/${assetId}/metadata/compare?metadata_id_a=${metadataIdA}&metadata_id_b=${metadataIdB}`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+}
+
+// ============================================================================
+// Scrape Collections API (Phase 4)
+// ============================================================================
+
+export interface ScrapeCollection {
+  id: string
+  organization_id: string
+  name: string
+  slug: string
+  description: string | null
+  collection_mode: 'snapshot' | 'record_preserving'
+  root_url: string
+  url_patterns: Array<{ type: 'include' | 'exclude'; pattern: string }>
+  crawl_config: Record<string, any>
+  status: 'active' | 'paused' | 'archived'
+  last_crawl_at: string | null
+  last_crawl_run_id: string | null
+  stats: Record<string, any>
+  created_at: string
+  updated_at: string
+  created_by: string | null
+}
+
+export interface ScrapeSource {
+  id: string
+  collection_id: string
+  url: string
+  source_type: 'seed' | 'discovered' | 'manual'
+  is_active: boolean
+  crawl_config: Record<string, any> | null
+  last_crawl_at: string | null
+  last_status: string | null
+  discovered_pages: number
+  created_at: string
+  updated_at: string
+}
+
+export interface ScrapedAsset {
+  id: string
+  asset_id: string
+  collection_id: string
+  source_id: string | null
+  asset_subtype: 'page' | 'record'
+  url: string
+  url_path: string | null
+  parent_url: string | null
+  crawl_depth: number
+  crawl_run_id: string | null
+  is_promoted: boolean
+  promoted_at: string | null
+  promoted_by: string | null
+  scrape_metadata: Record<string, any>
+  created_at: string
+  updated_at: string
+  original_filename: string | null
+  asset_status: string | null
+}
+
+export interface PathTreeNode {
+  path: string
+  name: string
+  page_count: number
+  record_count: number
+  has_children: boolean
+}
+
+export interface ScrapeCollectionCreateRequest {
+  name: string
+  root_url: string
+  collection_mode?: 'snapshot' | 'record_preserving'
+  description?: string
+  url_patterns?: Array<{ type: 'include' | 'exclude'; pattern: string }>
+  crawl_config?: Record<string, any>
+}
+
+export interface ScrapeCollectionUpdateRequest {
+  name?: string
+  description?: string
+  collection_mode?: 'snapshot' | 'record_preserving'
+  url_patterns?: Array<{ type: 'include' | 'exclude'; pattern: string }>
+  crawl_config?: Record<string, any>
+  status?: 'active' | 'paused' | 'archived'
+}
+
+export interface CrawlStatus {
+  run_id: string
+  status: string
+  progress: Record<string, any> | null
+  results_summary: Record<string, any> | null
+  error_message: string | null
+}
+
+export const scrapeApi = {
+  // ========== Collection Management ==========
+
+  /**
+   * List scrape collections
+   */
+  async listCollections(token: string | undefined, params?: {
+    status?: 'active' | 'paused' | 'archived'
+    limit?: number
+    offset?: number
+  }): Promise<{ collections: ScrapeCollection[]; total: number; limit: number; offset: number }> {
+    const searchParams = new URLSearchParams()
+    if (params?.status) searchParams.append('status', params.status)
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/scrape/collections?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Create a new scrape collection
+   */
+  async createCollection(token: string | undefined, request: ScrapeCollectionCreateRequest): Promise<ScrapeCollection> {
+    const url = apiUrl('/scrape/collections')
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(request),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get collection details
+   */
+  async getCollection(token: string | undefined, collectionId: string): Promise<ScrapeCollection> {
+    const url = apiUrl(`/scrape/collections/${collectionId}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Update a collection
+   */
+  async updateCollection(token: string | undefined, collectionId: string, request: ScrapeCollectionUpdateRequest): Promise<ScrapeCollection> {
+    const url = apiUrl(`/scrape/collections/${collectionId}`)
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(request),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Archive a collection
+   */
+  async deleteCollection(token: string | undefined, collectionId: string): Promise<void> {
+    const url = apiUrl(`/scrape/collections/${collectionId}`)
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    if (!res.ok) {
+      const error = await res.text()
+      throw new Error(error || res.statusText)
+    }
+  },
+
+  // ========== Crawl Management ==========
+
+  /**
+   * Start a crawl for a collection
+   */
+  async startCrawl(token: string | undefined, collectionId: string, maxPages?: number): Promise<{ run_id: string; collection_id: string; status: string; message: string }> {
+    const url = apiUrl(`/scrape/collections/${collectionId}/crawl`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: maxPages ? JSON.stringify({ max_pages: maxPages }) : '{}',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get crawl status
+   */
+  async getCrawlStatus(token: string | undefined, collectionId: string): Promise<CrawlStatus> {
+    const url = apiUrl(`/scrape/collections/${collectionId}/crawl/status`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  // ========== Source Management ==========
+
+  /**
+   * List sources for a collection
+   */
+  async listSources(token: string | undefined, collectionId: string, isActive?: boolean): Promise<{ sources: ScrapeSource[]; total: number }> {
+    const searchParams = new URLSearchParams()
+    if (isActive !== undefined) searchParams.append('is_active', isActive.toString())
+
+    const url = apiUrl(`/scrape/collections/${collectionId}/sources?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Add a source to a collection
+   */
+  async addSource(token: string | undefined, collectionId: string, url_source: string, sourceType: string = 'seed', crawlConfig?: Record<string, any>): Promise<ScrapeSource> {
+    const url = apiUrl(`/scrape/collections/${collectionId}/sources`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ url: url_source, source_type: sourceType, crawl_config: crawlConfig }),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Delete a source
+   */
+  async deleteSource(token: string | undefined, collectionId: string, sourceId: string): Promise<void> {
+    const url = apiUrl(`/scrape/collections/${collectionId}/sources/${sourceId}`)
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    if (!res.ok) {
+      const error = await res.text()
+      throw new Error(error || res.statusText)
+    }
+  },
+
+  // ========== Scraped Assets ==========
+
+  /**
+   * List scraped assets
+   */
+  async listScrapedAssets(token: string | undefined, collectionId: string, params?: {
+    asset_subtype?: 'page' | 'record'
+    url_path_prefix?: string
+    is_promoted?: boolean
+    limit?: number
+    offset?: number
+  }): Promise<{ assets: ScrapedAsset[]; total: number; limit: number; offset: number }> {
+    const searchParams = new URLSearchParams()
+    if (params?.asset_subtype) searchParams.append('asset_subtype', params.asset_subtype)
+    if (params?.url_path_prefix) searchParams.append('url_path_prefix', params.url_path_prefix)
+    if (params?.is_promoted !== undefined) searchParams.append('is_promoted', params.is_promoted.toString())
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/scrape/collections/${collectionId}/assets?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get a scraped asset
+   */
+  async getScrapedAsset(token: string | undefined, collectionId: string, scrapedAssetId: string): Promise<ScrapedAsset> {
+    const url = apiUrl(`/scrape/collections/${collectionId}/assets/${scrapedAssetId}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Promote a page to record
+   */
+  async promoteToRecord(token: string | undefined, collectionId: string, scrapedAssetId: string): Promise<{ scraped_asset: ScrapedAsset; message: string }> {
+    const url = apiUrl(`/scrape/collections/${collectionId}/assets/${scrapedAssetId}/promote`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  // ========== Tree Browsing ==========
+
+  /**
+   * Get hierarchical path tree
+   */
+  async getPathTree(token: string | undefined, collectionId: string, pathPrefix: string = '/'): Promise<{ path_prefix: string; nodes: PathTreeNode[] }> {
+    const searchParams = new URLSearchParams()
+    searchParams.append('path_prefix', pathPrefix)
+
+    const url = apiUrl(`/scrape/collections/${collectionId}/tree?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+}
+
+// -------------------- Scheduled Tasks API (Phase 5) --------------------
+
+export interface ScheduledTask {
+  id: string
+  organization_id: string | null
+  name: string
+  display_name: string
+  description: string | null
+  task_type: string
+  scope_type: string
+  schedule_expression: string
+  schedule_description: string
+  enabled: boolean
+  config: Record<string, any>
+  last_run_id: string | null
+  last_run_at: string | null
+  last_run_status: string | null
+  next_run_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface MaintenanceStats {
+  total_tasks: number
+  enabled_tasks: number
+  disabled_tasks: number
+  total_runs: number
+  successful_runs: number
+  failed_runs: number
+  success_rate: number
+  last_run_at: string | null
+  last_run_status: string | null
+  period_days: number
+}
+
+export interface TaskRun {
+  id: string
+  run_type: string
+  origin: string
+  status: string
+  created_at: string
+  started_at: string | null
+  completed_at: string | null
+  results_summary: Record<string, any> | null
+  error_message: string | null
+}
+
+export const scheduledTasksApi = {
+  /**
+   * List scheduled tasks
+   */
+  async listTasks(token: string | undefined, enabledOnly?: boolean): Promise<{ tasks: ScheduledTask[]; total: number }> {
+    const searchParams = new URLSearchParams()
+    if (enabledOnly !== undefined) searchParams.append('enabled_only', enabledOnly.toString())
+
+    const url = apiUrl(`/scheduled-tasks?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get maintenance statistics
+   */
+  async getStats(token: string | undefined, days?: number): Promise<MaintenanceStats> {
+    const searchParams = new URLSearchParams()
+    if (days !== undefined) searchParams.append('days', days.toString())
+
+    const url = apiUrl(`/scheduled-tasks/stats?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get task details
+   */
+  async getTask(token: string | undefined, taskId: string): Promise<ScheduledTask> {
+    const url = apiUrl(`/scheduled-tasks/${taskId}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get task run history
+   */
+  async getTaskRuns(token: string | undefined, taskId: string, limit?: number, offset?: number): Promise<{ runs: TaskRun[]; total: number }> {
+    const searchParams = new URLSearchParams()
+    if (limit !== undefined) searchParams.append('limit', limit.toString())
+    if (offset !== undefined) searchParams.append('offset', offset.toString())
+
+    const url = apiUrl(`/scheduled-tasks/${taskId}/runs?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Enable a scheduled task
+   */
+  async enableTask(token: string | undefined, taskId: string): Promise<{ message: string; task_id: string; task_name: string; enabled: boolean; next_run_at: string | null }> {
+    const url = apiUrl(`/scheduled-tasks/${taskId}/enable`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Disable a scheduled task
+   */
+  async disableTask(token: string | undefined, taskId: string): Promise<{ message: string; task_id: string; task_name: string; enabled: boolean; next_run_at: string | null }> {
+    const url = apiUrl(`/scheduled-tasks/${taskId}/disable`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Trigger a scheduled task immediately
+   */
+  async triggerTask(token: string | undefined, taskId: string): Promise<{ message: string; task_id: string; task_name: string; run_id: string }> {
+    const url = apiUrl(`/scheduled-tasks/${taskId}/trigger`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
 }
 
 // Default export with all API modules
@@ -2174,5 +2747,7 @@ export default {
   objectStorageApi,
   usersApi,
   assetsApi,
+  scrapeApi,
+  scheduledTasksApi,
   utils,
 }

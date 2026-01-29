@@ -112,7 +112,7 @@ class UploadIntegrationService:
         self,
         session: AsyncSession,
         asset_id: UUID,
-        extractor_version: str = "markitdown-1.0",
+        extractor_version: Optional[str] = None,
     ) -> Tuple[Run, ExtractionResult]:
         """
         Trigger automatic extraction for an Asset (Phase 1: with version tracking).
@@ -124,7 +124,7 @@ class UploadIntegrationService:
         Args:
             session: Database session
             asset_id: Asset UUID to extract
-            extractor_version: Extractor version to use
+            extractor_version: Extractor version to use (defaults to config.yml default engine)
 
         Returns:
             Tuple of (Run, ExtractionResult)
@@ -133,6 +133,15 @@ class UploadIntegrationService:
         asset = await asset_service.get_asset(session, asset_id)
         if not asset:
             raise ValueError(f"Asset {asset_id} not found")
+
+        # Get extractor version from config if not provided
+        if not extractor_version:
+            from .config_loader import config_loader
+            default_engine = config_loader.get_default_extraction_engine()
+            if default_engine:
+                extractor_version = f"{default_engine.name}-{default_engine.engine_type}"
+            else:
+                extractor_version = "extraction-service"
 
         # Phase 1: Get current asset version
         current_version = await asset_service.get_current_asset_version(session, asset_id)
@@ -202,7 +211,7 @@ class UploadIntegrationService:
         artifact: Artifact,
         uploader_id: Optional[UUID] = None,
         additional_metadata: Optional[dict] = None,
-        extractor_version: str = "markitdown-1.0",
+        extractor_version: Optional[str] = None,
     ) -> Tuple[Asset, Run, ExtractionResult]:
         """
         Convenience method: Create Asset and trigger extraction in one call.

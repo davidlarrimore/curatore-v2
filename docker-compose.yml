@@ -136,6 +136,43 @@ services:
       - minio
 
   # --------------------------------------------------------------------------
+  # BEAT: Celery Beat scheduler for periodic tasks
+  # --------------------------------------------------------------------------
+  beat:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: curatore-beat
+    command: celery -A app.celery_app beat -l info
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
+      - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
+      - CELERY_DEFAULT_QUEUE=${CELERY_DEFAULT_QUEUE:-processing}
+      # Enable scheduled task checking
+      - SCHEDULED_TASK_CHECK_ENABLED=${SCHEDULED_TASK_CHECK_ENABLED:-true}
+      - SCHEDULED_TASK_CHECK_INTERVAL=${SCHEDULED_TASK_CHECK_INTERVAL:-60}
+      # Extraction service (match worker)
+      - EXTRACTION_SERVICE_URL=http://extraction:8010
+      - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-180}
+      # Object Storage (match worker)
+      - USE_OBJECT_STORAGE=${USE_OBJECT_STORAGE:-true}
+      - MINIO_ENDPOINT=minio:9000
+      - MINIO_ACCESS_KEY=${MINIO_ACCESS_KEY:-${MINIO_ROOT_USER:-admin}}
+      - MINIO_SECRET_KEY=${MINIO_SECRET_KEY:-${MINIO_ROOT_PASSWORD:-changeme}}
+      - MINIO_SECURE=${MINIO_SECURE:-false}
+      - MINIO_BUCKET_UPLOADS=${MINIO_BUCKET_UPLOADS:-curatore-uploads}
+      - MINIO_BUCKET_PROCESSED=${MINIO_BUCKET_PROCESSED:-curatore-processed}
+      - MINIO_BUCKET_TEMP=${MINIO_BUCKET_TEMP:-curatore-temp}
+    volumes:
+      - ./backend/app:/app/app
+      - ./backend/data:/app/data
+      - ./config.yml:/app/config.yml:ro
+    depends_on:
+      - redis
+      - backend
+
+  # --------------------------------------------------------------------------
   # REDIS: Broker/result backend
   # --------------------------------------------------------------------------
   redis:

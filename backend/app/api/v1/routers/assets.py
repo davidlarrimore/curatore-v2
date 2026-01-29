@@ -30,6 +30,13 @@ from ..models import (
     BulkUploadAnalysisResponse,
     BulkUploadFileInfo,
     BulkUploadApplyResponse,
+    # Phase 3: Metadata models
+    AssetMetadataResponse,
+    AssetMetadataCreateRequest,
+    AssetMetadataUpdateRequest,
+    AssetMetadataListResponse,
+    AssetMetadataPromoteResponse,
+    AssetMetadataCompareResponse,
 )
 
 logger = logging.getLogger("curatore.api.assets")
@@ -703,7 +710,7 @@ async def apply_bulk_upload(
     from ....services.minio_service import get_minio_service
     from ....services.artifact_service import artifact_service
     from ....services.upload_integration_service import upload_integration_service
-    from ....core.config import settings
+    from ....config import settings
     from datetime import datetime, timedelta
     import io
     import uuid as uuid_lib
@@ -889,4 +896,567 @@ async def apply_bulk_upload(
                 "updated_count": len(updated_assets),
                 "marked_inactive_count": len(marked_inactive),
             },
+        )
+
+
+# =========================================================================
+# ASSET METADATA ENDPOINTS (Phase 3)
+# =========================================================================
+
+@router.get(
+    "/{asset_id}/metadata",
+    response_model=AssetMetadataListResponse,
+    summary="Get asset metadata",
+    description="Get all metadata for an asset, organized by canonical vs experimental (Phase 3).",
+)
+async def get_asset_metadata(
+    asset_id: UUID,
+    include_superseded: bool = Query(False, description="Include superseded metadata"),
+    current_user: User = Depends(get_current_user),
+) -> AssetMetadataListResponse:
+    """
+    Get all metadata for an asset.
+
+    Returns metadata organized into:
+    - Canonical: Production metadata (one per type), always visible and trusted
+    - Experimental: Non-promoted variants, attributed to specific runs
+
+    Args:
+        asset_id: Asset UUID
+        include_superseded: Whether to include superseded metadata
+        current_user: Authenticated user making the request
+
+    Returns:
+        AssetMetadataListResponse with canonical and experimental metadata
+
+    Example:
+        GET /api/v1/assets/{asset_id}/metadata
+
+        Response:
+        {
+            "canonical": [
+                {
+                    "id": "uuid",
+                    "metadata_type": "summary.short.v1",
+                    "metadata_content": {"summary": "..."},
+                    "is_canonical": true,
+                    ...
+                }
+            ],
+            "experimental": [
+                {
+                    "id": "uuid",
+                    "metadata_type": "summary.short.v1",
+                    "metadata_content": {"summary": "..."},
+                    "is_canonical": false,
+                    "producer_run_id": "run-uuid",
+                    ...
+                }
+            ],
+            "total_canonical": 3,
+            "total_experimental": 5,
+            "metadata_types": ["summary.short.v1", "topics.v1", "tags.llm.v1"]
+        }
+    """
+    from ....services.asset_metadata_service import asset_metadata_service
+
+    async with database_service.get_session() as session:
+        # Verify asset exists and belongs to user's organization
+        asset = await asset_service.get_asset(session=session, asset_id=asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        if asset.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Get canonical metadata
+        canonical = await asset_metadata_service.get_canonical_metadata(
+            session=session, asset_id=asset_id
+        )
+
+        # Get experimental metadata
+        experimental = await asset_metadata_service.get_experimental_metadata(
+            session=session, asset_id=asset_id
+        )
+
+        # Get metadata types
+        metadata_types = await asset_metadata_service.get_metadata_types_for_asset(
+            session=session, asset_id=asset_id
+        )
+
+        # Helper to convert model to response
+        def to_response(m):
+            return AssetMetadataResponse(
+                id=str(m.id),
+                asset_id=str(m.asset_id),
+                metadata_type=m.metadata_type,
+                schema_version=m.schema_version,
+                producer_run_id=str(m.producer_run_id) if m.producer_run_id else None,
+                is_canonical=m.is_canonical,
+                status=m.status,
+                metadata_content=m.metadata_content or {},
+                metadata_object_ref=m.metadata_object_ref,
+                created_at=m.created_at,
+                promoted_at=m.promoted_at,
+                superseded_at=m.superseded_at,
+                promoted_from_id=str(m.promoted_from_id) if m.promoted_from_id else None,
+                superseded_by_id=str(m.superseded_by_id) if m.superseded_by_id else None,
+            )
+
+        return AssetMetadataListResponse(
+            canonical=[to_response(m) for m in canonical],
+            experimental=[to_response(m) for m in experimental],
+            total_canonical=len(canonical),
+            total_experimental=len(experimental),
+            metadata_types=metadata_types,
+        )
+
+
+@router.post(
+    "/{asset_id}/metadata",
+    response_model=AssetMetadataResponse,
+    summary="Create asset metadata",
+    description="Create new metadata for an asset (Phase 3).",
+    status_code=201,
+)
+async def create_asset_metadata(
+    asset_id: UUID,
+    request: AssetMetadataCreateRequest,
+    current_user: User = Depends(get_current_user),
+) -> AssetMetadataResponse:
+    """
+    Create new metadata for an asset.
+
+    Creates either canonical or experimental metadata based on the is_canonical flag.
+    If creating canonical metadata and one already exists for the same type, the
+    existing one will be superseded.
+
+    For experimental metadata, provide a producer_run_id to attribute the metadata
+    to a specific run (recommended for traceability).
+
+    Args:
+        asset_id: Asset UUID
+        request: Metadata creation request
+        current_user: Authenticated user making the request
+
+    Returns:
+        Created AssetMetadataResponse
+
+    Raises:
+        404: Asset not found
+        403: User doesn't have access to the asset
+        400: Invalid request
+
+    Example:
+        POST /api/v1/assets/{asset_id}/metadata
+        {
+            "metadata_type": "summary.short.v1",
+            "metadata_content": {"summary": "This document describes..."},
+            "is_canonical": false,
+            "producer_run_id": "run-uuid"
+        }
+    """
+    from ....services.asset_metadata_service import asset_metadata_service
+
+    async with database_service.get_session() as session:
+        # Verify asset exists and belongs to user's organization
+        asset = await asset_service.get_asset(session=session, asset_id=asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        if asset.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Create metadata
+        try:
+            producer_run_id = UUID(request.producer_run_id) if request.producer_run_id else None
+
+            metadata = await asset_metadata_service.create_metadata(
+                session=session,
+                asset_id=asset_id,
+                metadata_type=request.metadata_type,
+                metadata_content=request.metadata_content,
+                producer_run_id=producer_run_id,
+                is_canonical=request.is_canonical,
+                schema_version=request.schema_version,
+            )
+
+            logger.info(
+                f"Created {'canonical' if request.is_canonical else 'experimental'} "
+                f"metadata {metadata.id} for asset {asset_id}"
+            )
+
+            return AssetMetadataResponse(
+                id=str(metadata.id),
+                asset_id=str(metadata.asset_id),
+                metadata_type=metadata.metadata_type,
+                schema_version=metadata.schema_version,
+                producer_run_id=str(metadata.producer_run_id) if metadata.producer_run_id else None,
+                is_canonical=metadata.is_canonical,
+                status=metadata.status,
+                metadata_content=metadata.metadata_content or {},
+                metadata_object_ref=metadata.metadata_object_ref,
+                created_at=metadata.created_at,
+                promoted_at=metadata.promoted_at,
+                superseded_at=metadata.superseded_at,
+                promoted_from_id=str(metadata.promoted_from_id) if metadata.promoted_from_id else None,
+                superseded_by_id=str(metadata.superseded_by_id) if metadata.superseded_by_id else None,
+            )
+
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get(
+    "/{asset_id}/metadata/{metadata_id}",
+    response_model=AssetMetadataResponse,
+    summary="Get specific metadata",
+    description="Get a specific metadata record by ID (Phase 3).",
+)
+async def get_specific_metadata(
+    asset_id: UUID,
+    metadata_id: UUID,
+    current_user: User = Depends(get_current_user),
+) -> AssetMetadataResponse:
+    """
+    Get a specific metadata record.
+
+    Args:
+        asset_id: Asset UUID (for access control)
+        metadata_id: Metadata UUID
+        current_user: Authenticated user making the request
+
+    Returns:
+        AssetMetadataResponse
+
+    Raises:
+        404: Asset or metadata not found
+        403: User doesn't have access
+    """
+    from ....services.asset_metadata_service import asset_metadata_service
+
+    async with database_service.get_session() as session:
+        # Verify asset exists and belongs to user's organization
+        asset = await asset_service.get_asset(session=session, asset_id=asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        if asset.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Get metadata
+        metadata = await asset_metadata_service.get_metadata(
+            session=session, metadata_id=metadata_id
+        )
+
+        if not metadata:
+            raise HTTPException(status_code=404, detail="Metadata not found")
+
+        # Verify metadata belongs to asset
+        if metadata.asset_id != asset_id:
+            raise HTTPException(status_code=404, detail="Metadata not found for this asset")
+
+        return AssetMetadataResponse(
+            id=str(metadata.id),
+            asset_id=str(metadata.asset_id),
+            metadata_type=metadata.metadata_type,
+            schema_version=metadata.schema_version,
+            producer_run_id=str(metadata.producer_run_id) if metadata.producer_run_id else None,
+            is_canonical=metadata.is_canonical,
+            status=metadata.status,
+            metadata_content=metadata.metadata_content or {},
+            metadata_object_ref=metadata.metadata_object_ref,
+            created_at=metadata.created_at,
+            promoted_at=metadata.promoted_at,
+            superseded_at=metadata.superseded_at,
+            promoted_from_id=str(metadata.promoted_from_id) if metadata.promoted_from_id else None,
+            superseded_by_id=str(metadata.superseded_by_id) if metadata.superseded_by_id else None,
+        )
+
+
+@router.post(
+    "/{asset_id}/metadata/{metadata_id}/promote",
+    response_model=AssetMetadataPromoteResponse,
+    summary="Promote metadata to canonical",
+    description="Promote experimental metadata to canonical status (Phase 3).",
+)
+async def promote_metadata_to_canonical(
+    asset_id: UUID,
+    metadata_id: UUID,
+    current_user: User = Depends(get_current_user),
+) -> AssetMetadataPromoteResponse:
+    """
+    Promote experimental metadata to canonical status.
+
+    This is a pointer update operation - no recomputation is performed.
+    If canonical metadata of the same type already exists, it will be superseded.
+
+    Args:
+        asset_id: Asset UUID (for access control)
+        metadata_id: Metadata UUID to promote
+        current_user: Authenticated user making the request
+
+    Returns:
+        AssetMetadataPromoteResponse with promoted and superseded metadata
+
+    Raises:
+        404: Asset or metadata not found
+        403: User doesn't have access
+        400: Metadata is already canonical or invalid state
+
+    Example:
+        POST /api/v1/assets/{asset_id}/metadata/{metadata_id}/promote
+
+        Response:
+        {
+            "promoted": {...},
+            "superseded": {...},  // null if no previous canonical
+            "message": "Metadata promoted to canonical"
+        }
+    """
+    from ....services.asset_metadata_service import asset_metadata_service
+
+    async with database_service.get_session() as session:
+        # Verify asset exists and belongs to user's organization
+        asset = await asset_service.get_asset(session=session, asset_id=asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        if asset.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Get metadata to promote
+        metadata = await asset_metadata_service.get_metadata(
+            session=session, metadata_id=metadata_id
+        )
+
+        if not metadata:
+            raise HTTPException(status_code=404, detail="Metadata not found")
+
+        if metadata.asset_id != asset_id:
+            raise HTTPException(status_code=404, detail="Metadata not found for this asset")
+
+        # Get existing canonical before promotion (for response)
+        existing_canonical = await asset_metadata_service.get_canonical_metadata_by_type(
+            session=session, asset_id=asset_id, metadata_type=metadata.metadata_type
+        )
+
+        # Promote
+        try:
+            promoted = await asset_metadata_service.promote_to_canonical(
+                session=session, metadata_id=metadata_id
+            )
+
+            logger.info(
+                f"User {current_user.id} promoted metadata {metadata_id} to canonical "
+                f"for asset {asset_id} (type: {metadata.metadata_type})"
+            )
+
+            # Helper to convert model to response
+            def to_response(m):
+                return AssetMetadataResponse(
+                    id=str(m.id),
+                    asset_id=str(m.asset_id),
+                    metadata_type=m.metadata_type,
+                    schema_version=m.schema_version,
+                    producer_run_id=str(m.producer_run_id) if m.producer_run_id else None,
+                    is_canonical=m.is_canonical,
+                    status=m.status,
+                    metadata_content=m.metadata_content or {},
+                    metadata_object_ref=m.metadata_object_ref,
+                    created_at=m.created_at,
+                    promoted_at=m.promoted_at,
+                    superseded_at=m.superseded_at,
+                    promoted_from_id=str(m.promoted_from_id) if m.promoted_from_id else None,
+                    superseded_by_id=str(m.superseded_by_id) if m.superseded_by_id else None,
+                )
+
+            superseded_response = None
+            if existing_canonical:
+                # Refresh to get updated status
+                await session.refresh(existing_canonical)
+                superseded_response = to_response(existing_canonical)
+
+            return AssetMetadataPromoteResponse(
+                promoted=to_response(promoted),
+                superseded=superseded_response,
+                message=f"Metadata promoted to canonical for type '{metadata.metadata_type}'"
+            )
+
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete(
+    "/{asset_id}/metadata/{metadata_id}",
+    summary="Delete or deprecate metadata",
+    description="Delete or deprecate metadata (Phase 3).",
+)
+async def delete_metadata(
+    asset_id: UUID,
+    metadata_id: UUID,
+    hard_delete: bool = Query(False, description="Perform hard delete instead of deprecation"),
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """
+    Delete or deprecate metadata.
+
+    By default, this performs a soft delete (deprecation) that preserves history.
+    Use hard_delete=true to permanently remove the metadata.
+
+    Args:
+        asset_id: Asset UUID (for access control)
+        metadata_id: Metadata UUID
+        hard_delete: If true, permanently delete; otherwise deprecate
+        current_user: Authenticated user making the request
+
+    Returns:
+        Success message
+
+    Raises:
+        404: Asset or metadata not found
+        403: User doesn't have access
+    """
+    from ....services.asset_metadata_service import asset_metadata_service
+
+    async with database_service.get_session() as session:
+        # Verify asset exists and belongs to user's organization
+        asset = await asset_service.get_asset(session=session, asset_id=asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        if asset.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Get metadata
+        metadata = await asset_metadata_service.get_metadata(
+            session=session, metadata_id=metadata_id
+        )
+
+        if not metadata:
+            raise HTTPException(status_code=404, detail="Metadata not found")
+
+        if metadata.asset_id != asset_id:
+            raise HTTPException(status_code=404, detail="Metadata not found for this asset")
+
+        if hard_delete:
+            await asset_metadata_service.delete_metadata(
+                session=session, metadata_id=metadata_id
+            )
+            logger.info(f"User {current_user.id} deleted metadata {metadata_id}")
+            return {"message": "Metadata deleted", "metadata_id": str(metadata_id)}
+        else:
+            await asset_metadata_service.deprecate_metadata(
+                session=session, metadata_id=metadata_id
+            )
+            logger.info(f"User {current_user.id} deprecated metadata {metadata_id}")
+            return {"message": "Metadata deprecated", "metadata_id": str(metadata_id)}
+
+
+@router.post(
+    "/{asset_id}/metadata/compare",
+    response_model=AssetMetadataCompareResponse,
+    summary="Compare two metadata records",
+    description="Compare two metadata records side-by-side (Phase 3).",
+)
+async def compare_metadata(
+    asset_id: UUID,
+    metadata_id_a: UUID = Query(..., description="First metadata UUID to compare"),
+    metadata_id_b: UUID = Query(..., description="Second metadata UUID to compare"),
+    current_user: User = Depends(get_current_user),
+) -> AssetMetadataCompareResponse:
+    """
+    Compare two metadata records side-by-side.
+
+    Useful for comparing experimental variants before promotion,
+    or comparing canonical vs experimental versions.
+
+    Args:
+        asset_id: Asset UUID (for access control)
+        metadata_id_a: First metadata UUID
+        metadata_id_b: Second metadata UUID
+        current_user: Authenticated user making the request
+
+    Returns:
+        AssetMetadataCompareResponse with both metadata and differences
+
+    Raises:
+        404: Asset or metadata not found
+        403: User doesn't have access
+        400: Metadata records are not of the same type
+    """
+    from ....services.asset_metadata_service import asset_metadata_service
+
+    async with database_service.get_session() as session:
+        # Verify asset exists and belongs to user's organization
+        asset = await asset_service.get_asset(session=session, asset_id=asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        if asset.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Get both metadata records
+        metadata_a = await asset_metadata_service.get_metadata(
+            session=session, metadata_id=metadata_id_a
+        )
+        metadata_b = await asset_metadata_service.get_metadata(
+            session=session, metadata_id=metadata_id_b
+        )
+
+        if not metadata_a:
+            raise HTTPException(status_code=404, detail=f"Metadata {metadata_id_a} not found")
+        if not metadata_b:
+            raise HTTPException(status_code=404, detail=f"Metadata {metadata_id_b} not found")
+
+        # Verify both belong to the asset
+        if metadata_a.asset_id != asset_id or metadata_b.asset_id != asset_id:
+            raise HTTPException(status_code=404, detail="Metadata not found for this asset")
+
+        # Helper to convert model to response
+        def to_response(m):
+            return AssetMetadataResponse(
+                id=str(m.id),
+                asset_id=str(m.asset_id),
+                metadata_type=m.metadata_type,
+                schema_version=m.schema_version,
+                producer_run_id=str(m.producer_run_id) if m.producer_run_id else None,
+                is_canonical=m.is_canonical,
+                status=m.status,
+                metadata_content=m.metadata_content or {},
+                metadata_object_ref=m.metadata_object_ref,
+                created_at=m.created_at,
+                promoted_at=m.promoted_at,
+                superseded_at=m.superseded_at,
+                promoted_from_id=str(m.promoted_from_id) if m.promoted_from_id else None,
+                superseded_by_id=str(m.superseded_by_id) if m.superseded_by_id else None,
+            )
+
+        # Calculate differences in metadata_content
+        content_a = metadata_a.metadata_content or {}
+        content_b = metadata_b.metadata_content or {}
+
+        differences = {
+            "metadata_type": {
+                "a": metadata_a.metadata_type,
+                "b": metadata_b.metadata_type,
+                "same": metadata_a.metadata_type == metadata_b.metadata_type,
+            },
+            "is_canonical": {
+                "a": metadata_a.is_canonical,
+                "b": metadata_b.is_canonical,
+            },
+            "keys_only_in_a": list(set(content_a.keys()) - set(content_b.keys())),
+            "keys_only_in_b": list(set(content_b.keys()) - set(content_a.keys())),
+            "keys_in_both": list(set(content_a.keys()) & set(content_b.keys())),
+            "values_differ": [
+                k for k in set(content_a.keys()) & set(content_b.keys())
+                if content_a.get(k) != content_b.get(k)
+            ],
+        }
+
+        return AssetMetadataCompareResponse(
+            metadata_a=to_response(metadata_a),
+            metadata_b=to_response(metadata_b),
+            differences=differences,
         )

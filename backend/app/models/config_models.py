@@ -25,7 +25,8 @@ class LLMConfig(BaseModel):
     provider: Literal["openai", "ollama", "openwebui", "lmstudio"] = Field(
         description="LLM provider name"
     )
-    api_key: str = Field(
+    api_key: Optional[str] = Field(
+        default=None,
         description="API key or authentication token"
     )
     base_url: str = Field(
@@ -501,12 +502,19 @@ class AppConfig(BaseModel):
             return [cls._resolve_env_vars(item) for item in obj]
         elif isinstance(obj, str):
             # Replace ${VAR_NAME} with environment variable value
+            # Supports ${VAR_NAME} or ${VAR_NAME:-default} syntax
             if obj.startswith("${") and obj.endswith("}"):
-                var_name = obj[2:-1]
-                value = os.getenv(var_name)
-                if value is None:
-                    raise ValueError(f"Environment variable not set: {var_name}")
-                return value
+                inner = obj[2:-1]
+                # Check for default value syntax: ${VAR_NAME:-default}
+                if ":-" in inner:
+                    var_name, default_value = inner.split(":-", 1)
+                    return os.getenv(var_name, default_value)
+                else:
+                    var_name = inner
+                    value = os.getenv(var_name)
+                    # Return None instead of raising for optional env vars
+                    # This allows partial configs to still load
+                    return value
             return obj
         else:
             return obj

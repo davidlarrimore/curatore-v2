@@ -8,6 +8,7 @@ import { Badge } from '@/components/ui/Badge'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import { JobStatsWidget } from '@/components/admin/JobStatsWidget'
 import InfrastructureHealthPanel from '@/components/admin/InfrastructureHealthPanel'
+import SystemMaintenanceTab from '@/components/admin/SystemMaintenanceTab'
 import UserInviteForm from '@/components/users/UserInviteForm'
 import UserEditForm from '@/components/users/UserEditForm'
 import {
@@ -23,7 +24,8 @@ import {
   FileText,
   Lock,
   Users,
-  UserPlus
+  UserPlus,
+  Wrench,
 } from 'lucide-react'
 
 interface UserData {
@@ -55,7 +57,7 @@ function SettingsAdminContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
-  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'jobs' | 'infrastructure' | 'users'>('organization')
+  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'jobs' | 'infrastructure' | 'users' | 'maintenance'>('organization')
   const [showMergedPreview, setShowMergedPreview] = useState(false)
 
   // Users management state
@@ -423,6 +425,17 @@ function SettingsAdminContent() {
               >
                 <Users className="w-4 h-4 mr-2" />
                 Users
+              </button>
+              <button
+                onClick={() => setActiveTab('maintenance')}
+                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'maintenance'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                <Wrench className="w-4 h-4 mr-2" />
+                Maintenance
               </button>
             </nav>
           </div>
@@ -806,6 +819,10 @@ function SettingsAdminContent() {
                   )}
                 </div>
               </div>
+            )}
+
+            {activeTab === 'maintenance' && (
+              <SystemMaintenanceTab onError={(msg) => setError(msg)} />
             )}
           </div>
 

@@ -14,6 +14,8 @@ from .routers import (
     storage,
     assets,
     runs,
+    scrape,
+    scheduled_tasks,
 )
 
 api_router = APIRouter()
@@ -30,5 +32,9 @@ api_router.include_router(storage.router)
 # Phase 0: Asset and Run endpoints
 api_router.include_router(assets.router)
 api_router.include_router(runs.router)
+# Phase 4: Web Scraping endpoints
+api_router.include_router(scrape.router)
+# Phase 5: Scheduled Tasks endpoints
+api_router.include_router(scheduled_tasks.router)
 
 __all__ = ["api_router"]

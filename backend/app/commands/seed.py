@@ -174,6 +174,98 @@ async def create_admin_user(organization: Organization) -> User:
         return admin
 
 
+async def seed_scheduled_tasks() -> list:
+    """
+    Seed default scheduled maintenance tasks (Phase 5).
+
+    Creates global scheduled tasks for system maintenance if they don't exist.
+
+    Returns:
+        list: List of created task names
+    """
+    from app.database.models import ScheduledTask
+
+    logger.info("Seeding default scheduled tasks...")
+
+    default_tasks = [
+        {
+            "name": "cleanup_expired_jobs",
+            "display_name": "Cleanup Expired Jobs",
+            "description": "Delete jobs that have exceeded their retention period based on organization settings.",
+            "task_type": "gc.cleanup",
+            "scope_type": "global",
+            "schedule_expression": "0 3 * * *",  # Daily at 3 AM UTC
+            "enabled": True,
+            "config": {"dry_run": False},
+        },
+        {
+            "name": "detect_orphaned_objects",
+            "display_name": "Detect Orphaned Objects",
+            "description": "Find orphaned objects: assets without extraction results, stuck runs, etc.",
+            "task_type": "orphan.detect",
+            "scope_type": "global",
+            "schedule_expression": "0 4 * * 0",  # Weekly on Sunday at 4 AM UTC
+            "enabled": True,
+            "config": {},
+        },
+        {
+            "name": "enforce_retention",
+            "display_name": "Enforce Retention Policies",
+            "description": "Enforce data retention policies by marking old artifacts as deleted.",
+            "task_type": "retention.enforce",
+            "scope_type": "global",
+            "schedule_expression": "0 5 * * *",  # Daily at 5 AM UTC
+            "enabled": True,
+            "config": {"default_retention_days": 90, "dry_run": False},
+        },
+        {
+            "name": "system_health_report",
+            "display_name": "System Health Report",
+            "description": "Generate a system health summary with asset, job, and extraction statistics.",
+            "task_type": "health.report",
+            "scope_type": "global",
+            "schedule_expression": "0 6 * * *",  # Daily at 6 AM UTC
+            "enabled": True,
+            "config": {},
+        },
+    ]
+
+    created_tasks = []
+
+    async with database_service.get_session() as session:
+        from app.services.scheduled_task_service import scheduled_task_service
+
+        for task_data in default_tasks:
+            # Check if task already exists
+            existing = await scheduled_task_service.get_task_by_name(
+                session, task_data["name"]
+            )
+
+            if existing:
+                logger.info(f"  Scheduled task already exists: {task_data['name']}")
+                continue
+
+            # Create the task
+            task = await scheduled_task_service.create_task(
+                session=session,
+                name=task_data["name"],
+                display_name=task_data["display_name"],
+                description=task_data["description"],
+                task_type=task_data["task_type"],
+                scope_type=task_data["scope_type"],
+                schedule_expression=task_data["schedule_expression"],
+                enabled=task_data["enabled"],
+                config=task_data["config"],
+            )
+
+            created_tasks.append(task.name)
+            logger.info(f"  ✅ Created scheduled task: {task.display_name}")
+
+        await session.commit()
+
+    return created_tasks
+
+
 async def seed_database(create_admin: bool = True):
     """
     Seed the database with initial data.
@@ -205,7 +297,12 @@ async def seed_database(create_admin: bool = True):
             admin = await create_admin_user(org)
             logger.info("")
 
-            # Display summary
+        # Seed default scheduled tasks (Phase 5)
+        scheduled_tasks = await seed_scheduled_tasks()
+        logger.info("")
+
+        # Display summary
+        if create_admin:
             logger.info("=" * 80)
             logger.info("SEEDING COMPLETE")
             logger.info("=" * 80)
@@ -218,6 +315,10 @@ async def seed_database(create_admin: bool = True):
             logger.info(f"  - Username: {admin.username}")
             logger.info(f"  - Role: {admin.role}")
             logger.info("")
+            logger.info(f"Scheduled Tasks: {len(scheduled_tasks)} created")
+            for task_name in scheduled_tasks:
+                logger.info(f"  - {task_name}")
+            logger.info("")
             logger.info("You can now login with:")
             logger.info(f"  Email: {admin.email}")
             logger.info(f"  Password: {settings.admin_password}")
@@ -229,6 +330,7 @@ async def seed_database(create_admin: bool = True):
             logger.info("=" * 80)
             logger.info("SEEDING COMPLETE (organization only)")
             logger.info("=" * 80)
+            logger.info(f"Scheduled Tasks: {len(scheduled_tasks)} created")
 
     except Exception as e:
         logger.error(f"Seeding failed: {e}")

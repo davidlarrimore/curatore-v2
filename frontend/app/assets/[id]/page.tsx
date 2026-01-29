@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { assetsApi, type Run } from '@/lib/api'
+import { assetsApi, type Run, type AssetMetadata, type AssetMetadataList } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import {
   FileText,
@@ -20,6 +20,13 @@ import {
   FileCode,
   History,
   Tag,
+  Star,
+  TestTube2,
+  ArrowUp,
+  Trash2,
+  ChevronDown,
+  ChevronRight,
+  GitCompare,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
@@ -97,6 +104,15 @@ function AssetDetailContent() {
   const [isLoadingContent, setIsLoadingContent] = useState(false)
   const [error, setError] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
+
+  // Phase 3: Metadata state
+  const [metadataList, setMetadataList] = useState<AssetMetadataList | null>(null)
+  const [isLoadingMetadata, setIsLoadingMetadata] = useState(false)
+  const [expandedExperimental, setExpandedExperimental] = useState(false)
+  const [isPromoting, setIsPromoting] = useState<string | null>(null)
+  const [selectedForCompare, setSelectedForCompare] = useState<string[]>([])
+  const [compareResult, setCompareResult] = useState<any | null>(null)
+  const [isComparing, setIsComparing] = useState(false)
 
   // Load asset data
   useEffect(() => {
@@ -182,6 +198,97 @@ function AssetDetailContent() {
     } finally {
       setIsLoadingContent(false)
     }
+  }
+
+  // Phase 3: Load metadata when metadata tab is active
+  useEffect(() => {
+    if (activeTab === 'metadata' && token && assetId && !metadataList && !isLoadingMetadata) {
+      loadAssetMetadata()
+    }
+  }, [activeTab, token, assetId])
+
+  const loadAssetMetadata = async () => {
+    if (!token || !assetId) return
+
+    setIsLoadingMetadata(true)
+    try {
+      const metadata = await assetsApi.getAssetMetadata(token, assetId)
+      setMetadataList(metadata)
+    } catch (err: any) {
+      console.error('Failed to load asset metadata:', err)
+    } finally {
+      setIsLoadingMetadata(false)
+    }
+  }
+
+  const handlePromoteMetadata = async (metadataId: string) => {
+    if (!token || !assetId) return
+
+    if (!confirm('Promote this metadata to canonical? This will supersede the current canonical metadata of this type.')) {
+      return
+    }
+
+    setIsPromoting(metadataId)
+    try {
+      const result = await assetsApi.promoteMetadata(token, assetId, metadataId)
+      setSuccessMessage(result.message)
+      // Reload metadata
+      await loadAssetMetadata()
+      setTimeout(() => setSuccessMessage(''), 3000)
+    } catch (err: any) {
+      setError(`Failed to promote metadata: ${err.message}`)
+      setTimeout(() => setError(''), 5000)
+    } finally {
+      setIsPromoting(null)
+    }
+  }
+
+  const handleDeleteMetadata = async (metadataId: string, hardDelete: boolean = false) => {
+    if (!token || !assetId) return
+
+    const action = hardDelete ? 'permanently delete' : 'deprecate'
+    if (!confirm(`Are you sure you want to ${action} this metadata?`)) {
+      return
+    }
+
+    try {
+      await assetsApi.deleteMetadata(token, assetId, metadataId, hardDelete)
+      setSuccessMessage(hardDelete ? 'Metadata deleted' : 'Metadata deprecated')
+      await loadAssetMetadata()
+      setTimeout(() => setSuccessMessage(''), 3000)
+    } catch (err: any) {
+      setError(`Failed to ${action} metadata: ${err.message}`)
+      setTimeout(() => setError(''), 5000)
+    }
+  }
+
+  const handleCompareMetadata = async () => {
+    if (!token || !assetId || selectedForCompare.length !== 2) return
+
+    setIsComparing(true)
+    try {
+      const result = await assetsApi.compareMetadata(token, assetId, selectedForCompare[0], selectedForCompare[1])
+      setCompareResult(result)
+    } catch (err: any) {
+      setError(`Failed to compare metadata: ${err.message}`)
+      setTimeout(() => setError(''), 5000)
+    } finally {
+      setIsComparing(false)
+    }
+  }
+
+  const toggleCompareSelection = (metadataId: string) => {
+    setSelectedForCompare(prev => {
+      if (prev.includes(metadataId)) {
+        return prev.filter(id => id !== metadataId)
+      }
+      if (prev.length >= 2) {
+        // Replace the first selected
+        return [prev[1], metadataId]
+      }
+      return [...prev, metadataId]
+    })
+    setCompareResult(null) // Clear comparison when selection changes
   }
 
   const handleReextract = async () => {
@@ -631,168 +738,353 @@ function AssetDetailContent() {
           {activeTab === 'metadata' && (
             <div>
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-6">Document Metadata</h3>
-              <div className="space-y-6">
-                {/* Extraction Info */}
-                {extraction && (
-                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
-                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                      <FileCode className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
-                      Extraction Information
-                    </h4>
-                    <dl className="grid grid-cols-2 gap-4">
-                      <div>
-                        <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Extractor Version</dt>
-                        <dd className="text-sm font-mono text-gray-900 dark:text-white bg-gray-50 dark:bg-gray-900/50 px-2 py-1 rounded">
-                          {extraction.extractor_version}
-                        </dd>
+
+              {/* Phase 3: Canonical vs Experimental Metadata */}
+              {isLoadingMetadata ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
+                  <span className="ml-2 text-sm text-gray-500 dark:text-gray-400">Loading metadata...</span>
+                </div>
+              ) : metadataList && (metadataList.canonical.length > 0 || metadataList.experimental.length > 0) ? (
+                <div className="space-y-6">
+                  {/* Canonical Metadata Section */}
+                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-emerald-200 dark:border-emerald-800 overflow-hidden">
+                    <div className="px-5 py-4 bg-emerald-50 dark:bg-emerald-900/20 border-b border-emerald-200 dark:border-emerald-800">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <Star className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                          <h4 className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">
+                            Canonical Metadata
+                          </h4>
+                          <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400">
+                            {metadataList.total_canonical}
+                          </span>
+                        </div>
+                        <span className="text-xs text-emerald-600 dark:text-emerald-400">Production / Trusted</span>
                       </div>
-                      {extraction.structure_metadata?.extraction_info?.method && (
-                        <div>
-                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Extraction Method</dt>
-                          <dd className="text-sm font-medium text-gray-900 dark:text-white">
-                            {extraction.structure_metadata.extraction_info.method}
-                          </dd>
+                    </div>
+                    <div className="p-5">
+                      {metadataList.canonical.length > 0 ? (
+                        <div className="space-y-4">
+                          {metadataList.canonical.map((metadata) => (
+                            <div key={metadata.id} className="p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                              <div className="flex items-start justify-between mb-3">
+                                <div>
+                                  <div className="flex items-center gap-2">
+                                    <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                                      {metadata.metadata_type}
+                                    </span>
+                                    <span className="px-1.5 py-0.5 text-xs rounded bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400">
+                                      canonical
+                                    </span>
+                                  </div>
+                                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                    Schema v{metadata.schema_version} • Created {formatDate(metadata.created_at)}
+                                    {metadata.promoted_at && ` • Promoted ${formatDate(metadata.promoted_at)}`}
+                                  </p>
+                                </div>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={selectedForCompare.includes(metadata.id)}
+                                    onChange={() => toggleCompareSelection(metadata.id)}
+                                    className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
+                                    title="Select for comparison"
+                                  />
+                                </div>
+                              </div>
+                              <div className="bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg">
+                                <pre className="text-xs text-gray-700 dark:text-gray-300 overflow-x-auto max-h-32 overflow-y-auto">
+                                  {JSON.stringify(metadata.metadata_content, null, 2)}
+                                </pre>
+                              </div>
+                            </div>
+                          ))}
                         </div>
+                      ) : (
+                        <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
+                          No canonical metadata yet. Promote experimental metadata to create canonical versions.
+                        </p>
                       )}
-                      {extraction.extraction_time_seconds && (
-                        <div>
-                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Processing Time</dt>
-                          <dd className="text-sm font-medium text-gray-900 dark:text-white">
-                            {extraction.extraction_time_seconds.toFixed(2)}s
-                          </dd>
+                    </div>
+                  </div>
+
+                  {/* Experimental Metadata Section */}
+                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-purple-200 dark:border-purple-800 overflow-hidden">
+                    <button
+                      onClick={() => setExpandedExperimental(!expandedExperimental)}
+                      className="w-full px-5 py-4 bg-purple-50 dark:bg-purple-900/20 border-b border-purple-200 dark:border-purple-800 hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors"
+                    >
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <TestTube2 className="w-5 h-5 text-purple-600 dark:text-purple-400" />
+                          <h4 className="text-sm font-semibold text-purple-800 dark:text-purple-200">
+                            Experimental Metadata
+                          </h4>
+                          <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">
+                            {metadataList.total_experimental}
+                          </span>
                         </div>
-                      )}
-                      <div>
-                        <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Status</dt>
-                        <dd className="text-sm font-medium text-gray-900 dark:text-white capitalize">
-                          {extraction.status}
-                        </dd>
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs text-purple-600 dark:text-purple-400">Run-attributed / Promotable</span>
+                          {expandedExperimental ? (
+                            <ChevronDown className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                          ) : (
+                            <ChevronRight className="w-4 h-4 text-purple-600 dark:text-purple-400" />
+                          )}
+                        </div>
                       </div>
-                    </dl>
+                    </button>
+                    {expandedExperimental && (
+                      <div className="p-5">
+                        {metadataList.experimental.length > 0 ? (
+                          <div className="space-y-4">
+                            {metadataList.experimental.map((metadata) => (
+                              <div key={metadata.id} className="p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                                <div className="flex items-start justify-between mb-3">
+                                  <div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                                        {metadata.metadata_type}
+                                      </span>
+                                      <span className="px-1.5 py-0.5 text-xs rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">
+                                        experimental
+                                      </span>
+                                    </div>
+                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                      Schema v{metadata.schema_version} • Created {formatDate(metadata.created_at)}
+                                      {metadata.producer_run_id && (
+                                        <span> • Run: {metadata.producer_run_id.substring(0, 8)}...</span>
+                                      )}
+                                    </p>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <input
+                                      type="checkbox"
+                                      checked={selectedForCompare.includes(metadata.id)}
+                                      onChange={() => toggleCompareSelection(metadata.id)}
+                                      className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
+                                      title="Select for comparison"
+                                    />
+                                    <button
+                                      onClick={() => handlePromoteMetadata(metadata.id)}
+                                      disabled={isPromoting === metadata.id}
+                                      className="p-1.5 rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors disabled:opacity-50"
+                                      title="Promote to canonical"
+                                    >
+                                      {isPromoting === metadata.id ? (
+                                        <Loader2 className="w-4 h-4 animate-spin" />
+                                      ) : (
+                                        <ArrowUp className="w-4 h-4" />
+                                      )}
+                                    </button>
+                                    <button
+                                      onClick={() => handleDeleteMetadata(metadata.id, false)}
+                                      className="p-1.5 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                                      title="Deprecate metadata"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg">
+                                  <pre className="text-xs text-gray-700 dark:text-gray-300 overflow-x-auto max-h-32 overflow-y-auto">
+                                    {JSON.stringify(metadata.metadata_content, null, 2)}
+                                  </pre>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
+                            No experimental metadata. Run experiments to generate metadata variants.
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
-                )}
 
-                {/* File Info */}
-                {extraction?.structure_metadata?.file_info && (
-                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
-                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-blue-600 dark:text-blue-400" />
-                      File Information
-                    </h4>
-                    <dl className="grid grid-cols-2 gap-4">
-                      {extraction.structure_metadata.file_info.filename && (
-                        <div className="col-span-2">
-                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Filename</dt>
-                          <dd className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                            {extraction.structure_metadata.file_info.filename}
-                          </dd>
+                  {/* Comparison Section */}
+                  {selectedForCompare.length > 0 && (
+                    <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-indigo-200 dark:border-indigo-800 overflow-hidden">
+                      <div className="px-5 py-4 bg-indigo-50 dark:bg-indigo-900/20 border-b border-indigo-200 dark:border-indigo-800">
+                        <div className="flex items-center justify-between">
+                          <div className="flex items-center gap-2">
+                            <GitCompare className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+                            <h4 className="text-sm font-semibold text-indigo-800 dark:text-indigo-200">
+                              Compare Metadata
+                            </h4>
+                            <span className="text-xs text-indigo-600 dark:text-indigo-400">
+                              {selectedForCompare.length} selected
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              onClick={() => setSelectedForCompare([])}
+                              className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
+                            >
+                              Clear selection
+                            </button>
+                            <Button
+                              variant="primary"
+                              onClick={handleCompareMetadata}
+                              disabled={selectedForCompare.length !== 2 || isComparing}
+                              className="gap-2 text-xs py-1 px-3"
+                            >
+                              {isComparing ? (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              ) : (
+                                <GitCompare className="w-3 h-3" />
+                              )}
+                              Compare
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                      {compareResult && (
+                        <div className="p-5">
+                          <div className="grid grid-cols-2 gap-4 mb-4">
+                            <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+                              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Metadata A</p>
+                              <p className="text-sm font-semibold text-gray-900 dark:text-white">{compareResult.metadata_a.metadata_type}</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">
+                                {compareResult.metadata_a.is_canonical ? 'Canonical' : 'Experimental'}
+                              </p>
+                            </div>
+                            <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700">
+                              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Metadata B</p>
+                              <p className="text-sm font-semibold text-gray-900 dark:text-white">{compareResult.metadata_b.metadata_type}</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">
+                                {compareResult.metadata_b.is_canonical ? 'Canonical' : 'Experimental'}
+                              </p>
+                            </div>
+                          </div>
+                          <div className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg">
+                            <h5 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">Differences</h5>
+                            <dl className="space-y-2 text-xs">
+                              {compareResult.differences.values_differ.length > 0 && (
+                                <div>
+                                  <dt className="text-red-600 dark:text-red-400 font-medium">Changed keys:</dt>
+                                  <dd className="text-gray-600 dark:text-gray-400">{compareResult.differences.values_differ.join(', ')}</dd>
+                                </div>
+                              )}
+                              {compareResult.differences.keys_only_in_a.length > 0 && (
+                                <div>
+                                  <dt className="text-amber-600 dark:text-amber-400 font-medium">Only in A:</dt>
+                                  <dd className="text-gray-600 dark:text-gray-400">{compareResult.differences.keys_only_in_a.join(', ')}</dd>
+                                </div>
+                              )}
+                              {compareResult.differences.keys_only_in_b.length > 0 && (
+                                <div>
+                                  <dt className="text-amber-600 dark:text-amber-400 font-medium">Only in B:</dt>
+                                  <dd className="text-gray-600 dark:text-gray-400">{compareResult.differences.keys_only_in_b.join(', ')}</dd>
+                                </div>
+                              )}
+                              {compareResult.differences.values_differ.length === 0 &&
+                               compareResult.differences.keys_only_in_a.length === 0 &&
+                               compareResult.differences.keys_only_in_b.length === 0 && (
+                                <p className="text-emerald-600 dark:text-emerald-400">Content is identical</p>
+                              )}
+                            </dl>
+                          </div>
                         </div>
                       )}
-                      {extraction.structure_metadata.file_info.extension && (
-                        <div>
-                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">File Type</dt>
-                          <dd className="text-sm font-medium text-gray-900 dark:text-white uppercase">
-                            {extraction.structure_metadata.file_info.extension.replace('.', '')}
-                          </dd>
-                        </div>
-                      )}
-                      {extraction.structure_metadata.file_info.size_human && (
-                        <div>
-                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">File Size</dt>
-                          <dd className="text-sm font-medium text-gray-900 dark:text-white">
-                            {extraction.structure_metadata.file_info.size_human}
-                          </dd>
-                        </div>
-                      )}
-                    </dl>
-                  </div>
-                )}
+                    </div>
+                  )}
+                </div>
+              ) : (
+                <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                  <Tag className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                  <p>No derived metadata available yet.</p>
+                  <p className="text-xs mt-1">Run experiments to generate metadata.</p>
+                </div>
+              )}
 
-                {/* Content Statistics */}
-                {extraction?.structure_metadata?.content_info && (
-                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
-                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                      <Tag className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                      Content Statistics
-                    </h4>
-                    <dl className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                      {extraction.structure_metadata.content_info.character_count !== undefined && (
+              {/* Legacy Extraction Metadata (collapsed) */}
+              <details className="mt-6 bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700">
+                <summary className="px-5 py-4 cursor-pointer text-sm font-semibold text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
+                  Extraction Metadata (Technical)
+                </summary>
+                <div className="px-5 pb-5 space-y-4">
+                  {/* Extraction Info */}
+                  {extraction && (
+                    <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4">
+                      <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
+                        <FileCode className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
+                        Extraction Information
+                      </h4>
+                      <dl className="grid grid-cols-2 gap-3 text-xs">
                         <div>
-                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Characters</dt>
-                          <dd className="text-sm font-semibold text-gray-900 dark:text-white">
-                            {extraction.structure_metadata.content_info.character_count.toLocaleString()}
-                          </dd>
+                          <dt className="text-gray-500 dark:text-gray-400 mb-0.5">Extractor Version</dt>
+                          <dd className="font-mono text-gray-900 dark:text-white">{extraction.extractor_version}</dd>
                         </div>
-                      )}
-                      {extraction.structure_metadata.content_info.word_count !== undefined && (
-                        <div>
-                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Words</dt>
-                          <dd className="text-sm font-semibold text-gray-900 dark:text-white">
-                            {extraction.structure_metadata.content_info.word_count.toLocaleString()}
-                          </dd>
-                        </div>
-                      )}
-                      {extraction.structure_metadata.content_info.line_count !== undefined && (
-                        <div>
-                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1">Lines</dt>
-                          <dd className="text-sm font-semibold text-gray-900 dark:text-white">
-                            {extraction.structure_metadata.content_info.line_count.toLocaleString()}
-                          </dd>
-                        </div>
-                      )}
-                    </dl>
-                  </div>
-                )}
+                        {extraction.extraction_time_seconds && (
+                          <div>
+                            <dt className="text-gray-500 dark:text-gray-400 mb-0.5">Processing Time</dt>
+                            <dd className="text-gray-900 dark:text-white">{extraction.extraction_time_seconds.toFixed(2)}s</dd>
+                          </div>
+                        )}
+                      </dl>
+                    </div>
+                  )}
 
-                {/* Document Properties (PDF/Office metadata) */}
-                {extraction?.structure_metadata?.document_properties && Object.keys(extraction.structure_metadata.document_properties).length > 0 && (
-                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
-                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-                      Document Properties
-                    </h4>
-                    <dl className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      {Object.entries(extraction.structure_metadata.document_properties).map(([key, value]) => (
-                        <div key={key}>
-                          <dt className="text-xs text-gray-500 dark:text-gray-400 mb-1 capitalize">
-                            {key.replace(/_/g, ' ')}
-                          </dt>
-                          <dd className="text-sm font-medium text-gray-900 dark:text-white break-words">
-                            {typeof value === 'object' ? JSON.stringify(value) : String(value)}
-                          </dd>
-                        </div>
-                      ))}
-                    </dl>
-                  </div>
-                )}
+                  {/* Content Statistics */}
+                  {extraction?.structure_metadata?.content_info && (
+                    <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4">
+                      <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-3 flex items-center gap-2">
+                        <Tag className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                        Content Statistics
+                      </h4>
+                      <dl className="grid grid-cols-3 gap-3 text-xs">
+                        {extraction.structure_metadata.content_info.character_count !== undefined && (
+                          <div>
+                            <dt className="text-gray-500 dark:text-gray-400 mb-0.5">Characters</dt>
+                            <dd className="font-semibold text-gray-900 dark:text-white">
+                              {extraction.structure_metadata.content_info.character_count.toLocaleString()}
+                            </dd>
+                          </div>
+                        )}
+                        {extraction.structure_metadata.content_info.word_count !== undefined && (
+                          <div>
+                            <dt className="text-gray-500 dark:text-gray-400 mb-0.5">Words</dt>
+                            <dd className="font-semibold text-gray-900 dark:text-white">
+                              {extraction.structure_metadata.content_info.word_count.toLocaleString()}
+                            </dd>
+                          </div>
+                        )}
+                        {extraction.structure_metadata.content_info.line_count !== undefined && (
+                          <div>
+                            <dt className="text-gray-500 dark:text-gray-400 mb-0.5">Lines</dt>
+                            <dd className="font-semibold text-gray-900 dark:text-white">
+                              {extraction.structure_metadata.content_info.line_count.toLocaleString()}
+                            </dd>
+                          </div>
+                        )}
+                      </dl>
+                    </div>
+                  )}
 
-                {/* Source Metadata (from Asset) */}
-                {asset.source_metadata && Object.keys(asset.source_metadata).length > 0 && (
-                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-5">
-                    <h4 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
-                      <FolderOpen className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                      Source Metadata
-                    </h4>
-                    <pre className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg overflow-x-auto text-xs text-gray-900 dark:text-gray-100">
-                      {JSON.stringify(asset.source_metadata, null, 2)}
-                    </pre>
-                  </div>
-                )}
-
-                {/* Raw Extraction Metadata (collapsed by default) */}
-                {extraction?.structure_metadata && (
-                  <details className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700">
-                    <summary className="px-5 py-4 cursor-pointer text-sm font-semibold text-gray-900 dark:text-white hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors">
-                      Raw Metadata (Advanced)
-                    </summary>
-                    <div className="px-5 pb-5">
-                      <pre className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg overflow-x-auto text-xs text-gray-900 dark:text-gray-100 max-h-96 overflow-y-auto">
+                  {/* Raw Metadata */}
+                  {extraction?.structure_metadata && (
+                    <div>
+                      <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">Raw Metadata</h4>
+                      <pre className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg overflow-x-auto text-xs text-gray-700 dark:text-gray-300 max-h-64 overflow-y-auto">
                         {JSON.stringify(extraction.structure_metadata, null, 2)}
                       </pre>
                     </div>
-                  </details>
-                )}
-              </div>
+                  )}
+
+                  {/* Source Metadata */}
+                  {asset.source_metadata && Object.keys(asset.source_metadata).length > 0 && (
+                    <div>
+                      <h4 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">Source Metadata</h4>
+                      <pre className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg overflow-x-auto text-xs text-gray-700 dark:text-gray-300 max-h-64 overflow-y-auto">
+                        {JSON.stringify(asset.source_metadata, null, 2)}
+                      </pre>
+                    </div>
+                  )}
+                </div>
+              </details>
             </div>
           )}
 

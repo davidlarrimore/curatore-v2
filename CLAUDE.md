@@ -171,6 +171,13 @@ python scripts/sharepoint/sharepoint_process.py
 
 # Nuclear option: remove everything including networks
 ./scripts/nuke.sh
+
+# Storage cleanup (for breaking changes to storage layer)
+# Automatically recreates buckets and organization folders after cleanup
+# See docs/STORAGE_CLEANUP.md for full documentation
+./scripts/cleanup_storage.sh --dry-run  # Preview what would be deleted
+./scripts/cleanup_storage.sh            # Interactive cleanup + recreation
+./scripts/cleanup_storage.sh --force    # Force cleanup + recreation
 ```
 
 ## Architecture Overview
@@ -280,6 +287,26 @@ The backend follows a service-oriented architecture with clear separation of con
   - Automatic connection health testing
   - Secure credential storage
 
+- **`scheduled_task_service.py`**: Database-backed scheduled task management
+  - CRUD operations for ScheduledTask model
+  - Enable/disable tasks at runtime
+  - Manual trigger with Run tracking
+  - Due task detection and execution coordination
+  - Maintenance statistics aggregation
+
+- **`lock_service.py`**: Redis-based distributed locking
+  - Acquire/release locks for task idempotency
+  - Lock extension for long-running operations
+  - Atomic check-and-delete via Lua scripts
+  - Prevents duplicate scheduled task execution
+
+- **`maintenance_handlers.py`**: Scheduled maintenance task handlers
+  - Job cleanup handler (expired jobs and data)
+  - Orphan detection handler (storage cleanup)
+  - Retention enforcement handler (policy compliance)
+  - Health report handler (system status summary)
+  - Extensible handler registry pattern
+
 ### API Structure
 
 All API endpoints are versioned under `/api/v1/`:
@@ -297,7 +324,8 @@ backend/app/
 │       │   ├── users.py           # User management
 │       │   ├── organizations.py   # Organization/tenant management
 │       │   ├── api_keys.py        # API key management
-│       │   └── connections.py     # Runtime connection management
+│       │   ├── connections.py     # Runtime connection management
+│       │   └── scheduled_tasks.py # Scheduled task management (admin)
 │       └── models.py              # V1-specific Pydantic models
 ├── models.py                      # Shared domain models
 ├── database/
@@ -325,6 +353,253 @@ Documents are processed asynchronously to avoid blocking the API:
 - `backend/app/celery_app.py`: Celery application setup
 - `backend/app/tasks.py`: Task definitions (e.g., `process_document_task`)
 - `backend/app/services/job_service.py`: Redis-backed job tracking
+
+### Celery Beat & Scheduled Tasks
+
+Curatore uses Celery Beat for periodic task scheduling. The system supports both hardcoded beat schedules and database-backed scheduled tasks for admin control.
+
+#### Beat Service Architecture
+
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│  Celery     │────▶│    Redis     │────▶│   Celery    │
+│   Beat      │     │   (Broker)   │     │   Worker    │
+└─────────────┘     └──────────────┘     └─────────────┘
+      │                                         │
+      │ (every minute)                          │
+      ▼                                         ▼
+┌─────────────┐                         ┌──────────────┐
+│ check_      │                         │  Execute     │
+│ scheduled_  │────────────────────────▶│  Scheduled   │
+│ tasks       │   (enqueue due tasks)   │  Task        │
+└─────────────┘                         └──────────────┘
+                                               │
+                                               ▼
+                                        ┌──────────────┐
+                                        │ Maintenance  │
+                                        │  Handlers    │
+                                        └──────────────┘
+```
+
+#### Docker Service
+
+The beat service runs separately from workers in Docker:
+
+```yaml
+# docker-compose.yml
+beat:
+  build:
+    context: ./backend
+  container_name: curatore-beat
+  command: celery -A app.celery_app beat -l info
+  environment:
+    - SCHEDULED_TASK_CHECK_ENABLED=${SCHEDULED_TASK_CHECK_ENABLED:-true}
+    - SCHEDULED_TASK_CHECK_INTERVAL=${SCHEDULED_TASK_CHECK_INTERVAL:-60}
+    # ... same env vars as worker
+  depends_on:
+    - redis
+    - backend
+```
+
+#### Hardcoded Beat Schedules
+
+Defined in `backend/app/celery_app.py`:
+
+```python
+celery_app.conf.beat_schedule = {
+    # Check for due scheduled tasks every minute
+    "check-scheduled-tasks": {
+        "task": "app.tasks.check_scheduled_tasks",
+        "schedule": crontab(minute="*"),  # Every minute
+    },
+    # Cleanup expired temp files
+    "cleanup-expired-files": {
+        "task": "app.tasks.cleanup_expired_files",
+        "schedule": crontab(hour=3, minute=0),  # Daily at 3 AM
+    },
+    # Cleanup expired jobs
+    "cleanup-expired-jobs": {
+        "task": "app.tasks.cleanup_expired_jobs",
+        "schedule": crontab(hour=4, minute=0),  # Daily at 4 AM
+    },
+}
+```
+
+**To add a new hardcoded beat:**
+
+1. Create the task in `backend/app/tasks.py`:
+   ```python
+   @celery_app.task(name="app.tasks.my_new_task")
+   def my_new_task():
+       """My periodic task."""
+       logger.info("Running my_new_task")
+       # Task logic here
+   ```
+
+2. Add to beat schedule in `backend/app/celery_app.py`:
+   ```python
+   celery_app.conf.beat_schedule["my-new-task"] = {
+       "task": "app.tasks.my_new_task",
+       "schedule": crontab(hour=5, minute=30),  # Daily at 5:30 AM
+   }
+   ```
+
+3. Restart the beat service: `docker-compose restart beat`
+
+#### Database-Backed Scheduled Tasks
+
+For admin-controllable scheduled tasks, use the `ScheduledTask` model. These tasks can be enabled/disabled and triggered manually via the admin UI.
+
+**ScheduledTask Model:**
+```python
+class ScheduledTask(Base):
+    id: UUID
+    organization_id: Optional[UUID]  # Null for global tasks
+    name: str                        # Unique identifier (e.g., "gc.cleanup")
+    display_name: str                # UI display name
+    description: Optional[str]
+    task_type: str                   # Handler type (gc.cleanup, orphan.detect, etc.)
+    scope_type: str                  # "global" or "organization"
+    schedule_expression: str         # Cron format (e.g., "0 3 * * *")
+    enabled: bool                    # Enable/disable toggle
+    config: Dict[str, Any]           # Task-specific configuration
+    last_run_id: Optional[UUID]      # Link to last Run record
+    last_run_at: Optional[datetime]
+    next_run_at: Optional[datetime]
+```
+
+**Default Scheduled Tasks** (seeded automatically):
+| Task | Schedule | Description |
+|------|----------|-------------|
+| `gc.cleanup` | Daily 3 AM | Clean up expired jobs and orphaned data |
+| `orphan.detect` | Weekly Sunday 4 AM | Detect orphaned objects in storage |
+| `retention.enforce` | Daily 5 AM | Enforce data retention policies |
+| `health.report` | Daily 6 AM | Generate system health summary |
+
+**To add a new database-backed scheduled task:**
+
+1. Create a handler in `backend/app/services/maintenance_handlers.py`:
+   ```python
+   async def handle_my_task(
+       session: AsyncSession,
+       run: Run,
+       task: ScheduledTask,
+       log_event: Callable,
+   ) -> Dict[str, Any]:
+       """My custom maintenance task."""
+       await log_event("info", "Starting my task...")
+
+       # Task logic here
+       items_processed = 0
+
+       await log_event("info", f"Processed {items_processed} items")
+       return {"items_processed": items_processed}
+   ```
+
+2. Register the handler in the same file:
+   ```python
+   MAINTENANCE_HANDLERS: Dict[str, MaintenanceHandler] = {
+       "gc.cleanup": handle_job_cleanup,
+       "orphan.detect": handle_orphan_detection,
+       "retention.enforce": handle_retention_enforcement,
+       "health.report": handle_health_report,
+       "my.task": handle_my_task,  # Add your handler
+   }
+   ```
+
+3. Seed the task in `backend/app/commands/seed.py` (add to `DEFAULT_SCHEDULED_TASKS`):
+   ```python
+   {
+       "name": "my.task",
+       "display_name": "My Custom Task",
+       "description": "Description of what this task does",
+       "task_type": "my.task",
+       "scope_type": "global",
+       "schedule_expression": "0 7 * * *",  # Daily at 7 AM
+       "enabled": True,
+       "config": {},
+   },
+   ```
+
+4. Run the seed command: `python -m app.commands.seed --seed-scheduled-tasks`
+
+#### Scheduled Task Execution Flow
+
+1. **Beat checks every minute**: `check_scheduled_tasks` finds due tasks
+2. **Lock acquired**: Redis-based distributed lock prevents duplicate execution
+3. **Run created**: A `Run` record tracks the execution (`run_type="system_maintenance"`)
+4. **Handler executed**: Appropriate handler from `MAINTENANCE_HANDLERS` is called
+5. **Results logged**: Handler logs events via `RunLogEvent`
+6. **Task updated**: `last_run_at` and `next_run_at` are updated
+
+#### Admin API Endpoints
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /scheduled-tasks` | List all scheduled tasks |
+| `GET /scheduled-tasks/{id}` | Get task details |
+| `POST /scheduled-tasks/{id}/enable` | Enable a task |
+| `POST /scheduled-tasks/{id}/disable` | Disable a task |
+| `POST /scheduled-tasks/{id}/trigger` | Trigger task immediately |
+| `GET /scheduled-tasks/{id}/runs` | Get task run history |
+| `GET /scheduled-tasks/stats` | Get maintenance statistics |
+
+#### Key Files
+
+| File | Purpose |
+|------|---------|
+| `backend/app/celery_app.py` | Celery app with beat schedule |
+| `backend/app/tasks.py` | Task definitions including `check_scheduled_tasks` |
+| `backend/app/database/models.py` | `ScheduledTask` model |
+| `backend/app/services/scheduled_task_service.py` | CRUD and execution logic |
+| `backend/app/services/maintenance_handlers.py` | Handler implementations |
+| `backend/app/services/lock_service.py` | Distributed locking |
+| `backend/app/api/v1/routers/scheduled_tasks.py` | Admin API endpoints |
+| `frontend/components/admin/SystemMaintenanceTab.tsx` | Admin UI |
+
+#### Configuration
+
+Environment variables for scheduled tasks:
+
+```bash
+# Enable/disable scheduled task checking
+SCHEDULED_TASK_CHECK_ENABLED=true
+
+# Interval for checking due tasks (seconds)
+SCHEDULED_TASK_CHECK_INTERVAL=60
+
+# Lock timeout for task execution (seconds)
+SCHEDULED_TASK_LOCK_TIMEOUT=300
+```
+
+#### Debugging Scheduled Tasks
+
+```bash
+# Check beat service logs
+docker-compose logs -f beat
+
+# Check worker logs for task execution
+docker-compose logs -f worker | grep -i "scheduled\|maintenance"
+
+# List active Celery tasks
+docker exec -it curatore-worker celery -A app.celery_app inspect active
+
+# Check scheduled task status in database
+docker exec -it curatore-backend python -c "
+from app.database.models import ScheduledTask
+from app.services.database_service import database_service
+import asyncio
+
+async def check():
+    async with database_service.get_session() as session:
+        from sqlalchemy import select
+        result = await session.execute(select(ScheduledTask))
+        for task in result.scalars():
+            print(f'{task.name}: enabled={task.enabled}, next_run={task.next_run_at}')
+
+asyncio.run(check())
+"
+```
 
 ### Extraction Engines
 
@@ -1626,6 +1901,15 @@ Base URL: `http://localhost:8000/api/v1`
 - `PATCH /connections/{id}` - Update connection
 - `DELETE /connections/{id}` - Delete connection
 - `POST /connections/{id}/test` - Test connection health
+
+**Scheduled Tasks** (requires `org_admin` role):
+- `GET /scheduled-tasks` - List all scheduled tasks
+- `GET /scheduled-tasks/stats` - Get maintenance statistics
+- `GET /scheduled-tasks/{id}` - Get task details
+- `POST /scheduled-tasks/{id}/enable` - Enable a scheduled task
+- `POST /scheduled-tasks/{id}/disable` - Disable a scheduled task
+- `POST /scheduled-tasks/{id}/trigger` - Trigger task immediately
+- `GET /scheduled-tasks/{id}/runs` - Get task run history
 
 **Storage** (when `USE_OBJECT_STORAGE=true`):
 - `GET /storage/health` - Storage service health check

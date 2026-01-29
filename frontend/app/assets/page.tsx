@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { assetsApi, type CollectionHealth } from '@/lib/api'
@@ -22,7 +22,7 @@ import {
   Upload,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
-import BulkUploadModal from '@/components/BulkUploadModal'
+import UploadModal from '@/components/UploadModal'
 
 interface Asset {
   id: string
@@ -64,11 +64,8 @@ function AssetsContent() {
   const [sourceTypeFilter, setSourceTypeFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
   const [limit] = useState(20)
-  const [isUploading, setIsUploading] = useState(false)
-  const [isBulkUploadOpen, setIsBulkUploadOpen] = useState(false)
-  const [selectedFiles, setSelectedFiles] = useState<File[]>([])
+  const [isUploadModalOpen, setIsUploadModalOpen] = useState(false)
   const [collectionHealth, setCollectionHealth] = useState<CollectionHealth | null>(null)
-  const fileInputRef = useRef<HTMLInputElement>(null)
 
   const loadAssets = useCallback(async (silent = false) => {
     if (!token) return
@@ -131,70 +128,11 @@ function AssetsContent() {
 
   const handleRefresh = () => {
     loadAssets()
+    loadCollectionHealth()
   }
 
   const handleUploadClick = () => {
-    fileInputRef.current?.click()
-  }
-
-  /**
-   * Smart upload handler - always analyzes files first, then:
-   * - Shows preview modal if changes detected or many files (4+)
-   * - Auto-skips with notification if all files unchanged (<4 files)
-   *
-   * This eliminates the need for separate "Upload" vs "Bulk Upload" buttons
-   * while still giving users control when it matters.
-   */
-  const handleFileSelect = async (event: React.ChangeEvent<HTMLInputElement>) => {
-    const files = event.target.files
-    if (!files || files.length === 0 || !token) return
-
-    setIsUploading(true)
-    setError('')
-    setSuccessMessage('')
-
-    try {
-      const fileArray = Array.from(files)
-
-      // Step 1: Always analyze the upload first
-      const analysis = await assetsApi.previewBulkUpload(token, fileArray)
-
-      // Step 2: Decide whether to show preview or auto-apply
-      const hasChanges = analysis.counts.new > 0 ||
-                         analysis.counts.updated > 0 ||
-                         analysis.counts.missing > 0
-      const manyFiles = fileArray.length >= 4
-
-      // Show preview if:
-      // - There are changes (new/updated/missing files)
-      // - User is uploading many files (4+)
-      const shouldShowPreview = hasChanges || manyFiles
-
-      if (shouldShowPreview) {
-        // Open preview modal for user review
-        setSelectedFiles(fileArray)
-        setIsBulkUploadOpen(true)
-      } else {
-        // Auto-skip for simple cases (all unchanged, few files)
-        if (analysis.counts.unchanged > 0) {
-          setSuccessMessage(
-            `${analysis.counts.unchanged} file(s) already up to date - no changes needed`
-          )
-          setTimeout(() => setSuccessMessage(''), 5000)
-        } else {
-          setSuccessMessage('No files to upload')
-          setTimeout(() => setSuccessMessage(''), 3000)
-        }
-      }
-    } catch (err: any) {
-      setError(err.message || 'Failed to analyze upload')
-    } finally {
-      setIsUploading(false)
-      // Reset file input
-      if (fileInputRef.current) {
-        fileInputRef.current.value = ''
-      }
-    }
+    setIsUploadModalOpen(true)
   }
 
   const handleViewAsset = (assetId: string) => {
@@ -304,11 +242,10 @@ function AssetsContent() {
             <div className="flex items-center gap-3">
               <Button
                 onClick={handleUploadClick}
-                disabled={isUploading}
                 className="gap-2 shadow-lg shadow-indigo-500/25"
               >
-                <Upload className={`w-4 h-4 ${isUploading ? 'animate-pulse' : ''}`} />
-                <span className="hidden sm:inline">{isUploading ? 'Analyzing...' : 'Upload Files'}</span>
+                <Upload className="w-4 h-4" />
+                <span className="hidden sm:inline">Upload Files</span>
                 <span className="sm:hidden">+</span>
               </Button>
               <Button
@@ -321,16 +258,6 @@ function AssetsContent() {
                 <span className="hidden sm:inline">Refresh</span>
               </Button>
             </div>
-
-            {/* Hidden file input */}
-            <input
-              ref={fileInputRef}
-              type="file"
-              multiple
-              accept=".pdf,.doc,.docx,.txt,.md,.ppt,.pptx,.xls,.xlsx,.png,.jpg,.jpeg"
-              onChange={handleFileSelect}
-              className="hidden"
-            />
           </div>
 
           {/* Collection Health */}
@@ -511,10 +438,9 @@ function AssetsContent() {
                   onClick={handleUploadClick}
                   size="lg"
                   className="gap-2 shadow-lg shadow-indigo-500/25"
-                  disabled={isUploading}
                 >
                   <Upload className="w-5 h-5" />
-                  {isUploading ? 'Uploading...' : 'Upload your first document'}
+                  Upload your first document
                 </Button>
               )}
             </div>
@@ -678,19 +604,15 @@ function AssetsContent() {
         )}
       </div>
 
-      {/* Smart Upload Modal - opens automatically when needed */}
-      <BulkUploadModal
-        isOpen={isBulkUploadOpen}
-        onClose={() => {
-          setIsBulkUploadOpen(false)
-          setSelectedFiles([])
-        }}
+      {/* Upload Modal */}
+      <UploadModal
+        isOpen={isUploadModalOpen}
+        onClose={() => setIsUploadModalOpen(false)}
         onSuccess={() => {
           loadAssets()
           loadCollectionHealth()
         }}
         token={token ?? undefined}
-        preselectedFiles={selectedFiles}
       />
     </div>
   )

@@ -581,6 +581,330 @@ def send_invitation_email_task(
 # Note: File cleanup is now handled by S3 lifecycle policies.
 #       Only job cleanup remains as a scheduled task.
 
+# ============================================================================
+# PHASE 5: SCHEDULED TASK EXECUTION
+# ============================================================================
+
+@shared_task(bind=True)
+def check_scheduled_tasks(self) -> Dict[str, Any]:
+    """
+    Periodic task to check for due scheduled tasks (Phase 5).
+
+    This task runs every minute (configurable via SCHEDULED_TASK_CHECK_INTERVAL)
+    and checks the database for ScheduledTasks that are due to run.
+
+    For each due task:
+    1. Creates a Run with origin="scheduled"
+    2. Enqueues execute_scheduled_task_async
+
+    Returns:
+        Dict with check statistics:
+        {
+            "checked_at": str,
+            "due_tasks": int,
+            "triggered_tasks": list[str]
+        }
+    """
+    logger = logging.getLogger("curatore.tasks.scheduled")
+    logger.debug("Checking for due scheduled tasks...")
+
+    try:
+        result = asyncio.run(_check_scheduled_tasks())
+        if result.get("due_tasks", 0) > 0:
+            logger.info(f"Triggered {result['due_tasks']} scheduled tasks")
+        return result
+    except Exception as e:
+        logger.error(f"Error checking scheduled tasks: {e}")
+        return {"error": str(e), "checked_at": datetime.utcnow().isoformat()}
+
+
+async def _check_scheduled_tasks() -> Dict[str, Any]:
+    """
+    Async implementation of scheduled task checker.
+
+    Returns:
+        Dict with check results
+    """
+    from .services.scheduled_task_service import scheduled_task_service
+    from .database.models import Run, RunLogEvent, Organization
+    from .config import settings
+    from sqlalchemy import select
+
+    now = datetime.utcnow()
+    triggered_tasks = []
+
+    async with database_service.get_session() as session:
+        # Get default organization for global tasks
+        default_org_id = None
+        if settings.default_org_id:
+            try:
+                default_org_id = uuid.UUID(settings.default_org_id)
+            except ValueError:
+                pass
+
+        # If no default org in settings, get the first organization
+        if not default_org_id:
+            result = await session.execute(
+                select(Organization).limit(1)
+            )
+            first_org = result.scalar_one_or_none()
+            if first_org:
+                default_org_id = first_org.id
+
+        # Find all due tasks
+        due_tasks = await scheduled_task_service.list_due_tasks(session, as_of=now)
+
+        for task in due_tasks:
+            try:
+                # For global tasks, use the default organization
+                run_org_id = task.organization_id or default_org_id
+                if not run_org_id:
+                    logging.getLogger("curatore.tasks.scheduled").warning(
+                        f"Skipping task {task.name}: no organization available"
+                    )
+                    continue
+
+                # Create a Run for this scheduled execution
+                run = Run(
+                    id=uuid.uuid4(),
+                    organization_id=run_org_id,
+                    run_type="system_maintenance",
+                    origin="scheduled",  # Scheduled trigger (vs "user" for manual)
+                    status="pending",
+                    config={
+                        "scheduled_task_id": str(task.id),
+                        "scheduled_task_name": task.name,
+                        "task_type": task.task_type,
+                        "task_config": task.config,
+                    },
+                )
+                session.add(run)
+
+                # Log the trigger
+                log_event = RunLogEvent(
+                    id=uuid.uuid4(),
+                    run_id=run.id,
+                    level="INFO",
+                    event_type="start",
+                    message=f"Scheduled task '{task.display_name}' triggered by scheduler",
+                    context={
+                        "task_id": str(task.id),
+                        "task_name": task.name,
+                        "scheduled_time": task.next_run_at.isoformat() if task.next_run_at else None,
+                    },
+                )
+                session.add(log_event)
+
+                await session.flush()
+
+                # Enqueue the task for execution
+                execute_scheduled_task_async.delay(
+                    task_id=str(task.id),
+                    run_id=str(run.id),
+                )
+
+                triggered_tasks.append(task.name)
+                logging.getLogger("curatore.tasks.scheduled").info(
+                    f"Enqueued scheduled task: {task.name} (run_id={run.id})"
+                )
+
+            except Exception as e:
+                logging.getLogger("curatore.tasks.scheduled").error(
+                    f"Failed to trigger task {task.name}: {e}"
+                )
+
+        await session.commit()
+
+    return {
+        "checked_at": now.isoformat(),
+        "due_tasks": len(triggered_tasks),
+        "triggered_tasks": triggered_tasks,
+    }
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def execute_scheduled_task_async(
+    self,
+    task_id: str,
+    run_id: str,
+) -> Dict[str, Any]:
+    """
+    Execute a scheduled maintenance task (Phase 5).
+
+    This task is the main entry point for scheduled task execution.
+    It handles:
+    1. Looking up the ScheduledTask
+    2. Acquiring a distributed lock
+    3. Updating Run status
+    4. Dispatching to the appropriate handler
+    5. Logging summary and updating task last_run
+
+    Args:
+        task_id: ScheduledTask UUID string
+        run_id: Run UUID string
+
+    Returns:
+        Dict with execution results
+    """
+    from uuid import UUID
+
+    logger = logging.getLogger("curatore.tasks.scheduled")
+    logger.info(f"Starting scheduled task execution: task={task_id}, run={run_id}")
+
+    try:
+        result = asyncio.run(
+            _execute_scheduled_task(
+                task_id=UUID(task_id),
+                run_id=UUID(run_id),
+            )
+        )
+        logger.info(f"Scheduled task completed: task={task_id}, status={result.get('status')}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Scheduled task failed: task={task_id}, error={e}", exc_info=True)
+        raise
+
+
+async def _execute_scheduled_task(
+    task_id,
+    run_id,
+) -> Dict[str, Any]:
+    """
+    Async implementation of scheduled task execution.
+
+    Args:
+        task_id: ScheduledTask UUID
+        run_id: Run UUID
+
+    Returns:
+        Dict with execution results
+    """
+    from .services.scheduled_task_service import scheduled_task_service
+    from .services.lock_service import lock_service
+    from .services.maintenance_handlers import MAINTENANCE_HANDLERS
+    from .database.models import Run, RunLogEvent, ScheduledTask
+    from sqlalchemy import select
+
+    start_time = datetime.utcnow()
+    logger = logging.getLogger("curatore.tasks.scheduled")
+
+    async with database_service.get_session() as session:
+        # 1. Look up the ScheduledTask
+        task = await scheduled_task_service.get_task(session, task_id)
+        if not task:
+            logger.error(f"ScheduledTask not found: {task_id}")
+            return {"status": "failed", "error": "Task not found"}
+
+        # 2. Look up the Run
+        run_result = await session.execute(
+            select(Run).where(Run.id == run_id)
+        )
+        run = run_result.scalar_one_or_none()
+        if not run:
+            logger.error(f"Run not found: {run_id}")
+            return {"status": "failed", "error": "Run not found"}
+
+        # 3. Acquire distributed lock
+        lock_resource = f"scheduled_task:{task.name}"
+        lock_id = await lock_service.acquire_lock(
+            lock_resource,
+            timeout=3600,  # 1 hour timeout
+            max_retries=0,  # Don't retry, skip if locked
+        )
+
+        if not lock_id:
+            logger.warning(f"Task already running (locked): {task.name}")
+            run.status = "cancelled"
+            run.error_message = "Task already running (locked)"
+            run.completed_at = datetime.utcnow()
+
+            log_event = RunLogEvent(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                level="WARN",
+                event_type="error",
+                message="Task execution skipped - already running",
+                context={"lock_resource": lock_resource},
+            )
+            session.add(log_event)
+            await session.commit()
+            return {"status": "skipped", "reason": "locked"}
+
+        try:
+            # 4. Update Run status to running
+            run.status = "running"
+            run.started_at = datetime.utcnow()
+            await session.flush()
+
+            # 5. Get the handler for this task type
+            handler = MAINTENANCE_HANDLERS.get(task.task_type)
+            if not handler:
+                raise ValueError(f"Unknown task type: {task.task_type}")
+
+            # 6. Execute the handler
+            logger.info(f"Executing handler for task type: {task.task_type}")
+            result = await handler(session, run, task.config or {})
+
+            # 7. Update Run with success
+            run.status = "completed"
+            run.completed_at = datetime.utcnow()
+            run.results_summary = result
+
+            # 8. Update task last_run
+            task.last_run_id = run.id
+            task.last_run_at = datetime.utcnow()
+            task.last_run_status = "success"
+
+            # Calculate next run
+            from .services.scheduled_task_service import scheduled_task_service
+            if task.enabled:
+                task.next_run_at = scheduled_task_service._calculate_next_run(
+                    task.schedule_expression
+                )
+
+            await session.commit()
+
+            duration = (datetime.utcnow() - start_time).total_seconds()
+            logger.info(f"Task completed successfully: {task.name} in {duration:.2f}s")
+
+            return {
+                "status": "completed",
+                "task_name": task.name,
+                "task_type": task.task_type,
+                "duration_seconds": duration,
+                "results": result,
+            }
+
+        except Exception as e:
+            # Update Run with failure
+            run.status = "failed"
+            run.completed_at = datetime.utcnow()
+            run.error_message = str(e)
+
+            # Update task last_run
+            task.last_run_id = run.id
+            task.last_run_at = datetime.utcnow()
+            task.last_run_status = "failed"
+
+            # Log the error
+            log_event = RunLogEvent(
+                id=uuid.uuid4(),
+                run_id=run.id,
+                level="ERROR",
+                event_type="error",
+                message=f"Task execution failed: {str(e)}",
+            )
+            session.add(log_event)
+
+            await session.commit()
+            raise
+
+        finally:
+            # Always release the lock
+            await lock_service.release_lock(lock_resource, lock_id)
+
+
 @shared_task(bind=True)
 def cleanup_expired_jobs_task(self, dry_run: bool = False) -> Dict[str, Any]:
     """

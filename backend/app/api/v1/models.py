@@ -1563,7 +1563,7 @@ class BulkUploadFileInfo(BaseModel):
     """Information about a file in bulk upload analysis."""
     filename: str = Field(..., description="Filename")
     file_size: int = Field(..., description="File size in bytes")
-    file_hash: Optional[str] = Field(None, description="SHA-256 content hash (may be None for old assets)")
+    file_hash: str = Field(..., description="SHA-256 content hash")
     asset_id: Optional[str] = Field(None, description="Existing asset ID (for unchanged/updated)")
     current_version: Optional[int] = Field(None, description="Current version number")
     old_file_hash: Optional[str] = Field(None, description="Previous file hash (for updated files)")
@@ -1600,3 +1600,366 @@ class BulkUploadApplyResponse(BaseModel):
         default_factory=dict,
         description="Summary counts (created_count, updated_count, marked_inactive_count)"
     )
+
+
+# =========================================================================
+# ASSET METADATA MODELS (Phase 3)
+# =========================================================================
+
+class AssetMetadataResponse(BaseModel):
+    """Asset metadata response model (Phase 3)."""
+    id: str = Field(..., description="Metadata UUID")
+    asset_id: str = Field(..., description="Asset UUID")
+    metadata_type: str = Field(..., description="Metadata type (e.g., topics.v1, summary.short.v1)")
+    schema_version: str = Field(..., description="Schema version for this metadata type")
+    producer_run_id: Optional[str] = Field(None, description="Run UUID that produced this metadata")
+    is_canonical: bool = Field(..., description="Whether this is canonical (production) metadata")
+    status: str = Field(..., description="Status (active, superseded, deprecated)")
+    metadata_content: Dict[str, Any] = Field(..., description="The actual metadata payload")
+    metadata_object_ref: Optional[str] = Field(None, description="Object store reference for large payloads")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    promoted_at: Optional[datetime] = Field(None, description="When promoted to canonical")
+    superseded_at: Optional[datetime] = Field(None, description="When superseded by newer canonical")
+    promoted_from_id: Optional[str] = Field(None, description="ID of metadata this was promoted from")
+    superseded_by_id: Optional[str] = Field(None, description="ID of metadata that superseded this")
+
+    class Config:
+        from_attributes = True
+
+
+class AssetMetadataCreateRequest(BaseModel):
+    """Request to create new asset metadata."""
+    metadata_type: str = Field(
+        ...,
+        min_length=1,
+        max_length=100,
+        description="Metadata type (e.g., topics.v1, summary.short.v1, tags.llm.v1)"
+    )
+    metadata_content: Dict[str, Any] = Field(..., description="The metadata payload")
+    schema_version: str = Field(default="1.0", description="Schema version")
+    is_canonical: bool = Field(default=False, description="Create as canonical (production) metadata")
+    producer_run_id: Optional[str] = Field(None, description="Run UUID that produced this (for attribution)")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "metadata_type": "summary.short.v1",
+                "metadata_content": {
+                    "summary": "This document describes the procurement process for IT services."
+                },
+                "schema_version": "1.0",
+                "is_canonical": False
+            }
+        }
+
+
+class AssetMetadataUpdateRequest(BaseModel):
+    """Request to update asset metadata content."""
+    metadata_content: Dict[str, Any] = Field(..., description="Updated metadata payload")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "metadata_content": {
+                    "summary": "Updated summary content."
+                }
+            }
+        }
+
+
+class AssetMetadataListResponse(BaseModel):
+    """List of metadata for an asset."""
+    canonical: List[AssetMetadataResponse] = Field(
+        default_factory=list,
+        description="Canonical (production) metadata"
+    )
+    experimental: List[AssetMetadataResponse] = Field(
+        default_factory=list,
+        description="Experimental (non-promoted) metadata"
+    )
+    total_canonical: int = Field(..., description="Count of canonical metadata")
+    total_experimental: int = Field(..., description="Count of experimental metadata")
+    metadata_types: List[str] = Field(default_factory=list, description="Available metadata types")
+
+
+class AssetMetadataPromoteResponse(BaseModel):
+    """Response after promoting metadata to canonical."""
+    promoted: AssetMetadataResponse = Field(..., description="The promoted metadata")
+    superseded: Optional[AssetMetadataResponse] = Field(
+        None,
+        description="Previously canonical metadata that was superseded"
+    )
+    message: str = Field(..., description="Success message")
+
+
+class AssetMetadataCompareRequest(BaseModel):
+    """Request to compare two metadata records."""
+    metadata_id_a: str = Field(..., description="First metadata UUID to compare")
+    metadata_id_b: str = Field(..., description="Second metadata UUID to compare")
+
+
+class AssetMetadataCompareResponse(BaseModel):
+    """Response comparing two metadata records."""
+    metadata_a: AssetMetadataResponse = Field(..., description="First metadata")
+    metadata_b: AssetMetadataResponse = Field(..., description="Second metadata")
+    differences: Dict[str, Any] = Field(
+        default_factory=dict,
+        description="Differences between the two metadata contents"
+    )
+
+
+# =========================================================================
+# SCRAPE COLLECTION MODELS (Phase 4)
+# =========================================================================
+
+class ScrapeCollectionResponse(BaseModel):
+    """Scrape collection response model."""
+    id: str = Field(..., description="Collection UUID")
+    organization_id: str = Field(..., description="Organization UUID")
+    name: str = Field(..., description="Collection name")
+    slug: str = Field(..., description="URL-friendly slug")
+    description: Optional[str] = Field(None, description="Collection description")
+    collection_mode: str = Field(..., description="Mode: snapshot or record_preserving")
+    root_url: str = Field(..., description="Root URL for this collection")
+    url_patterns: List[Dict[str, Any]] = Field(default_factory=list, description="URL include/exclude patterns")
+    crawl_config: Dict[str, Any] = Field(default_factory=dict, description="Crawl configuration")
+    status: str = Field(..., description="Status: active, paused, archived")
+    last_crawl_at: Optional[datetime] = Field(None, description="Last crawl timestamp")
+    last_crawl_run_id: Optional[str] = Field(None, description="Last crawl run UUID")
+    stats: Dict[str, Any] = Field(default_factory=dict, description="Collection statistics")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Update timestamp")
+    created_by: Optional[str] = Field(None, description="User UUID who created the collection")
+
+    class Config:
+        from_attributes = True
+        json_schema_extra = {
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "organization_id": "04ace7c6-2043-4935-b074-ec0a567d1fd2",
+                "name": "SAM.gov Opportunities",
+                "slug": "sam-gov-opportunities",
+                "description": "Federal procurement opportunities from SAM.gov",
+                "collection_mode": "record_preserving",
+                "root_url": "https://sam.gov/search",
+                "url_patterns": [{"type": "include", "pattern": "/opp/*"}],
+                "crawl_config": {"max_depth": 3, "delay_seconds": 1.0},
+                "status": "active",
+                "last_crawl_at": "2026-01-28T12:00:00",
+                "stats": {"page_count": 150, "record_count": 25},
+                "created_at": "2026-01-01T00:00:00",
+                "updated_at": "2026-01-28T12:00:00"
+            }
+        }
+
+
+class ScrapeCollectionCreateRequest(BaseModel):
+    """Request to create a scrape collection."""
+    name: str = Field(..., min_length=1, max_length=255, description="Collection name")
+    description: Optional[str] = Field(None, max_length=2000, description="Collection description")
+    root_url: str = Field(..., min_length=1, max_length=2048, description="Root URL")
+    collection_mode: str = Field(
+        default="record_preserving",
+        description="Mode: snapshot (auto-delete old) or record_preserving (never auto-delete)"
+    )
+    url_patterns: Optional[List[Dict[str, str]]] = Field(
+        None,
+        description="URL patterns: [{type: 'include'|'exclude', pattern: '/path/*'}]"
+    )
+    crawl_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Crawl config: max_depth, max_pages, delay_seconds, etc."
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "SAM.gov Opportunities",
+                "description": "Federal procurement opportunities",
+                "root_url": "https://sam.gov/search",
+                "collection_mode": "record_preserving",
+                "url_patterns": [
+                    {"type": "include", "pattern": "/opp/*"},
+                    {"type": "exclude", "pattern": "/opp/archive/*"}
+                ],
+                "crawl_config": {
+                    "max_depth": 3,
+                    "max_pages": 100,
+                    "delay_seconds": 1.0
+                }
+            }
+        }
+
+
+class ScrapeCollectionUpdateRequest(BaseModel):
+    """Request to update a scrape collection."""
+    name: Optional[str] = Field(None, min_length=1, max_length=255, description="Collection name")
+    description: Optional[str] = Field(None, max_length=2000, description="Description")
+    collection_mode: Optional[str] = Field(None, description="Mode: snapshot or record_preserving")
+    url_patterns: Optional[List[Dict[str, str]]] = Field(None, description="URL patterns")
+    crawl_config: Optional[Dict[str, Any]] = Field(None, description="Crawl configuration")
+    status: Optional[str] = Field(None, description="Status: active, paused, archived")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "Updated Collection Name",
+                "status": "paused"
+            }
+        }
+
+
+class ScrapeCollectionListResponse(BaseModel):
+    """Paginated list of scrape collections."""
+    collections: List[ScrapeCollectionResponse] = Field(..., description="List of collections")
+    total: int = Field(..., description="Total count")
+    limit: int = Field(..., description="Page size")
+    offset: int = Field(..., description="Offset")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "collections": [],
+                "total": 5,
+                "limit": 50,
+                "offset": 0
+            }
+        }
+
+
+class ScrapeSourceResponse(BaseModel):
+    """Scrape source response model."""
+    id: str = Field(..., description="Source UUID")
+    collection_id: str = Field(..., description="Collection UUID")
+    url: str = Field(..., description="Source URL")
+    source_type: str = Field(..., description="Type: seed, discovered, manual")
+    is_active: bool = Field(..., description="Whether source is active")
+    crawl_config: Optional[Dict[str, Any]] = Field(None, description="Source-specific config")
+    last_crawl_at: Optional[datetime] = Field(None, description="Last crawl timestamp")
+    last_status: Optional[str] = Field(None, description="Last crawl status")
+    discovered_pages: int = Field(..., description="Number of pages discovered from this source")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Update timestamp")
+
+    class Config:
+        from_attributes = True
+
+
+class ScrapeSourceCreateRequest(BaseModel):
+    """Request to add a source to a collection."""
+    url: str = Field(..., min_length=1, max_length=2048, description="Source URL")
+    source_type: str = Field(default="seed", description="Type: seed, discovered, manual")
+    crawl_config: Optional[Dict[str, Any]] = Field(None, description="Source-specific configuration")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "url": "https://sam.gov/search?status=active",
+                "source_type": "seed"
+            }
+        }
+
+
+class ScrapeSourceListResponse(BaseModel):
+    """List of sources for a collection."""
+    sources: List[ScrapeSourceResponse] = Field(..., description="List of sources")
+    total: int = Field(..., description="Total count")
+
+
+class ScrapedAssetResponse(BaseModel):
+    """Scraped asset response model."""
+    id: str = Field(..., description="ScrapedAsset UUID")
+    asset_id: str = Field(..., description="Asset UUID")
+    collection_id: str = Field(..., description="Collection UUID")
+    source_id: Optional[str] = Field(None, description="Source UUID")
+    asset_subtype: str = Field(..., description="Type: page or record")
+    url: str = Field(..., description="Original URL")
+    url_path: Optional[str] = Field(None, description="URL path for hierarchical browsing")
+    parent_url: Optional[str] = Field(None, description="Parent page URL")
+    crawl_depth: int = Field(..., description="Depth from seed URL")
+    crawl_run_id: Optional[str] = Field(None, description="Crawl run UUID")
+    is_promoted: bool = Field(..., description="Whether promoted to record")
+    promoted_at: Optional[datetime] = Field(None, description="Promotion timestamp")
+    promoted_by: Optional[str] = Field(None, description="User who promoted")
+    scrape_metadata: Dict[str, Any] = Field(default_factory=dict, description="Scrape metadata")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Update timestamp")
+    # Include asset details
+    original_filename: Optional[str] = Field(None, description="Original filename from asset")
+    asset_status: Optional[str] = Field(None, description="Asset status")
+
+    class Config:
+        from_attributes = True
+
+
+class ScrapedAssetListResponse(BaseModel):
+    """Paginated list of scraped assets."""
+    assets: List[ScrapedAssetResponse] = Field(..., description="List of scraped assets")
+    total: int = Field(..., description="Total count")
+    limit: int = Field(..., description="Page size")
+    offset: int = Field(..., description="Offset")
+
+
+class PathTreeNode(BaseModel):
+    """Node in hierarchical path tree."""
+    path: str = Field(..., description="Full path")
+    name: str = Field(..., description="Path segment name")
+    page_count: int = Field(..., description="Number of pages at/below this path")
+    record_count: int = Field(..., description="Number of records at/below this path")
+    has_children: bool = Field(..., description="Whether this path has children")
+
+
+class PathTreeResponse(BaseModel):
+    """Hierarchical tree structure for browsing."""
+    path_prefix: str = Field(..., description="Current path prefix")
+    nodes: List[PathTreeNode] = Field(..., description="Child nodes")
+
+
+class PromoteToRecordRequest(BaseModel):
+    """Request to promote a page to record."""
+    pass  # No body needed, just confirmation via POST
+
+
+class PromoteToRecordResponse(BaseModel):
+    """Response after promoting to record."""
+    scraped_asset: ScrapedAssetResponse = Field(..., description="Updated scraped asset")
+    message: str = Field(..., description="Success message")
+
+
+class CrawlCollectionRequest(BaseModel):
+    """Request to start a crawl."""
+    max_pages: Optional[int] = Field(None, ge=1, le=10000, description="Override max pages")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "max_pages": 50
+            }
+        }
+
+
+class CrawlCollectionResponse(BaseModel):
+    """Response from starting a crawl."""
+    run_id: str = Field(..., description="Crawl run UUID")
+    collection_id: str = Field(..., description="Collection UUID")
+    status: str = Field(..., description="Run status")
+    message: str = Field(..., description="Status message")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "run_id": "123e4567-e89b-12d3-a456-426614174000",
+                "collection_id": "456e4567-e89b-12d3-a456-426614174000",
+                "status": "running",
+                "message": "Crawl started successfully"
+            }
+        }
+
+
+class CrawlStatusResponse(BaseModel):
+    """Status of a crawl run."""
+    run_id: str = Field(..., description="Run UUID")
+    status: str = Field(..., description="Run status")
+    progress: Optional[Dict[str, Any]] = Field(None, description="Progress info")
+    results_summary: Optional[Dict[str, Any]] = Field(None, description="Results summary")
+    error_message: Optional[str] = Field(None, description="Error if failed")

@@ -289,10 +289,10 @@ class ExtractionOrchestrator:
         try:
             # Use document_service's extraction logic
             # This calls either extraction-service or docling based on config
+            # Pass None for engine to use the default from config.yml
             result = await document_service._extract_content(
                 file_path,  # Pass Path object, not string
-                filename,
-                OCRSettings(enabled=True),  # Enable OCR by default
+                engine=None,  # Use default engine from config
             )
 
             return {
