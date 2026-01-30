@@ -1690,3 +1690,362 @@ class CrawlStatusResponse(BaseModel):
     progress: Optional[Dict[str, Any]] = Field(None, description="Progress info")
     results_summary: Optional[Dict[str, Any]] = Field(None, description="Results summary")
     error_message: Optional[str] = Field(None, description="Error if failed")
+
+
+# =========================================================================
+# SHAREPOINT SYNC MODELS (Phase 8)
+# =========================================================================
+
+class SharePointSyncConfigResponse(BaseModel):
+    """SharePoint sync config response model."""
+    id: str = Field(..., description="Sync config UUID")
+    organization_id: str = Field(..., description="Organization UUID")
+    connection_id: Optional[str] = Field(None, description="SharePoint connection UUID")
+    name: str = Field(..., description="Sync config name")
+    slug: str = Field(..., description="URL-friendly slug")
+    description: Optional[str] = Field(None, description="Description")
+    folder_url: str = Field(..., description="SharePoint folder URL")
+    folder_name: Optional[str] = Field(None, description="Cached folder name")
+    folder_drive_id: Optional[str] = Field(None, description="Microsoft Graph drive ID")
+    folder_item_id: Optional[str] = Field(None, description="Microsoft Graph item ID")
+    sync_config: Dict[str, Any] = Field(default_factory=dict, description="Sync configuration")
+    status: str = Field(..., description="Status: active, paused, archived")
+    is_active: bool = Field(..., description="Whether sync is enabled")
+    last_sync_at: Optional[datetime] = Field(None, description="Last sync timestamp")
+    last_sync_status: Optional[str] = Field(None, description="Last sync status")
+    last_sync_run_id: Optional[str] = Field(None, description="Last sync run UUID")
+    sync_frequency: str = Field(..., description="Sync frequency: manual, hourly, daily")
+    stats: Dict[str, Any] = Field(default_factory=dict, description="Sync statistics")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Update timestamp")
+    created_by: Optional[str] = Field(None, description="User UUID who created this")
+    # Active sync tracking
+    is_syncing: bool = Field(default=False, description="True if sync is currently running")
+    current_sync_status: Optional[str] = Field(None, description="Current sync run status")
+
+    class Config:
+        from_attributes = True
+        json_schema_extra = {
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "organization_id": "04ace7c6-2043-4935-b074-ec0a567d1fd2",
+                "connection_id": "789e4567-e89b-12d3-a456-426614174000",
+                "name": "IT Policies",
+                "slug": "it-policies",
+                "description": "IT policy documents from SharePoint",
+                "folder_url": "https://company.sharepoint.com/sites/IT/Documents/Policies",
+                "folder_name": "Policies",
+                "sync_config": {
+                    "recursive": True,
+                    "include_patterns": ["*.pdf", "*.docx"],
+                    "exclude_patterns": ["~$*", "*.tmp"]
+                },
+                "status": "active",
+                "is_active": True,
+                "last_sync_at": "2026-01-29T10:00:00",
+                "last_sync_status": "success",
+                "sync_frequency": "daily",
+                "stats": {"total_files": 25, "synced_files": 25, "deleted_count": 0},
+                "created_at": "2026-01-01T00:00:00",
+                "updated_at": "2026-01-29T10:00:00"
+            }
+        }
+
+
+class SharePointSyncConfigCreateRequest(BaseModel):
+    """Request to create a SharePoint sync config."""
+    name: str = Field(..., min_length=1, max_length=255, description="Sync config name")
+    description: Optional[str] = Field(None, max_length=2000, description="Description")
+    connection_id: Optional[str] = Field(None, description="SharePoint connection UUID")
+    folder_url: str = Field(..., min_length=1, max_length=2048, description="SharePoint folder URL")
+    sync_config: Optional[Dict[str, Any]] = Field(
+        None,
+        description="Sync configuration: recursive, include_patterns, exclude_patterns, max_file_size_mb"
+    )
+    sync_frequency: str = Field(
+        default="manual",
+        description="Sync frequency: manual, hourly, daily"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "IT Policies",
+                "description": "IT policy documents from SharePoint",
+                "connection_id": "789e4567-e89b-12d3-a456-426614174000",
+                "folder_url": "https://company.sharepoint.com/sites/IT/Documents/Policies",
+                "sync_config": {
+                    "recursive": True,
+                    "include_patterns": ["*.pdf", "*.docx"],
+                    "exclude_patterns": ["~$*", "*.tmp"],
+                    "max_file_size_mb": 100
+                },
+                "sync_frequency": "daily"
+            }
+        }
+
+
+class SharePointSyncConfigUpdateRequest(BaseModel):
+    """Request to update a SharePoint sync config."""
+    name: Optional[str] = Field(None, min_length=1, max_length=255, description="Sync config name")
+    description: Optional[str] = Field(None, max_length=2000, description="Description")
+    connection_id: Optional[str] = Field(None, description="SharePoint connection UUID")
+    folder_url: Optional[str] = Field(None, max_length=2048, description="SharePoint folder URL")
+    sync_config: Optional[Dict[str, Any]] = Field(None, description="Sync configuration")
+    status: Optional[str] = Field(None, description="Status: active, paused, archived")
+    is_active: Optional[bool] = Field(None, description="Whether sync is enabled")
+    sync_frequency: Optional[str] = Field(None, description="Sync frequency")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "Updated Name",
+                "sync_config": {"recursive": False},
+                "status": "paused"
+            }
+        }
+
+
+class SharePointSyncConfigListResponse(BaseModel):
+    """Paginated list of SharePoint sync configs."""
+    configs: List[SharePointSyncConfigResponse] = Field(..., description="List of sync configs")
+    total: int = Field(..., description="Total count")
+    limit: int = Field(..., description="Page size")
+    offset: int = Field(..., description="Offset")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "configs": [],
+                "total": 5,
+                "limit": 50,
+                "offset": 0
+            }
+        }
+
+
+class SharePointSyncedDocumentResponse(BaseModel):
+    """SharePoint synced document response model."""
+    id: str = Field(..., description="Document UUID")
+    asset_id: str = Field(..., description="Asset UUID")
+    sync_config_id: str = Field(..., description="Sync config UUID")
+    sharepoint_item_id: str = Field(..., description="Microsoft Graph item ID")
+    sharepoint_drive_id: str = Field(..., description="Microsoft Graph drive ID")
+    sharepoint_path: Optional[str] = Field(None, description="Relative path in synced folder")
+    sharepoint_web_url: Optional[str] = Field(None, description="Direct link to file in SharePoint")
+    sharepoint_etag: Optional[str] = Field(None, description="ETag for change detection")
+    content_hash: Optional[str] = Field(None, description="SHA-256 content hash")
+    sharepoint_created_at: Optional[datetime] = Field(None, description="Creation date in SharePoint")
+    sharepoint_modified_at: Optional[datetime] = Field(None, description="Last modified date in SharePoint")
+    sharepoint_created_by: Optional[str] = Field(None, description="Creator email/name")
+    sharepoint_modified_by: Optional[str] = Field(None, description="Last modifier email/name")
+    file_size: Optional[int] = Field(None, description="File size in bytes")
+    sync_status: str = Field(..., description="Sync status: synced, deleted_in_source, orphaned")
+    last_synced_at: Optional[datetime] = Field(None, description="Last sync timestamp")
+    last_sync_run_id: Optional[str] = Field(None, description="Last sync run UUID")
+    deleted_detected_at: Optional[datetime] = Field(None, description="When deletion was detected")
+    sync_metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Update timestamp")
+    # Include asset details
+    original_filename: Optional[str] = Field(None, description="Original filename from asset")
+    asset_status: Optional[str] = Field(None, description="Asset status")
+
+    class Config:
+        from_attributes = True
+        json_schema_extra = {
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "asset_id": "456e4567-e89b-12d3-a456-426614174000",
+                "sync_config_id": "789e4567-e89b-12d3-a456-426614174000",
+                "sharepoint_item_id": "abc123",
+                "sharepoint_drive_id": "xyz789",
+                "sharepoint_path": "Reports/Q4",
+                "sharepoint_web_url": "https://company.sharepoint.com/sites/IT/Documents/Policies/report.pdf",
+                "sync_status": "synced",
+                "file_size": 1024000,
+                "last_synced_at": "2026-01-29T10:00:00",
+                "created_at": "2026-01-15T00:00:00",
+                "updated_at": "2026-01-29T10:00:00",
+                "original_filename": "report.pdf"
+            }
+        }
+
+
+class SharePointSyncedDocumentListResponse(BaseModel):
+    """Paginated list of synced documents."""
+    documents: List[SharePointSyncedDocumentResponse] = Field(..., description="List of documents")
+    total: int = Field(..., description="Total count")
+    limit: int = Field(..., description="Page size")
+    offset: int = Field(..., description="Offset")
+
+
+class SharePointSyncTriggerRequest(BaseModel):
+    """Request to trigger a sync."""
+    full_sync: bool = Field(
+        default=False,
+        description="If true, re-download all files regardless of etag"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "full_sync": False
+            }
+        }
+
+
+class SharePointSyncTriggerResponse(BaseModel):
+    """Response from triggering a sync."""
+    sync_config_id: str = Field(..., description="Sync config UUID")
+    run_id: str = Field(..., description="Sync run UUID")
+    status: str = Field(..., description="Run status")
+    message: str = Field(..., description="Status message")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sync_config_id": "123e4567-e89b-12d3-a456-426614174000",
+                "run_id": "456e4567-e89b-12d3-a456-426614174000",
+                "status": "pending",
+                "message": "Sync queued for execution"
+            }
+        }
+
+
+class SharePointSyncHistoryResponse(BaseModel):
+    """Sync run history response."""
+    runs: List[RunResponse] = Field(..., description="List of sync runs")
+    total: int = Field(..., description="Total count")
+
+
+class SharePointBrowseFolderRequest(BaseModel):
+    """Request to browse a SharePoint folder."""
+    connection_id: Optional[str] = Field(None, description="SharePoint connection UUID")
+    folder_url: str = Field(..., min_length=1, max_length=2048, description="SharePoint folder URL")
+    recursive: bool = Field(default=False, description="Include subfolders")
+    include_folders: bool = Field(default=True, description="Include folders in results")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "folder_url": "https://company.sharepoint.com/sites/IT/Documents",
+                "recursive": False,
+                "include_folders": True
+            }
+        }
+
+
+class SharePointBrowseFolderResponse(BaseModel):
+    """Response from browsing a SharePoint folder."""
+    folder_name: str = Field(..., description="Folder name")
+    folder_id: str = Field(..., description="Folder item ID")
+    folder_url: str = Field(..., description="Folder web URL")
+    drive_id: str = Field(..., description="Drive ID")
+    items: List[Dict[str, Any]] = Field(..., description="Files and folders in the folder")
+    total_items: int = Field(..., description="Total number of items")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "folder_name": "Documents",
+                "folder_id": "abc123",
+                "folder_url": "https://company.sharepoint.com/sites/IT/Documents",
+                "drive_id": "xyz789",
+                "items": [
+                    {"name": "Policies", "type": "folder", "id": "folder1"},
+                    {"name": "report.pdf", "type": "file", "id": "file1", "size": 1024}
+                ],
+                "total_items": 2
+            }
+        }
+
+
+class SharePointImportRequest(BaseModel):
+    """Request to import selected files from SharePoint."""
+    connection_id: Optional[str] = Field(None, description="SharePoint connection UUID")
+    folder_url: str = Field(..., min_length=1, max_length=2048, description="SharePoint folder URL")
+    selected_items: List[Dict[str, Any]] = Field(
+        ...,
+        description="List of items to import with their IDs and paths"
+    )
+    sync_config_name: Optional[str] = Field(
+        None,
+        max_length=255,
+        description="Name for new sync config (if creating one)"
+    )
+    sync_config_description: Optional[str] = Field(
+        None,
+        max_length=2000,
+        description="Description for new sync config"
+    )
+    create_sync_config: bool = Field(
+        default=True,
+        description="Whether to create a sync config for ongoing sync"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "folder_url": "https://company.sharepoint.com/sites/IT/Documents/Policies",
+                "selected_items": [
+                    {"id": "file1", "name": "policy.pdf", "folder": ""},
+                    {"id": "file2", "name": "guideline.docx", "folder": "Guidelines"}
+                ],
+                "sync_config_name": "IT Policies Import",
+                "create_sync_config": True
+            }
+        }
+
+
+class SharePointImportResponse(BaseModel):
+    """Response from import operation."""
+    run_id: str = Field(..., description="Import run UUID")
+    sync_config_id: Optional[str] = Field(None, description="Created sync config UUID")
+    status: str = Field(..., description="Run status")
+    message: str = Field(..., description="Status message")
+    selected_count: int = Field(..., description="Number of items selected for import")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "run_id": "123e4567-e89b-12d3-a456-426614174000",
+                "sync_config_id": "456e4567-e89b-12d3-a456-426614174000",
+                "status": "pending",
+                "message": "Import queued for 5 files",
+                "selected_count": 5
+            }
+        }
+
+
+class SharePointCleanupRequest(BaseModel):
+    """Request to cleanup deleted files."""
+    delete_assets: bool = Field(
+        default=False,
+        description="If true, also soft-delete the Asset records"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "delete_assets": False
+            }
+        }
+
+
+class SharePointCleanupResponse(BaseModel):
+    """Response from cleanup operation."""
+    sync_config_id: str = Field(..., description="Sync config UUID")
+    documents_removed: int = Field(..., description="Number of document records removed")
+    assets_deleted: int = Field(..., description="Number of assets soft-deleted")
+    message: str = Field(..., description="Status message")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sync_config_id": "123e4567-e89b-12d3-a456-426614174000",
+                "documents_removed": 3,
+                "assets_deleted": 0,
+                "message": "Cleaned up 3 deleted documents"
+            }
+        }

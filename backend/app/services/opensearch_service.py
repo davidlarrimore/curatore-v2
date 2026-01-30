@@ -331,6 +331,7 @@ class OpenSearchService:
                             "content_type": {"type": "keyword"},
                             "url": {"type": "keyword"},
                             "collection_id": {"type": "keyword"},
+                            "sync_config_id": {"type": "keyword"},
                             "metadata": {"type": "object", "enabled": False},
                             "created_at": {"type": "date"},
                             "updated_at": {"type": "date"},
@@ -357,6 +358,7 @@ class OpenSearchService:
         content_type: Optional[str] = None,
         url: Optional[str] = None,
         collection_id: Optional[UUID] = None,
+        sync_config_id: Optional[UUID] = None,
         metadata: Optional[Dict[str, Any]] = None,
         created_at: Optional[datetime] = None,
     ) -> bool:
@@ -373,6 +375,7 @@ class OpenSearchService:
             content_type: MIME type (optional)
             url: URL for web scrapes (optional)
             collection_id: Collection ID for web scrapes (optional)
+            sync_config_id: SharePoint sync config ID (optional)
             metadata: Additional metadata to store (optional)
             created_at: Creation timestamp (optional)
 
@@ -407,6 +410,7 @@ class OpenSearchService:
                 "content_type": content_type,
                 "url": url,
                 "collection_id": str(collection_id) if collection_id else None,
+                "sync_config_id": str(sync_config_id) if sync_config_id else None,
                 "metadata": metadata or {},
                 "created_at": (created_at or datetime.utcnow()).isoformat(),
                 "updated_at": datetime.utcnow().isoformat(),
@@ -462,6 +466,7 @@ class OpenSearchService:
         source_types: Optional[List[str]] = None,
         content_types: Optional[List[str]] = None,
         collection_ids: Optional[List[UUID]] = None,
+        sync_config_ids: Optional[List[UUID]] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
         limit: int = 20,
@@ -476,6 +481,7 @@ class OpenSearchService:
             source_types: Filter by source types (optional)
             content_types: Filter by content/MIME types (optional)
             collection_ids: Filter by collection IDs (optional)
+            sync_config_ids: Filter by SharePoint sync config IDs (optional)
             date_from: Filter by creation date >= (optional)
             date_to: Filter by creation date <= (optional)
             limit: Maximum results to return (default 20)
@@ -517,6 +523,10 @@ class OpenSearchService:
             if collection_ids:
                 filters.append(
                     {"terms": {"collection_id": [str(c) for c in collection_ids]}}
+                )
+            if sync_config_ids:
+                filters.append(
+                    {"terms": {"sync_config_id": [str(c) for c in sync_config_ids]}}
                 )
             if date_from or date_to:
                 date_range: Dict[str, str] = {}
@@ -596,6 +606,7 @@ class OpenSearchService:
         source_types: Optional[List[str]] = None,
         content_types: Optional[List[str]] = None,
         collection_ids: Optional[List[UUID]] = None,
+        sync_config_ids: Optional[List[UUID]] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
         limit: int = 20,
@@ -615,6 +626,7 @@ class OpenSearchService:
             source_types: Filter by source types (optional)
             content_types: Filter by content/MIME types (optional)
             collection_ids: Filter by collection IDs (optional)
+            sync_config_ids: Filter by SharePoint sync config IDs (optional)
             date_from: Filter by creation date >= (optional)
             date_to: Filter by creation date <= (optional)
             limit: Maximum results to return (default 20)
@@ -665,6 +677,13 @@ class OpenSearchService:
                     "terms": {"collection_id": [str(c) for c in collection_ids]}
                 }
 
+            # Build sync_config filter for SharePoint (always applied)
+            sync_config_filter = None
+            if sync_config_ids:
+                sync_config_filter = {
+                    "terms": {"sync_config_id": [str(c) for c in sync_config_ids]}
+                }
+
             # Build post_filter for source_types and content_types
             # These are the filters we want to cross-filter on
             post_filters = []
@@ -673,11 +692,13 @@ class OpenSearchService:
             if content_types:
                 post_filters.append({"terms": {"content_type": content_types}})
 
-            # Combine with date and collection filters for post_filter
+            # Combine with date, collection, and sync_config filters for post_filter
             if date_filter:
                 post_filters.append(date_filter)
             if collection_filter:
                 post_filters.append(collection_filter)
+            if sync_config_filter:
+                post_filters.append(sync_config_filter)
 
             # Build aggregations with cross-filtering
             # source_type facet: filter by content_type only
@@ -692,6 +713,8 @@ class OpenSearchService:
                 source_type_agg_filters.append(date_filter)
             if collection_filter:
                 source_type_agg_filters.append(collection_filter)
+            if sync_config_filter:
+                source_type_agg_filters.append(sync_config_filter)
 
             if source_type_agg_filters:
                 aggs["source_type_facet"] = {
@@ -721,6 +744,8 @@ class OpenSearchService:
                 content_type_agg_filters.append(date_filter)
             if collection_filter:
                 content_type_agg_filters.append(collection_filter)
+            if sync_config_filter:
+                content_type_agg_filters.append(sync_config_filter)
 
             if content_type_agg_filters:
                 aggs["content_type_facet"] = {

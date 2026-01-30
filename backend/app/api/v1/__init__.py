@@ -18,6 +18,7 @@ from .routers import (
     render,
     search,
     sam,
+    sharepoint_sync,
 )
 
 api_router = APIRouter()
@@ -43,5 +44,7 @@ api_router.include_router(render.router)
 api_router.include_router(search.router)
 # Phase 7: SAM.gov Integration endpoints
 api_router.include_router(sam.router)
+# Phase 8: SharePoint Sync Integration endpoints
+api_router.include_router(sharepoint_sync.router)
 
 __all__ = ["api_router"]

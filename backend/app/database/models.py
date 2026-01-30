@@ -2446,3 +2446,241 @@ class SamQueuedRequest(Base):
 
     def __repr__(self) -> str:
         return f"<SamQueuedRequest(id={self.id}, type={self.request_type}, status={self.status})>"
+
+
+# ============================================================================
+# Phase 8 Models: SharePoint Sync Integration
+# ============================================================================
+
+
+class SharePointSyncConfig(Base):
+    """
+    SharePointSyncConfig model for managing SharePoint folder synchronization (Phase 8).
+
+    A sync config defines a connection to a SharePoint folder with settings for
+    how to synchronize files to Curatore. Supports one-way pull from SharePoint
+    with change detection and deletion tracking.
+
+    Key Concepts:
+    - Each config syncs files from one SharePoint folder (optionally recursive)
+    - Files become Assets with source_type='sharepoint'
+    - Re-sync replaces content (no version history in sync, just latest)
+    - Deleted files in SharePoint are tracked but not auto-deleted
+
+    Attributes:
+        id: Unique sync config identifier
+        organization_id: Organization that owns this config
+        connection_id: SharePoint connection for authentication
+        name: Display name for the sync config
+        slug: URL-friendly identifier (unique within org)
+        description: Optional description
+        folder_url: SharePoint folder URL to sync
+        folder_name: Cached folder display name
+        folder_drive_id: Microsoft Graph drive ID
+        folder_item_id: Microsoft Graph item ID
+        sync_config: JSONB with filters (include/exclude patterns, recursive, max_file_size)
+        status: Config status (active, paused, archived)
+        is_active: Whether sync is enabled
+        last_sync_at: Timestamp of last successful sync
+        last_sync_status: Status of last sync (success, failed, partial)
+        last_sync_run_id: Run ID of last sync
+        sync_frequency: How often to sync (manual, hourly, daily)
+        stats: JSONB with sync statistics
+
+    sync_config Example:
+        {
+            "recursive": true,
+            "include_patterns": ["*.pdf", "*.docx"],
+            "exclude_patterns": ["~$*", "*.tmp"],
+            "max_file_size_mb": 100
+        }
+
+    Relationships:
+        organization: Organization that owns this config
+        connection: SharePoint connection used for sync
+        last_sync_run: Most recent sync Run
+        synced_documents: Documents synced from this config
+    """
+
+    __tablename__ = "sharepoint_sync_configs"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    connection_id = Column(
+        UUID(), ForeignKey("connections.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+
+    # Config metadata
+    name = Column(String(255), nullable=False)
+    slug = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # SharePoint folder information
+    folder_url = Column(String(2048), nullable=False)
+    folder_name = Column(String(500), nullable=True)  # Cached folder name
+    folder_drive_id = Column(String(255), nullable=True)  # Graph API drive ID
+    folder_item_id = Column(String(255), nullable=True)  # Graph API item ID
+
+    # Sync configuration (JSONB for filters)
+    sync_config = Column(JSON, nullable=False, default=dict, server_default="{}")
+    # Example: {"recursive": true, "include_patterns": ["*.pdf"], "exclude_patterns": ["~$*"]}
+
+    # Status
+    status = Column(String(50), nullable=False, default="active", index=True)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+
+    # Sync tracking
+    last_sync_at = Column(DateTime, nullable=True)
+    last_sync_status = Column(String(50), nullable=True)  # success, failed, partial
+    last_sync_run_id = Column(
+        UUID(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
+    )
+    sync_frequency = Column(String(50), nullable=False, default="manual")  # manual, hourly, daily
+
+    # Statistics
+    stats = Column(JSON, nullable=False, default=dict, server_default="{}")
+    # Example: {"total_files": 50, "synced_files": 48, "deleted_count": 2, "total_size_bytes": 12345678}
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+    created_by = Column(
+        UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Relationships
+    organization = relationship("Organization", backref="sharepoint_sync_configs")
+    connection = relationship("Connection", backref="sharepoint_sync_configs")
+    last_sync_run = relationship("Run", foreign_keys=[last_sync_run_id])
+    synced_documents = relationship(
+        "SharePointSyncedDocument",
+        back_populates="sync_config",
+        cascade="all, delete-orphan",
+    )
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_sharepoint_sync_org_slug", "organization_id", "slug", unique=True),
+        Index("ix_sharepoint_sync_org_status", "organization_id", "status"),
+        Index("ix_sharepoint_sync_org_active", "organization_id", "is_active"),
+        Index("ix_sharepoint_sync_connection", "connection_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SharePointSyncConfig(id={self.id}, name={self.name}, status={self.status})>"
+
+
+class SharePointSyncedDocument(Base):
+    """
+    SharePointSyncedDocument model linking Assets to SharePoint sync configs (Phase 8).
+
+    This is a bridge table that tracks which SharePoint files have been synced
+    to which Assets. Enables change detection via etag/content hash comparison
+    and tracks files that have been deleted in SharePoint.
+
+    Key Concepts:
+    - Each synced file becomes an Asset with this record as metadata
+    - etag and content_hash enable change detection during re-sync
+    - Deleted files are marked but NOT auto-deleted from Curatore
+    - User decides when to cleanup deleted files
+
+    Sync Statuses:
+    - synced: File exists in SharePoint and is current
+    - deleted_in_source: File was deleted in SharePoint
+    - orphaned: User marked for cleanup
+
+    Attributes:
+        id: Unique identifier
+        asset_id: Reference to Asset (the synced file)
+        sync_config_id: Reference to SharePointSyncConfig
+        sharepoint_item_id: Microsoft Graph item ID
+        sharepoint_drive_id: Microsoft Graph drive ID
+        sharepoint_path: Relative path within synced folder
+        sharepoint_web_url: Direct link to file in SharePoint
+        sharepoint_etag: ETag for change detection
+        content_hash: SHA-256 hash of file content
+        sharepoint_created_at: Creation date in SharePoint
+        sharepoint_modified_at: Last modified date in SharePoint
+        sharepoint_created_by: Creator email/name
+        sharepoint_modified_by: Last modifier email/name
+        file_size: File size in bytes
+        sync_status: Current sync status
+        last_synced_at: When file was last synced
+        last_sync_run_id: Run that last synced this file
+        deleted_detected_at: When deletion was detected
+        sync_metadata: Additional sync metadata (JSONB)
+
+    Relationships:
+        asset: The synced Asset
+        sync_config: Parent sync config
+        last_sync_run: Run that last synced this file
+    """
+
+    __tablename__ = "sharepoint_synced_documents"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    asset_id = Column(
+        UUID(), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sync_config_id = Column(
+        UUID(), ForeignKey("sharepoint_sync_configs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # SharePoint identifiers
+    sharepoint_item_id = Column(String(255), nullable=False)
+    sharepoint_drive_id = Column(String(255), nullable=False)
+    sharepoint_path = Column(String(2048), nullable=True)  # Relative path in synced folder
+    sharepoint_web_url = Column(String(2048), nullable=True)
+
+    # Change detection
+    sharepoint_etag = Column(String(255), nullable=True)
+    content_hash = Column(String(64), nullable=True)  # SHA-256
+
+    # SharePoint metadata
+    sharepoint_created_at = Column(DateTime, nullable=True)
+    sharepoint_modified_at = Column(DateTime, nullable=True)
+    sharepoint_created_by = Column(String(255), nullable=True)
+    sharepoint_modified_by = Column(String(255), nullable=True)
+    file_size = Column(Integer, nullable=True)
+
+    # Sync status
+    sync_status = Column(String(50), nullable=False, default="synced", index=True)
+    # synced, deleted_in_source, orphaned
+
+    # Sync tracking
+    last_synced_at = Column(DateTime, nullable=True)
+    last_sync_run_id = Column(
+        UUID(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True, index=True
+    )
+    deleted_detected_at = Column(DateTime, nullable=True)
+
+    # Additional metadata
+    sync_metadata = Column(JSON, nullable=False, default=dict, server_default="{}")
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    asset = relationship("Asset", backref="sharepoint_sync_info")
+    sync_config = relationship("SharePointSyncConfig", back_populates="synced_documents")
+    last_sync_run = relationship("Run", foreign_keys=[last_sync_run_id])
+
+    # Indexes
+    __table_args__ = (
+        # Unique constraint: one item per sync config
+        Index("ix_sp_synced_config_item", "sync_config_id", "sharepoint_item_id", unique=True),
+        Index("ix_sp_synced_config_status", "sync_config_id", "sync_status"),
+        Index("ix_sp_synced_config_path", "sync_config_id", "sharepoint_path"),
+        Index("ix_sp_synced_asset", "asset_id"),
+        Index("ix_sp_synced_run", "last_sync_run_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SharePointSyncedDocument(id={self.id}, path={self.sharepoint_path}, status={self.sync_status})>"

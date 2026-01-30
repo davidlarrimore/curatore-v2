@@ -140,9 +140,11 @@ class IndexService:
             title = asset.original_filename
             url = None
             collection_id = None
+            sync_config_id = None
+
+            source_meta = asset.source_metadata or {}
 
             if asset.source_type == "web_scrape":
-                source_meta = asset.source_metadata or {}
                 url = source_meta.get("url")
                 if url:
                     # Prefer page title from metadata, fallback to URL
@@ -150,6 +152,16 @@ class IndexService:
                 collection_id = source_meta.get("collection_id")
                 if collection_id:
                     collection_id = UUID(collection_id)
+
+            elif asset.source_type == "sharepoint":
+                # Extract SharePoint-specific metadata
+                sync_config_id = source_meta.get("sync_config_id")
+                if sync_config_id:
+                    sync_config_id = UUID(sync_config_id)
+                # Use SharePoint path in title if available
+                sp_path = source_meta.get("sharepoint_path")
+                if sp_path:
+                    title = f"{sp_path}/{asset.original_filename}"
 
             # Index to OpenSearch
             success = await opensearch_service.index_document(
@@ -162,6 +174,7 @@ class IndexService:
                 content_type=asset.content_type,
                 url=url,
                 collection_id=collection_id,
+                sync_config_id=sync_config_id,
                 metadata=asset.source_metadata,
                 created_at=asset.created_at,
             )
@@ -292,13 +305,21 @@ class IndexService:
                     title = asset.original_filename
                     url = None
                     collection_id = None
+                    sync_config_id = None
+
+                    source_meta = asset.source_metadata or {}
 
                     if asset.source_type == "web_scrape":
-                        source_meta = asset.source_metadata or {}
                         url = source_meta.get("url")
                         if url:
                             title = source_meta.get("title") or url
                         collection_id = source_meta.get("collection_id")
+
+                    elif asset.source_type == "sharepoint":
+                        sync_config_id = source_meta.get("sync_config_id")
+                        sp_path = source_meta.get("sharepoint_path")
+                        if sp_path:
+                            title = f"{sp_path}/{asset.original_filename}"
 
                     batch_docs.append(
                         {
@@ -310,6 +331,7 @@ class IndexService:
                             "content_type": asset.content_type,
                             "url": url,
                             "collection_id": collection_id,
+                            "sync_config_id": sync_config_id,
                             "metadata": asset.source_metadata,
                             "created_at": asset.created_at.isoformat(),
                         }

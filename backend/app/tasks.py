@@ -2436,3 +2436,454 @@ async def _enhance_extraction_async(
                     shutil.rmtree(temp_dir)
                 except Exception as e:
                     logger.warning(f"Failed to cleanup temp directory: {e}")
+
+
+# ============================================================================
+# PHASE 8: SHAREPOINT SYNC TASKS
+# ============================================================================
+
+@shared_task(bind=True)
+def sharepoint_sync_task(
+    self,
+    sync_config_id: str,
+    organization_id: str,
+    run_id: str,
+    full_sync: bool = False,
+) -> Dict[str, Any]:
+    """
+    Execute SharePoint folder synchronization.
+
+    This task:
+    1. Gets folder inventory from SharePoint
+    2. Compares with existing synced documents
+    3. Downloads new/updated files and creates Assets
+    4. Detects deleted files and marks them
+    5. Triggers extraction for new assets
+
+    Args:
+        sync_config_id: SharePointSyncConfig UUID string
+        organization_id: Organization UUID string
+        run_id: Run UUID string
+        full_sync: If True, re-download all files regardless of etag
+
+    Returns:
+        Dict with sync results
+    """
+    logger = logging.getLogger("curatore.tasks.sharepoint_sync")
+    logger.info(f"Starting SharePoint sync for config {sync_config_id}")
+
+    try:
+        result = asyncio.run(
+            _sharepoint_sync_async(
+                sync_config_id=uuid.UUID(sync_config_id),
+                organization_id=uuid.UUID(organization_id),
+                run_id=uuid.UUID(run_id),
+                full_sync=full_sync,
+            )
+        )
+
+        logger.info(f"SharePoint sync completed for config {sync_config_id}: {result}")
+        return result
+
+    except Exception as e:
+        logger.error(f"SharePoint sync failed for config {sync_config_id}: {e}", exc_info=True)
+        # Mark run as failed
+        asyncio.run(_fail_sharepoint_sync_run(uuid.UUID(run_id), str(e)))
+        raise
+
+
+async def _sharepoint_sync_async(
+    sync_config_id,
+    organization_id,
+    run_id,
+    full_sync: bool,
+) -> Dict[str, Any]:
+    """
+    Async implementation of SharePoint sync.
+    """
+    from .services.sharepoint_sync_service import sharepoint_sync_service
+    from .services.run_service import run_service
+    from .services.run_log_service import run_log_service
+    from .services.upload_integration_service import upload_integration_service
+    from .database.models import SharePointSyncedDocument, Asset
+
+    logger = logging.getLogger("curatore.tasks.sharepoint_sync")
+
+    async with database_service.get_session() as session:
+        # Start the run
+        await run_service.start_run(session, run_id)
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="start",
+            message=f"Starting SharePoint sync (full_sync={full_sync})",
+        )
+        await session.commit()
+
+        try:
+            # Execute sync
+            result = await sharepoint_sync_service.execute_sync(
+                session=session,
+                sync_config_id=sync_config_id,
+                organization_id=organization_id,
+                run_id=run_id,
+                full_sync=full_sync,
+            )
+
+            # Get newly created assets for extraction
+            new_docs_result = await session.execute(
+                select(SharePointSyncedDocument).where(
+                    SharePointSyncedDocument.sync_config_id == sync_config_id,
+                    SharePointSyncedDocument.last_sync_run_id == run_id,
+                )
+            )
+            new_docs = list(new_docs_result.scalars().all())
+
+            # Trigger extraction for new/updated assets
+            extraction_count = 0
+            for doc in new_docs:
+                asset_result = await session.execute(
+                    select(Asset).where(Asset.id == doc.asset_id)
+                )
+                asset = asset_result.scalar_one_or_none()
+                if asset and asset.status == "pending":
+                    try:
+                        await upload_integration_service.trigger_extraction(
+                            session=session,
+                            asset_id=asset.id,
+                        )
+                        extraction_count += 1
+                    except Exception as e:
+                        logger.warning(f"Failed to trigger extraction for asset {asset.id}: {e}")
+
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="progress",
+                message=f"Triggered extraction for {extraction_count} assets",
+            )
+
+            # Complete the run
+            await run_service.complete_run(
+                session=session,
+                run_id=run_id,
+                results_summary=result,
+            )
+
+            await run_log_service.log_summary(
+                session=session,
+                run_id=run_id,
+                message=(
+                    f"Sync completed: {result.get('new_files', 0)} new, "
+                    f"{result.get('updated_files', 0)} updated, "
+                    f"{result.get('unchanged_files', 0)} unchanged, "
+                    f"{result.get('deleted_detected', 0)} deleted"
+                ),
+            )
+
+            await session.commit()
+
+            return result
+
+        except Exception as e:
+            logger.error(f"SharePoint sync error: {e}")
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="ERROR",
+                event_type="error",
+                message=str(e),
+            )
+            await run_service.fail_run(session, run_id, str(e))
+            await session.commit()
+            raise
+
+
+async def _fail_sharepoint_sync_run(run_id, error_message: str):
+    """Mark a sync run as failed."""
+    from .services.run_service import run_service
+
+    async with database_service.get_session() as session:
+        await run_service.fail_run(session, run_id, error_message)
+        await session.commit()
+
+
+@shared_task(bind=True)
+def sharepoint_import_task(
+    self,
+    connection_id: Optional[str],
+    organization_id: str,
+    folder_url: str,
+    selected_items: list,
+    sync_config_id: Optional[str],
+    run_id: str,
+) -> Dict[str, Any]:
+    """
+    Import selected files from SharePoint (wizard import).
+
+    This task:
+    1. Downloads each selected file from SharePoint
+    2. Creates Assets with source_type='sharepoint'
+    3. Creates SharePointSyncedDocument records if sync_config_id provided
+    4. Triggers extraction for each asset
+
+    Args:
+        connection_id: SharePoint connection UUID string (optional)
+        organization_id: Organization UUID string
+        folder_url: SharePoint folder URL
+        selected_items: List of items to import with their metadata
+        sync_config_id: Optional sync config UUID to link documents to
+        run_id: Run UUID string
+
+    Returns:
+        Dict with import results
+    """
+    logger = logging.getLogger("curatore.tasks.sharepoint_import")
+    logger.info(f"Starting SharePoint import for {len(selected_items)} files")
+
+    try:
+        result = asyncio.run(
+            _sharepoint_import_async(
+                connection_id=uuid.UUID(connection_id) if connection_id else None,
+                organization_id=uuid.UUID(organization_id),
+                folder_url=folder_url,
+                selected_items=selected_items,
+                sync_config_id=uuid.UUID(sync_config_id) if sync_config_id else None,
+                run_id=uuid.UUID(run_id),
+            )
+        )
+
+        logger.info(f"SharePoint import completed: {result}")
+        return result
+
+    except Exception as e:
+        logger.error(f"SharePoint import failed: {e}", exc_info=True)
+        asyncio.run(_fail_sharepoint_sync_run(uuid.UUID(run_id), str(e)))
+        raise
+
+
+async def _sharepoint_import_async(
+    connection_id: Optional[uuid.UUID],
+    organization_id: uuid.UUID,
+    folder_url: str,
+    selected_items: list,
+    sync_config_id: Optional[uuid.UUID],
+    run_id: uuid.UUID,
+) -> Dict[str, Any]:
+    """
+    Async implementation of SharePoint import.
+    """
+    import hashlib
+    import tempfile
+    from pathlib import Path
+
+    import httpx
+
+    from .services.sharepoint_sync_service import sharepoint_sync_service
+    from .services.sharepoint_service import _get_sharepoint_credentials, _graph_base_url
+    from .services.run_service import run_service
+    from .services.run_log_service import run_log_service
+    from .services.asset_service import asset_service
+    from .services.minio_service import minio_service
+    from .services.upload_integration_service import upload_integration_service
+    from .services.storage_path_service import storage_paths
+
+    logger = logging.getLogger("curatore.tasks.sharepoint_import")
+
+    async with database_service.get_session() as session:
+        # Start the run
+        await run_service.start_run(session, run_id)
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="start",
+            message=f"Starting import of {len(selected_items)} files",
+        )
+        await session.commit()
+
+        # Get sync config if provided
+        sync_config = None
+        sync_slug = "import"
+        if sync_config_id:
+            sync_config = await sharepoint_sync_service.get_sync_config(session, sync_config_id)
+            if sync_config:
+                sync_slug = sync_config.slug
+
+        # Get SharePoint credentials
+        credentials = await _get_sharepoint_credentials(organization_id, session)
+        tenant_id = credentials["tenant_id"]
+        client_id = credentials["client_id"]
+        client_secret = credentials["client_secret"]
+
+        token_payload = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "client_credentials",
+            "scope": "https://graph.microsoft.com/.default",
+        }
+
+        graph_base = _graph_base_url()
+
+        results = {
+            "imported": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
+            # Get token
+            token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
+            token_resp = await client.post(token_url, data=token_payload)
+            token_resp.raise_for_status()
+            token = token_resp.json().get("access_token")
+            headers = {"Authorization": f"Bearer {token}"}
+
+            for item in selected_items:
+                item_id = item.get("id")
+                name = item.get("name", "unknown")
+                folder_path = item.get("folder", "").strip("/")
+                drive_id = item.get("drive_id")
+                size = item.get("size")
+                web_url = item.get("web_url")
+                mime_type = item.get("mime") or item.get("file_type")
+
+                try:
+                    # Download file
+                    if not drive_id:
+                        # Try to get drive_id from sync config or folder inventory
+                        if sync_config and sync_config.folder_drive_id:
+                            drive_id = sync_config.folder_drive_id
+                        else:
+                            raise ValueError("drive_id is required for import")
+
+                    download_url = f"{graph_base}/drives/{drive_id}/items/{item_id}/content"
+
+                    with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                        async with client.stream("GET", download_url, headers=headers) as response:
+                            response.raise_for_status()
+                            async for chunk in response.aiter_bytes():
+                                tmp_file.write(chunk)
+                        tmp_path = tmp_file.name
+
+                    # Calculate content hash
+                    content_hash = None
+                    try:
+                        with open(tmp_path, "rb") as f:
+                            content_hash = hashlib.sha256(f.read()).hexdigest()
+                    except:
+                        pass
+
+                    # Generate storage path
+                    org_id_str = str(organization_id)
+                    storage_key = storage_paths.sharepoint_sync(
+                        org_id=org_id_str,
+                        sync_slug=sync_slug,
+                        relative_path=folder_path,
+                        filename=name,
+                        extracted=False,
+                    )
+
+                    # Upload to MinIO
+                    uploads_bucket = minio_service.uploads_bucket
+                    await minio_service.upload_file(
+                        bucket=uploads_bucket,
+                        object_key=storage_key,
+                        file_path=tmp_path,
+                        content_type=mime_type,
+                    )
+
+                    # Cleanup temp file
+                    try:
+                        Path(tmp_path).unlink()
+                    except:
+                        pass
+
+                    # Create asset
+                    asset = await asset_service.create_asset(
+                        session=session,
+                        organization_id=organization_id,
+                        source_type="sharepoint",
+                        source_metadata={
+                            "sync_config_id": str(sync_config_id) if sync_config_id else None,
+                            "sharepoint_item_id": item_id,
+                            "sharepoint_drive_id": drive_id,
+                            "sharepoint_path": folder_path,
+                            "sharepoint_web_url": web_url,
+                            "folder_url": folder_url,
+                            "import_run_id": str(run_id),
+                        },
+                        original_filename=name,
+                        raw_bucket=uploads_bucket,
+                        raw_object_key=storage_key,
+                        content_type=mime_type,
+                        file_size=size,
+                        file_hash=content_hash,
+                        status="pending",
+                    )
+
+                    # Create synced document record if sync config exists
+                    if sync_config_id:
+                        await sharepoint_sync_service.create_synced_document(
+                            session=session,
+                            sync_config_id=sync_config_id,
+                            asset_id=asset.id,
+                            sharepoint_item_id=item_id,
+                            sharepoint_drive_id=drive_id,
+                            sharepoint_path=folder_path,
+                            sharepoint_web_url=web_url,
+                            file_size=size,
+                            content_hash=content_hash,
+                            run_id=run_id,
+                        )
+
+                    # Trigger extraction
+                    try:
+                        await upload_integration_service.trigger_extraction(
+                            session=session,
+                            asset_id=asset.id,
+                        )
+                    except Exception as e:
+                        logger.warning(f"Failed to trigger extraction for {name}: {e}")
+
+                    results["imported"] += 1
+
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_id,
+                        level="INFO",
+                        event_type="progress",
+                        message=f"Imported: {name}",
+                    )
+
+                except Exception as e:
+                    logger.error(f"Failed to import {name}: {e}")
+                    results["failed"] += 1
+                    results["errors"].append({"file": name, "error": str(e)})
+
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_id,
+                        level="ERROR",
+                        event_type="error",
+                        message=f"Failed to import {name}: {e}",
+                    )
+
+        # Complete the run
+        await run_service.complete_run(
+            session=session,
+            run_id=run_id,
+            results_summary=results,
+        )
+
+        await run_log_service.log_summary(
+            session=session,
+            run_id=run_id,
+            message=f"Import completed: {results['imported']} imported, {results['failed']} failed",
+        )
+
+        await session.commit()
+
+        return results

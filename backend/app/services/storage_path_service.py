@@ -340,6 +340,59 @@ def temp_path(
     return f"{org_id}/temp/{content_hash[:16]}/{safe_filename}"
 
 
+def sharepoint_sync_path(
+    org_id: str,
+    sync_slug: str,
+    relative_path: str,
+    filename: str,
+    file_type: str = "raw",
+) -> str:
+    """
+    Generate storage path for a SharePoint synced file.
+
+    Files are stored preserving the folder structure from SharePoint
+    within the sync config's slug directory.
+
+    Args:
+        org_id: Organization UUID string
+        sync_slug: Sync config slug (e.g., "it-documents")
+        relative_path: Relative path within SharePoint synced folder
+        filename: Original filename
+        file_type: "raw" for original, "extracted" for markdown
+
+    Returns:
+        Storage path like: {org_id}/sharepoint/{sync_slug}/{relative_path}/{filename}
+
+    Examples:
+        >>> sharepoint_sync_path("org1", "it-docs", "Reports/Q4", "summary.pdf")
+        "org1/sharepoint/it-docs/reports/q4/summary.pdf"
+
+        >>> sharepoint_sync_path("org1", "hr-files", "", "handbook.docx")
+        "org1/sharepoint/hr-files/handbook.docx"
+    """
+    # Slugify the sync slug
+    safe_slug = slugify(sync_slug)
+
+    # Sanitize relative path components
+    if relative_path:
+        path_parts = relative_path.strip("/").split("/")
+        safe_path_parts = [slugify(p) for p in path_parts if p]
+        safe_relative_path = "/".join(safe_path_parts)
+    else:
+        safe_relative_path = ""
+
+    # Sanitize filename
+    safe_filename = slugify_filename(filename)
+
+    if file_type == "extracted":
+        base, _ = safe_filename.rsplit(".", 1) if "." in safe_filename else (safe_filename, "")
+        safe_filename = f"{base}.md"
+
+    if safe_relative_path:
+        return f"{org_id}/sharepoint/{safe_slug}/{safe_relative_path}/{safe_filename}"
+    return f"{org_id}/sharepoint/{safe_slug}/{safe_filename}"
+
+
 # Convenience class for organized access
 class StoragePathService:
     """
@@ -413,6 +466,18 @@ class StoragePathService:
     ) -> str:
         """Generate temporary path."""
         return temp_path(org_id, content_hash, filename)
+
+    def sharepoint_sync(
+        self,
+        org_id: str,
+        sync_slug: str,
+        relative_path: str,
+        filename: str,
+        extracted: bool = False,
+    ) -> str:
+        """Generate path for SharePoint synced file."""
+        file_type = "extracted" if extracted else "raw"
+        return sharepoint_sync_path(org_id, sync_slug, relative_path, filename, file_type)
 
 
 # Singleton instance

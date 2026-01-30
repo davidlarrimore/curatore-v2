@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { systemApi, runsApi, objectStorageApi } from '@/lib/api'
+import { systemApi, runsApi, objectStorageApi, storageApi, assetsApi } from '@/lib/api'
 import {
   SystemHealthCard,
   StorageOverviewCard,
@@ -39,6 +39,21 @@ interface StorageHealth {
   error: string | null
 }
 
+interface StorageStats {
+  organization_id: string
+  total_files: number
+  total_size_bytes: number
+  files_by_type: { uploaded: number; processed: number }
+  deduplication: {
+    unique_files: number
+    total_references: number
+    duplicate_references: number
+    storage_used_bytes: number
+    storage_saved_bytes: number
+    savings_percentage: number
+  }
+}
+
 interface Run {
   id: string
   run_type: string
@@ -70,6 +85,8 @@ function DashboardContent() {
   const [healthData, setHealthData] = useState<HealthData | null>(null)
   const [runStats, setRunStats] = useState<RunStats | null>(null)
   const [storageHealth, setStorageHealth] = useState<StorageHealth | null>(null)
+  const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
+  const [assetCount, setAssetCount] = useState<number | null>(null)
   const [recentRuns, setRecentRuns] = useState<Run[]>([])
 
   // Loading states
@@ -105,15 +122,23 @@ function DashboardContent() {
     }
   }, [token])
 
-  // Fetch storage health
+  // Fetch storage health and stats
   const fetchStorageHealth = useCallback(async () => {
+    if (!token) return
+
     try {
-      const health = await objectStorageApi.getHealth()
+      const [health, stats, assetsResponse] = await Promise.all([
+        objectStorageApi.getHealth(),
+        storageApi.getStats(token).catch(() => null),
+        assetsApi.listAssets(token, { limit: 1 }).catch(() => null),
+      ])
       setStorageHealth(health)
+      if (stats) setStorageStats(stats)
+      if (assetsResponse) setAssetCount(assetsResponse.total)
     } catch (error) {
       console.error('Failed to fetch storage health:', error)
     }
-  }, [])
+  }, [token])
 
   // Initial load
   useEffect(() => {
@@ -236,6 +261,8 @@ function DashboardContent() {
           <div>
             <StorageOverviewCard
               storageHealth={storageHealth}
+              storageStats={storageStats}
+              assetCount={assetCount}
               isLoading={isLoadingStorage}
             />
           </div>

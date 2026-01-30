@@ -52,6 +52,9 @@ class SearchRequest(BaseModel):
     collection_ids: Optional[List[str]] = Field(
         None, description="Filter by collection IDs (for web scrapes)"
     )
+    sync_config_ids: Optional[List[str]] = Field(
+        None, description="Filter by SharePoint sync config IDs"
+    )
     date_from: Optional[datetime] = Field(
         None, description="Filter by creation date >= (ISO format)"
     )
@@ -172,6 +175,17 @@ async def search_assets(
                     detail="Invalid collection ID format",
                 )
 
+        # Convert sync_config_ids to UUIDs if provided
+        sync_config_uuids = None
+        if request.sync_config_ids:
+            try:
+                sync_config_uuids = [UUID(c) for c in request.sync_config_ids]
+            except ValueError:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Invalid sync config ID format",
+                )
+
         # Use search_with_facets if facets are requested
         if request.include_facets:
             results = await opensearch_service.search_with_facets(
@@ -180,6 +194,7 @@ async def search_assets(
                 source_types=request.source_types,
                 content_types=request.content_types,
                 collection_ids=collection_uuids,
+                sync_config_ids=sync_config_uuids,
                 date_from=request.date_from,
                 date_to=request.date_to,
                 limit=request.limit,
@@ -192,6 +207,7 @@ async def search_assets(
                 source_types=request.source_types,
                 content_types=request.content_types,
                 collection_ids=collection_uuids,
+                sync_config_ids=sync_config_uuids,
                 date_from=request.date_from,
                 date_to=request.date_to,
                 limit=request.limit,

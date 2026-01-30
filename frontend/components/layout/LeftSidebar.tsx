@@ -17,7 +17,8 @@ import {
   LayoutDashboard,
   Globe,
   Search,
-  Building2
+  Building2,
+  FolderSync
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import clsx from 'clsx'
@@ -84,6 +85,13 @@ export function LeftSidebar({
         icon: LinkIcon,
         current: pathname === '/connections',
         gradient: 'from-blue-500 to-cyan-500'
+      },
+      {
+        name: 'SharePoint Sync',
+        href: '/sharepoint-sync',
+        icon: FolderSync,
+        current: pathname?.startsWith('/sharepoint-sync'),
+        gradient: 'from-teal-500 to-cyan-600'
       },
       {
         name: 'Web Scraping',

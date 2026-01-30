@@ -3546,6 +3546,348 @@ export const samApi = {
   },
 }
 
+// -------------------- SharePoint Sync API (Phase 8) --------------------
+
+export interface SharePointSyncConfig {
+  id: string
+  organization_id: string
+  connection_id: string | null
+  name: string
+  slug: string
+  description: string | null
+  folder_url: string
+  folder_name: string | null
+  folder_drive_id: string | null
+  folder_item_id: string | null
+  sync_config: Record<string, any>
+  status: string
+  is_active: boolean
+  last_sync_at: string | null
+  last_sync_status: string | null
+  last_sync_run_id: string | null
+  sync_frequency: string
+  stats: Record<string, any>
+  created_at: string
+  updated_at: string
+  created_by: string | null
+  is_syncing: boolean
+  current_sync_status: string | null
+}
+
+export interface SharePointSyncedDocument {
+  id: string
+  asset_id: string
+  sync_config_id: string
+  sharepoint_item_id: string
+  sharepoint_drive_id: string
+  sharepoint_path: string | null
+  sharepoint_web_url: string | null
+  sharepoint_etag: string | null
+  content_hash: string | null
+  sharepoint_created_at: string | null
+  sharepoint_modified_at: string | null
+  sharepoint_created_by: string | null
+  sharepoint_modified_by: string | null
+  file_size: number | null
+  sync_status: string
+  last_synced_at: string | null
+  last_sync_run_id: string | null
+  deleted_detected_at: string | null
+  sync_metadata: Record<string, any>
+  created_at: string
+  updated_at: string
+  original_filename: string | null
+  asset_status: string | null
+}
+
+export interface SharePointBrowseItem {
+  id: string
+  name: string
+  type: 'file' | 'folder'
+  size?: number
+  web_url?: string
+  mime?: string
+  folder?: string
+  created?: string
+  modified?: string
+  drive_id?: string
+}
+
+export const sharepointSyncApi = {
+  // ========== Sync Configs ==========
+
+  async listConfigs(
+    token: string | undefined,
+    params?: {
+      status?: string
+      limit?: number
+      offset?: number
+    }
+  ): Promise<{
+    configs: SharePointSyncConfig[]
+    total: number
+    limit: number
+    offset: number
+  }> {
+    const searchParams = new URLSearchParams()
+    if (params?.status) searchParams.append('status', params.status)
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/sharepoint-sync/configs?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getConfig(
+    token: string | undefined,
+    configId: string
+  ): Promise<SharePointSyncConfig> {
+    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async createConfig(
+    token: string | undefined,
+    data: {
+      name: string
+      description?: string
+      connection_id?: string
+      folder_url: string
+      sync_config?: Record<string, any>
+      sync_frequency?: string
+    }
+  ): Promise<SharePointSyncConfig> {
+    const res = await fetch(apiUrl('/sharepoint-sync/configs'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async updateConfig(
+    token: string | undefined,
+    configId: string,
+    data: {
+      name?: string
+      description?: string
+      connection_id?: string
+      folder_url?: string
+      sync_config?: Record<string, any>
+      status?: string
+      is_active?: boolean
+      sync_frequency?: string
+    }
+  ): Promise<SharePointSyncConfig> {
+    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}`), {
+      method: 'PATCH',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteConfig(token: string | undefined, configId: string): Promise<{
+    message: string
+    cleanup_stats: {
+      assets_deleted: number
+      documents_deleted: number
+      runs_deleted: number
+      opensearch_removed: number
+      errors: string[]
+    }
+  }> {
+    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}`), {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  async archiveConfig(token: string | undefined, configId: string): Promise<{
+    message: string
+    archive_stats: {
+      opensearch_removed: number
+      errors: string[]
+    }
+  }> {
+    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}/archive`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  // ========== Sync Execution ==========
+
+  async triggerSync(
+    token: string | undefined,
+    configId: string,
+    fullSync: boolean = false
+  ): Promise<{
+    sync_config_id: string
+    run_id: string
+    status: string
+    message: string
+  }> {
+    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}/sync`), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify({ full_sync: fullSync }),
+    })
+    return handleJson(res)
+  },
+
+  async getHistory(
+    token: string | undefined,
+    configId: string,
+    params?: {
+      limit?: number
+      offset?: number
+    }
+  ): Promise<{
+    runs: Array<{
+      id: string
+      organization_id: string
+      run_type: string
+      origin: string
+      status: string
+      config: Record<string, any>
+      progress: Record<string, any> | null
+      results_summary: Record<string, any> | null
+      error_message: string | null
+      created_at: string
+      started_at: string | null
+      completed_at: string | null
+    }>
+    total: number
+  }> {
+    const searchParams = new URLSearchParams()
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/sharepoint-sync/configs/${configId}/history?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  // ========== Synced Documents ==========
+
+  async listDocuments(
+    token: string | undefined,
+    configId: string,
+    params?: {
+      sync_status?: string
+      limit?: number
+      offset?: number
+    }
+  ): Promise<{
+    documents: SharePointSyncedDocument[]
+    total: number
+    limit: number
+    offset: number
+  }> {
+    const searchParams = new URLSearchParams()
+    if (params?.sync_status) searchParams.append('sync_status', params.sync_status)
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/sharepoint-sync/configs/${configId}/documents?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async cleanupDeleted(
+    token: string | undefined,
+    configId: string,
+    deleteAssets: boolean = false
+  ): Promise<{
+    sync_config_id: string
+    documents_removed: number
+    assets_deleted: number
+    message: string
+  }> {
+    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}/cleanup`), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify({ delete_assets: deleteAssets }),
+    })
+    return handleJson(res)
+  },
+
+  // ========== Browse and Import ==========
+
+  async browseFolder(
+    token: string | undefined,
+    data: {
+      connection_id?: string
+      folder_url: string
+      recursive?: boolean
+      include_folders?: boolean
+    }
+  ): Promise<{
+    folder_name: string
+    folder_id: string
+    folder_url: string
+    drive_id: string
+    items: SharePointBrowseItem[]
+    total_items: number
+  }> {
+    const res = await fetch(apiUrl('/sharepoint-sync/browse'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async importFiles(
+    token: string | undefined,
+    data: {
+      connection_id?: string
+      folder_url: string
+      selected_items: Array<{
+        id: string
+        name: string
+        folder?: string
+        drive_id?: string
+        size?: number
+        web_url?: string
+        mime?: string
+      }>
+      sync_config_name?: string
+      sync_config_description?: string
+      create_sync_config?: boolean
+    }
+  ): Promise<{
+    run_id: string
+    sync_config_id: string | null
+    status: string
+    message: string
+    selected_count: number
+  }> {
+    const res = await fetch(apiUrl('/sharepoint-sync/import'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+}
+
 // Default export with all API modules
 export default {
   API_BASE_URL,
@@ -3567,5 +3909,6 @@ export default {
   scheduledTasksApi,
   searchApi,
   samApi,
+  sharepointSyncApi,
   utils,
 }
