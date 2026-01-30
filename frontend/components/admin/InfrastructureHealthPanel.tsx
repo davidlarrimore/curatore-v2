@@ -5,6 +5,7 @@ import { useState, useEffect } from 'react'
 import { systemApi } from '@/lib/api'
 import { RefreshCw, CheckCircle, XCircle, AlertCircle, AlertTriangle, HelpCircle, Loader2, ExternalLink } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
+import { formatTime, DISPLAY_TIMEZONE_ABBR } from '@/lib/date-utils'
 
 interface ComponentHealth {
   status: 'healthy' | 'unhealthy' | 'degraded' | 'unknown' | 'not_configured' | 'checking'
@@ -258,7 +259,7 @@ export default function InfrastructureHealthPanel() {
 
       {lastChecked && (
         <p className="text-sm text-gray-500 dark:text-gray-400">
-          Last checked: {lastChecked.toLocaleTimeString()}
+          Last checked: {formatTime(lastChecked)} {DISPLAY_TIMEZONE_ABBR}
         </p>
       )}
 

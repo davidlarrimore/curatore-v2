@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { searchApi, SearchHit, SearchResponse } from '@/lib/api'
+import { searchApi, SearchHit, SearchResponse, SearchFacets } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import {
   Search,
@@ -14,10 +14,14 @@ import {
   X,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   RefreshCw,
   AlertTriangle,
   Loader2,
   ExternalLink,
+  Building2,
+  Check,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
@@ -38,6 +42,11 @@ const sourceTypeConfig: Record<string, { name: string; icon: React.ReactNode; co
     icon: <Globe className="w-4 h-4" />,
     color: 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400',
   },
+  sam_gov: {
+    name: 'SAM.gov',
+    icon: <Building2 className="w-4 h-4" />,
+    color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  },
 }
 
 export default function SearchPage() {
@@ -57,9 +66,15 @@ function SearchContent() {
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [selectedSourceTypes, setSelectedSourceTypes] = useState<string[]>([])
+  const [selectedContentTypes, setSelectedContentTypes] = useState<string[]>([])
+  const [showAllContentTypes, setShowAllContentTypes] = useState(false)
+  const [facets, setFacets] = useState<SearchFacets | null>(null)
   const [limit] = useState(20)
   const [offset, setOffset] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
+
+  // Number of content types to show before "Show more"
+  const CONTENT_TYPE_INITIAL_COUNT = 5
 
   // Debounce search query
   useEffect(() => {
@@ -75,6 +90,7 @@ function SearchContent() {
   const executeSearch = useCallback(async () => {
     if (!token || !debouncedQuery.trim()) {
       setResults(null)
+      setFacets(null)
       return
     }
 
@@ -85,10 +101,13 @@ function SearchContent() {
       const response = await searchApi.search(token, {
         query: debouncedQuery.trim(),
         source_types: selectedSourceTypes.length > 0 ? selectedSourceTypes : undefined,
+        content_types: selectedContentTypes.length > 0 ? selectedContentTypes : undefined,
+        include_facets: true,
         limit,
         offset,
       })
       setResults(response)
+      setFacets(response.facets || null)
     } catch (err: any) {
       if (err.status === 503) {
         setError('Search is not enabled. Enable OpenSearch to use this feature.')
@@ -96,10 +115,11 @@ function SearchContent() {
         setError(err.message || 'Search failed')
       }
       setResults(null)
+      setFacets(null)
     } finally {
       setIsLoading(false)
     }
-  }, [token, debouncedQuery, selectedSourceTypes, limit, offset])
+  }, [token, debouncedQuery, selectedSourceTypes, selectedContentTypes, limit, offset])
 
   useEffect(() => {
     executeSearch()
@@ -115,10 +135,48 @@ function SearchContent() {
     setOffset(0) // Reset pagination
   }
 
+  // Toggle content type filter
+  const toggleContentType = (type: string) => {
+    setSelectedContentTypes(prev =>
+      prev.includes(type)
+        ? prev.filter(t => t !== type)
+        : [...prev, type]
+    )
+    setOffset(0) // Reset pagination
+  }
+
   // Clear all filters
   const clearFilters = () => {
     setSelectedSourceTypes([])
+    setSelectedContentTypes([])
     setOffset(0)
+  }
+
+  // Get count for a source type from facets
+  const getSourceTypeCount = (type: string): number | null => {
+    if (!facets?.source_type) return null
+    const bucket = facets.source_type.buckets.find(b => b.value === type)
+    return bucket?.count ?? 0
+  }
+
+  // Format content type for display
+  const formatContentType = (contentType: string): string => {
+    // Extract file extension or type from MIME type
+    if (contentType.includes('/')) {
+      const subtype = contentType.split('/')[1]
+      // Handle common types
+      if (subtype === 'pdf') return 'PDF'
+      if (subtype === 'html') return 'HTML'
+      if (subtype === 'plain') return 'TXT'
+      if (subtype === 'markdown' || subtype === 'x-markdown') return 'Markdown'
+      if (subtype.includes('word') || subtype === 'docx') return 'DOCX'
+      if (subtype.includes('excel') || subtype === 'xlsx') return 'XLSX'
+      if (subtype.includes('powerpoint') || subtype === 'pptx') return 'PPTX'
+      if (subtype.includes('json')) return 'JSON'
+      if (subtype.includes('xml')) return 'XML'
+      return subtype.toUpperCase()
+    }
+    return contentType
   }
 
   // Pagination
@@ -205,29 +263,99 @@ function SearchContent() {
         </div>
 
         {/* Filters */}
-        <div className="mb-6 flex flex-wrap items-center gap-3">
-          <span className="text-sm text-gray-500 dark:text-gray-400">Filter by:</span>
-          {Object.entries(sourceTypeConfig).map(([type, config]) => (
-            <button
-              key={type}
-              onClick={() => toggleSourceType(type)}
-              className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
-                selectedSourceTypes.includes(type)
-                  ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 ring-2 ring-indigo-500'
-                  : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-              }`}
-            >
-              {config.icon}
-              {config.name}
-            </button>
-          ))}
-          {selectedSourceTypes.length > 0 && (
-            <button
-              onClick={clearFilters}
-              className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 underline"
-            >
-              Clear filters
-            </button>
+        <div className="mb-6 space-y-4">
+          {/* Source Type Filters */}
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm text-gray-500 dark:text-gray-400">Source:</span>
+            {Object.entries(sourceTypeConfig).map(([type, config]) => {
+              const count = getSourceTypeCount(type)
+              const isSelected = selectedSourceTypes.includes(type)
+              return (
+                <button
+                  key={type}
+                  onClick={() => toggleSourceType(type)}
+                  className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
+                    isSelected
+                      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 ring-2 ring-indigo-500'
+                      : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
+                  }`}
+                >
+                  {config.icon}
+                  <span>{config.name}</span>
+                  {count !== null && (
+                    <span className={`text-xs px-1.5 py-0.5 rounded-full ${
+                      isSelected
+                        ? 'bg-indigo-200 dark:bg-indigo-800 text-indigo-800 dark:text-indigo-200'
+                        : 'bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400'
+                    }`}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              )
+            })}
+            {(selectedSourceTypes.length > 0 || selectedContentTypes.length > 0) && (
+              <button
+                onClick={clearFilters}
+                className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 underline"
+              >
+                Clear filters
+              </button>
+            )}
+          </div>
+
+          {/* Content Type Filters */}
+          {facets?.content_type && facets.content_type.buckets.length > 0 && (
+            <div className="flex flex-wrap items-start gap-3">
+              <span className="text-sm text-gray-500 dark:text-gray-400 pt-1.5">Content Type:</span>
+              <div className="flex flex-wrap items-center gap-2">
+                {(showAllContentTypes
+                  ? facets.content_type.buckets
+                  : facets.content_type.buckets.slice(0, CONTENT_TYPE_INITIAL_COUNT)
+                ).map((bucket) => {
+                  const isSelected = selectedContentTypes.includes(bucket.value)
+                  return (
+                    <button
+                      key={bucket.value}
+                      onClick={() => toggleContentType(bucket.value)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all border ${
+                        isSelected
+                          ? 'bg-indigo-50 text-indigo-700 border-indigo-300 dark:bg-indigo-900/30 dark:text-indigo-400 dark:border-indigo-700'
+                          : 'bg-white text-gray-600 border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                      }`}
+                    >
+                      {isSelected && <Check className="w-3 h-3" />}
+                      <span>{formatContentType(bucket.value)}</span>
+                      <span className={`text-xs ${
+                        isSelected
+                          ? 'text-indigo-500 dark:text-indigo-300'
+                          : 'text-gray-400 dark:text-gray-500'
+                      }`}>
+                        ({bucket.count})
+                      </span>
+                    </button>
+                  )
+                })}
+                {facets.content_type.buckets.length > CONTENT_TYPE_INITIAL_COUNT && (
+                  <button
+                    onClick={() => setShowAllContentTypes(!showAllContentTypes)}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 transition-colors"
+                  >
+                    {showAllContentTypes ? (
+                      <>
+                        <ChevronUp className="w-3 h-3" />
+                        Show less
+                      </>
+                    ) : (
+                      <>
+                        <ChevronDown className="w-3 h-3" />
+                        Show {facets.content_type.buckets.length - CONTENT_TYPE_INITIAL_COUNT} more
+                      </>
+                    )}
+                  </button>
+                )}
+              </div>
+            </div>
           )}
         </div>
 
@@ -260,7 +388,7 @@ function SearchContent() {
                 Search your documents
               </h3>
               <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto">
-                Enter a search query to find documents across uploads, SharePoint, and web scrapes.
+                Enter a search query to find documents across uploads, SharePoint, web scrapes, and SAM.gov.
               </p>
             </div>
           </div>

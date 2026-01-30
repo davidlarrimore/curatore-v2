@@ -66,7 +66,6 @@ class ArtifactService:
         file_size: Optional[int] = None,
         etag: Optional[str] = None,
         file_hash: Optional[str] = None,
-        job_id: Optional[UUID] = None,
         status: str = "pending",
         file_metadata: Optional[Dict[str, Any]] = None,
         expires_at: Optional[datetime] = None,
@@ -86,7 +85,6 @@ class ArtifactService:
             file_size: Size in bytes
             etag: Object storage ETag
             file_hash: SHA-256 hash
-            job_id: Associated job UUID
             status: Initial status (default: pending)
             file_metadata: Additional metadata dict
             expires_at: Expiration timestamp
@@ -105,7 +103,6 @@ class ArtifactService:
             file_size=file_size,
             etag=etag,
             file_hash=file_hash,
-            job_id=job_id,
             status=status,
             file_metadata=file_metadata or {},
             expires_at=expires_at,
@@ -131,7 +128,6 @@ class ArtifactService:
         file_size: Optional[int] = None,
         etag: Optional[str] = None,
         file_hash: Optional[str] = None,
-        job_id: Optional[UUID] = None,
         status: str = "pending",
         file_metadata: Optional[Dict[str, Any]] = None,
         expires_at: Optional[datetime] = None,
@@ -154,7 +150,6 @@ class ArtifactService:
             file_size: Size in bytes
             etag: Object storage ETag
             file_hash: SHA-256 hash
-            job_id: Associated job UUID
             status: Status (default: pending)
             file_metadata: Additional metadata dict
             expires_at: Expiration timestamp
@@ -184,7 +179,6 @@ class ArtifactService:
             existing.file_size = file_size
             existing.etag = etag
             existing.file_hash = file_hash
-            existing.job_id = job_id
             existing.status = status
             existing.file_metadata = file_metadata or {}
             existing.expires_at = expires_at
@@ -209,7 +203,6 @@ class ArtifactService:
                 file_size=file_size,
                 etag=etag,
                 file_hash=file_hash,
-                job_id=job_id,
                 status=status,
                 file_metadata=file_metadata,
                 expires_at=expires_at,
@@ -303,69 +296,8 @@ class ArtifactService:
         )
         return list(result.scalars().all())
 
-    async def get_artifact_by_document_and_job(
-        self,
-        session: AsyncSession,
-        document_id: str,
-        job_id: UUID,
-        artifact_type: str,
-        organization_id: Optional[UUID] = None,
-    ) -> Optional[Artifact]:
-        """
-        Get an artifact by document ID, job ID, and type.
-
-        This is used when retrieving processed files in the context of a specific job,
-        ensuring that the correct artifact is returned even if the same document has
-        been processed by multiple jobs.
-
-        Args:
-            session: Database session
-            document_id: Document identifier
-            job_id: Job UUID
-            artifact_type: Type (uploaded, processed, temp)
-            organization_id: Optional organization filter
-
-        Returns:
-            Artifact or None if not found
-        """
-        conditions = [
-            Artifact.document_id == document_id,
-            Artifact.job_id == job_id,
-            Artifact.artifact_type == artifact_type,
-            Artifact.deleted_at.is_(None),
-        ]
-        if organization_id:
-            conditions.append(Artifact.organization_id == organization_id)
-
-        result = await session.execute(
-            select(Artifact).where(and_(*conditions))
-        )
-        return result.scalar_one_or_none()
-
-    async def list_artifacts_by_job(
-        self, session: AsyncSession, job_id: UUID
-    ) -> List[Artifact]:
-        """
-        Get all artifacts for a job.
-
-        Args:
-            session: Database session
-            job_id: Job UUID
-
-        Returns:
-            List of artifacts
-        """
-        result = await session.execute(
-            select(Artifact)
-            .where(
-                and_(
-                    Artifact.job_id == job_id,
-                    Artifact.deleted_at.is_(None),
-                )
-            )
-            .order_by(Artifact.created_at)
-        )
-        return list(result.scalars().all())
+    # NOTE: get_artifact_by_document_and_job and list_artifacts_by_job have been removed.
+    # The Job system was deprecated - use Run-based tracking instead.
 
     async def list_artifacts_by_organization(
         self,

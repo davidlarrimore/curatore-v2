@@ -537,231 +537,10 @@ class AuditLog(Base):
         return f"<AuditLog(id={self.id}, action={self.action}, status={self.status})>"
 
 
-class Job(Base):
-    """
-    Job model for batch document processing tracking.
-
-    Represents a batch processing job that processes multiple documents.
-    Jobs track overall progress, status, and results across all documents.
-
-    Attributes:
-        id: Unique job identifier
-        organization_id: Organization that owns this job
-        user_id: User who created this job (nullable for system jobs)
-        name: Human-readable job name
-        description: Optional job description
-        job_type: Type of job (default: 'batch_processing')
-        status: Current job status (PENDING, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED)
-        celery_batch_id: Celery batch identifier for grouping tasks
-        total_documents: Total number of documents in job
-        completed_documents: Number of completed documents
-        failed_documents: Number of failed documents
-        processing_options: Snapshot of processing options used (JSONB)
-        results_summary: Aggregated quality scores and metrics (JSONB)
-        error_message: Error message if job failed
-        created_at: When job was created
-        queued_at: When job was queued for processing
-        started_at: When job started processing
-        completed_at: When job completed (success or failure)
-        cancelled_at: When job was cancelled
-        expires_at: When job should be automatically deleted (based on retention policy)
-
-    Relationships:
-        organization: Organization that owns this job
-        user: User who created this job
-        documents: List of documents in this job
-        logs: List of log entries for this job
-
-    Job Status Flow:
-        PENDING → QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED
-    """
-
-    __tablename__ = "jobs"
-
-    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
-    organization_id = Column(
-        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    user_id = Column(
-        UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True
-    )
-
-    # Job metadata
-    name = Column(String(255), nullable=False)
-    description = Column(Text, nullable=True)
-    job_type = Column(String(50), nullable=False, default="batch_processing")
-
-    # Job status
-    status = Column(String(50), nullable=False, default="PENDING", index=True)
-    celery_batch_id = Column(String(255), nullable=True, index=True)
-
-    # Progress tracking
-    total_documents = Column(Integer, nullable=False, default=0)
-    completed_documents = Column(Integer, nullable=False, default=0)
-    failed_documents = Column(Integer, nullable=False, default=0)
-
-    # Processing configuration and results
-    processing_options = Column(JSON, nullable=False, default=dict, server_default="{}")
-    results_summary = Column(JSON, nullable=True)
-    error_message = Column(Text, nullable=True)
-    processed_folder = Column(String(255), nullable=True, index=True)
-
-    # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    queued_at = Column(DateTime, nullable=True)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
-    cancelled_at = Column(DateTime, nullable=True)
-    expires_at = Column(DateTime, nullable=True)
-
-    # Relationships
-    organization = relationship("Organization")
-    user = relationship("User")
-    documents = relationship(
-        "JobDocument", back_populates="job", cascade="all, delete-orphan"
-    )
-    logs = relationship("JobLog", back_populates="job", cascade="all, delete-orphan")
-
-    # Indexes for common queries
-    __table_args__ = (
-        Index("ix_jobs_org_created", "organization_id", "created_at"),
-        Index("ix_jobs_org_status", "organization_id", "status"),
-        Index("ix_jobs_user", "user_id", "created_at"),
-        Index("ix_jobs_expires", "expires_at"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<Job(id={self.id}, name={self.name}, status={self.status})>"
-
-
-class JobDocument(Base):
-    """
-    JobDocument model for tracking individual documents within a job.
-
-    Represents a single document being processed as part of a batch job.
-    Tracks document-level status, quality scores, and processing results.
-
-    Attributes:
-        id: Unique job document identifier
-        job_id: Job this document belongs to
-        document_id: Document identifier (UUID from storage)
-        filename: Original filename
-        file_path: Path to original file
-        file_hash: SHA-256 hash for deduplication
-        file_size: File size in bytes
-        status: Document processing status (PENDING, RUNNING, COMPLETED, FAILED, CANCELLED)
-        celery_task_id: Individual Celery task ID
-        conversion_score: Overall conversion quality score (0-100)
-        quality_scores: Detailed quality metrics (JSONB)
-        is_rag_ready: Whether document meets RAG quality thresholds
-        error_message: Error message if processing failed
-        created_at: When document was added to job
-        started_at: When document processing started
-        completed_at: When document processing completed
-        processing_time_seconds: Total processing time
-        processed_file_path: Path to processed markdown file
-
-    Relationships:
-        job: Job this document belongs to
-
-    Document Status Flow:
-        PENDING → RUNNING → COMPLETED/FAILED/CANCELLED
-    """
-
-    __tablename__ = "job_documents"
-
-    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
-    job_id = Column(
-        UUID(), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-
-    # Document identification
-    document_id = Column(String(36), nullable=False, index=True)  # UUID or legacy doc_* format
-    filename = Column(String(500), nullable=False)
-    file_path = Column(Text, nullable=False)
-    file_hash = Column(String(64), nullable=True)
-    file_size = Column(Integer, nullable=True)
-
-    # Processing status
-    status = Column(String(50), nullable=False, default="PENDING", index=True)
-    celery_task_id = Column(String(255), nullable=True, index=True)
-
-    # Quality metrics
-    conversion_score = Column(Integer, nullable=True)
-    quality_scores = Column(JSON, nullable=True)
-    is_rag_ready = Column(Boolean, nullable=False, default=False)
-    error_message = Column(Text, nullable=True)
-
-    # Timestamps
-    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
-    started_at = Column(DateTime, nullable=True)
-    completed_at = Column(DateTime, nullable=True)
-    processing_time_seconds = Column(Float, nullable=True)
-
-    # Result
-    processed_file_path = Column(Text, nullable=True)
-
-    # Relationships
-    job = relationship("Job", back_populates="documents")
-
-    # Indexes for common queries
-    __table_args__ = (
-        Index("ix_job_docs_document", "document_id"),
-        Index("ix_job_docs_celery_task", "celery_task_id"),
-    )
-
-    def __repr__(self) -> str:
-        return f"<JobDocument(id={self.id}, document_id={self.document_id}, status={self.status})>"
-
-
-class JobLog(Base):
-    """
-    JobLog model for job execution logs and audit trail.
-
-    Stores log entries for job execution, including progress updates,
-    errors, and document-level events. Provides audit trail and debugging.
-
-    Attributes:
-        id: Unique log entry identifier
-        job_id: Job this log belongs to
-        document_id: Document this log relates to (nullable for job-level logs)
-        timestamp: When log entry was created
-        level: Log level (INFO, SUCCESS, WARNING, ERROR)
-        message: Log message
-        log_metadata: Additional structured data (JSONB)
-
-    Relationships:
-        job: Job this log belongs to
-
-    Log Levels:
-        - INFO: General progress updates
-        - SUCCESS: Successful operations
-        - WARNING: Non-critical issues
-        - ERROR: Errors and failures
-    """
-
-    __tablename__ = "job_logs"
-
-    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
-    job_id = Column(
-        UUID(), ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    document_id = Column(String(36), nullable=True, index=True)  # UUID or legacy doc_* format
-
-    # Log details
-    timestamp = Column(DateTime, default=datetime.utcnow, nullable=False)
-    level = Column(String(20), nullable=False, index=True)
-    message = Column(Text, nullable=False)
-    log_metadata = Column(JSON, nullable=True)
-
-    # Relationships
-    job = relationship("Job", back_populates="logs")
-
-    # Indexes for common queries
-    __table_args__ = (Index("ix_job_logs_job_ts", "job_id", "timestamp"),)
-
-    def __repr__(self) -> str:
-        return f"<JobLog(id={self.id}, job_id={self.job_id}, level={self.level})>"
+# NOTE: Job, JobDocument, and JobLog models have been removed.
+# The Job system was deprecated in favor of the Run-based execution tracking.
+# See migration 20260129_1300_drop_job_tables.py for details.
+# All document processing now uses Asset, Run, and ExtractionResult models.
 
 
 class Artifact(Base):
@@ -776,7 +555,6 @@ class Artifact(Base):
         id: Unique artifact identifier
         organization_id: Organization that owns this artifact
         document_id: Document identifier (links uploaded/processed pairs)
-        job_id: Job this artifact belongs to (nullable for adhoc uploads)
         artifact_type: Type of artifact (uploaded, processed, temp)
         bucket: Object storage bucket name
         object_key: Full object key (path) in the bucket
@@ -794,7 +572,6 @@ class Artifact(Base):
 
     Relationships:
         organization: Organization that owns this artifact
-        job: Job this artifact belongs to
 
     Artifact Types:
         - uploaded: Original uploaded source file
@@ -812,9 +589,6 @@ class Artifact(Base):
         UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
     )
     document_id = Column(String(36), nullable=False, index=True)  # UUID or legacy doc_* format
-    job_id = Column(
-        UUID(), ForeignKey("jobs.id", ondelete="SET NULL"), nullable=True, index=True
-    )
 
     # Object storage location
     artifact_type = Column(String(50), nullable=False, index=True)  # uploaded, processed, temp
@@ -842,7 +616,6 @@ class Artifact(Base):
 
     # Relationships
     organization = relationship("Organization")
-    job = relationship("Job")
 
     # Composite indexes for common queries
     __table_args__ = (
@@ -935,6 +708,15 @@ class Asset(Base):
 
     # Phase 1: Version tracking
     current_version_number = Column(Integer, nullable=True, default=1)  # Track current version
+
+    # Phase 2: Tiered Extraction
+    # enhancement_eligible: Whether file type could benefit from Docling enhancement
+    # Eligible types: PDF, DOCX, PPTX, DOC, PPT, XLS, XLSX (structured documents)
+    enhancement_eligible = Column(Boolean, nullable=True, default=False)
+    # enhancement_queued_at: When background enhancement was queued (null = not queued)
+    enhancement_queued_at = Column(DateTime, nullable=True)
+    # extraction_tier: Current extraction quality tier ('basic' = fast MarkItDown, 'enhanced' = Docling)
+    extraction_tier = Column(String(50), nullable=True, default="basic")
 
     # Relationships
     organization = relationship("Organization")
@@ -1199,6 +981,10 @@ class ExtractionResult(Base):
 
     # Extractor information
     extractor_version = Column(String(100), nullable=False)
+
+    # Phase 2: Tiered Extraction
+    # extraction_tier: Quality tier of this extraction ('basic' = fast MarkItDown, 'enhanced' = Docling)
+    extraction_tier = Column(String(50), nullable=True, default="basic")
 
     # Extraction status
     status = Column(String(50), nullable=False, default="pending", index=True)
@@ -1902,8 +1688,6 @@ class SamSearch(Base):
         last_pull_status: Status of last pull (success, failed, partial)
         last_pull_run_id: Run ID of last pull
         pull_frequency: How often to pull (manual, hourly, daily)
-        solicitation_count: Denormalized count of solicitations
-        notice_count: Denormalized count of notices
 
     search_config Example:
         {
@@ -1920,8 +1704,10 @@ class SamSearch(Base):
 
     Relationships:
         organization: Organization that owns this search
-        solicitations: Solicitations found by this search
         last_pull_run: Most recent pull Run
+
+    Note: Solicitations are NOT directly linked to searches. They exist
+    organization-wide and may match multiple search configurations.
     """
 
     __tablename__ = "sam_searches"
@@ -1951,10 +1737,6 @@ class SamSearch(Base):
     )
     pull_frequency = Column(String(50), nullable=False, default="manual")  # manual, hourly, daily
 
-    # Denormalized counts
-    solicitation_count = Column(Integer, nullable=False, default=0)
-    notice_count = Column(Integer, nullable=False, default=0)
-
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
@@ -1966,11 +1748,6 @@ class SamSearch(Base):
 
     # Relationships
     organization = relationship("Organization", backref="sam_searches")
-    solicitations = relationship(
-        "SamSolicitation",
-        back_populates="search",
-        cascade="all, delete-orphan",
-    )
     last_pull_run = relationship("Run", foreign_keys=[last_pull_run_id])
 
     # Indexes
@@ -2102,7 +1879,6 @@ class SamSolicitation(Base):
     Attributes:
         id: Unique solicitation identifier
         organization_id: Organization that owns this solicitation
-        search_id: Search that found this solicitation
         sub_agency_id: Issuing sub-agency (optional)
         notice_id: SAM.gov unique notice ID
         solicitation_number: Contract number
@@ -2120,14 +1896,18 @@ class SamSolicitation(Base):
         api_link: Link to SAM.gov API
         notice_count: Number of notices/versions
         attachment_count: Number of attachments
+        summary_status: Auto-summary status (pending, generating, ready, failed, no_llm)
+        summary_generated_at: When AI summary was generated
 
     Relationships:
         organization: Owning organization
-        search: Search that found this
         sub_agency: Issuing sub-agency
         notices: Version history
         attachments: Linked files
         summaries: LLM-generated summaries
+
+    Note: Solicitations are NOT directly linked to searches. They exist
+    organization-wide and may match multiple search configurations.
     """
 
     __tablename__ = "sam_solicitations"
@@ -2135,9 +1915,6 @@ class SamSolicitation(Base):
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
     organization_id = Column(
         UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
-    )
-    search_id = Column(
-        UUID(), ForeignKey("sam_searches.id", ondelete="CASCADE"), nullable=False, index=True
     )
     sub_agency_id = Column(
         UUID(), ForeignKey("sam_sub_agencies.id", ondelete="SET NULL"), nullable=True, index=True
@@ -2186,6 +1963,11 @@ class SamSolicitation(Base):
     notice_count = Column(Integer, nullable=False, default=1)
     attachment_count = Column(Integer, nullable=False, default=0)
 
+    # Auto-summary tracking (Phase 7.6)
+    # Values: pending, generating, ready, failed, no_llm
+    summary_status = Column(String(50), nullable=True, default="pending", index=True)
+    summary_generated_at = Column(DateTime, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
@@ -2194,7 +1976,6 @@ class SamSolicitation(Base):
 
     # Relationships
     organization = relationship("Organization", backref="sam_solicitations")
-    search = relationship("SamSearch", back_populates="solicitations")
     sub_agency = relationship("SamSubAgency", back_populates="solicitations")
     notices = relationship(
         "SamNotice",
@@ -2215,7 +1996,6 @@ class SamSolicitation(Base):
 
     # Indexes
     __table_args__ = (
-        Index("ix_sam_solicitations_org_search", "organization_id", "search_id"),
         Index("ix_sam_solicitations_org_status", "organization_id", "status"),
         Index("ix_sam_solicitations_deadline", "response_deadline"),
         Index("ix_sam_solicitations_posted", "posted_date"),
@@ -2260,8 +2040,15 @@ class SamNotice(Base):
     __tablename__ = "sam_notices"
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+
+    # Parent solicitation - NULLABLE for standalone notices (e.g., Special Notices)
     solicitation_id = Column(
-        UUID(), ForeignKey("sam_solicitations.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(), ForeignKey("sam_solicitations.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+
+    # For standalone notices (when solicitation_id is NULL)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True, index=True
     )
 
     # SAM.gov identifiers
@@ -2277,12 +2064,30 @@ class SamNotice(Base):
     posted_date = Column(DateTime, nullable=True)
     response_deadline = Column(DateTime, nullable=True)
 
+    # Classification (for standalone notices)
+    naics_code = Column(String(20), nullable=True)
+    psc_code = Column(String(20), nullable=True)
+    set_aside_code = Column(String(50), nullable=True)
+
+    # Organization hierarchy (for standalone notices)
+    agency_name = Column(String(500), nullable=True)
+    bureau_name = Column(String(500), nullable=True)
+    office_name = Column(String(500), nullable=True)
+
+    # Links
+    ui_link = Column(String(500), nullable=True)
+
     # Raw API response storage
     raw_json_bucket = Column(String(255), nullable=True)
     raw_json_key = Column(String(500), nullable=True)
 
     # Change tracking
     changes_summary = Column(Text, nullable=True)  # AI-generated or manual
+
+    # AI Summary (similar to SamSolicitation)
+    summary_status = Column(String(50), nullable=True, default="pending")
+    # Values: pending, generating, ready, failed, no_llm
+    summary_generated_at = Column(DateTime, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -2295,10 +2100,14 @@ class SamNotice(Base):
         cascade="all, delete-orphan",
     )
 
-    # Indexes
+    # Indexes - updated for nullable solicitation_id
     __table_args__ = (
-        Index("ix_sam_notices_sol_version", "solicitation_id", "version_number", unique=True),
+        Index("ix_sam_notices_sol_version", "solicitation_id", "version_number", unique=True,
+              postgresql_where=Column("solicitation_id").isnot(None)),
         Index("ix_sam_notices_sam_id", "sam_notice_id"),
+        Index("ix_sam_notices_org", "organization_id"),
+        Index("ix_sam_notices_standalone", "organization_id", "sam_notice_id",
+              postgresql_where=Column("solicitation_id").is_(None)),
     )
 
     def __repr__(self) -> str:
@@ -2341,8 +2150,9 @@ class SamAttachment(Base):
     __tablename__ = "sam_attachments"
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    # Nullable for standalone notice attachments
     solicitation_id = Column(
-        UUID(), ForeignKey("sam_solicitations.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(), ForeignKey("sam_solicitations.id", ondelete="CASCADE"), nullable=True, index=True
     )
     notice_id = Column(
         UUID(), ForeignKey("sam_notices.id", ondelete="CASCADE"), nullable=True, index=True

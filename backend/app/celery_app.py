@@ -3,9 +3,17 @@ Celery application setup for Curatore v2.
 
 Configures Celery using environment-driven settings so workers and the API
 share the same broker/result backend. Tasks live in app.tasks.
+
+Queue Architecture:
+- processing_priority: High-priority tasks (user-requested, SAM summarization dependencies)
+- processing: Normal extraction and indexing tasks (FIFO)
+- maintenance: Scheduled tasks, cleanup, recovery (non-blocking)
+
+Workers consume queues left-to-right, so priority queue is processed first.
 """
 import os
 from celery import Celery
+from kombu import Queue
 
 
 def _bool(val: str, default: bool = False) -> bool:
@@ -22,6 +30,14 @@ app = Celery(
     broker=BROKER_URL,
     backend=RESULT_BACKEND,
     include=["app.tasks"],
+)
+
+# Define task queues with priority support
+# Workers will consume queues in order: priority first, then normal, then maintenance
+app.conf.task_queues = (
+    Queue("processing_priority", routing_key="processing_priority"),
+    Queue("processing", routing_key="processing"),
+    Queue("maintenance", routing_key="maintenance"),
 )
 
 # Core settings with sensible defaults, overridable via env
@@ -41,10 +57,15 @@ app.conf.update(
         "app.tasks.execute_scheduled_task_async": {"queue": "maintenance"},
         # Recovery and maintenance
         "app.tasks.recover_orphaned_extractions": {"queue": "maintenance"},
-        "app.tasks.cleanup_expired_jobs_task": {"queue": "maintenance"},
         # SAM.gov queue processing (lightweight, shouldn't block on extractions)
         "app.tasks.sam_process_queued_requests_task": {"queue": "maintenance"},
-        # All extraction/indexing tasks stay on default 'processing' queue
+        # SAM summarization uses priority queue
+        "app.tasks.sam_auto_summarize_task": {"queue": "processing_priority"},
+        # Phase 2: Tiered Extraction - enhancement runs in background at lower priority
+        # Basic extractions go to default 'processing' queue
+        # Enhancements go to 'maintenance' queue (background, non-blocking)
+        "app.tasks.enhance_extraction_task": {"queue": "maintenance"},
+        # All other extraction/indexing tasks stay on default 'processing' queue
     },
 )
 
@@ -75,28 +96,6 @@ except Exception:
     # Fallback to daily at 2 AM
     cleanup_schedule = crontab(hour=2, minute=0)
 
-# Parse job cleanup schedule from config (default: daily at 3 AM)
-job_cleanup_schedule_str = os.getenv("JOB_CLEANUP_SCHEDULE_CRON", "0 3 * * *")
-job_cleanup_enabled = _bool(os.getenv("JOB_CLEANUP_ENABLED", "true"), True)
-
-# Parse job cleanup cron string
-try:
-    parts = job_cleanup_schedule_str.split()
-    if len(parts) == 5:
-        job_cleanup_schedule = crontab(
-            minute=parts[0],
-            hour=parts[1],
-            day_of_month=parts[2],
-            month_of_year=parts[3],
-            day_of_week=parts[4],
-        )
-    else:
-        # Default to daily at 3 AM if parsing fails
-        job_cleanup_schedule = crontab(hour=3, minute=0)
-except Exception:
-    # Fallback to daily at 3 AM
-    job_cleanup_schedule = crontab(hour=3, minute=0)
-
 beat_schedule = {
     "cleanup-expired-files": {
         "task": "app.tasks.cleanup_expired_files_task",
@@ -104,14 +103,6 @@ beat_schedule = {
         "options": {"queue": "processing"},
     },
 }
-
-# Add job cleanup task if enabled (Phase 2+)
-if job_cleanup_enabled:
-    beat_schedule["cleanup-expired-jobs"] = {
-        "task": "app.tasks.cleanup_expired_jobs_task",
-        "schedule": job_cleanup_schedule,
-        "options": {"queue": "maintenance"},
-    }
 
 # Add scheduled task checker (Phase 5)
 # This task runs every minute to check for due ScheduledTasks in the database

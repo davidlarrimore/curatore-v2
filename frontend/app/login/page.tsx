@@ -16,7 +16,7 @@
  * - Does not redirect to /login as return URL
  */
 
-import { useState, FormEvent, useEffect, useCallback, useRef } from 'react'
+import { useState, FormEvent, useEffect, useCallback, useRef, Suspense } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { systemApi } from '@/lib/api'
@@ -26,7 +26,7 @@ import toast from 'react-hot-toast'
 const RETURN_URL_KEY = 'auth_return_url'
 type LoginStage = 'idle' | 'submitting' | 'finalizing'
 
-export default function LoginPage() {
+function LoginContent() {
   const router = useRouter()
   const searchParams = useSearchParams()
   const { login, isAuthenticated, isLoading: authLoading } = useAuth()
@@ -237,5 +237,24 @@ export default function LoginPage() {
         </form>
       </div>
     </div>
+  )
+}
+
+function LoginFallback() {
+  return (
+    <div className="min-h-screen flex items-center justify-center bg-gray-50 dark:bg-gray-900">
+      <div className="text-center">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
+        <p className="text-gray-600 dark:text-gray-400">Loading...</p>
+      </div>
+    </div>
+  )
+}
+
+export default function LoginPage() {
+  return (
+    <Suspense fallback={<LoginFallback />}>
+      <LoginContent />
+    </Suspense>
   )
 }

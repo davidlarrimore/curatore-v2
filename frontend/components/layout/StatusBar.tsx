@@ -3,9 +3,10 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Activity, Clock, Briefcase, ChevronRight, CheckCircle, XCircle, Loader2 } from 'lucide-react'
-import { API_PATH_VERSION, jobsApi } from '@/lib/api'
+import { Activity, Clock, ChevronRight, CheckCircle, XCircle, Loader2 } from 'lucide-react'
+import { API_PATH_VERSION, runsApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
+import { formatCurrentTime, DISPLAY_TIMEZONE_ABBR } from '@/lib/date-utils'
 import clsx from 'clsx'
 
 interface SystemStatus {
@@ -27,10 +28,10 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
   const { accessToken, isAuthenticated } = useAuth()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [currentTime, setCurrentTime] = useState<Date | null>(null)
-  const [activeJobs, setActiveJobs] = useState(0)
-  const [totalJobs24h, setTotalJobs24h] = useState(0)
-  const [completedJobs24h, setCompletedJobs24h] = useState(0)
-  const [failedJobs24h, setFailedJobs24h] = useState(0)
+  const [activeRuns, setActiveRuns] = useState(0)
+  const [totalRuns24h, setTotalRuns24h] = useState(0)
+  const [completedRuns24h, setCompletedRuns24h] = useState(0)
+  const [failedRuns24h, setFailedRuns24h] = useState(0)
   const [isClient, setIsClient] = useState(false)
 
   // Fix hydration issue by only showing time after client-side hydration
@@ -45,19 +46,25 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
     return () => clearInterval(timer)
   }, [])
 
-  // Poll job stats from the authenticated jobs API
+  // Poll run stats from the authenticated runs API
   useEffect(() => {
     if (!accessToken || !isAuthenticated) return
 
     let mounted = true
     const poll = async () => {
       try {
-        const stats = await jobsApi.getUserStats(accessToken)
+        const stats = await runsApi.getStats(accessToken)
         if (!mounted) return
-        setActiveJobs(stats.active_jobs ?? 0)
-        setTotalJobs24h(stats.total_jobs_24h ?? 0)
-        setCompletedJobs24h(stats.completed_jobs_24h ?? 0)
-        setFailedJobs24h(stats.failed_jobs_24h ?? 0)
+
+        // Calculate active runs (pending + running)
+        const runningCount = stats.runs.by_status['running'] || 0
+        const pendingCount = stats.runs.by_status['pending'] || 0
+        setActiveRuns(runningCount + pendingCount)
+
+        // Get 24h stats
+        setTotalRuns24h(stats.recent_24h.total || 0)
+        setCompletedRuns24h(stats.recent_24h.by_status['completed'] || 0)
+        setFailedRuns24h(stats.recent_24h.by_status['failed'] || 0)
       } catch {
         // ignore transient errors
       }
@@ -67,13 +74,7 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
     return () => { mounted = false; clearInterval(interval) }
   }, [accessToken, isAuthenticated])
 
-  const formatTime = (date: Date) => {
-    return date.toLocaleTimeString([], {
-      hour: '2-digit',
-      minute: '2-digit',
-      second: '2-digit'
-    })
-  }
+  // formatTime is now handled by formatCurrentTime from date-utils
 
   const getUptimeDisplay = () => {
     if (!isClient) return '0h 0m'
@@ -136,59 +137,59 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
         {/* Divider */}
         <div className="hidden lg:block w-px h-4 bg-gray-200 dark:bg-gray-700"></div>
 
-        {/* Jobs Button */}
+        {/* Processing Button */}
         <button
-          onClick={() => router.push('/jobs')}
+          onClick={() => router.push('/settings-admin?tab=processing')}
           className={clsx(
             "hidden lg:flex items-center gap-3 px-3 py-1.5 rounded-lg transition-all group",
-            activeJobs > 0
+            activeRuns > 0
               ? "bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/30"
               : "hover:bg-gray-100 dark:hover:bg-gray-800"
           )}
         >
           <div className="flex items-center gap-2">
-            <Briefcase className={clsx(
+            <Activity className={clsx(
               "w-4 h-4",
-              activeJobs > 0 ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-500 dark:text-gray-400'
+              activeRuns > 0 ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-500 dark:text-gray-400'
             )} />
             <span className={clsx(
               "text-xs font-medium",
-              activeJobs > 0 ? 'text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-300'
+              activeRuns > 0 ? 'text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-300'
             )}>
-              Jobs
+              Processing
             </span>
           </div>
 
-          {/* Job stats */}
+          {/* Run stats */}
           <div className="flex items-center gap-2 text-xs">
-            {activeJobs > 0 ? (
+            {activeRuns > 0 ? (
               <div className="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
                 </span>
-                <span className="font-mono font-medium">{activeJobs}</span>
+                <span className="font-mono font-medium">{activeRuns}</span>
                 <span className="text-indigo-500 dark:text-indigo-400">active</span>
               </div>
-            ) : totalJobs24h > 0 ? (
+            ) : totalRuns24h > 0 ? (
               <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
                 <div className="flex items-center gap-1">
                   <CheckCircle className="w-3 h-3 text-emerald-500" />
-                  <span className="font-mono text-emerald-600 dark:text-emerald-400">{completedJobs24h}</span>
+                  <span className="font-mono text-emerald-600 dark:text-emerald-400">{completedRuns24h}</span>
                 </div>
-                {failedJobs24h > 0 && (
+                {failedRuns24h > 0 && (
                   <>
                     <span className="text-gray-300 dark:text-gray-600">|</span>
                     <div className="flex items-center gap-1">
                       <XCircle className="w-3 h-3 text-red-500" />
-                      <span className="font-mono text-red-600 dark:text-red-400">{failedJobs24h}</span>
+                      <span className="font-mono text-red-600 dark:text-red-400">{failedRuns24h}</span>
                     </div>
                   </>
                 )}
                 <span className="text-gray-400">today</span>
               </div>
             ) : (
-              <span className="text-gray-400 dark:text-gray-500">No recent jobs</span>
+              <span className="text-gray-400 dark:text-gray-500">No recent activity</span>
             )}
           </div>
 
@@ -211,8 +212,9 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
         <div className="flex items-center gap-1.5 text-gray-600 dark:text-gray-300">
           <Clock className="w-3 h-3 text-gray-400 dark:text-gray-500" />
           <span className="font-mono font-medium">
-            {isClient && currentTime ? formatTime(currentTime) : '--:--:--'}
+            {isClient && currentTime ? formatCurrentTime() : '--:--:--'}
           </span>
+          <span className="text-xs text-gray-400 dark:text-gray-500">{DISPLAY_TIMEZONE_ABBR}</span>
         </div>
 
         {/* Divider */}

@@ -9,27 +9,29 @@ import {
   AlertCircle,
   ArrowRight,
   FileText,
-  Briefcase
+  Activity
 } from 'lucide-react'
 
-interface Job {
+interface Run {
   id: string
-  name: string
+  run_type: string
   status: string
-  total_documents: number
-  completed_documents: number
-  failed_documents: number
   created_at: string
   started_at?: string
   completed_at?: string
+  results_summary?: {
+    total?: number
+    processed?: number
+    failed?: number
+  }
 }
 
 interface RecentActivityCardProps {
-  recentJobs: Job[]
+  recentRuns: Run[]
   isLoading: boolean
 }
 
-export function RecentActivityCard({ recentJobs, isLoading }: RecentActivityCardProps) {
+export function RecentActivityCard({ recentRuns, isLoading }: RecentActivityCardProps) {
   const router = useRouter()
 
   const getStatusIcon = (status: string) => {
@@ -68,6 +70,21 @@ export function RecentActivityCard({ recentJobs, isLoading }: RecentActivityCard
     }
   }
 
+  const formatRunType = (runType: string) => {
+    switch (runType) {
+      case 'extraction':
+        return 'Extraction'
+      case 'system_maintenance':
+        return 'Maintenance'
+      case 'sam_pull':
+        return 'SAM Pull'
+      case 'scrape':
+        return 'Web Scrape'
+      default:
+        return runType.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase())
+    }
+  }
+
   const formatTime = (dateString: string) => {
     const date = new Date(dateString)
     const now = new Date()
@@ -97,11 +114,11 @@ export function RecentActivityCard({ recentJobs, isLoading }: RecentActivityCard
             </div>
             <div>
               <h3 className="text-base font-semibold text-gray-900 dark:text-white">Recent Activity</h3>
-              <p className="text-xs text-gray-500 dark:text-gray-400">Latest processing jobs</p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">Latest processing runs</p>
             </div>
           </div>
           <button
-            onClick={() => router.push('/jobs')}
+            onClick={() => router.push('/assets')}
             className="flex items-center gap-1 text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 font-medium transition-colors"
           >
             <span>View All</span>
@@ -113,43 +130,47 @@ export function RecentActivityCard({ recentJobs, isLoading }: RecentActivityCard
           <div className="flex items-center justify-center py-8">
             <Loader2 className="w-6 h-6 text-gray-400 animate-spin" />
           </div>
-        ) : recentJobs.length === 0 ? (
+        ) : recentRuns.length === 0 ? (
           /* Empty State */
           <div className="text-center py-8">
             <div className="w-12 h-12 rounded-xl bg-gray-100 dark:bg-gray-700 flex items-center justify-center mx-auto mb-3">
-              <Briefcase className="w-6 h-6 text-gray-400" />
+              <Activity className="w-6 h-6 text-gray-400" />
             </div>
-            <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">No recent jobs</p>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-1">No recent activity</p>
             <p className="text-xs text-gray-400 dark:text-gray-500">
-              Create a job to start processing documents
+              Upload files to start processing
             </p>
           </div>
         ) : (
-          /* Job List */
+          /* Run List */
           <div className="space-y-2">
-            {recentJobs.slice(0, 5).map((job) => (
+            {recentRuns.slice(0, 5).map((run) => (
               <button
-                key={job.id}
-                onClick={() => router.push(`/jobs/${job.id}`)}
+                key={run.id}
+                onClick={() => router.push(`/assets`)}
                 className="w-full flex items-center gap-3 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-left group"
               >
                 {/* Status Icon */}
-                <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${getStatusColor(job.status)}`}>
-                  {getStatusIcon(job.status)}
+                <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${getStatusColor(run.status)}`}>
+                  {getStatusIcon(run.status)}
                 </div>
 
-                {/* Job Info */}
+                {/* Run Info */}
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-medium text-gray-900 dark:text-white truncate group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                    {job.name}
+                    {formatRunType(run.run_type)}
                   </p>
                   <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-                    <span className="flex items-center gap-1">
-                      <FileText className="w-3 h-3" />
-                      {job.completed_documents}/{job.total_documents}
-                    </span>
-                    <span>•</span>
-                    <span>{formatTime(job.created_at)}</span>
+                    {run.results_summary?.total && (
+                      <>
+                        <span className="flex items-center gap-1">
+                          <FileText className="w-3 h-3" />
+                          {run.results_summary.processed || 0}/{run.results_summary.total}
+                        </span>
+                        <span>•</span>
+                      </>
+                    )}
+                    <span>{formatTime(run.created_at)}</span>
                   </div>
                 </div>
 

@@ -210,6 +210,49 @@ Provide your comprehensive analysis in the following JSON format:
 }}
 
 Respond ONLY with valid JSON, no additional text.""",
+
+    # Auto-summary prompt for BD perspective (Phase 7.6)
+    "auto_bd": """You are a Business Development analyst at a government contracting company.
+Analyze this federal opportunity and provide a concise summary focused on business development.
+
+SOLICITATION INFORMATION:
+Title: {title}
+Solicitation Number: {solicitation_number}
+Notice Type: {notice_type}
+NAICS Code: {naics_code}
+PSC Code: {psc_code}
+Set-Aside: {set_aside}
+Response Deadline: {response_deadline}
+Agency: {agency}
+
+DESCRIPTION:
+{description}
+
+{attachment_content}
+
+{update_context}
+
+Provide your analysis in the following JSON format:
+{{
+    "summary": "A 2-3 paragraph business development focused summary covering: (1) Opportunity Overview - type, agency, contract vehicle; (2) Key Requirements - skills, certifications, deliverables; (3) Important Dates and Eligibility",
+    "opportunity_type": "Brief description (e.g., 'IT Services BPA', 'Software Development IDIQ Task Order')",
+    "key_requirements": [
+        {{"category": "Technical/Personnel/Security/Other", "requirement": "...", "mandatory": true/false}}
+    ],
+    "eligibility": {{
+        "set_aside": "Set-aside type or 'Full & Open'",
+        "clearance_required": true/false,
+        "certifications_needed": ["List of required certifications"]
+    }},
+    "dates": {{
+        "response_deadline": "Date or 'Not specified'",
+        "period_of_performance": "Duration if mentioned"
+    }},
+    "recommendation": "pursue/monitor/pass",
+    "recommendation_rationale": "Brief explanation of recommendation"
+}}
+
+Respond ONLY with valid JSON, no additional text.""",
 }
 
 
@@ -722,6 +765,172 @@ Keep the summary brief and actionable."""
             results["processed"] += 1
 
         return results
+
+    async def generate_auto_summary(
+        self,
+        session: AsyncSession,
+        solicitation_id: UUID,
+        organization_id: UUID,
+        is_update: bool = False,
+    ) -> Optional[str]:
+        """
+        Generate an auto-summary for a solicitation's description field.
+
+        This method generates a BD-focused summary and updates the solicitation's
+        description field directly. Used for automatic summarization after pulls.
+
+        If no LLM is configured, falls back to using the latest notice description.
+
+        Args:
+            session: Database session
+            solicitation_id: Solicitation UUID
+            organization_id: Organization UUID
+            is_update: Whether this is an update to an existing solicitation
+                       (adds update context to prompt)
+
+        Returns:
+            Generated summary text or None on failure
+        """
+        from .sam_service import sam_service
+
+        # Get solicitation with notices
+        solicitation = await sam_service.get_solicitation(
+            session, solicitation_id, include_notices=True
+        )
+        if not solicitation:
+            logger.error(f"Solicitation {solicitation_id} not found for auto-summary")
+            return None
+
+        # Check if LLM is configured
+        llm_available = await self._check_llm_availability(organization_id)
+
+        if not llm_available:
+            # Fallback to notice description
+            logger.info(f"No LLM configured for org {organization_id}, using notice description")
+            if solicitation.notices:
+                # Get latest notice description
+                latest_notice = sorted(solicitation.notices, key=lambda n: n.version_number, reverse=True)[0]
+                summary = latest_notice.description or solicitation.description
+            else:
+                summary = solicitation.description
+
+            return summary
+
+        # Build context
+        update_context = ""
+        if is_update and solicitation.notices and len(solicitation.notices) > 1:
+            update_context = "UPDATE: This is a notice update. Highlight what changed compared to the previous version in your summary."
+
+        context = self._build_context(solicitation)
+        context["update_context"] = update_context
+
+        # Get extracted content from attachments if available
+        extracted_content = await self._get_extracted_content(session, solicitation_id)
+        if extracted_content:
+            context["attachment_content"] = f"\nATTACHMENT CONTENT:\n{extracted_content[:10000]}"  # Limit content
+
+        # Format prompt
+        prompt_template = self.prompt_templates.get("auto_bd", self.prompt_templates["executive"])
+        prompt = prompt_template.format(**context)
+
+        # Get LLM client - first try database connection, then fall back to default
+        client = None
+        model = settings.openai_model
+
+        try:
+            from .connection_service import connection_service
+            from .database_service import database_service
+
+            async with database_service.get_session() as conn_session:
+                llm_conn = await connection_service.get_default_connection(
+                    conn_session, organization_id, "llm"
+                )
+                if llm_conn and llm_conn.is_active and llm_conn.config.get("api_key"):
+                    # Create client from database connection config
+                    client = await self.llm_service._create_client_from_config(llm_conn.config)
+                    # Use model from connection config if available
+                    model = llm_conn.config.get("model", model)
+                    logger.info(f"Using database LLM connection: {llm_conn.name}")
+        except Exception as e:
+            logger.warning(f"Error getting database LLM connection: {e}")
+
+        # Fall back to default client
+        if not client:
+            client = self.llm_service._client
+
+        if not client:
+            logger.error(f"No LLM client available for auto-summary of {solicitation_id}")
+            return None
+
+        # Call LLM
+        try:
+            response = client.chat.completions.create(
+                model=model,
+                messages=[
+                    {
+                        "role": "system",
+                        "content": "You are a Business Development analyst at a government contracting company. Provide accurate, professional analysis.",
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+                max_tokens=4000,
+            )
+
+            response_text = response.choices[0].message.content
+            if not response_text:
+                logger.error(f"No LLM response for auto-summary of {solicitation_id}")
+                return None
+
+            # Parse response
+            parsed = self._parse_llm_response(response_text)
+            if not parsed:
+                logger.warning(f"Failed to parse LLM response for {solicitation_id}, using raw response")
+                return response_text[:2000]
+
+            summary = parsed.get("summary", "")
+
+            # Add recommendation if available
+            recommendation = parsed.get("recommendation", "")
+            rationale = parsed.get("recommendation_rationale", "")
+            if recommendation and rationale:
+                summary += f"\n\n**Recommendation: {recommendation.upper()}** - {rationale}"
+
+            logger.info(f"Generated auto-summary for solicitation {solicitation_id}")
+            return summary
+
+        except Exception as e:
+            logger.error(f"Error generating auto-summary for {solicitation_id}: {e}")
+            return None
+
+    async def _check_llm_availability(self, organization_id: UUID) -> bool:
+        """Check if LLM is configured and available.
+
+        Checks for LLM availability in this order:
+        1. Database connection for the organization
+        2. Environment variable (settings.openai_api_key)
+        """
+        from .connection_service import connection_service
+        from .database_service import database_service
+
+        # First check for database connection
+        try:
+            async with database_service.get_session() as session:
+                llm_conn = await connection_service.get_default_connection(
+                    session, organization_id, "llm"
+                )
+                if llm_conn and llm_conn.is_active:
+                    # Check if connection has an API key configured
+                    if llm_conn.config and llm_conn.config.get("api_key"):
+                        return True
+        except Exception as e:
+            logger.warning(f"Error checking database LLM connection: {e}")
+
+        # Fallback to environment variable
+        if settings.openai_api_key:
+            return True
+
+        return False
 
 
 # Singleton instance

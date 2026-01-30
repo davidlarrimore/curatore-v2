@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { AlertTriangle, ArrowRight, Clock, Briefcase } from 'lucide-react'
+import { AlertTriangle, ArrowRight, Clock, FileText } from 'lucide-react'
 
 export default function DeprecatedProcessPage() {
   const router = useRouter()
@@ -13,7 +13,7 @@ export default function DeprecatedProcessPage() {
       setCountdown((prev) => {
         if (prev <= 1) {
           clearInterval(timer)
-          router.push('/jobs')
+          router.push('/assets')
           return 0
         }
         return prev - 1
@@ -45,10 +45,10 @@ export default function DeprecatedProcessPage() {
           <div className="p-6">
             <div className="mb-6">
               <p className="text-gray-700 dark:text-gray-300 mb-4">
-                The <strong>Process Documents</strong> page has been deprecated and replaced with the improved <strong>Jobs</strong> page.
+                The <strong>Process Documents</strong> page has been deprecated and replaced with the improved <strong>Assets</strong> page.
               </p>
               <p className="text-gray-600 dark:text-gray-400 text-sm">
-                The Jobs page provides better batch processing, real-time tracking, and organization-level job management.
+                The Assets page provides automatic extraction on upload, real-time tracking, and organization-level asset management.
               </p>
             </div>
 
@@ -57,7 +57,7 @@ export default function DeprecatedProcessPage() {
               <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
               <div className="flex-1">
                 <p className="text-sm text-amber-800 dark:text-amber-200">
-                  Redirecting to Jobs page in <strong className="font-mono">{countdown}</strong> seconds...
+                  Redirecting to Assets page in <strong className="font-mono">{countdown}</strong> seconds...
                 </p>
               </div>
             </div>
@@ -65,11 +65,11 @@ export default function DeprecatedProcessPage() {
             {/* Actions */}
             <div className="flex flex-col sm:flex-row gap-3">
               <button
-                onClick={() => router.push('/jobs')}
+                onClick={() => router.push('/assets')}
                 className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-gradient-to-r from-violet-500 to-purple-600 hover:from-violet-600 hover:to-purple-700 text-white font-medium rounded-xl shadow-lg shadow-violet-500/25 transition-all hover:shadow-xl hover:shadow-violet-500/30"
               >
-                <Briefcase className="w-5 h-5" />
-                <span>Go to Jobs</span>
+                <FileText className="w-5 h-5" />
+                <span>Go to Assets</span>
                 <ArrowRight className="w-4 h-4" />
               </button>
               <button

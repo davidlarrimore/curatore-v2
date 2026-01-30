@@ -3,7 +3,8 @@
 import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { assetsApi, type Run, type AssetMetadata, type AssetMetadataList } from '@/lib/api'
+import { assetsApi, type Run, type AssetMetadata, type AssetMetadataList, type AssetQueueInfo } from '@/lib/api'
+import { formatDateTime } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import {
   FileText,
@@ -79,6 +80,17 @@ interface AssetVersion {
 
 type TabType = 'original' | 'extracted' | 'metadata' | 'history'
 
+// Helper to format source type for display
+const formatSourceType = (sourceType: string): string => {
+  const sourceTypeLabels: Record<string, string> = {
+    upload: 'Upload',
+    sharepoint: 'SharePoint',
+    web_scrape: 'Web Scrape',
+    sam_gov: 'SAM.gov',
+  }
+  return sourceTypeLabels[sourceType] || sourceType.replace('_', ' ')
+}
+
 export default function AssetDetailPage() {
   return (
     <ProtectedRoute>
@@ -114,6 +126,9 @@ function AssetDetailContent() {
   const [compareResult, setCompareResult] = useState<any | null>(null)
   const [isComparing, setIsComparing] = useState(false)
 
+  // Queue info for pending assets
+  const [queueInfo, setQueueInfo] = useState<AssetQueueInfo | null>(null)
+
   // Load asset data
   useEffect(() => {
     if (token && assetId) {
@@ -131,6 +146,34 @@ function AssetDetailContent() {
       return () => clearInterval(intervalId)
     }
   }, [asset?.status])
+
+  // Fetch queue info when asset is pending
+  useEffect(() => {
+    if (asset?.status === 'pending' && token && assetId) {
+      // Initial fetch
+      loadQueueInfo()
+
+      // Poll queue info every 3 seconds for faster updates
+      const queuePollInterval = setInterval(() => {
+        loadQueueInfo()
+      }, 3000)
+
+      return () => clearInterval(queuePollInterval)
+    } else {
+      setQueueInfo(null)
+    }
+  }, [asset?.status, token, assetId])
+
+  const loadQueueInfo = async () => {
+    if (!token || !assetId) return
+    try {
+      const info = await assetsApi.getAssetQueueInfo(token, assetId)
+      setQueueInfo(info)
+    } catch (err) {
+      // Silently fail - queue info is supplementary
+      console.error('Failed to load queue info:', err)
+    }
+  }
 
   const loadAssetData = async (silent = false) => {
     if (!token || !assetId) return
@@ -367,10 +410,6 @@ function AssetDetailContent() {
     return `${(bytes / Math.pow(1024, i)).toFixed(2)} ${sizes[i]}`
   }
 
-  const formatDate = (dateString: string) => {
-    return new Date(dateString).toLocaleString()
-  }
-
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
@@ -434,9 +473,21 @@ function AssetDetailContent() {
                     <span>{statusConfig.label}</span>
                   </div>
                   {asset.status === 'pending' && (
-                    <div className="inline-flex items-center gap-1.5 text-xs text-blue-600 dark:text-blue-400">
+                    <div className="inline-flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400">
                       <Loader2 className="w-3 h-3 animate-spin" />
-                      <span className="font-medium">Extracting...</span>
+                      <span className="font-medium">
+                        {queueInfo?.status === 'processing' ? 'Extracting...' : 'Queued'}
+                      </span>
+                      {queueInfo?.queue_position && queueInfo?.total_pending && (
+                        <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/40 rounded text-blue-700 dark:text-blue-300">
+                          {queueInfo.queue_position}/{queueInfo.total_pending}
+                        </span>
+                      )}
+                      {queueInfo?.extractor_version && (
+                        <span className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-gray-600 dark:text-gray-400 font-mono">
+                          {queueInfo.extractor_version}
+                        </span>
+                      )}
                     </div>
                   )}
                   {asset.current_version_number && (
@@ -498,7 +549,7 @@ function AssetDetailContent() {
                 </div>
                 <div>
                   <p className="text-xs text-gray-500 dark:text-gray-400">Source</p>
-                  <p className="text-sm font-medium text-gray-900 dark:text-white capitalize">{asset.source_type}</p>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">{formatSourceType(asset.source_type)}</p>
                 </div>
               </div>
             </div>
@@ -520,7 +571,7 @@ function AssetDetailContent() {
                 </div>
                 <div>
                   <p className="text-xs text-gray-500 dark:text-gray-400">Created</p>
-                  <p className="text-sm font-medium text-gray-900 dark:text-white">{formatDate(asset.created_at)}</p>
+                  <p className="text-sm font-medium text-gray-900 dark:text-white">{formatDateTime(asset.created_at)}</p>
                 </div>
               </div>
             </div>
@@ -886,8 +937,8 @@ function AssetDetailContent() {
                                     </span>
                                   </div>
                                   <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                    Schema v{metadata.schema_version} • Created {formatDate(metadata.created_at)}
-                                    {metadata.promoted_at && ` • Promoted ${formatDate(metadata.promoted_at)}`}
+                                    Schema v{metadata.schema_version} • Created {formatDateTime(metadata.created_at)}
+                                    {metadata.promoted_at && ` • Promoted ${formatDateTime(metadata.promoted_at)}`}
                                   </p>
                                 </div>
                                 <div className="flex items-center gap-2">
@@ -959,7 +1010,7 @@ function AssetDetailContent() {
                                       </span>
                                     </div>
                                     <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                      Schema v{metadata.schema_version} • Created {formatDate(metadata.created_at)}
+                                      Schema v{metadata.schema_version} • Created {formatDateTime(metadata.created_at)}
                                       {metadata.producer_run_id && (
                                         <span> • Run: {metadata.producer_run_id.substring(0, 8)}...</span>
                                       )}
@@ -1236,7 +1287,7 @@ function AssetDetailContent() {
                               )}
                             </div>
                             <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                              {formatDate(version.created_at)}
+                              {formatDateTime(version.created_at)}
                             </p>
                           </div>
                         </div>
@@ -1253,71 +1304,93 @@ function AssetDetailContent() {
                       </div>
                     </div>
                   ))}
-
-                  {/* Runs Timeline */}
-                  {runs.length > 0 && (
-                    <div className="mt-8">
-                      <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Processing Runs</h4>
-                      <div className="space-y-3">
-                        {runs.map((run) => (
-                          <div
-                            key={run.id}
-                            className="flex items-start gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50"
-                          >
-                            <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                              run.status === 'completed'
-                                ? 'bg-emerald-100 dark:bg-emerald-900/30'
-                                : run.status === 'failed'
-                                ? 'bg-red-100 dark:bg-red-900/30'
-                                : 'bg-blue-100 dark:bg-blue-900/30'
-                            }`}>
-                              {run.status === 'completed' ? (
-                                <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                              ) : run.status === 'failed' ? (
-                                <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
-                              ) : (
-                                <Loader2 className="w-4 h-4 text-blue-600 dark:text-blue-400 animate-spin" />
-                              )}
-                            </div>
-                            <div className="flex-1 min-w-0">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <p className="text-sm font-medium text-gray-900 dark:text-white capitalize">
-                                  {run.run_type}
-                                </p>
-                                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 capitalize">
-                                  {run.origin}
-                                </span>
-                                {/* Show extraction system/method if available */}
-                                {run.config?.extraction_method && (
-                                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300">
-                                    {run.config.extraction_method}
-                                  </span>
-                                )}
-                                {run.config?.extractor_version && (
-                                  <span className="px-2 py-0.5 text-xs font-mono rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
-                                    {run.config.extractor_version}
-                                  </span>
-                                )}
-                              </div>
-                              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                                {formatDate(run.created_at)}
-                              </p>
-                              {run.error_message && (
-                                <p className="text-xs text-red-600 dark:text-red-400 mt-1">
-                                  {run.error_message}
-                                </p>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  )}
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-500 dark:text-gray-400">
                   <History className="w-12 h-12 mx-auto mb-3 opacity-50" />
                   <p>No version history available</p>
+                </div>
+              )}
+
+              {/* Runs Timeline - shown regardless of versions */}
+              {runs.length > 0 && (
+                <div className={versions.length > 0 ? 'mt-8' : 'mt-4'}>
+                  <h4 className="text-sm font-medium text-gray-700 dark:text-gray-300 mb-3">Processing Runs</h4>
+                  <div className="space-y-3">
+                    {runs.map((run) => (
+                      <div
+                        key={run.id}
+                        className="flex items-start gap-3 p-3 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50"
+                      >
+                        <div className={`w-8 h-8 rounded-lg flex items-center justify-center flex-shrink-0 ${
+                          run.status === 'completed'
+                            ? 'bg-emerald-100 dark:bg-emerald-900/30'
+                            : run.status === 'failed'
+                            ? 'bg-red-100 dark:bg-red-900/30'
+                            : 'bg-blue-100 dark:bg-blue-900/30'
+                        }`}>
+                          {run.status === 'completed' ? (
+                            <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                          ) : run.status === 'failed' ? (
+                            <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
+                          ) : (
+                            <Loader2 className="w-4 h-4 text-blue-600 dark:text-blue-400 animate-spin" />
+                          )}
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <p className="text-sm font-medium text-gray-900 dark:text-white">
+                              {run.run_type === 'extraction_enhancement'
+                                ? 'Enhancement'
+                                : run.run_type === 'extraction'
+                                ? 'Extraction'
+                                : run.run_type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
+                            </p>
+                            <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 capitalize">
+                              {run.origin}
+                            </span>
+                            {run.config?.extractor_version && (
+                              <span className="px-2 py-0.5 text-xs font-mono rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
+                                {run.config.extractor_version}
+                              </span>
+                            )}
+                            {run.config?.enhancement_type && (
+                              <span className="px-2 py-0.5 text-xs font-mono rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+                                {run.config.enhancement_type}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-4 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            {run.started_at && (
+                              <span>Started: {formatDateTime(run.started_at)}</span>
+                            )}
+                            {run.completed_at && (
+                              <span>Completed: {formatDateTime(run.completed_at)}</span>
+                            )}
+                          </div>
+                          {run.results_summary && (
+                            <div className="mt-2 text-xs text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/50 rounded p-2">
+                              {run.results_summary.status && (
+                                <span className="font-medium">{run.results_summary.status}</span>
+                              )}
+                              {run.results_summary.improvement_percent !== undefined && (
+                                <span className="ml-2">
+                                  {run.results_summary.improvement_percent > 0
+                                    ? `+${run.results_summary.improvement_percent.toFixed(1)}% improvement`
+                                    : 'No improvement'}
+                                </span>
+                              )}
+                            </div>
+                          )}
+                          {run.error_message && (
+                            <div className="mt-2 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded p-2">
+                              {run.error_message}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
             </div>

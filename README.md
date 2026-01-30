@@ -1,8 +1,8 @@
 # Curatore v2
 
-**RAG-ready document processing and optimization platform**
+**RAG-ready document processing and curation platform**
 
-Curatore v2 is a multi-tenant document processing system that converts documents (PDF, DOCX, PPTX, TXT, Images) to Markdown, evaluates quality with an LLM, and optimizes structure for vector databases. Built with FastAPI, Next.js, and async Celery workers.
+Curatore v2 is a multi-tenant document processing system that converts documents (PDF, DOCX, PPTX, TXT, Images, Web Pages) to Markdown, provides full-text search, and supports LLM-powered analysis. Built with FastAPI, Next.js, and async Celery workers.
 
 [![FastAPI](https://img.shields.io/badge/FastAPI-0.115.0-green)](https://fastapi.tiangolo.com/)
 [![Next.js](https://img.shields.io/badge/Next.js-15.5.0-blue)](https://nextjs.org/)
@@ -14,36 +14,51 @@ Curatore v2 is a multi-tenant document processing system that converts documents
 ## Features
 
 ### Document Processing
-- **Multi-format Support**: PDF, DOCX, PPTX, TXT, Images with OCR
-- **Intelligent Conversion**: MarkItDown, Tesseract OCR, and optional Docling
-- **Quality Assessment**: LLM-powered document evaluation and scoring
-- **Vector Optimization**: Structure optimization for RAG applications
-- **Batch Processing**: Process multiple documents asynchronously
+- **Multi-format Support**: PDF, DOCX, PPTX, TXT, Images with OCR, HTML/Web Pages
+- **Intelligent Conversion**: MarkItDown, Tesseract OCR, Playwright for JS-rendered pages, and optional Docling
+- **Automatic Extraction**: Documents are automatically converted to Markdown on upload
+- **Asset Versioning**: Immutable version history with re-extraction support
+- **Quality Metadata**: LLM-powered document analysis and tagging
 
-### Job Management
-- **Batch Jobs**: Process multiple documents as a single tracked job
-- **Concurrency Control**: Per-organization limits prevent resource exhaustion
-- **Real-time Tracking**: Live progress updates and document-level status
-- **Job Retention**: Configurable auto-cleanup policies (7/30/90/indefinite days)
-- **Cancellation**: Immediate job termination with verification and cleanup
-- **Admin Visibility**: Organization-wide job statistics and performance metrics
+### Full-Text Search (OpenSearch)
+- **Native Search**: Full-text search across all indexed content
+- **Multi-match Queries**: Search titles, filenames, content, and URLs
+- **Faceted Filtering**: Filter by source type and content type with live counts
+- **Highlighted Results**: Search snippets with match highlighting
+- **Cross-source Search**: Unified search across uploads, web scrapes, SharePoint, and SAM.gov
+
+### Web Scraping (Playwright)
+- **JavaScript Rendering**: Full Chromium-based rendering for SPAs and dynamic sites
+- **Scrape Collections**: Organize crawls by project with seed URLs
+- **Document Discovery**: Automatically find and download PDFs, DOCXs linked on pages
+- **Inline Extraction**: Content extracted during crawl (no separate job)
+- **Hierarchical Browsing**: Tree-based navigation of scraped content
+- **Record Preservation**: Promote pages to durable records that survive re-crawls
+
+### SAM.gov Integration
+- **Federal Opportunities**: Search and track SAM.gov contract opportunities
+- **Solicitation Tracking**: Monitor solicitations and amendments over time
+- **Attachment Processing**: Download and extract attachments automatically
+- **AI Summaries**: LLM-powered analysis with compliance checklists
+- **Rate Limit Management**: Automatic tracking of 1,000 calls/day limit
 
 ### Multi-Tenant Architecture
 - **Organizations**: Complete tenant isolation with separate storage
 - **User Management**: Role-based access control (Admin, Member, Viewer)
 - **API Keys**: Headless authentication for automation
 - **Connection Management**: Runtime-configurable service connections
-- **Settings**: Organization and user-level configuration with deep merge
+- **Scheduled Tasks**: Database-backed maintenance with admin controls
 
-### Storage Management
-- **Hierarchical Organization**: Organized by organization and batch
-- **File Deduplication**: SHA-256 content-based duplicate detection (30-70% savings)
-- **Automatic Retention**: Configurable cleanup policies with TTL
-- **Storage Analytics**: Real-time usage statistics and savings metrics
+### Object Storage (S3/MinIO)
+- **S3-Compatible**: Works with MinIO (dev) or AWS S3 (production)
+- **Human-Readable Paths**: Organized by source type (uploads, scrape, sharepoint, sam)
+- **Artifact Tracking**: All files tracked in database with provenance
+- **Lifecycle Policies**: Automatic retention and cleanup via S3 policies
 
 ### Integrations
 - **SharePoint**: Microsoft Graph API integration for document retrieval
 - **LLM Providers**: OpenAI, Ollama, OpenWebUI, LM Studio support
+- **OpenSearch**: Native full-text search with faceted filtering
 - **Custom Endpoints**: Extensible connection system for any service
 
 ---
@@ -58,11 +73,14 @@ Curatore v2 is a multi-tenant document processing system that converts documents
 ### Start All Services
 
 ```bash
-# Start all services (backend, worker, frontend, redis, extraction)
+# Start all services (backend, worker, frontend, redis, extraction, minio)
 ./scripts/dev-up.sh
 
 # Or using Make
 make up
+
+# Start with OpenSearch for full-text search
+docker-compose --profile search up -d
 ```
 
 ### Access the Application
@@ -70,8 +88,17 @@ make up
 - **Frontend**: http://localhost:3000
 - **Backend API**: http://localhost:8000
 - **API Documentation**: http://localhost:8000/docs
+- **MinIO Console**: http://localhost:9001 (minioadmin/minioadmin)
 
 ### Initial Setup
+
+```bash
+# Initialize storage buckets
+./scripts/init_storage.sh
+
+# Create admin user and seed data
+docker exec curatore-backend python -m app.commands.seed --create-admin
+```
 
 See [ADMIN_SETUP.md](./ADMIN_SETUP.md) for default admin credentials and initial configuration.
 
@@ -83,6 +110,7 @@ See [ADMIN_SETUP.md](./ADMIN_SETUP.md) for default admin credentials and initial
 - **FastAPI**: High-performance async Python API
 - **SQLAlchemy**: Async ORM with SQLite/PostgreSQL support
 - **Celery**: Distributed task queue with Redis broker
+- **Celery Beat**: Scheduled task execution
 - **Alembic**: Database migrations
 - **Pydantic**: Data validation and settings management
 
@@ -93,17 +121,57 @@ See [ADMIN_SETUP.md](./ADMIN_SETUP.md) for default admin credentials and initial
 - **React 19**: Latest React features
 
 ### Services
-- **Redis**: Message broker and caching
-- **Extraction Service**: Standalone FastAPI service for document conversion
+- **Redis**: Message broker and distributed locking
+- **MinIO/S3**: Object storage for all files
+- **OpenSearch**: Full-text search engine (optional)
+- **Extraction Service**: Standalone document conversion service
+- **Playwright Service**: Browser-based web rendering
 - **Docling** (optional): Advanced document converter
 
 ---
 
-## TODO
+## Architecture
 
-- Semantic search index (lexical + vector) for processed documents
-- SharePoint integration: push/pull document sync
-- Open WebUI integration: push processed documents into knowledge bases
+```
+┌─────────────┐     ┌──────────────┐     ┌─────────────┐
+│   Frontend  │────▶│   Backend    │────▶│    Redis    │
+│  (Next.js)  │     │  (FastAPI)   │     │  (Broker)   │
+└─────────────┘     └──────────────┘     └─────────────┘
+                            │                     │
+                    ┌───────┴───────┐             ▼
+                    │               │     ┌──────────────┐
+                    ▼               ▼     │    Worker    │
+            ┌──────────────┐ ┌──────────┐ │   (Celery)   │
+            │   MinIO/S3   │ │OpenSearch│ └──────────────┘
+            │   Storage    │ │ (Search) │         │
+            └──────────────┘ └──────────┘         │
+                                          ┌───────┴───────┐
+                                          │               │
+                                          ▼               ▼
+                                  ┌──────────────┐ ┌──────────────┐
+                                  │  Extraction  │ │  Playwright  │
+                                  │   Service    │ │   Service    │
+                                  └──────────────┘ └──────────────┘
+```
+
+### Storage Structure (Object Storage)
+
+```
+curatore-uploads/                    # Raw/source files
+└── {org_id}/
+    ├── uploads/{asset_uuid}/        # File uploads
+    ├── scrape/{collection}/         # Web scraping
+    │   ├── pages/                   # Scraped web pages
+    │   └── documents/               # Downloaded documents
+    ├── sharepoint/{site}/           # SharePoint files
+    └── sam/solicitations/           # SAM.gov attachments
+
+curatore-processed/                  # Extracted markdown
+└── {org_id}/
+    └── ...                          # Mirrors uploads structure
+
+curatore-temp/                       # Temporary processing files
+```
 
 ---
 
@@ -186,6 +254,7 @@ Curatore v2 supports two configuration methods:
 ```bash
 # Copy example configuration
 cp config.yml.example config.yml
+cp .env.example .env
 
 # Edit config.yml with your credentials
 # Use ${VAR_NAME} to reference secrets from .env
@@ -197,138 +266,33 @@ python -m app.commands.validate_config
 docker-compose up -d
 ```
 
-### YAML Configuration (Recommended)
+### Key Environment Variables
 
-Create `config.yml` in project root:
-
-```yaml
-version: "2.0"
-
-llm:
-  provider: openai
-  api_key: ${OPENAI_API_KEY}  # Reference from .env
-  base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-
-extraction:
-  priority: default
-  services:
-    - name: extraction-service
-      url: http://extraction:8010
-      enabled: true
-
-sharepoint:
-  enabled: true
-  tenant_id: ${MS_TENANT_ID}
-  client_id: ${MS_CLIENT_ID}
-  client_secret: ${MS_CLIENT_SECRET}
-
-storage:
-  hierarchical: true
-  deduplication:
-    enabled: true
-    strategy: symlink
-
-queue:
-  broker_url: redis://redis:6379/0
-  result_backend: redis://redis:6379/1
-```
-
-**Benefits:**
-- Structured, type-validated configuration
-- Share `config.yml.example` across environments
-- Keep secrets in `.env` (referenced via `${VAR_NAME}`)
-- Validate before starting: `python -m app.commands.validate_config`
-
-**Migration from .env:**
-```bash
-python scripts/migrate_env_to_yaml.py
-```
-
-See **[docs/CONFIGURATION.md](./docs/CONFIGURATION.md)** for complete reference.
-
-### Environment Variables (Legacy)
-
-Key environment variables (see `.env.example` for complete list):
+See `.env.example` for complete list. Key variables:
 
 #### LLM Configuration
 - `OPENAI_API_KEY`: API key for LLM provider
 - `OPENAI_MODEL`: Model name (default: `gpt-4o-mini`)
 - `OPENAI_BASE_URL`: API endpoint (supports Ollama, OpenWebUI, etc.)
 
-#### Extraction
-- `EXTRACTION_SERVICE_URL`: Extraction service endpoint
-- `DOCLING_SERVICE_URL`: Docling service endpoint (when enabled)
+#### Object Storage (Required)
+- `MINIO_ENDPOINT`: MinIO/S3 endpoint (default: `minio:9000`)
+- `MINIO_ACCESS_KEY`: Access key (default: `minioadmin`)
+- `MINIO_SECRET_KEY`: Secret key (default: `minioadmin`)
+
+#### OpenSearch (Optional)
+- `OPENSEARCH_ENABLED`: Enable search (default: `false`)
+- `OPENSEARCH_ENDPOINT`: OpenSearch endpoint (default: `opensearch:9200`)
+
+#### SAM.gov (Optional)
+- `SAM_API_KEY`: API key from api.sam.gov
+- `SAM_ENABLED`: Enable SAM.gov integration (default: `false`)
 
 #### Authentication
 - `ENABLE_AUTH`: Enable multi-tenant authentication (default: `true`)
 - `JWT_SECRET_KEY`: Secret for JWT token signing
-- `ADMIN_EMAIL`: Initial admin user email
-- `ADMIN_PASSWORD`: Initial admin password
 
-#### Job Management
-- `DEFAULT_JOB_CONCURRENCY_LIMIT`: Max concurrent jobs per org (default: 3)
-- `DEFAULT_JOB_RETENTION_DAYS`: Days to retain completed jobs (default: 30)
-- `JOB_CLEANUP_ENABLED`: Enable automatic job cleanup (default: `true`)
-- `JOB_CLEANUP_SCHEDULE_CRON`: Job cleanup schedule (default: `0 3 * * *`)
-
-#### Storage
-- `FILE_DEDUPLICATION_ENABLED`: Enable file deduplication (default: `true`)
-- `FILE_RETENTION_UPLOADED_DAYS`: Retention for uploaded files (default: 7)
-- `FILE_RETENTION_PROCESSED_DAYS`: Retention for processed files (default: 30)
-- `FILE_CLEANUP_ENABLED`: Enable automatic cleanup (default: `true`)
-
-#### SharePoint
-- `MS_TENANT_ID`: Azure AD tenant ID
-- `MS_CLIENT_ID`: Azure AD app client ID
-- `MS_CLIENT_SECRET`: Azure AD app client secret
-
----
-
-## Architecture
-
-```
-┌─────────────┐     ┌──────────────┐     ┌─────────────┐
-│   Frontend  │────▶│   Backend    │────▶│    Redis    │
-│  (Next.js)  │     │  (FastAPI)   │     │  (Broker)   │
-└─────────────┘     └──────────────┘     └─────────────┘
-                            │                     │
-                            │                     ▼
-                            │             ┌──────────────┐
-                            │             │    Worker    │
-                            │             │   (Celery)   │
-                            │             └──────────────┘
-                            │                     │
-                            ▼                     ▼
-                    ┌──────────────┐     ┌──────────────┐
-                    │  Extraction  │     │   Storage    │
-                    │   Service    │     │  (/app/files)│
-                    └──────────────┘     └──────────────┘
-                            │
-                            ▼
-                    ┌──────────────┐
-                    │   Docling    │
-                    │  (Optional)  │
-                    └──────────────┘
-```
-
-### Storage Structure
-
-```
-/app/files/
-├── organizations/{org_id}/
-│   ├── batches/{batch_id}/
-│   │   ├── uploaded/
-│   │   ├── processed/
-│   │   └── metadata.json
-│   └── adhoc/
-├── shared/              # Unauthenticated mode
-├── dedupe/              # Content-addressable storage
-│   └── {hash[:2]}/{hash}/
-│       ├── content.ext
-│       └── refs.json
-└── temp/                # Temporary processing files
-```
+See **[docs/CONFIGURATION.md](./docs/CONFIGURATION.md)** for complete reference.
 
 ---
 
@@ -336,49 +300,58 @@ Key environment variables (see `.env.example` for complete list):
 
 Base URL: `http://localhost:8000/api/v1`
 
-### Documents
-- `POST /documents/upload` - Upload document
-- `GET /documents/{id}/result` - Get result
-- `GET /documents/{id}/content` - Get markdown
-- Use `POST /jobs` to process one or more document IDs
+### Assets
+- `GET /assets` - List assets with filters
+- `GET /assets/{id}` - Get asset details
+- `POST /assets/{id}/reextract` - Re-run extraction
+- `GET /assets/{id}/versions` - Get version history
+- `GET /assets/health` - Collection health metrics
+- `POST /assets/bulk-upload/preview` - Preview bulk upload changes
+- `POST /assets/bulk-upload/apply` - Apply bulk upload
 
-### Jobs
-- `POST /jobs` - Create batch job
-- `GET /jobs` - List jobs (paginated, filtered)
-- `GET /jobs/{id}` - Get job details
-- `POST /jobs/{id}/start` - Start job
-- `POST /jobs/{id}/cancel` - Cancel job
-- `DELETE /jobs/{id}` - Delete job (terminal states only)
-- `GET /jobs/{id}/logs` - Get job logs (paginated)
-- `GET /jobs/{id}/documents` - Get job documents
-- `GET /jobs/stats/user` - User job statistics
-- `GET /jobs/stats/organization` - Org job stats (admin only)
+### Runs
+- `GET /runs` - List runs with filters
+- `GET /runs/{id}` - Get run details
+- `GET /runs/{id}/logs` - Get run logs
+- `POST /runs/{id}/retry` - Retry failed run
+
+### Search
+- `POST /search` - Full-text search with facets
+- `GET /search` - Simple search via query params
+- `GET /search/stats` - Index statistics
+- `POST /search/reindex` - Trigger reindex (admin)
+- `GET /search/health` - OpenSearch health
+
+### Web Scraping
+- `GET /scrape/collections` - List collections
+- `POST /scrape/collections` - Create collection
+- `POST /scrape/collections/{id}/crawl` - Start crawl
+- `GET /scrape/collections/{id}/assets` - List scraped assets
+- `GET /scrape/collections/{id}/tree` - Hierarchical tree
+
+### SAM.gov
+- `GET /sam/searches` - List SAM searches
+- `POST /sam/searches` - Create search
+- `POST /sam/searches/{id}/pull` - Pull from SAM.gov
+- `GET /sam/solicitations` - List solicitations
+- `GET /sam/notices` - List notices
+- `GET /sam/usage` - API usage tracking
 
 ### Storage
-- `GET /storage/stats` - Storage usage statistics
-- `POST /storage/cleanup` - Trigger cleanup
-- `GET /storage/retention` - Retention policy
-- `GET /storage/deduplication` - Deduplication stats
-- `GET /storage/duplicates` - List duplicate files
-
-### SharePoint
-- `POST /sharepoint/inventory` - List folder contents
-- `POST /sharepoint/download` - Download files
+- `GET /storage/health` - Storage health check
+- `POST /storage/upload/proxy` - Upload file (proxied)
+- `GET /storage/object/download` - Download file (proxied)
 
 ### Authentication
 - `POST /auth/login` - Login with credentials
 - `POST /auth/refresh` - Refresh access token
 - `GET /auth/me` - Get current user
 
-### Organizations & Users
-- `GET /organizations` - List organizations
-- `GET /users` - List users
-- `POST /users/invite` - Invite user
-
-### Connections
-- `GET /connections` - List connections
-- `POST /connections` - Create connection
-- `POST /connections/{id}/test` - Test connection
+### Scheduled Tasks (Admin)
+- `GET /scheduled-tasks` - List scheduled tasks
+- `POST /scheduled-tasks/{id}/trigger` - Trigger task manually
+- `POST /scheduled-tasks/{id}/enable` - Enable task
+- `POST /scheduled-tasks/{id}/disable` - Disable task
 
 **Interactive Documentation**: http://localhost:8000/docs
 
@@ -387,8 +360,8 @@ Base URL: `http://localhost:8000/api/v1`
 ## Documentation
 
 - **[ADMIN_SETUP.md](./ADMIN_SETUP.md)** - Initial setup and admin credentials
-- **[docs/CONFIGURATION.md](./docs/CONFIGURATION.md)** - YAML configuration guide and reference
-- **[API_DOCUMENTATION.md](./API_DOCUMENTATION.md)** - Complete API reference
+- **[docs/CONFIGURATION.md](./docs/CONFIGURATION.md)** - YAML configuration guide
+- **[docs/API_DOCUMENTATION.md](./docs/API_DOCUMENTATION.md)** - Complete API reference
 - **[USER_GUIDE.md](./USER_GUIDE.md)** - End-user documentation
 - **[DEPLOYMENT_GUIDE.md](./DEPLOYMENT_GUIDE.md)** - Production deployment guide
 - **[CLAUDE.md](./CLAUDE.md)** - Development patterns and conventions
@@ -403,16 +376,23 @@ Base URL: `http://localhost:8000/api/v1`
 docker exec curatore-backend python -m app.commands.seed --create-admin
 ```
 
+### Initialize Storage
+
+```bash
+./scripts/init_storage.sh
+```
+
 ### Check System Health
 
 ```bash
 curl http://localhost:8000/api/v1/system/health/comprehensive | jq '.'
 ```
 
-### Monitor Queue
+### Trigger Search Reindex
 
 ```bash
-./scripts/queue_health.sh
+curl -X POST http://localhost:8000/api/v1/search/reindex \
+  -H "Authorization: Bearer YOUR_TOKEN"
 ```
 
 ### View Logs
@@ -440,11 +420,17 @@ curl http://localhost:8000/api/v1/system/health/comprehensive | jq '.'
 
 ## Port Mappings
 
-- `3000` - Frontend (Next.js)
-- `8000` - Backend API (FastAPI)
-- `8010` - Extraction Service
-- `6379` - Redis
-- `5151` - Docling (when enabled)
+| Port | Service |
+|------|---------|
+| 3000 | Frontend (Next.js) |
+| 8000 | Backend API (FastAPI) |
+| 8010 | Extraction Service |
+| 8011 | Playwright Service |
+| 6379 | Redis |
+| 9000 | MinIO S3 API |
+| 9001 | MinIO Console |
+| 9200 | OpenSearch (when enabled) |
+| 5151 | Docling (when enabled) |
 
 ---
 

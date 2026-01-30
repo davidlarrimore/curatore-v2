@@ -12,8 +12,6 @@ import {
   Link as LinkIcon,
   Shield,
   HardDrive,
-  Database,
-  Briefcase,
   Zap,
   ChevronRight,
   LayoutDashboard,
@@ -79,13 +77,6 @@ export function LeftSidebar({
         icon: FileText,
         current: pathname?.startsWith('/assets'),
         gradient: 'from-indigo-500 to-blue-600'
-      },
-      {
-        name: 'Jobs',
-        href: '/jobs',
-        icon: Briefcase,
-        current: pathname?.startsWith('/jobs'),
-        gradient: 'from-violet-500 to-purple-600'
       },
       {
         name: 'Connections',

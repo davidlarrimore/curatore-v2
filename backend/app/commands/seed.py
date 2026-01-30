@@ -238,6 +238,20 @@ async def seed_scheduled_tasks() -> list:
             "enabled": False,  # Disabled by default - enable when OpenSearch is configured
             "config": {"batch_size": 100},
         },
+        {
+            "name": "stale_run_cleanup",
+            "display_name": "Stale Run Cleanup",
+            "description": "Clean up runs stuck in pending/running state. Prevents stale 'running' status in the UI.",
+            "task_type": "stale_run.cleanup",
+            "scope_type": "global",
+            "schedule_expression": "0 */4 * * *",  # Every 4 hours
+            "enabled": True,
+            "config": {
+                "stale_running_hours": 2,  # Cancel runs stuck in 'running' for >2 hours
+                "stale_pending_hours": 1,  # Cancel runs stuck in 'pending' for >1 hour
+                "dry_run": False,
+            },
+        },
     ]
 
     created_tasks = []

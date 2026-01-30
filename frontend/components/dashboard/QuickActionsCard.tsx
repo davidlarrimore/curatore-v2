@@ -1,7 +1,7 @@
 'use client'
 
 import { useRouter } from 'next/navigation'
-import { Plus, HardDrive, Link2, Settings, Briefcase, FolderOpen, ArrowRight } from 'lucide-react'
+import { Plus, Link2, Settings, FolderOpen, FileText, Search } from 'lucide-react'
 
 interface QuickActionsCardProps {
   isAdmin: boolean
@@ -12,13 +12,21 @@ export function QuickActionsCard({ isAdmin }: QuickActionsCardProps) {
 
   const actions = [
     {
-      name: 'Create Job',
-      description: 'Start processing documents',
+      name: 'Upload Files',
+      description: 'Add documents to process',
       icon: Plus,
-      href: '/jobs',
+      href: '/assets',
       gradient: 'from-violet-500 to-purple-600',
       shadowColor: 'shadow-violet-500/25',
       primary: true,
+    },
+    {
+      name: 'Browse Assets',
+      description: 'View processed files',
+      icon: FileText,
+      href: '/assets',
+      gradient: 'from-emerald-500 to-teal-500',
+      shadowColor: 'shadow-emerald-500/25',
     },
     {
       name: 'Browse Storage',
@@ -36,14 +44,6 @@ export function QuickActionsCard({ isAdmin }: QuickActionsCardProps) {
       href: '/connections',
       gradient: 'from-indigo-500 to-purple-600',
       shadowColor: 'shadow-indigo-500/25',
-    },
-    {
-      name: 'View Jobs',
-      description: 'Monitor progress',
-      icon: Briefcase,
-      href: '/jobs',
-      gradient: 'from-emerald-500 to-teal-500',
-      shadowColor: 'shadow-emerald-500/25',
     },
   ]
 

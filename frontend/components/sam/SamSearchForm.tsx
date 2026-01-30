@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, FormEvent, useEffect } from 'react'
+import { useState, FormEvent, useEffect, useRef } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { samApi, SamSearch, SamPreviewResult } from '@/lib/api'
 import { Button } from '../ui/Button'
@@ -9,13 +9,10 @@ import {
   Loader2,
   X,
   Search,
-  Eye,
   CheckCircle,
-  FileText,
-  Calendar,
   Building2,
   Plus,
-  Minus,
+  FlaskConical,
 } from 'lucide-react'
 
 interface SamSearchFormProps {
@@ -76,20 +73,67 @@ export default function SamSearchForm({
 
   // Form state
   const [isLoading, setIsLoading] = useState(false)
-  const [isPreviewing, setIsPreviewing] = useState(false)
+  const [isTesting, setIsTesting] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [previewResults, setPreviewResults] = useState<SamPreviewResult[] | null>(null)
-  const [previewTotal, setPreviewTotal] = useState<number | null>(null)
-  const [step, setStep] = useState<'config' | 'preview' | 'confirm'>('config')
+  const [testResults, setTestResults] = useState<SamPreviewResult[] | null>(null)
+  const [testTotal, setTestTotal] = useState<number | null>(null)
 
-  // Notice type options
+  // Track if component has mounted (to skip effect on initial render)
+  const hasMounted = useRef(false)
+
+  // Modal effects: lock body scroll and handle Escape key
+  useEffect(() => {
+    // Lock body scroll
+    const originalOverflow = document.body.style.overflow
+    document.body.style.overflow = 'hidden'
+
+    // Handle Escape key
+    const handleEscape = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && !isLoading) {
+        onCancel()
+      }
+    }
+    document.addEventListener('keydown', handleEscape)
+
+    return () => {
+      document.body.style.overflow = originalOverflow
+      document.removeEventListener('keydown', handleEscape)
+    }
+  }, [onCancel, isLoading])
+
+  // Reset test results when search configuration changes (not name/description)
+  // Skip on initial mount - only reset when user actually changes something
+  useEffect(() => {
+    if (!hasMounted.current) {
+      hasMounted.current = true
+      return
+    }
+    // User changed a config option, clear previous test results
+    setTestResults(null)
+    setTestTotal(null)
+  }, [
+    naicsCodes,
+    pscCodes,
+    keyword,
+    setAsideCodes,
+    noticeTypes,
+    activeOnly,
+    downloadAttachments,
+    dateRange,
+    department,
+  ])
+
+  // Notice type options (SAM.gov API v2 ptype values)
+  // See: https://open.gsa.gov/api/opportunities-api/
   const noticeTypeOptions = [
     { value: 'o', label: 'Combined Synopsis/Solicitation' },
     { value: 'p', label: 'Presolicitation' },
+    { value: 'r', label: 'Solicitation' },
+    { value: 's', label: 'Special Notice' },
     { value: 'k', label: 'Sources Sought' },
-    { value: 'r', label: 'Special Notice' },
-    { value: 's', label: 'Sale of Surplus' },
-    { value: 'g', label: 'Grant Notice' },
+    { value: 'i', label: 'Intent to Bundle' },
+    { value: 'a', label: 'Award Notice' },
+    { value: 'g', label: 'Sale of Surplus Property' },
   ]
 
   // Set-aside options
@@ -161,31 +205,44 @@ export default function SamSearchForm({
     }
   }
 
-  // Preview search
-  const handlePreview = async () => {
-    if (!token) return
+  // Test search configuration
+  const handleTest = async () => {
+    if (!token) {
+      console.log('[SamSearchForm] handleTest: No token, aborting')
+      return
+    }
 
-    setIsPreviewing(true)
+    console.log('[SamSearchForm] handleTest: Starting test...')
+    setIsTesting(true)
     setError(null)
 
     try {
+      const searchConfig = buildSearchConfig()
+      console.log('[SamSearchForm] handleTest: Search config:', searchConfig)
+
       const result = await samApi.previewSearch(token, {
-        search_config: buildSearchConfig(),
+        search_config: searchConfig,
         limit: 10,
       })
 
+      console.log('[SamSearchForm] handleTest: API result:', result)
+
       if (!result.success) {
-        setError(result.message || 'Preview failed')
+        console.log('[SamSearchForm] handleTest: API returned success=false:', result.message)
+        setError(result.message || 'Test failed')
         return
       }
 
-      setPreviewResults(result.sample_results || [])
-      setPreviewTotal(result.total_matching || 0)
-      setStep('preview')
+      const results = result.sample_results || []
+      const total = result.total_matching || 0
+      console.log('[SamSearchForm] handleTest: Setting results:', { results, total })
+      setTestResults(results)
+      setTestTotal(total)
     } catch (err: any) {
-      setError(err.message || 'Failed to preview search')
+      console.error('[SamSearchForm] handleTest: Error:', err)
+      setError(err.message || 'Failed to test search')
     } finally {
-      setIsPreviewing(false)
+      setIsTesting(false)
     }
   }
 
@@ -205,9 +262,11 @@ export default function SamSearchForm({
         pull_frequency: pullFrequency,
       }
 
-      if (search) {
+      if (search?.id) {
+        // Edit existing search
         await samApi.updateSearch(token, search.id, data)
       } else {
+        // Create new search (including cloned searches)
         await samApi.createSearch(token, data)
       }
 
@@ -229,13 +288,25 @@ export default function SamSearchForm({
   }
 
   return (
-    <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl overflow-hidden max-h-[85vh] flex flex-col">
-      {/* Gradient header */}
-      <div className="relative bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 px-6 py-5 flex-shrink-0">
+    <div className="fixed inset-0 z-50 overflow-y-auto">
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
+        onClick={onCancel}
+      />
+
+      {/* Modal container */}
+      <div className="flex min-h-full items-start justify-center pt-8 pb-4 px-4">
+        <div
+          className="relative bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-2xl overflow-hidden w-full max-w-2xl max-h-[85vh] flex flex-col animate-in fade-in zoom-in-95 duration-200"
+          onClick={(e) => e.stopPropagation()}
+        >
+          {/* Gradient header */}
+          <div className="relative bg-gradient-to-r from-blue-600 via-indigo-600 to-blue-600 px-6 py-5 flex-shrink-0">
         <div className="flex items-center justify-between">
           <div>
             <h2 className="text-xl font-bold text-white">
-              {search ? 'Edit SAM.gov Search' : 'Create SAM.gov Search'}
+              {search?.id ? 'Edit SAM.gov Search' : 'Create SAM.gov Search'}
             </h2>
             <p className="text-blue-100 text-sm mt-0.5">
               Configure your federal opportunity search parameters
@@ -249,26 +320,6 @@ export default function SamSearchForm({
           </button>
         </div>
 
-        {/* Step indicator */}
-        <div className="flex items-center gap-4 mt-4">
-          <div className={`flex items-center gap-2 ${step === 'config' ? 'text-white' : 'text-blue-200'}`}>
-            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm ${
-              step === 'config' ? 'bg-white text-blue-600' : 'bg-blue-500/50'
-            }`}>
-              1
-            </div>
-            <span className="text-sm">Configure</span>
-          </div>
-          <div className="w-8 h-px bg-blue-400" />
-          <div className={`flex items-center gap-2 ${step === 'preview' ? 'text-white' : 'text-blue-200'}`}>
-            <div className={`w-6 h-6 rounded-full flex items-center justify-center text-sm ${
-              step === 'preview' ? 'bg-white text-blue-600' : 'bg-blue-500/50'
-            }`}>
-              2
-            </div>
-            <span className="text-sm">Preview</span>
-          </div>
-        </div>
       </div>
 
       <form onSubmit={handleSubmit} className="p-6 overflow-y-auto flex-1">
@@ -281,8 +332,7 @@ export default function SamSearchForm({
           </div>
         )}
 
-        {step === 'config' && (
-          <div className="space-y-6">
+        <div className="space-y-6">
             {/* Basic Info */}
             <div className="space-y-4">
               <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
@@ -560,6 +610,94 @@ export default function SamSearchForm({
               </div>
             </div>
 
+            {/* Test Results Section - shown inline when test results exist */}
+            {testResults !== null && (
+              <div className="space-y-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
+                  <FlaskConical className="w-4 h-4" />
+                  Test Results
+                </h3>
+
+                {/* Results Summary */}
+                <div className="p-3 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900/50 rounded-lg">
+                  <div className="flex items-center gap-3">
+                    <CheckCircle className="w-5 h-5 text-blue-600 dark:text-blue-400" />
+                    <div>
+                      <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
+                        Found {testTotal?.toLocaleString()} matching opportunities
+                      </p>
+                      {testTotal !== null && testTotal > 10 && (
+                        <p className="text-xs text-blue-600 dark:text-blue-400">
+                          Showing first 10 of {testTotal.toLocaleString()} results
+                        </p>
+                      )}
+                    </div>
+                  </div>
+                </div>
+
+                {/* Results Table */}
+                {testResults.length > 0 ? (
+                  <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                    <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                      <thead className="bg-gray-50 dark:bg-gray-900/50">
+                        <tr>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Title
+                          </th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Solicitation #
+                          </th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Agency
+                          </th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Posted
+                          </th>
+                          <th className="px-3 py-2 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                            Due
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
+                        {testResults.map((result, idx) => (
+                          <tr key={result.notice_id || idx} className="hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                            <td className="px-3 py-2 text-sm text-gray-900 dark:text-white">
+                              <div className="max-w-[200px] truncate" title={result.title}>
+                                {result.title}
+                              </div>
+                              {result.naics_code && (
+                                <span className="mt-0.5 inline-block px-1.5 py-0.5 text-xs bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded">
+                                  {result.naics_code}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2 text-xs font-mono text-gray-600 dark:text-gray-400">
+                              {result.solicitation_number || '-'}
+                            </td>
+                            <td className="px-3 py-2 text-xs text-gray-600 dark:text-gray-400">
+                              <div className="max-w-[120px] truncate" title={result.agency || ''}>
+                                {result.agency || '-'}
+                              </div>
+                            </td>
+                            <td className="px-3 py-2 text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                              {formatDate(result.posted_date)}
+                            </td>
+                            <td className="px-3 py-2 text-xs text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                              {formatDate(result.response_deadline)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ) : (
+                  <div className="p-4 text-center text-sm text-gray-500 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
+                    No results found matching your criteria.
+                  </div>
+                )}
+              </div>
+            )}
+
             {/* Actions */}
             <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
               <button
@@ -572,16 +710,16 @@ export default function SamSearchForm({
               <Button
                 type="button"
                 variant="secondary"
-                onClick={handlePreview}
-                disabled={isPreviewing || !name}
+                onClick={handleTest}
+                disabled={isTesting || !name}
                 className="gap-2"
               >
-                {isPreviewing ? (
+                {isTesting ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
-                  <Eye className="w-4 h-4" />
+                  <FlaskConical className="w-4 h-4" />
                 )}
-                Preview Results
+                Test
               </Button>
               <Button
                 type="submit"
@@ -589,107 +727,13 @@ export default function SamSearchForm({
                 className="gap-2"
               >
                 {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-                {search ? 'Update Search' : 'Create Search'}
+                {search?.id ? 'Update Search' : 'Create Search'}
               </Button>
             </div>
           </div>
-        )}
-
-        {step === 'preview' && (
-          <div className="space-y-6">
-            {/* Preview Summary */}
-            <div className="p-4 bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-900/50 rounded-lg">
-              <div className="flex items-center gap-3">
-                <CheckCircle className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-                <div>
-                  <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
-                    Found {previewTotal?.toLocaleString()} matching opportunities
-                  </p>
-                  <p className="text-xs text-blue-600 dark:text-blue-400">
-                    Showing first {previewResults?.length} results
-                  </p>
-                </div>
-              </div>
-            </div>
-
-            {/* Preview Results */}
-            {previewResults && previewResults.length > 0 && (
-              <div className="space-y-3">
-                <h3 className="text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Sample Results
-                </h3>
-                <div className="space-y-2 max-h-80 overflow-y-auto">
-                  {previewResults.map((result, idx) => (
-                    <div
-                      key={result.notice_id || idx}
-                      className="p-3 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-lg"
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex-1 min-w-0">
-                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                            {result.title}
-                          </p>
-                          <div className="flex items-center gap-3 mt-1 text-xs text-gray-500 dark:text-gray-400">
-                            {result.solicitation_number && (
-                              <span>{result.solicitation_number}</span>
-                            )}
-                            {result.naics_code && (
-                              <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300 rounded">
-                                {result.naics_code}
-                              </span>
-                            )}
-                            {result.agency && (
-                              <span className="truncate max-w-[150px]">{result.agency}</span>
-                            )}
-                          </div>
-                        </div>
-                        {result.attachments_count > 0 && (
-                          <div className="flex items-center gap-1 text-xs text-gray-500">
-                            <FileText className="w-3 h-3" />
-                            {result.attachments_count}
-                          </div>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-4 mt-2 text-xs text-gray-500 dark:text-gray-400">
-                        {result.posted_date && (
-                          <span className="flex items-center gap-1">
-                            <Calendar className="w-3 h-3" />
-                            Posted: {formatDate(result.posted_date)}
-                          </span>
-                        )}
-                        {result.response_deadline && (
-                          <span className="flex items-center gap-1">
-                            Due: {formatDate(result.response_deadline)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Actions */}
-            <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <button
-                type="button"
-                onClick={() => setStep('config')}
-                className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-              >
-                Back to Configure
-              </button>
-              <Button
-                type="submit"
-                disabled={isLoading || !name}
-                className="gap-2"
-              >
-                {isLoading && <Loader2 className="w-4 h-4 animate-spin" />}
-                {search ? 'Update Search' : 'Create Search'}
-              </Button>
-            </div>
-          </div>
-        )}
       </form>
+        </div>
+      </div>
     </div>
   )
 }

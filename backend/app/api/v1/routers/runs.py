@@ -2,14 +2,16 @@
 """
 Runs API Router for Phase 0.
 
-Provides endpoints for querying runs, log events, and triggering retries.
+Provides endpoints for querying runs, log events, triggering retries,
+and priority boosting for extractions.
 """
 
 import logging
 from typing import Optional, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from pydantic import BaseModel
 
 from ....database.models import User
 from ....dependencies import get_current_user
@@ -18,6 +20,11 @@ from ....services.run_service import run_service
 from ....services.run_log_service import run_log_service
 from ....services.asset_service import asset_service
 from ....services.extraction_result_service import extraction_result_service
+from ....services.priority_queue_service import (
+    priority_queue_service,
+    BoostReason,
+    PriorityTier,
+)
 from ..models import (
     RunResponse,
     RunWithLogsResponse,
@@ -69,6 +76,240 @@ async def list_runs(
             limit=limit,
             offset=offset,
         )
+
+
+@router.get(
+    "/stats",
+    summary="Get run statistics",
+    description="Get aggregated statistics about runs for the organization.",
+)
+async def get_run_stats(
+    current_user: User = Depends(get_current_user),
+):
+    """Get run statistics for the organization."""
+    async with database_service.get_session() as session:
+        from sqlalchemy import func, select, and_
+        from datetime import datetime, timedelta
+        from ....database.models import Run, Asset
+
+        org_id = current_user.organization_id
+
+        # Count by status
+        status_counts = await session.execute(
+            select(Run.status, func.count(Run.id))
+            .where(Run.organization_id == org_id)
+            .group_by(Run.status)
+        )
+        by_status = {row[0]: row[1] for row in status_counts.fetchall()}
+
+        # Count by run_type
+        type_counts = await session.execute(
+            select(Run.run_type, func.count(Run.id))
+            .where(Run.organization_id == org_id)
+            .group_by(Run.run_type)
+        )
+        by_type = {row[0]: row[1] for row in type_counts.fetchall()}
+
+        # Recent activity (last 24 hours)
+        yesterday = datetime.utcnow() - timedelta(hours=24)
+        recent_counts = await session.execute(
+            select(Run.status, func.count(Run.id))
+            .where(and_(
+                Run.organization_id == org_id,
+                Run.created_at >= yesterday
+            ))
+            .group_by(Run.status)
+        )
+        recent_by_status = {row[0]: row[1] for row in recent_counts.fetchall()}
+
+        # Asset status counts
+        asset_counts = await session.execute(
+            select(Asset.status, func.count(Asset.id))
+            .where(Asset.organization_id == org_id)
+            .group_by(Asset.status)
+        )
+        assets_by_status = {row[0]: row[1] for row in asset_counts.fetchall()}
+
+        # Queue length (from Redis)
+        try:
+            import redis
+            r = redis.Redis(host='redis', port=6379, db=0)
+            queue_lengths = {
+                "processing_priority": r.llen("processing_priority"),
+                "processing": r.llen("processing"),
+                "maintenance": r.llen("maintenance"),
+            }
+        except Exception:
+            queue_lengths = {"processing_priority": 0, "processing": 0, "maintenance": 0}
+
+        return {
+            "runs": {
+                "by_status": by_status,
+                "by_type": by_type,
+                "total": sum(by_status.values()),
+            },
+            "recent_24h": {
+                "by_status": recent_by_status,
+                "total": sum(recent_by_status.values()),
+            },
+            "assets": {
+                "by_status": assets_by_status,
+                "total": sum(assets_by_status.values()),
+            },
+            "queues": queue_lengths,
+        }
+
+
+# =============================================================================
+# Queue and Priority Boost Endpoints (must be before /{run_id})
+# =============================================================================
+
+
+class BoostAssetRequest(BaseModel):
+    """Request model for boosting a single asset."""
+    asset_id: UUID
+    reason: Optional[str] = "user_requested"
+
+
+class BoostAssetsRequest(BaseModel):
+    """Request model for boosting multiple assets."""
+    asset_ids: List[UUID]
+    reason: Optional[str] = "user_requested"
+
+
+@router.get(
+    "/queues",
+    summary="Get queue statistics",
+    description="Get current queue lengths and processing status.",
+)
+async def get_queue_stats(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get queue statistics for monitoring.
+
+    Returns lengths of priority, normal, and maintenance queues.
+    """
+    return await priority_queue_service.get_queue_stats()
+
+
+@router.post(
+    "/boost/asset",
+    summary="Boost extraction priority",
+    description="Boost the extraction priority for a single asset. "
+                "Moves pending extraction to high-priority queue.",
+)
+async def boost_asset_extraction_endpoint(
+    request: BoostAssetRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Boost extraction priority for a single asset.
+
+    Use this when a user is waiting for a specific document to be processed.
+    The extraction will be moved to the high-priority queue.
+    """
+    # Map string reason to enum
+    try:
+        reason = BoostReason(request.reason) if request.reason else BoostReason.USER_REQUESTED
+    except ValueError:
+        reason = BoostReason.USER_REQUESTED
+
+    async with database_service.get_session() as session:
+        # Verify asset belongs to user's organization
+        asset = await asset_service.get_asset(session=session, asset_id=request.asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        if asset.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        result = await priority_queue_service.boost_extraction(
+            session=session,
+            asset_id=request.asset_id,
+            reason=reason,
+            organization_id=current_user.organization_id,
+        )
+
+        return result
+
+
+@router.post(
+    "/boost/assets",
+    summary="Boost multiple extraction priorities",
+    description="Boost extraction priority for multiple assets at once.",
+)
+async def boost_multiple_assets_endpoint(
+    request: BoostAssetsRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Boost extraction priority for multiple assets.
+
+    Use this when preparing for a batch operation that needs multiple
+    documents to be ready (e.g., export, AI summarization).
+    """
+    # Map string reason to enum
+    try:
+        reason = BoostReason(request.reason) if request.reason else BoostReason.USER_REQUESTED
+    except ValueError:
+        reason = BoostReason.USER_REQUESTED
+
+    async with database_service.get_session() as session:
+        # Verify all assets belong to user's organization
+        for asset_id in request.asset_ids:
+            asset = await asset_service.get_asset(session=session, asset_id=asset_id)
+            if not asset:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Asset {asset_id} not found"
+                )
+            if asset.organization_id != current_user.organization_id:
+                raise HTTPException(status_code=403, detail="Access denied")
+
+        result = await priority_queue_service.boost_multiple_extractions(
+            session=session,
+            asset_ids=request.asset_ids,
+            reason=reason,
+            organization_id=current_user.organization_id,
+        )
+
+        return result
+
+
+@router.post(
+    "/boost/check-ready",
+    summary="Check if assets are ready",
+    description="Check if specified assets have completed extraction.",
+)
+async def check_assets_ready_endpoint(
+    asset_ids: List[UUID] = Body(..., embed=True),
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Check if assets are ready for processing.
+
+    Returns which assets are ready and which are still pending.
+    Useful for UI to show progress before running operations.
+    """
+    async with database_service.get_session() as session:
+        all_ready, ready_ids, pending_ids = await priority_queue_service.check_assets_ready(
+            session=session,
+            asset_ids=asset_ids,
+        )
+
+        return {
+            "all_ready": all_ready,
+            "total": len(asset_ids),
+            "ready_count": len(ready_ids),
+            "pending_count": len(pending_ids),
+            "ready_ids": [str(id) for id in ready_ids],
+            "pending_ids": [str(id) for id in pending_ids],
+        }
+
+
+# =============================================================================
+# Run-specific endpoints (dynamic paths with /{run_id})
+# =============================================================================
 
 
 @router.get(
@@ -221,9 +462,8 @@ async def retry_extraction(
             },
         )
 
-        # Enqueue extraction task
+        # Enqueue extraction task on priority queue (user-initiated retry)
         from ....tasks import execute_extraction_task
-        from ....config import settings
 
         task = execute_extraction_task.apply_async(
             kwargs={
@@ -231,7 +471,7 @@ async def retry_extraction(
                 "run_id": str(new_run.id),
                 "extraction_id": str(extraction.id),
             },
-            queue=settings.celery_default_queue or "processing",
+            queue=PriorityTier.HIGH.value,  # User retries get priority
         )
 
         logger.info(

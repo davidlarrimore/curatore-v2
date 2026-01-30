@@ -3,10 +3,9 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { systemApi, jobsApi, objectStorageApi } from '@/lib/api'
+import { systemApi, runsApi, objectStorageApi } from '@/lib/api'
 import {
   SystemHealthCard,
-  JobStatsCard,
   StorageOverviewCard,
   QuickActionsCard,
   RecentActivityCard,
@@ -21,24 +20,15 @@ interface HealthData {
   issues?: string[]
 }
 
-interface UserStats {
-  active_jobs: number
-  total_jobs_24h: number
-  total_jobs_7d: number
-  completed_jobs_24h: number
-  failed_jobs_24h: number
-}
-
-interface OrgStats {
-  organization_id: string
-  active_jobs: number
-  queued_jobs: number
-  concurrency_limit: number
-  total_jobs: number
-  completed_jobs: number
-  failed_jobs: number
-  cancelled_jobs: number
-  total_documents_processed: number
+interface RunStats {
+  runs: {
+    total: number
+    by_status: Record<string, number>
+  }
+  recent_24h: {
+    total: number
+    by_status: Record<string, number>
+  }
 }
 
 interface StorageHealth {
@@ -49,16 +39,18 @@ interface StorageHealth {
   error: string | null
 }
 
-interface Job {
+interface Run {
   id: string
-  name: string
+  run_type: string
   status: string
-  total_documents: number
-  completed_documents: number
-  failed_documents: number
   created_at: string
   started_at?: string
   completed_at?: string
+  results_summary?: {
+    total?: number
+    processed?: number
+    failed?: number
+  }
 }
 
 export default function DashboardPage() {
@@ -76,16 +68,15 @@ function DashboardContent() {
 
   // Data states
   const [healthData, setHealthData] = useState<HealthData | null>(null)
-  const [userStats, setUserStats] = useState<UserStats | null>(null)
-  const [orgStats, setOrgStats] = useState<OrgStats | null>(null)
+  const [runStats, setRunStats] = useState<RunStats | null>(null)
   const [storageHealth, setStorageHealth] = useState<StorageHealth | null>(null)
-  const [recentJobs, setRecentJobs] = useState<Job[]>([])
+  const [recentRuns, setRecentRuns] = useState<Run[]>([])
 
   // Loading states
   const [isLoadingHealth, setIsLoadingHealth] = useState(true)
   const [isLoadingStats, setIsLoadingStats] = useState(true)
   const [isLoadingStorage, setIsLoadingStorage] = useState(true)
-  const [isLoadingJobs, setIsLoadingJobs] = useState(true)
+  const [isLoadingRuns, setIsLoadingRuns] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
   // Fetch health data
@@ -98,30 +89,21 @@ function DashboardContent() {
     }
   }, [])
 
-  // Fetch job stats
-  const fetchJobStats = useCallback(async () => {
+  // Fetch run stats
+  const fetchRunStats = useCallback(async () => {
     if (!token) return
 
     try {
-      const [userStatsData, recentJobsData] = await Promise.all([
-        jobsApi.getUserStats(token),
-        jobsApi.listJobs(token, { page_size: 5 }),
+      const [statsData, runsData] = await Promise.all([
+        runsApi.getStats(token),
+        runsApi.listRuns(token, { limit: 5 }),
       ])
-      setUserStats(userStatsData)
-      setRecentJobs(recentJobsData.jobs)
-
-      if (isAdmin) {
-        try {
-          const orgStatsData = await jobsApi.getOrgStats(token)
-          setOrgStats(orgStatsData)
-        } catch (error) {
-          console.error('Failed to fetch org stats:', error)
-        }
-      }
+      setRunStats(statsData)
+      setRecentRuns(runsData.items || [])
     } catch (error) {
-      console.error('Failed to fetch job stats:', error)
+      console.error('Failed to fetch run stats:', error)
     }
-  }, [token, isAdmin])
+  }, [token])
 
   // Fetch storage health
   const fetchStorageHealth = useCallback(async () => {
@@ -139,13 +121,13 @@ function DashboardContent() {
       setIsLoadingHealth(true)
       setIsLoadingStats(true)
       setIsLoadingStorage(true)
-      setIsLoadingJobs(true)
+      setIsLoadingRuns(true)
 
       await Promise.all([
         fetchHealthData().finally(() => setIsLoadingHealth(false)),
-        fetchJobStats().finally(() => {
+        fetchRunStats().finally(() => {
           setIsLoadingStats(false)
-          setIsLoadingJobs(false)
+          setIsLoadingRuns(false)
         }),
         fetchStorageHealth().finally(() => setIsLoadingStorage(false)),
       ])
@@ -154,14 +136,14 @@ function DashboardContent() {
     if (isAuthenticated && token) {
       loadAll()
     }
-  }, [isAuthenticated, token, fetchHealthData, fetchJobStats, fetchStorageHealth])
+  }, [isAuthenticated, token, fetchHealthData, fetchRunStats, fetchStorageHealth])
 
   // Refresh all data
   const handleRefreshAll = async () => {
     setIsRefreshing(true)
     await Promise.all([
       fetchHealthData(),
-      fetchJobStats(),
+      fetchRunStats(),
       fetchStorageHealth(),
     ])
     setIsRefreshing(false)
@@ -174,9 +156,14 @@ function DashboardContent() {
   const totalComponents = healthData?.components
     ? Object.keys(healthData.components).length
     : 0
-  const successRate = userStats
-    ? userStats.total_jobs_24h > 0
-      ? Math.round((userStats.completed_jobs_24h / userStats.total_jobs_24h) * 100)
+
+  // Calculate active runs and success rate from runStats
+  const activeRuns = runStats
+    ? (runStats.runs.by_status['running'] || 0) + (runStats.runs.by_status['pending'] || 0)
+    : 0
+  const successRate = runStats
+    ? runStats.recent_24h.total > 0
+      ? Math.round(((runStats.recent_24h.by_status['completed'] || 0) / runStats.recent_24h.total) * 100)
       : 100
     : 0
 
@@ -213,8 +200,8 @@ function DashboardContent() {
           {!isLoadingHealth && !isLoadingStats && (
             <div className="mt-6 flex flex-wrap items-center gap-4 text-sm">
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
-                <span className="font-medium">{userStats?.active_jobs ?? 0}</span>
-                <span>active jobs</span>
+                <span className="font-medium">{activeRuns}</span>
+                <span>active runs</span>
               </div>
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400">
                 <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
@@ -245,16 +232,6 @@ function DashboardContent() {
             />
           </div>
 
-          {/* Job Statistics */}
-          <div>
-            <JobStatsCard
-              userStats={userStats}
-              orgStats={orgStats}
-              isAdmin={isAdmin}
-              isLoading={isLoadingStats}
-            />
-          </div>
-
           {/* Storage Overview */}
           <div>
             <StorageOverviewCard
@@ -264,10 +241,10 @@ function DashboardContent() {
           </div>
 
           {/* Recent Activity - Takes 2 columns on xl */}
-          <div className="lg:col-span-2">
+          <div className="lg:col-span-2 xl:col-span-2">
             <RecentActivityCard
-              recentJobs={recentJobs}
-              isLoading={isLoadingJobs}
+              recentRuns={recentRuns}
+              isLoading={isLoadingRuns}
             />
           </div>
         </div>

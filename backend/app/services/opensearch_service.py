@@ -58,6 +58,23 @@ logger = logging.getLogger(__name__)
 
 
 @dataclass
+class FacetBucket:
+    """Represents a single bucket in a facet aggregation."""
+
+    value: str
+    count: int
+
+
+@dataclass
+class Facet:
+    """Represents a facet with its buckets."""
+
+    field: str
+    buckets: List[FacetBucket]
+    total_other: int = 0  # Count of documents not in top buckets
+
+
+@dataclass
 class SearchHit:
     """Represents a single search result."""
 
@@ -78,6 +95,7 @@ class SearchResults:
 
     total: int
     hits: List[SearchHit]
+    facets: Optional[Dict[str, Facet]] = None
 
 
 @dataclass
@@ -571,6 +589,272 @@ class OpenSearchService:
             logger.error(f"Search failed: {e}")
             return SearchResults(total=0, hits=[])
 
+    async def search_with_facets(
+        self,
+        organization_id: UUID,
+        query: str,
+        source_types: Optional[List[str]] = None,
+        content_types: Optional[List[str]] = None,
+        collection_ids: Optional[List[UUID]] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        limit: int = 20,
+        offset: int = 0,
+        facet_size: int = 10,
+    ) -> SearchResults:
+        """
+        Execute a search query with filters and return faceted counts.
+
+        Uses post_filter for filters so aggregations see the full dataset
+        (cross-filtering). Each facet excludes its own filter to show what
+        counts would be if that filter were changed.
+
+        Args:
+            organization_id: Organization UUID (for index selection)
+            query: Search query string
+            source_types: Filter by source types (optional)
+            content_types: Filter by content/MIME types (optional)
+            collection_ids: Filter by collection IDs (optional)
+            date_from: Filter by creation date >= (optional)
+            date_to: Filter by creation date <= (optional)
+            limit: Maximum results to return (default 20)
+            offset: Offset for pagination (default 0)
+            facet_size: Maximum buckets per facet (default 10)
+
+        Returns:
+            SearchResults with total count, matching hits, and facets
+        """
+        if not self._client:
+            logger.warning("OpenSearch not available, returning empty results")
+            return SearchResults(total=0, hits=[], facets=None)
+
+        try:
+            index_name = self.get_index_name(organization_id)
+
+            # Check if index exists
+            if not self._client.indices.exists(index=index_name):
+                logger.debug(f"Index {index_name} does not exist, returning empty results")
+                return SearchResults(total=0, hits=[], facets=None)
+
+            # Build multi_match query
+            must = [
+                {
+                    "multi_match": {
+                        "query": query,
+                        "fields": ["title^3", "filename^2", "content", "url"],
+                        "type": "best_fields",
+                        "fuzziness": "AUTO",
+                    }
+                }
+            ]
+
+            # Build date filter (always applied to both query and aggregations)
+            date_filter = None
+            if date_from or date_to:
+                date_range: Dict[str, str] = {}
+                if date_from:
+                    date_range["gte"] = date_from.isoformat()
+                if date_to:
+                    date_range["lte"] = date_to.isoformat()
+                date_filter = {"range": {"created_at": date_range}}
+
+            # Build collection filter (always applied to both query and aggregations)
+            collection_filter = None
+            if collection_ids:
+                collection_filter = {
+                    "terms": {"collection_id": [str(c) for c in collection_ids]}
+                }
+
+            # Build post_filter for source_types and content_types
+            # These are the filters we want to cross-filter on
+            post_filters = []
+            if source_types:
+                post_filters.append({"terms": {"source_type": source_types}})
+            if content_types:
+                post_filters.append({"terms": {"content_type": content_types}})
+
+            # Combine with date and collection filters for post_filter
+            if date_filter:
+                post_filters.append(date_filter)
+            if collection_filter:
+                post_filters.append(collection_filter)
+
+            # Build aggregations with cross-filtering
+            # source_type facet: filter by content_type only
+            # content_type facet: filter by source_type only
+            aggs = {}
+
+            # Source type facet - applies content_type filter but NOT source_type filter
+            source_type_agg_filters = []
+            if content_types:
+                source_type_agg_filters.append({"terms": {"content_type": content_types}})
+            if date_filter:
+                source_type_agg_filters.append(date_filter)
+            if collection_filter:
+                source_type_agg_filters.append(collection_filter)
+
+            if source_type_agg_filters:
+                aggs["source_type_facet"] = {
+                    "filter": {"bool": {"filter": source_type_agg_filters}},
+                    "aggs": {
+                        "buckets": {
+                            "terms": {
+                                "field": "source_type",
+                                "size": facet_size,
+                            }
+                        }
+                    },
+                }
+            else:
+                aggs["source_type_facet"] = {
+                    "terms": {
+                        "field": "source_type",
+                        "size": facet_size,
+                    }
+                }
+
+            # Content type facet - applies source_type filter but NOT content_type filter
+            content_type_agg_filters = []
+            if source_types:
+                content_type_agg_filters.append({"terms": {"source_type": source_types}})
+            if date_filter:
+                content_type_agg_filters.append(date_filter)
+            if collection_filter:
+                content_type_agg_filters.append(collection_filter)
+
+            if content_type_agg_filters:
+                aggs["content_type_facet"] = {
+                    "filter": {"bool": {"filter": content_type_agg_filters}},
+                    "aggs": {
+                        "buckets": {
+                            "terms": {
+                                "field": "content_type",
+                                "size": facet_size,
+                            }
+                        }
+                    },
+                }
+            else:
+                aggs["content_type_facet"] = {
+                    "terms": {
+                        "field": "content_type",
+                        "size": facet_size,
+                    }
+                }
+
+            # Build query body
+            body: Dict[str, Any] = {
+                "query": {
+                    "bool": {
+                        "must": must,
+                    }
+                },
+                "aggs": aggs,
+                "highlight": {
+                    "fields": {
+                        "content": {
+                            "fragment_size": 200,
+                            "number_of_fragments": 3,
+                        },
+                        "title": {},
+                    },
+                    "pre_tags": ["<mark>"],
+                    "post_tags": ["</mark>"],
+                },
+                "from": offset,
+                "size": limit,
+                "_source": [
+                    "asset_id",
+                    "title",
+                    "filename",
+                    "source_type",
+                    "content_type",
+                    "url",
+                    "created_at",
+                ],
+            }
+
+            # Add post_filter if any filters exist
+            if post_filters:
+                body["post_filter"] = {"bool": {"filter": post_filters}}
+
+            # Execute search
+            response = self._client.search(index=index_name, body=body)
+
+            # Parse results
+            total = response["hits"]["total"]["value"]
+            hits = []
+            for hit in response["hits"]["hits"]:
+                source = hit["_source"]
+                hits.append(
+                    SearchHit(
+                        asset_id=source.get("asset_id", ""),
+                        score=hit.get("_score", 0.0),
+                        title=source.get("title"),
+                        filename=source.get("filename"),
+                        source_type=source.get("source_type"),
+                        content_type=source.get("content_type"),
+                        url=source.get("url"),
+                        created_at=source.get("created_at"),
+                        highlights=hit.get("highlight", {}),
+                    )
+                )
+
+            # Parse facets
+            facets: Dict[str, Facet] = {}
+
+            # Parse source_type facet
+            source_type_agg = response.get("aggregations", {}).get("source_type_facet", {})
+            # Handle both nested (with filter) and direct (without filter) aggregation structures
+            if "buckets" in source_type_agg and isinstance(source_type_agg["buckets"], dict):
+                # Nested structure: {"filter": ..., "aggs": {"buckets": ...}}
+                source_type_data = source_type_agg["buckets"]
+            elif "buckets" in source_type_agg and isinstance(source_type_agg["buckets"], list):
+                # Direct terms aggregation
+                source_type_data = source_type_agg
+            else:
+                source_type_data = source_type_agg
+
+            source_type_buckets = []
+            for bucket in source_type_data.get("buckets", []):
+                source_type_buckets.append(
+                    FacetBucket(value=bucket["key"], count=bucket["doc_count"])
+                )
+            facets["source_type"] = Facet(
+                field="source_type",
+                buckets=source_type_buckets,
+                total_other=source_type_data.get("sum_other_doc_count", 0),
+            )
+
+            # Parse content_type facet
+            content_type_agg = response.get("aggregations", {}).get("content_type_facet", {})
+            if "buckets" in content_type_agg and isinstance(content_type_agg["buckets"], dict):
+                content_type_data = content_type_agg["buckets"]
+            elif "buckets" in content_type_agg and isinstance(content_type_agg["buckets"], list):
+                content_type_data = content_type_agg
+            else:
+                content_type_data = content_type_agg
+
+            content_type_buckets = []
+            for bucket in content_type_data.get("buckets", []):
+                content_type_buckets.append(
+                    FacetBucket(value=bucket["key"], count=bucket["doc_count"])
+                )
+            facets["content_type"] = Facet(
+                field="content_type",
+                buckets=content_type_buckets,
+                total_other=content_type_data.get("sum_other_doc_count", 0),
+            )
+
+            logger.debug(
+                f"Search with facets query '{query}' returned {total} results (showing {len(hits)})"
+            )
+            return SearchResults(total=total, hits=hits, facets=facets)
+
+        except Exception as e:
+            logger.error(f"Search with facets failed: {e}")
+            return SearchResults(total=0, hits=[], facets=None)
+
     async def get_index_stats(self, organization_id: UUID) -> Optional[IndexStats]:
         """
         Get statistics for an organization's index.
@@ -697,6 +981,527 @@ class OpenSearchService:
         except Exception as e:
             logger.error(f"Bulk indexing failed: {e}")
             return {"success": 0, "failed": len(documents), "errors": [str(e)]}
+
+
+    # =========================================================================
+    # SAM.gov Indexing Methods (Phase 7)
+    # =========================================================================
+
+    def get_sam_notice_index_name(self, organization_id: UUID) -> str:
+        """
+        Get the SAM notices index name for an organization.
+
+        Args:
+            organization_id: Organization UUID
+
+        Returns:
+            Index name in format: {prefix}-sam-notices-{org_id}
+        """
+        prefix = self._config.get("index_prefix", "curatore") if self._config else "curatore"
+        return f"{prefix}-sam-notices-{organization_id}"
+
+    def get_sam_solicitation_index_name(self, organization_id: UUID) -> str:
+        """
+        Get the SAM solicitations index name for an organization.
+
+        Args:
+            organization_id: Organization UUID
+
+        Returns:
+            Index name in format: {prefix}-sam-solicitations-{org_id}
+        """
+        prefix = self._config.get("index_prefix", "curatore") if self._config else "curatore"
+        return f"{prefix}-sam-solicitations-{organization_id}"
+
+    async def ensure_sam_indices(self, organization_id: UUID) -> bool:
+        """
+        Create SAM notice and solicitation indices if they don't exist.
+
+        Args:
+            organization_id: Organization UUID
+
+        Returns:
+            True if indices exist or were created, False on error
+        """
+        if not self._client:
+            return False
+
+        notice_index = self.get_sam_notice_index_name(organization_id)
+        solicitation_index = self.get_sam_solicitation_index_name(organization_id)
+
+        # SAM Notice mapping
+        notice_mapping = {
+            "settings": {
+                "number_of_shards": 1,
+                "number_of_replicas": 0,
+                "analysis": {
+                    "analyzer": {
+                        "content_analyzer": {
+                            "type": "standard",
+                            "stopwords": "_english_",
+                        }
+                    }
+                },
+            },
+            "mappings": {
+                "properties": {
+                    "notice_id": {"type": "keyword"},
+                    "sam_notice_id": {"type": "keyword"},
+                    "solicitation_id": {"type": "keyword"},
+                    "solicitation_number": {"type": "keyword"},
+                    "title": {"type": "text", "analyzer": "content_analyzer"},
+                    "description": {"type": "text", "analyzer": "content_analyzer"},
+                    "notice_type": {"type": "keyword"},
+                    "agency": {"type": "keyword"},
+                    "sub_agency": {"type": "keyword"},
+                    "office": {"type": "keyword"},
+                    "posted_date": {"type": "date"},
+                    "response_deadline": {"type": "date"},
+                    "naics_codes": {"type": "keyword"},
+                    "psc_codes": {"type": "keyword"},
+                    "set_aside": {"type": "keyword"},
+                    "place_of_performance": {"type": "text"},
+                    "version_number": {"type": "integer"},
+                    "created_at": {"type": "date"},
+                    "updated_at": {"type": "date"},
+                }
+            },
+        }
+
+        # SAM Solicitation mapping
+        solicitation_mapping = {
+            "settings": {
+                "number_of_shards": 1,
+                "number_of_replicas": 0,
+                "analysis": {
+                    "analyzer": {
+                        "content_analyzer": {
+                            "type": "standard",
+                            "stopwords": "_english_",
+                        }
+                    }
+                },
+            },
+            "mappings": {
+                "properties": {
+                    "solicitation_id": {"type": "keyword"},
+                    "solicitation_number": {"type": "keyword"},
+                    "title": {"type": "text", "analyzer": "content_analyzer"},
+                    "description": {"type": "text", "analyzer": "content_analyzer"},
+                    "notice_type": {"type": "keyword"},
+                    "agency": {"type": "keyword"},
+                    "sub_agency": {"type": "keyword"},
+                    "office": {"type": "keyword"},
+                    "posted_date": {"type": "date"},
+                    "response_deadline": {"type": "date"},
+                    "naics_codes": {"type": "keyword"},
+                    "psc_codes": {"type": "keyword"},
+                    "set_aside": {"type": "keyword"},
+                    "place_of_performance": {"type": "text"},
+                    "notice_count": {"type": "integer"},
+                    "attachment_count": {"type": "integer"},
+                    "summary_status": {"type": "keyword"},
+                    "is_active": {"type": "boolean"},
+                    "created_at": {"type": "date"},
+                    "updated_at": {"type": "date"},
+                }
+            },
+        }
+
+        try:
+            # Create notice index
+            if not self._client.indices.exists(index=notice_index):
+                self._client.indices.create(index=notice_index, body=notice_mapping)
+                logger.info(f"Created OpenSearch SAM notices index: {notice_index}")
+
+            # Create solicitation index
+            if not self._client.indices.exists(index=solicitation_index):
+                self._client.indices.create(index=solicitation_index, body=solicitation_mapping)
+                logger.info(f"Created OpenSearch SAM solicitations index: {solicitation_index}")
+
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to create SAM indices: {e}")
+            return False
+
+    async def index_sam_notice(
+        self,
+        organization_id: UUID,
+        notice_id: UUID,
+        sam_notice_id: str,
+        solicitation_id: UUID,
+        solicitation_number: str,
+        title: str,
+        description: Optional[str] = None,
+        notice_type: Optional[str] = None,
+        agency: Optional[str] = None,
+        sub_agency: Optional[str] = None,
+        office: Optional[str] = None,
+        posted_date: Optional[datetime] = None,
+        response_deadline: Optional[datetime] = None,
+        naics_codes: Optional[List[str]] = None,
+        psc_codes: Optional[List[str]] = None,
+        set_aside: Optional[str] = None,
+        place_of_performance: Optional[str] = None,
+        version_number: int = 1,
+        created_at: Optional[datetime] = None,
+    ) -> bool:
+        """
+        Index a SAM.gov notice for full-text search.
+
+        Args:
+            organization_id: Organization UUID
+            notice_id: SamNotice UUID (used as document ID)
+            sam_notice_id: Original SAM.gov notice ID
+            solicitation_id: Parent solicitation UUID
+            solicitation_number: Solicitation number for linking
+            title: Notice title
+            description: Notice description text
+            notice_type: Type of notice (Combined Synopsis/Solicitation, etc.)
+            agency: Contracting agency
+            sub_agency: Sub-agency
+            office: Contracting office
+            posted_date: When notice was posted
+            response_deadline: Response deadline
+            naics_codes: NAICS codes
+            psc_codes: PSC codes
+            set_aside: Set-aside type
+            place_of_performance: Place of performance
+            version_number: Notice version number
+            created_at: Creation timestamp
+
+        Returns:
+            True if indexed successfully, False otherwise
+        """
+        if not self._client:
+            logger.debug("OpenSearch not available, skipping SAM notice indexing")
+            return False
+
+        try:
+            await self.ensure_sam_indices(organization_id)
+            index_name = self.get_sam_notice_index_name(organization_id)
+
+            # Truncate description if too long
+            max_length = self._config.get("max_content_length", 100000) if self._config else 100000
+            if description and len(description) > max_length:
+                description = description[:max_length]
+
+            doc = {
+                "notice_id": str(notice_id),
+                "sam_notice_id": sam_notice_id,
+                "solicitation_id": str(solicitation_id),
+                "solicitation_number": solicitation_number,
+                "title": title,
+                "description": description or "",
+                "notice_type": notice_type,
+                "agency": agency,
+                "sub_agency": sub_agency,
+                "office": office,
+                "posted_date": posted_date.isoformat() if posted_date else None,
+                "response_deadline": response_deadline.isoformat() if response_deadline else None,
+                "naics_codes": naics_codes or [],
+                "psc_codes": psc_codes or [],
+                "set_aside": set_aside,
+                "place_of_performance": place_of_performance,
+                "version_number": version_number,
+                "created_at": (created_at or datetime.utcnow()).isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+
+            self._client.index(
+                index=index_name,
+                id=str(notice_id),
+                body=doc,
+                refresh=True,
+            )
+
+            logger.debug(f"Indexed SAM notice {notice_id} to OpenSearch")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to index SAM notice {notice_id}: {e}")
+            return False
+
+    async def index_sam_solicitation(
+        self,
+        organization_id: UUID,
+        solicitation_id: UUID,
+        solicitation_number: str,
+        title: str,
+        description: Optional[str] = None,
+        notice_type: Optional[str] = None,
+        agency: Optional[str] = None,
+        sub_agency: Optional[str] = None,
+        office: Optional[str] = None,
+        posted_date: Optional[datetime] = None,
+        response_deadline: Optional[datetime] = None,
+        naics_codes: Optional[List[str]] = None,
+        psc_codes: Optional[List[str]] = None,
+        set_aside: Optional[str] = None,
+        place_of_performance: Optional[str] = None,
+        notice_count: int = 0,
+        attachment_count: int = 0,
+        summary_status: Optional[str] = None,
+        is_active: bool = True,
+        created_at: Optional[datetime] = None,
+    ) -> bool:
+        """
+        Index a SAM.gov solicitation for full-text search.
+
+        Args:
+            organization_id: Organization UUID
+            solicitation_id: SamSolicitation UUID (used as document ID)
+            solicitation_number: Solicitation number
+            title: Solicitation title
+            description: Solicitation description/summary
+            notice_type: Latest notice type
+            agency: Contracting agency
+            sub_agency: Sub-agency
+            office: Contracting office
+            posted_date: Original posted date
+            response_deadline: Response deadline
+            naics_codes: NAICS codes
+            psc_codes: PSC codes
+            set_aside: Set-aside type
+            place_of_performance: Place of performance
+            notice_count: Number of notices
+            attachment_count: Number of attachments
+            summary_status: AI summary status
+            is_active: Whether solicitation is active
+            created_at: Creation timestamp
+
+        Returns:
+            True if indexed successfully, False otherwise
+        """
+        if not self._client:
+            logger.debug("OpenSearch not available, skipping SAM solicitation indexing")
+            return False
+
+        try:
+            await self.ensure_sam_indices(organization_id)
+            index_name = self.get_sam_solicitation_index_name(organization_id)
+
+            # Truncate description if too long
+            max_length = self._config.get("max_content_length", 100000) if self._config else 100000
+            if description and len(description) > max_length:
+                description = description[:max_length]
+
+            doc = {
+                "solicitation_id": str(solicitation_id),
+                "solicitation_number": solicitation_number,
+                "title": title,
+                "description": description or "",
+                "notice_type": notice_type,
+                "agency": agency,
+                "sub_agency": sub_agency,
+                "office": office,
+                "posted_date": posted_date.isoformat() if posted_date else None,
+                "response_deadline": response_deadline.isoformat() if response_deadline else None,
+                "naics_codes": naics_codes or [],
+                "psc_codes": psc_codes or [],
+                "set_aside": set_aside,
+                "place_of_performance": place_of_performance,
+                "notice_count": notice_count,
+                "attachment_count": attachment_count,
+                "summary_status": summary_status,
+                "is_active": is_active,
+                "created_at": (created_at or datetime.utcnow()).isoformat(),
+                "updated_at": datetime.utcnow().isoformat(),
+            }
+
+            self._client.index(
+                index=index_name,
+                id=str(solicitation_id),
+                body=doc,
+                refresh=True,
+            )
+
+            logger.debug(f"Indexed SAM solicitation {solicitation_id} to OpenSearch")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to index SAM solicitation {solicitation_id}: {e}")
+            return False
+
+    async def search_sam(
+        self,
+        organization_id: UUID,
+        query: str,
+        source_types: Optional[List[str]] = None,
+        notice_types: Optional[List[str]] = None,
+        agencies: Optional[List[str]] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> SearchResults:
+        """
+        Search across SAM notices and solicitations.
+
+        Args:
+            organization_id: Organization UUID
+            query: Search query string
+            source_types: Filter by type (notices, solicitations, or both)
+            notice_types: Filter by notice types
+            agencies: Filter by agencies
+            date_from: Filter by posted date >= (optional)
+            date_to: Filter by posted date <= (optional)
+            limit: Maximum results to return (default 20)
+            offset: Offset for pagination (default 0)
+
+        Returns:
+            SearchResults with total count and matching hits
+        """
+        if not self._client:
+            logger.warning("OpenSearch not available, returning empty SAM results")
+            return SearchResults(total=0, hits=[])
+
+        # Determine which indices to search
+        indices = []
+        if source_types is None or "notices" in source_types:
+            indices.append(self.get_sam_notice_index_name(organization_id))
+        if source_types is None or "solicitations" in source_types:
+            indices.append(self.get_sam_solicitation_index_name(organization_id))
+
+        if not indices:
+            return SearchResults(total=0, hits=[])
+
+        try:
+            # Check which indices exist
+            existing_indices = [
+                idx for idx in indices if self._client.indices.exists(index=idx)
+            ]
+            if not existing_indices:
+                return SearchResults(total=0, hits=[])
+
+            # Build multi_match query
+            must = [
+                {
+                    "multi_match": {
+                        "query": query,
+                        "fields": [
+                            "title^3",
+                            "description^2",
+                            "solicitation_number^2",
+                            "agency",
+                            "office",
+                        ],
+                        "type": "best_fields",
+                        "fuzziness": "AUTO",
+                    }
+                }
+            ]
+
+            # Build filters
+            filters = []
+            if notice_types:
+                filters.append({"terms": {"notice_type": notice_types}})
+            if agencies:
+                filters.append({"terms": {"agency": agencies}})
+            if date_from or date_to:
+                date_range: Dict[str, str] = {}
+                if date_from:
+                    date_range["gte"] = date_from.isoformat()
+                if date_to:
+                    date_range["lte"] = date_to.isoformat()
+                filters.append({"range": {"posted_date": date_range}})
+
+            # Build query body
+            body = {
+                "query": {
+                    "bool": {
+                        "must": must,
+                        "filter": filters,
+                    }
+                },
+                "highlight": {
+                    "fields": {
+                        "description": {
+                            "fragment_size": 200,
+                            "number_of_fragments": 3,
+                        },
+                        "title": {},
+                    },
+                    "pre_tags": ["<mark>"],
+                    "post_tags": ["</mark>"],
+                },
+                "from": offset,
+                "size": limit,
+                "_source": [
+                    "notice_id",
+                    "solicitation_id",
+                    "solicitation_number",
+                    "title",
+                    "notice_type",
+                    "agency",
+                    "sub_agency",
+                    "office",
+                    "posted_date",
+                    "response_deadline",
+                ],
+            }
+
+            # Execute search across indices
+            response = self._client.search(index=",".join(existing_indices), body=body)
+
+            # Parse results
+            total = response["hits"]["total"]["value"]
+            hits = []
+            for hit in response["hits"]["hits"]:
+                source = hit["_source"]
+                # Determine if this is a notice or solicitation based on presence of notice_id
+                is_notice = "notice_id" in source
+                asset_id = source.get("notice_id") if is_notice else source.get("solicitation_id", "")
+
+                hits.append(
+                    SearchHit(
+                        asset_id=asset_id,
+                        score=hit.get("_score", 0.0),
+                        title=source.get("title"),
+                        filename=source.get("solicitation_number"),  # Use sol # as filename
+                        source_type="sam_notice" if is_notice else "sam_solicitation",
+                        content_type=source.get("notice_type"),
+                        url=None,
+                        created_at=source.get("posted_date"),
+                        highlights=hit.get("highlight", {}),
+                    )
+                )
+
+            logger.debug(
+                f"SAM search query '{query}' returned {total} results (showing {len(hits)})"
+            )
+            return SearchResults(total=total, hits=hits)
+
+        except Exception as e:
+            logger.error(f"SAM search failed: {e}")
+            return SearchResults(total=0, hits=[])
+
+    async def delete_sam_notice(self, organization_id: UUID, notice_id: UUID) -> bool:
+        """Delete a SAM notice from the index."""
+        if not self._client:
+            return False
+
+        try:
+            index_name = self.get_sam_notice_index_name(organization_id)
+            self._client.delete(index=index_name, id=str(notice_id), ignore=[404])
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete SAM notice {notice_id}: {e}")
+            return False
+
+    async def delete_sam_solicitation(self, organization_id: UUID, solicitation_id: UUID) -> bool:
+        """Delete a SAM solicitation from the index."""
+        if not self._client:
+            return False
+
+        try:
+            index_name = self.get_sam_solicitation_index_name(organization_id)
+            self._client.delete(index=index_name, id=str(solicitation_id), ignore=[404])
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete SAM solicitation {solicitation_id}: {e}")
+            return False
 
 
 # Global service instance

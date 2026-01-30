@@ -5,6 +5,7 @@ import { useAuth } from '@/lib/auth-context'
 import { scheduledTasksApi, ScheduledTask, MaintenanceStats, TaskRun } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
+import { formatDateTime } from '@/lib/date-utils'
 import {
   Wrench,
   Calendar,
@@ -142,11 +143,6 @@ export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabPr
     } finally {
       setActionLoading(null)
     }
-  }
-
-  const formatDateTime = (dateStr: string | null) => {
-    if (!dateStr) return 'Never'
-    return new Date(dateStr).toLocaleString()
   }
 
   const formatRelativeTime = (dateStr: string | null) => {

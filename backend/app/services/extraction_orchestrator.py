@@ -254,6 +254,14 @@ class ExtractionOrchestrator:
                 warnings=warnings,
             )
 
+            # Phase 2: Set extraction tier to "basic" for this extraction
+            extraction.extraction_tier = "basic"
+            asset.extraction_tier = "basic"
+
+            # Check if asset is eligible for enhancement
+            enhancement_eligible = self._is_enhancement_eligible(asset.original_filename)
+            asset.enhancement_eligible = enhancement_eligible
+
             # Update Asset status to ready
             await asset_service.update_asset_status(session, asset_id, "ready")
 
@@ -306,6 +314,30 @@ class ExtractionOrchestrator:
                     # Don't fail extraction if indexing queue fails
                     logger.warning(f"Failed to queue asset {asset_id} for indexing: {e}")
 
+            # Phase 2: Queue enhancement task if eligible and Docling is enabled
+            enhancement_queued = False
+            if enhancement_eligible and self._is_docling_enabled():
+                try:
+                    enhancement_result = await self._queue_enhancement(
+                        session=session,
+                        asset=asset,
+                        organization_id=asset.organization_id,
+                    )
+                    enhancement_queued = enhancement_result.get("queued", False)
+
+                    if enhancement_queued:
+                        await run_log_service.log_event(
+                            session=session,
+                            run_id=run_id,
+                            level="INFO",
+                            event_type="progress",
+                            message="Queued for background Docling enhancement",
+                            context=enhancement_result,
+                        )
+                except Exception as e:
+                    # Don't fail extraction if enhancement queue fails
+                    logger.warning(f"Failed to queue enhancement for asset {asset_id}: {e}")
+
             return {
                 "status": "success",
                 "asset_id": str(asset_id),
@@ -316,6 +348,7 @@ class ExtractionOrchestrator:
                 "extraction_time_seconds": extraction_time,
                 "markdown_length": len(markdown_content),
                 "warnings": warnings,
+                "enhancement_queued": enhancement_queued,
             }
 
         except Exception as e:
@@ -465,6 +498,119 @@ class ExtractionOrchestrator:
 
         except Exception as e:
             logger.error(f"Failed to record extraction failure: {e}", exc_info=True)
+
+    def _is_enhancement_eligible(self, filename: str) -> bool:
+        """
+        Check if file type is eligible for Docling enhancement.
+
+        Eligible types are structured documents that Docling handles better
+        than basic MarkItDown extraction.
+
+        Args:
+            filename: Original filename
+
+        Returns:
+            True if file type could benefit from enhancement
+        """
+        ENHANCEMENT_ELIGIBLE_EXTENSIONS = {
+            ".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls"
+        }
+        ext = Path(filename).suffix.lower()
+        return ext in ENHANCEMENT_ELIGIBLE_EXTENSIONS
+
+    def _is_docling_enabled(self) -> bool:
+        """
+        Check if Docling service is available for enhancement.
+
+        Returns:
+            True if Docling is configured and enabled
+        """
+        extraction_config = config_loader.get_extraction_config()
+        if extraction_config:
+            # Check if docling engine is listed and enabled
+            engines = getattr(extraction_config, 'engines', [])
+            for engine in engines:
+                if hasattr(engine, 'engine_type') and engine.engine_type == 'docling':
+                    if hasattr(engine, 'enabled') and engine.enabled:
+                        return True
+        # Fallback to settings
+        docling_url = getattr(settings, 'docling_service_url', None)
+        return bool(docling_url)
+
+    async def _queue_enhancement(
+        self,
+        session: AsyncSession,
+        asset,
+        organization_id,
+    ) -> Dict[str, Any]:
+        """
+        Queue background enhancement task for an asset.
+
+        Creates a new Run and ExtractionResult for the enhancement,
+        then queues the enhance_extraction_task.
+
+        Args:
+            session: Database session
+            asset: Asset to enhance
+            organization_id: Organization ID
+
+        Returns:
+            Dict with queuing result
+        """
+        from datetime import datetime
+        from uuid import uuid4
+
+        from ..database.models import Run, ExtractionResult
+        from ..tasks import enhance_extraction_task
+
+        # Create enhancement run
+        enhancement_run = Run(
+            id=uuid4(),
+            organization_id=organization_id,
+            run_type="extraction_enhancement",
+            origin="system",
+            status="pending",
+            config={
+                "asset_id": str(asset.id),
+                "enhancement_type": "docling",
+            },
+            input_asset_ids=[str(asset.id)],
+        )
+        session.add(enhancement_run)
+
+        # Create extraction result for enhancement
+        enhancement_extraction = ExtractionResult(
+            id=uuid4(),
+            asset_id=asset.id,
+            run_id=enhancement_run.id,
+            extractor_version="docling-enhancement",
+            extraction_tier="enhanced",
+            status="pending",
+        )
+        session.add(enhancement_extraction)
+
+        # Update asset enhancement timestamp
+        asset.enhancement_queued_at = datetime.utcnow()
+
+        await session.commit()
+
+        # Queue the enhancement task (goes to maintenance queue)
+        enhance_extraction_task.delay(
+            asset_id=str(asset.id),
+            run_id=str(enhancement_run.id),
+            extraction_id=str(enhancement_extraction.id),
+        )
+
+        logger.info(
+            f"Queued enhancement for asset {asset.id}: "
+            f"run={enhancement_run.id}, extraction={enhancement_extraction.id}"
+        )
+
+        return {
+            "queued": True,
+            "run_id": str(enhancement_run.id),
+            "extraction_id": str(enhancement_extraction.id),
+        }
 
 
 # Singleton instance

@@ -3,7 +3,7 @@
 import { useState, useEffect, use, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { samApi, SamSearch, SamSolicitation } from '@/lib/api'
+import { samApi, SamSearch, SamPullHistoryItem } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import toast from 'react-hot-toast'
 import Link from 'next/link'
@@ -17,18 +17,14 @@ import {
   Clock,
   Zap,
   Calendar,
-  ExternalLink,
   Play,
-  Pause,
   ChevronLeft,
   ChevronRight,
-  Filter,
-  Search,
-  Tag,
-  AlertCircle,
   CheckCircle,
   XCircle,
+  AlertCircle,
   Pencil,
+  History,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import SamSearchForm from '@/components/sam/SamSearchForm'
@@ -53,20 +49,17 @@ function SamSearchDetailContent({ params }: PageProps) {
 
   // State
   const [search, setSearch] = useState<SamSearch | null>(null)
-  const [solicitations, setSolicitations] = useState<SamSolicitation[]>([])
-  const [total, setTotal] = useState(0)
+  const [pullHistory, setPullHistory] = useState<SamPullHistoryItem[]>([])
+  const [totalPulls, setTotalPulls] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
-  const [isLoadingSolicitations, setIsLoadingSolicitations] = useState(false)
+  const [isLoadingHistory, setIsLoadingHistory] = useState(false)
   const [error, setError] = useState('')
   const [isPulling, setIsPulling] = useState(false)
   const [showEditForm, setShowEditForm] = useState(false)
 
-  // Filters & Pagination
-  const [statusFilter, setStatusFilter] = useState<string>('')
-  const [noticeTypeFilter, setNoticeTypeFilter] = useState<string>('')
-  const [naicsFilter, setNaicsFilter] = useState<string>('')
+  // Pagination
   const [page, setPage] = useState(1)
-  const pageSize = 20
+  const pageSize = 10
 
   // Load search details
   const loadSearch = useCallback(async () => {
@@ -80,30 +73,24 @@ function SamSearchDetailContent({ params }: PageProps) {
     }
   }, [token, searchId])
 
-  // Load solicitations with filters
-  const loadSolicitations = useCallback(async () => {
+  // Load pull history
+  const loadPullHistory = useCallback(async () => {
     if (!token) return
 
-    setIsLoadingSolicitations(true)
+    setIsLoadingHistory(true)
     try {
-      const params: any = {
-        search_id: searchId,
+      const data = await samApi.getPullHistory(token, searchId, {
         limit: pageSize,
         offset: (page - 1) * pageSize,
-      }
-      if (statusFilter) params.status = statusFilter
-      if (noticeTypeFilter) params.notice_type = noticeTypeFilter
-      if (naicsFilter) params.naics_code = naicsFilter
-
-      const data = await samApi.listSolicitations(token, params)
-      setSolicitations(data.items)
-      setTotal(data.total)
+      })
+      setPullHistory(data.items)
+      setTotalPulls(data.total)
     } catch (err: any) {
-      setError(err.message || 'Failed to load solicitations')
+      setError(err.message || 'Failed to load pull history')
     } finally {
-      setIsLoadingSolicitations(false)
+      setIsLoadingHistory(false)
     }
-  }, [token, searchId, statusFilter, noticeTypeFilter, naicsFilter, page])
+  }, [token, searchId, page])
 
   // Initial load
   useEffect(() => {
@@ -115,12 +102,12 @@ function SamSearchDetailContent({ params }: PageProps) {
     if (token) loadData()
   }, [token, loadSearch])
 
-  // Load solicitations when filters change
+  // Load pull history when page changes or after initial load
   useEffect(() => {
     if (token && !isLoading) {
-      loadSolicitations()
+      loadPullHistory()
     }
-  }, [token, isLoading, loadSolicitations])
+  }, [token, isLoading, loadPullHistory])
 
   // Handlers
   const handleTriggerPull = async () => {
@@ -135,20 +122,16 @@ function SamSearchDetailContent({ params }: PageProps) {
       } else {
         toast.success(`Pull completed: ${result.new_solicitations || 0} new solicitations`)
       }
-      // Refresh periodically to show results as they come in
+      // Refresh periodically to show results
       setTimeout(() => {
         loadSearch()
-        loadSolicitations()
+        loadPullHistory()
       }, 3000)
       setTimeout(() => {
         loadSearch()
-        loadSolicitations()
+        loadPullHistory()
         setIsPulling(false)
       }, 10000)
-      setTimeout(() => {
-        loadSearch()
-        loadSolicitations()
-      }, 30000)
     } catch (err: any) {
       setError(err.message || 'Failed to trigger pull')
       toast.error(err.message || 'Failed to trigger pull')
@@ -180,6 +163,18 @@ function SamSearchDetailContent({ params }: PageProps) {
     })
   }
 
+  const formatDuration = (start: string | null, end: string | null) => {
+    if (!start || !end) return '-'
+    const startDate = new Date(start)
+    const endDate = new Date(end)
+    const durationMs = endDate.getTime() - startDate.getTime()
+    const seconds = Math.floor(durationMs / 1000)
+    if (seconds < 60) return `${seconds}s`
+    const minutes = Math.floor(seconds / 60)
+    const remainingSeconds = seconds % 60
+    return `${minutes}m ${remainingSeconds}s`
+  }
+
   const getStatusBadge = (status: string) => {
     switch (status) {
       case 'active':
@@ -193,16 +188,34 @@ function SamSearchDetailContent({ params }: PageProps) {
     }
   }
 
-  const getNoticeTypeBadge = (noticeType: string) => {
-    const colors: Record<string, string> = {
-      o: 'bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400',
-      p: 'bg-purple-100 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400',
-      k: 'bg-indigo-100 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400',
-      r: 'bg-amber-100 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400',
-      s: 'bg-emerald-100 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400',
-      a: 'bg-cyan-100 dark:bg-cyan-900/20 text-cyan-700 dark:text-cyan-400',
+  const getPullStatusBadge = (status: string) => {
+    switch (status) {
+      case 'completed':
+        return {
+          bg: 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400',
+          icon: <CheckCircle className="w-3 h-3" />,
+        }
+      case 'running':
+        return {
+          bg: 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400',
+          icon: <RefreshCw className="w-3 h-3 animate-spin" />,
+        }
+      case 'failed':
+        return {
+          bg: 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400',
+          icon: <XCircle className="w-3 h-3" />,
+        }
+      case 'pending':
+        return {
+          bg: 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400',
+          icon: <Clock className="w-3 h-3" />,
+        }
+      default:
+        return {
+          bg: 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400',
+          icon: <AlertCircle className="w-3 h-3" />,
+        }
     }
-    return colors[noticeType] || 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
   }
 
   const getNoticeTypeLabel = (noticeType: string) => {
@@ -219,7 +232,7 @@ function SamSearchDetailContent({ params }: PageProps) {
     return labels[noticeType] || noticeType.toUpperCase()
   }
 
-  const totalPages = Math.ceil(total / pageSize)
+  const totalPages = Math.ceil(totalPulls / pageSize)
 
   if (isLoading) {
     return (
@@ -242,10 +255,10 @@ function SamSearchDetailContent({ params }: PageProps) {
             <AlertTriangle className="w-12 h-12 mx-auto text-red-500 mb-4" />
             <h2 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">Search Not Found</h2>
             <p className="text-gray-500 dark:text-gray-400 mb-6">{error || 'The requested search could not be found.'}</p>
-            <Link href="/sam">
+            <Link href="/sam/setup">
               <Button variant="secondary" className="gap-2">
                 <ArrowLeft className="w-4 h-4" />
-                Back to SAM Searches
+                Back to SAM Setup
               </Button>
             </Link>
           </div>
@@ -259,11 +272,11 @@ function SamSearchDetailContent({ params }: PageProps) {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Back Link */}
         <Link
-          href="/sam"
+          href="/sam/setup"
           className="inline-flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 mb-6"
         >
           <ArrowLeft className="w-4 h-4" />
-          Back to SAM Searches
+          Back to SAM Setup
         </Link>
 
         {/* Header */}
@@ -321,13 +334,11 @@ function SamSearchDetailContent({ params }: PageProps) {
 
         {/* Edit Form Modal */}
         {showEditForm && (
-          <div className="mb-8">
-            <SamSearchForm
-              search={search}
-              onSuccess={handleEditSuccess}
-              onCancel={() => setShowEditForm(false)}
-            />
-          </div>
+          <SamSearchForm
+            search={search}
+            onSuccess={handleEditSuccess}
+            onCancel={() => setShowEditForm(false)}
+          />
         )}
 
         {/* Error */}
@@ -344,17 +355,23 @@ function SamSearchDetailContent({ params }: PageProps) {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
             <div className="flex items-center gap-2 mb-2">
-              <FileText className="w-4 h-4 text-blue-500" />
-              <span className="text-xs text-gray-500 dark:text-gray-400">Solicitations</span>
+              <Calendar className="w-4 h-4 text-blue-500" />
+              <span className="text-xs text-gray-500 dark:text-gray-400">Date Range</span>
             </div>
-            <p className="text-2xl font-bold text-gray-900 dark:text-white">{search.solicitation_count}</p>
+            <p className="text-sm font-medium text-gray-900 dark:text-white">
+              {search.search_config?.posted_from
+                ? `From ${search.search_config.posted_from}`
+                : search.search_config?.active_only
+                ? 'Active only'
+                : 'All dates'}
+            </p>
           </div>
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
             <div className="flex items-center gap-2 mb-2">
-              <Zap className="w-4 h-4 text-purple-500" />
-              <span className="text-xs text-gray-500 dark:text-gray-400">Notices</span>
+              <History className="w-4 h-4 text-purple-500" />
+              <span className="text-xs text-gray-500 dark:text-gray-400">Total Pulls</span>
             </div>
-            <p className="text-2xl font-bold text-gray-900 dark:text-white">{search.notice_count}</p>
+            <p className="text-2xl font-bold text-gray-900 dark:text-white">{totalPulls}</p>
           </div>
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
             <div className="flex items-center gap-2 mb-2">
@@ -454,89 +471,41 @@ function SamSearchDetailContent({ params }: PageProps) {
           </div>
         </div>
 
-        {/* Filters */}
-        <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4 mb-6">
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex items-center gap-2">
-              <Filter className="w-4 h-4 text-gray-400" />
-              <span className="text-sm font-medium text-gray-700 dark:text-gray-300">Filters:</span>
-            </div>
-
-            {/* Status Filter */}
-            <select
-              value={statusFilter}
-              onChange={(e) => { setStatusFilter(e.target.value); setPage(1); }}
-              className="px-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
-            >
-              <option value="">All Statuses</option>
-              <option value="active">Active</option>
-              <option value="awarded">Awarded</option>
-              <option value="cancelled">Cancelled</option>
-            </select>
-
-            {/* Notice Type Filter */}
-            <select
-              value={noticeTypeFilter}
-              onChange={(e) => { setNoticeTypeFilter(e.target.value); setPage(1); }}
-              className="px-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
-            >
-              <option value="">All Notice Types</option>
-              <option value="o">Solicitation</option>
-              <option value="p">Presolicitation</option>
-              <option value="k">Combined Synopsis</option>
-              <option value="r">Sources Sought</option>
-              <option value="s">Special Notice</option>
-              <option value="a">Award</option>
-            </select>
-
-            {/* NAICS Filter */}
-            <input
-              type="text"
-              placeholder="NAICS Code"
-              value={naicsFilter}
-              onChange={(e) => { setNaicsFilter(e.target.value); setPage(1); }}
-              className="w-32 px-3 py-1.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400"
-            />
-
-            {/* Clear Filters */}
-            {(statusFilter || noticeTypeFilter || naicsFilter) && (
-              <button
-                onClick={() => {
-                  setStatusFilter('')
-                  setNoticeTypeFilter('')
-                  setNaicsFilter('')
-                  setPage(1)
-                }}
-                className="px-3 py-1.5 text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200"
-              >
-                Clear
-              </button>
-            )}
-
-            <div className="flex-1" />
-
-            {/* Results count */}
-            <span className="text-sm text-gray-500 dark:text-gray-400">
-              {total} solicitation{total !== 1 ? 's' : ''}
-            </span>
-          </div>
-        </div>
-
-        {/* Solicitations List */}
+        {/* Pull History Section */}
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-          {isLoadingSolicitations ? (
+          <div className="px-5 py-4 border-b border-gray-200 dark:border-gray-700">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <History className="w-5 h-5 text-gray-400" />
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white">Pull History</h3>
+                <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                  {totalPulls}
+                </span>
+              </div>
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={loadPullHistory}
+                disabled={isLoadingHistory}
+                className="gap-1.5"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isLoadingHistory ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+            </div>
+          </div>
+
+          {isLoadingHistory ? (
             <div className="flex flex-col items-center justify-center py-12">
               <Loader2 className="w-8 h-8 text-blue-500 animate-spin" />
-              <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">Loading solicitations...</p>
+              <p className="mt-3 text-sm text-gray-500 dark:text-gray-400">Loading pull history...</p>
             </div>
-          ) : solicitations.length === 0 ? (
+          ) : pullHistory.length === 0 ? (
             <div className="text-center py-12">
-              <FileText className="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
-              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">No Solicitations Found</h3>
+              <History className="w-12 h-12 mx-auto text-gray-300 dark:text-gray-600 mb-4" />
+              <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">No Pull History</h3>
               <p className="text-gray-500 dark:text-gray-400 mb-6">
-                {statusFilter || noticeTypeFilter || naicsFilter
-                  ? 'Try adjusting your filters or trigger a pull to fetch new data.'
-                  : 'Trigger a pull to fetch solicitations from SAM.gov.'}
+                Trigger a pull to fetch solicitations from SAM.gov.
               </p>
               <Button onClick={handleTriggerPull} disabled={isPulling} className="gap-2">
                 <Play className="w-4 h-4" />
@@ -551,125 +520,98 @@ function SamSearchDetailContent({ params }: PageProps) {
                   <thead>
                     <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        Solicitation
+                        Started
                       </th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        Organization
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        Type
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        NAICS
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        Posted
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        Deadline
-                      </th>
-                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
-                        Items
+                        Duration
                       </th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         Status
                       </th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Fetched
+                      </th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        New
+                      </th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Updated
+                      </th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Notices
+                      </th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Attachments
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
-                    {solicitations.map((sol) => (
-                      <tr
-                        key={sol.id}
-                        onClick={() => router.push(`/sam/solicitation/${sol.id}`)}
-                        className="hover:bg-gray-50 dark:hover:bg-gray-900/50 cursor-pointer transition-colors"
-                      >
-                        <td className="px-4 py-4">
-                          <div className="max-w-md">
-                            <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                              {sol.title}
-                            </p>
-                            <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
-                              {sol.solicitation_number || sol.notice_id}
-                            </p>
-                          </div>
-                        </td>
-                        <td className="px-4 py-4">
-                          <div className="max-w-[200px]">
-                            {sol.agency_name && (
-                              <p className="text-xs font-medium text-gray-700 dark:text-gray-300 truncate" title={sol.agency_name}>
-                                {sol.agency_name}
+                    {pullHistory.map((pull) => {
+                      const statusBadge = getPullStatusBadge(pull.status)
+                      return (
+                        <tr key={pull.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/50 transition-colors">
+                          <td className="px-4 py-4">
+                            <div>
+                              <p className="text-sm font-medium text-gray-900 dark:text-white">
+                                {formatDateTime(pull.started_at)}
                               </p>
-                            )}
-                            {sol.bureau_name && (
-                              <p className="text-xs text-gray-500 dark:text-gray-400 truncate" title={sol.bureau_name}>
-                                {sol.bureau_name}
-                              </p>
-                            )}
-                            {sol.office_name && (
-                              <p className="text-xs text-gray-400 dark:text-gray-500 truncate" title={sol.office_name}>
-                                {sol.office_name}
-                              </p>
-                            )}
-                            {!sol.agency_name && !sol.bureau_name && !sol.office_name && (
-                              <span className="text-xs text-gray-400">-</span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-4">
-                          <span className={`inline-flex px-2 py-0.5 text-xs font-medium rounded ${getNoticeTypeBadge(sol.notice_type)}`}>
-                            {getNoticeTypeLabel(sol.notice_type)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-4">
-                          {sol.naics_code && (
-                            <span className="text-xs font-mono text-gray-600 dark:text-gray-400">
-                              {sol.naics_code}
+                              {pull.completed_at && (
+                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                  Completed {formatDateTime(pull.completed_at)}
+                                </p>
+                              )}
+                            </div>
+                          </td>
+                          <td className="px-4 py-4 text-sm text-gray-600 dark:text-gray-400">
+                            {formatDuration(pull.started_at, pull.completed_at)}
+                          </td>
+                          <td className="px-4 py-4">
+                            <span className={`inline-flex items-center gap-1.5 px-2 py-0.5 text-xs font-medium rounded ${statusBadge.bg}`}>
+                              {statusBadge.icon}
+                              {pull.status}
                             </span>
-                          )}
-                        </td>
-                        <td className="px-4 py-4 text-xs text-gray-500 dark:text-gray-400">
-                          {formatDate(sol.posted_date)}
-                        </td>
-                        <td className="px-4 py-4">
-                          {sol.response_deadline ? (
-                            <span className={`text-xs ${
-                              new Date(sol.response_deadline) < new Date()
-                                ? 'text-red-600 dark:text-red-400'
-                                : 'text-gray-600 dark:text-gray-400'
+                            {pull.error_message && (
+                              <p className="text-xs text-red-600 dark:text-red-400 mt-1 truncate max-w-[200px]" title={pull.error_message}>
+                                {pull.error_message}
+                              </p>
+                            )}
+                          </td>
+                          <td className="px-4 py-4 text-center">
+                            <span className="text-sm font-medium text-gray-900 dark:text-white">
+                              {pull.results_summary?.total_fetched ?? '-'}
+                            </span>
+                          </td>
+                          <td className="px-4 py-4 text-center">
+                            <span className={`text-sm font-medium ${
+                              (pull.results_summary?.new_solicitations ?? 0) > 0
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-gray-500 dark:text-gray-400'
                             }`}>
-                              {formatDate(sol.response_deadline)}
+                              {pull.results_summary?.new_solicitations ?? '-'}
                             </span>
-                          ) : (
-                            <span className="text-xs text-gray-400">-</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-4 text-center">
-                          <div className="flex items-center justify-center gap-2">
-                            <span className="text-xs text-gray-500 dark:text-gray-400">
-                              <Zap className="w-3 h-3 inline mr-1" />
-                              {sol.notice_count}
+                          </td>
+                          <td className="px-4 py-4 text-center">
+                            <span className={`text-sm font-medium ${
+                              (pull.results_summary?.updated_solicitations ?? 0) > 0
+                                ? 'text-blue-600 dark:text-blue-400'
+                                : 'text-gray-500 dark:text-gray-400'
+                            }`}>
+                              {pull.results_summary?.updated_solicitations ?? '-'}
                             </span>
-                            <span className="text-xs text-gray-500 dark:text-gray-400">
-                              <FileText className="w-3 h-3 inline mr-1" />
-                              {sol.attachment_count}
+                          </td>
+                          <td className="px-4 py-4 text-center">
+                            <span className="text-sm text-gray-600 dark:text-gray-400">
+                              {pull.results_summary?.new_notices ?? '-'}
                             </span>
-                          </div>
-                        </td>
-                        <td className="px-4 py-4">
-                          <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded ${
-                            sol.status === 'active'
-                              ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400'
-                              : sol.status === 'awarded'
-                              ? 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400'
-                              : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
-                          }`}>
-                            {sol.status === 'active' && <CheckCircle className="w-3 h-3" />}
-                            {sol.status === 'cancelled' && <XCircle className="w-3 h-3" />}
-                            {sol.status}
-                          </span>
-                        </td>
-                      </tr>
-                    ))}
+                          </td>
+                          <td className="px-4 py-4 text-center">
+                            <span className="text-sm text-gray-600 dark:text-gray-400">
+                              {pull.results_summary?.new_attachments ?? '-'}
+                            </span>
+                          </td>
+                        </tr>
+                      )
+                    })}
                   </tbody>
                 </table>
               </div>
@@ -700,6 +642,17 @@ function SamSearchDetailContent({ params }: PageProps) {
               )}
             </>
           )}
+        </div>
+
+        {/* Link to all solicitations */}
+        <div className="mt-6 text-center">
+          <Link
+            href="/sam/solicitations"
+            className="inline-flex items-center gap-2 text-sm text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300"
+          >
+            <FileText className="w-4 h-4" />
+            View all solicitations
+          </Link>
         </div>
       </div>
     </div>

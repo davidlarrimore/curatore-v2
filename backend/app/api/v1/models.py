@@ -8,6 +8,7 @@ map to internal domain models, allowing the frontend's v1 payload shape.
 from typing import Optional, List, Dict, Any
 from pathlib import Path
 from datetime import datetime
+from uuid import UUID
 from pydantic import BaseModel, Field, EmailStr
 from pydantic import AliasChoices
 from pydantic import model_validator
@@ -691,280 +692,6 @@ class V1BatchProcessingResult(BaseModel):
 
 
 # =========================================================================
-# JOB MANAGEMENT MODELS (Phase 3)
-# =========================================================================
-
-class CreateJobRequest(BaseModel):
-    """Request to create a new batch job."""
-    document_ids: List[str] = Field(..., min_length=1, description="List of document IDs to process")
-    options: Optional[Dict[str, Any]] = Field(default=None, description="Processing options")
-    name: Optional[str] = Field(None, min_length=1, max_length=255, description="Job name (auto-generated if not provided)")
-    description: Optional[str] = Field(None, max_length=1000, description="Job description")
-    start_immediately: bool = Field(default=True, description="Start processing immediately after creation")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "document_ids": ["doc_123", "doc_456", "doc_789"],
-                "options": {
-                    "apply_llm_evaluation": True,
-                    "apply_vector_optimization": False,
-                    "quality_thresholds": {
-                        "conversion_threshold": 70,
-                        "clarity_threshold": 7
-                    }
-                },
-                "name": "Q1 Report Processing",
-                "description": "Process all Q1 reports for analysis",
-                "start_immediately": True
-            }
-        }
-
-
-class JobDocumentResponse(BaseModel):
-    """Individual document within a job."""
-    id: str = Field(..., description="Job document UUID")
-    document_id: str = Field(..., description="Document ID")
-    filename: str = Field(..., description="Original filename")
-    status: str = Field(..., description="Document status (PENDING, RUNNING, COMPLETED, FAILED, CANCELLED)")
-    conversion_score: Optional[int] = Field(None, description="Conversion quality score (0-100)")
-    is_rag_ready: bool = Field(..., description="Whether document meets RAG quality thresholds")
-    error_message: Optional[str] = Field(None, description="Error message if failed")
-    started_at: Optional[datetime] = Field(None, description="When processing started")
-    completed_at: Optional[datetime] = Field(None, description="When processing completed")
-    processing_time_seconds: Optional[float] = Field(None, description="Processing time in seconds")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "id": "123e4567-e89b-12d3-a456-426614174000",
-                "document_id": "doc_123",
-                "filename": "report_q1.pdf",
-                "status": "COMPLETED",
-                "conversion_score": 85,
-                "is_rag_ready": True,
-                "error_message": None,
-                "started_at": "2026-01-15T10:00:00",
-                "completed_at": "2026-01-15T10:02:30",
-                "processing_time_seconds": 150.5
-            }
-        }
-
-
-class JobLogResponse(BaseModel):
-    """Job log entry."""
-    id: str = Field(..., description="Log entry UUID")
-    timestamp: datetime = Field(..., description="Log timestamp")
-    level: str = Field(..., description="Log level (INFO, SUCCESS, WARNING, ERROR)")
-    message: str = Field(..., description="Log message")
-    document_id: Optional[str] = Field(None, description="Related document ID (if document-specific)")
-    metadata: Optional[Dict[str, Any]] = Field(None, description="Additional structured data")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "id": "123e4567-e89b-12d3-a456-426614174001",
-                "timestamp": "2026-01-15T10:00:00",
-                "level": "INFO",
-                "message": "Job created with 3 documents",
-                "document_id": None,
-                "metadata": {"document_count": 3, "retention_days": 30}
-            }
-        }
-
-
-class JobResponse(BaseModel):
-    """Job summary response."""
-    id: str = Field(..., description="Job UUID")
-    organization_id: str = Field(..., description="Organization UUID")
-    user_id: Optional[str] = Field(None, description="User UUID who created the job")
-    name: str = Field(..., description="Job name")
-    description: Optional[str] = Field(None, description="Job description")
-    status: str = Field(..., description="Job status (PENDING, QUEUED, RUNNING, COMPLETED, FAILED, CANCELLED)")
-    total_documents: int = Field(..., description="Total number of documents")
-    completed_documents: int = Field(..., description="Number of completed documents")
-    failed_documents: int = Field(..., description="Number of failed documents")
-    created_at: datetime = Field(..., description="When job was created")
-    queued_at: Optional[datetime] = Field(None, description="When job was queued")
-    started_at: Optional[datetime] = Field(None, description="When job started processing")
-    completed_at: Optional[datetime] = Field(None, description="When job completed")
-    cancelled_at: Optional[datetime] = Field(None, description="When job was cancelled")
-    expires_at: Optional[datetime] = Field(None, description="When job will be auto-deleted")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "id": "123e4567-e89b-12d3-a456-426614174000",
-                "organization_id": "04ace7c6-2043-4935-b074-ec0a567d1fd2",
-                "user_id": "usr_123",
-                "name": "Q1 Report Processing",
-                "description": "Process all Q1 reports for analysis",
-                "status": "RUNNING",
-                "total_documents": 3,
-                "completed_documents": 1,
-                "failed_documents": 0,
-                "created_at": "2026-01-15T10:00:00",
-                "queued_at": "2026-01-15T10:00:01",
-                "started_at": "2026-01-15T10:00:05",
-                "completed_at": None,
-                "cancelled_at": None,
-                "expires_at": "2026-02-14T10:00:00"
-            }
-        }
-
-
-class JobDetailResponse(JobResponse):
-    """Detailed job response with documents and logs."""
-    documents: List[JobDocumentResponse] = Field(..., description="Documents in this job")
-    recent_logs: List[JobLogResponse] = Field(..., description="Recent log entries")
-    processing_options: Dict[str, Any] = Field(..., description="Processing options used")
-    results_summary: Optional[Dict[str, Any]] = Field(None, description="Aggregated results")
-    error_message: Optional[str] = Field(None, description="Error message if job failed")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "id": "123e4567-e89b-12d3-a456-426614174000",
-                "organization_id": "04ace7c6-2043-4935-b074-ec0a567d1fd2",
-                "user_id": "usr_123",
-                "name": "Q1 Report Processing",
-                "description": "Process all Q1 reports",
-                "status": "RUNNING",
-                "total_documents": 3,
-                "completed_documents": 1,
-                "failed_documents": 0,
-                "created_at": "2026-01-15T10:00:00",
-                "queued_at": "2026-01-15T10:00:01",
-                "started_at": "2026-01-15T10:00:05",
-                "completed_at": None,
-                "cancelled_at": None,
-                "expires_at": "2026-02-14T10:00:00",
-                "documents": [],
-                "recent_logs": [],
-                "processing_options": {"apply_llm_evaluation": True},
-                "results_summary": None,
-                "error_message": None
-            }
-        }
-
-
-class JobListResponse(BaseModel):
-    """Paginated list of jobs."""
-    jobs: List[JobResponse] = Field(..., description="List of jobs")
-    total: int = Field(..., description="Total number of jobs (across all pages)")
-    page: int = Field(..., description="Current page number (1-indexed)")
-    page_size: int = Field(..., description="Number of items per page")
-    total_pages: int = Field(..., description="Total number of pages")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "jobs": [],
-                "total": 42,
-                "page": 1,
-                "page_size": 50,
-                "total_pages": 1
-            }
-        }
-
-
-class CancelJobResponse(BaseModel):
-    """Response from job cancellation."""
-    job_id: str = Field(..., description="Job UUID")
-    status: str = Field(..., description="Updated job status")
-    tasks_revoked: int = Field(..., description="Number of Celery tasks revoked")
-    tasks_verified_stopped: int = Field(..., description="Number of tasks verified stopped")
-    verification_timeout: bool = Field(..., description="Whether verification timed out")
-    cancelled_at: Optional[datetime] = Field(None, description="Cancellation timestamp")
-    message: Optional[str] = Field(None, description="Additional message")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "job_id": "123e4567-e89b-12d3-a456-426614174000",
-                "status": "CANCELLED",
-                "tasks_revoked": 5,
-                "tasks_verified_stopped": 5,
-                "verification_timeout": False,
-                "cancelled_at": "2026-01-15T10:05:00",
-                "message": None
-            }
-        }
-
-
-class UserJobStatsResponse(BaseModel):
-    """Job statistics for a user."""
-    active_jobs: int = Field(..., description="Number of active jobs (QUEUED or RUNNING)")
-    total_jobs_24h: int = Field(..., description="Total jobs created in last 24 hours")
-    total_jobs_7d: int = Field(..., description="Total jobs created in last 7 days")
-    completed_jobs_24h: int = Field(..., description="Completed jobs in last 24 hours")
-    failed_jobs_24h: int = Field(..., description="Failed jobs in last 24 hours")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "active_jobs": 2,
-                "total_jobs_24h": 5,
-                "total_jobs_7d": 18,
-                "completed_jobs_24h": 3,
-                "failed_jobs_24h": 0
-            }
-        }
-
-
-class OrganizationJobStatsResponse(BaseModel):
-    """Job statistics for an organization (admin only)."""
-    active_jobs: int = Field(..., description="Number of active jobs")
-    concurrency_limit: int = Field(..., description="Organization's concurrency limit")
-    total_jobs_24h: int = Field(..., description="Total jobs created in last 24 hours")
-    total_jobs_7d: int = Field(..., description="Total jobs created in last 7 days")
-    total_jobs_30d: int = Field(..., description="Total jobs created in last 30 days")
-    completed_jobs_24h: int = Field(..., description="Completed jobs in last 24 hours")
-    failed_jobs_24h: int = Field(..., description="Failed jobs in last 24 hours")
-    avg_processing_time_minutes: Optional[float] = Field(None, description="Average processing time in minutes")
-    success_rate_7d: Optional[float] = Field(None, description="Success rate over last 7 days (0.0-1.0)")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "active_jobs": 3,
-                "concurrency_limit": 5,
-                "total_jobs_24h": 12,
-                "total_jobs_7d": 45,
-                "total_jobs_30d": 180,
-                "completed_jobs_24h": 10,
-                "failed_jobs_24h": 1,
-                "avg_processing_time_minutes": 15.5,
-                "success_rate_7d": 0.96
-            }
-        }
-
-
-class DeleteJobResponse(BaseModel):
-    """Response from job deletion."""
-    job_id: str = Field(..., description="Job UUID")
-    job_name: str = Field(..., description="Name of deleted job")
-    documents_deleted: int = Field(..., description="Number of job documents deleted")
-    files_deleted: int = Field(..., description="Number of processed files deleted from disk")
-    logs_deleted: int = Field(..., description="Number of job log entries deleted")
-    deleted_at: datetime = Field(..., description="Deletion timestamp")
-    message: str = Field(..., description="Deletion summary message")
-
-    class Config:
-        json_schema_extra = {
-            "example": {
-                "job_id": "123e4567-e89b-12d3-a456-426614174000",
-                "job_name": "Q4 Report Processing",
-                "documents_deleted": 5,
-                "files_deleted": 4,
-                "logs_deleted": 12,
-                "deleted_at": "2026-01-16T10:30:00",
-                "message": "Job deleted successfully. 5 documents and 4 processed files removed."
-            }
-        }
-
-
-# =========================================================================
 # OBJECT STORAGE MODELS
 # =========================================================================
 
@@ -1514,8 +1241,8 @@ class RunLogEventResponse(BaseModel):
 
 class RunResponse(BaseModel):
     """Run response model."""
-    id: str = Field(..., description="Run UUID")
-    organization_id: str = Field(..., description="Organization UUID")
+    id: UUID = Field(..., description="Run UUID")
+    organization_id: UUID = Field(..., description="Organization UUID")
     run_type: str = Field(..., description="Run type (extraction, processing, experiment, system_maintenance, sync)")
     origin: str = Field(..., description="Run origin (user, system, scheduled)")
     status: str = Field(..., description="Run status (pending, running, completed, failed, cancelled)")
@@ -1527,7 +1254,7 @@ class RunResponse(BaseModel):
     created_at: datetime = Field(..., description="Creation timestamp")
     started_at: Optional[datetime] = Field(None, description="Start timestamp")
     completed_at: Optional[datetime] = Field(None, description="Completion timestamp")
-    created_by: Optional[str] = Field(None, description="User UUID who created the run")
+    created_by: Optional[UUID] = Field(None, description="User UUID who created the run")
 
     class Config:
         from_attributes = True

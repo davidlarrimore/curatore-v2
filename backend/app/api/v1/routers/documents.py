@@ -18,93 +18,20 @@ from ..models import (
     BulkDownloadRequest,
     ZipArchiveInfo,
     V1ProcessingOptions,
-    V1BatchProcessingRequest,
     V1ProcessingResult,
-    V1BatchProcessingResult,
 )
 from ....models import FileListResponse
 from ....database.models import User
 from ....dependencies import get_current_user, validate_document_id_param
 from ....services.document_service import document_service
 from ....models import BatchProcessingResult
-from ....services.job_service import (
-    set_active_job,
-    get_active_job_for_document,
-    record_job_status,
-    append_job_log,
-)
 from ....services.database_service import database_service
 from ....celery_app import app as celery_app
-from ....tasks import process_document_task
 from ....services.storage_service import storage_service
 from ....services.zip_service import zip_service
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
-# Ensure static batch routes are registered before dynamic '{document_id}' routes
-@router.post("/documents/batch/process", tags=["Processing"])
-async def process_batch(request: V1BatchProcessingRequest):
-    """Enqueue processing jobs for multiple documents in batch."""
-    batch_id = str(uuid.uuid4())
-    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
-    enqueued = []
-    conflicts = []
-
-    # Import artifact service for object storage validation
-    from ....services.artifact_service import artifact_service
-
-    for doc_id in request.document_ids:
-        # Verify artifact exists in object storage
-        try:
-            async with database_service.get_session() as session:
-                artifact = await artifact_service.get_artifact_by_document(
-                    session=session,
-                    document_id=doc_id,
-                    artifact_type="uploaded",
-                )
-                if not artifact:
-                    conflicts.append({"document_id": doc_id, "error": "Document not found in object storage"})
-                    continue
-
-                artifact_id = str(artifact.id)
-        except Exception as e:
-            conflicts.append({"document_id": doc_id, "error": f"Failed to verify document: {str(e)}"})
-            continue
-
-        opts = (request.options.model_dump() if request.options else {})
-        async_result = process_document_task.apply_async(
-            kwargs={
-                "document_id": doc_id,
-                "options": opts,
-                "artifact_id": artifact_id
-            },
-            queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing")
-        )
-        if not set_active_job(doc_id, async_result.id, ttl):
-            try:
-                celery_app.control.revoke(async_result.id, terminate=False)
-            except Exception:
-                pass
-            conflicts.append({"document_id": doc_id, "status": "conflict", "active_job_id": get_active_job_for_document(doc_id)})
-            continue
-        record_job_status(async_result.id, {
-            "job_id": async_result.id,
-            "document_id": doc_id,
-            "status": "PENDING",
-            "enqueued_at": datetime.utcnow().isoformat(),
-            "batch_id": batch_id,
-        })
-        append_job_log(async_result.id, "info", f"Queued: {doc_id}")
-        enqueued.append({"document_id": doc_id, "job_id": async_result.id, "status": "queued"})
-
-    return {
-        "batch_id": batch_id,
-        "jobs": enqueued,
-        "conflicts": conflicts,
-        "total": len(request.document_ids)
-    }
-
-# (moved above to avoid shadowing by dynamic routes)
 
 @router.get("/documents/{document_id}/result", response_model=V1ProcessingResult, tags=["Results"])
 async def get_processing_result(document_id: str = Depends(validate_document_id_param)):
@@ -270,48 +197,6 @@ async def get_document_content(
     except Exception as e:
         logger.error(f"Failed to get document content: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to get content: {str(e)}")
-
-@router.put("/documents/{document_id}/content", tags=["Results"])
-async def update_document_content(
-    document_id: str = Depends(validate_document_id_param),
-    request: DocumentEditRequest = Body(...),
-    options: Optional[V1ProcessingOptions] = None,
-):
-    """Enqueue content update + re-evaluation as a background job."""
-    payload = {
-        "content": request.content,
-        "options": (options.model_dump() if options else {}),
-        "improvement_prompt": request.improvement_prompt,
-        "apply_vector_optimization": request.apply_vector_optimization,
-    }
-    from ....tasks import update_document_content_task
-    async_result = update_document_content_task.apply_async(args=[document_id, payload], queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"))
-    ttl = int(os.getenv("JOB_LOCK_TTL_SECONDS", "3600"))
-    if not set_active_job(document_id, async_result.id, ttl):
-        try:
-            celery_app.control.revoke(async_result.id, terminate=False)
-        except Exception:
-            pass
-        active_job = get_active_job_for_document(document_id)
-        raise HTTPException(status_code=409, detail={
-            "error": "Another job is already running for this document",
-            "active_job_id": active_job,
-            "status": "conflict"
-        })
-    record_job_status(async_result.id, {
-        "job_id": async_result.id,
-        "document_id": document_id,
-        "status": "PENDING",
-        "enqueued_at": datetime.utcnow().isoformat(),
-        "operation": "update_content",
-    })
-    append_job_log(async_result.id, "info", f"Queued content update: {document_id}")
-    return {
-        "job_id": async_result.id,
-        "document_id": document_id,
-        "status": "queued",
-        "enqueued_at": datetime.utcnow(),
-    }
 
 def _strip_hash_prefix(filename: str) -> str:
     """Strip 32-character hex hash prefix from filename if present."""
@@ -561,7 +446,7 @@ async def download_rag_ready_documents(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"RAG-ready download failed: {str(e)}")
 
-@router.get("/batch/{batch_id}/result", response_model=V1BatchProcessingResult, tags=["Results"])
+@router.get("/batch/{batch_id}/result", response_model=BatchProcessingResult, tags=["Results"])
 async def get_batch_result(batch_id: str):
     """Get batch processing result."""
     result = storage_service.get_batch_result(batch_id)

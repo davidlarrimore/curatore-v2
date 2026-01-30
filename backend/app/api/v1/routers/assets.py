@@ -1460,3 +1460,91 @@ async def compare_metadata(
             metadata_b=to_response(metadata_b),
             differences=differences,
         )
+
+
+# =============================================================================
+# Priority Boost Endpoint
+# =============================================================================
+
+
+@router.post(
+    "/{asset_id}/boost",
+    summary="Boost extraction priority",
+    description="Boost extraction priority for this asset. "
+                "Moves pending extraction to high-priority queue.",
+)
+async def boost_asset_extraction(
+    asset_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Boost extraction priority for this asset.
+
+    Use this when waiting for a specific document to be processed.
+    The extraction will be moved to the high-priority queue.
+    """
+    from ....services.priority_queue_service import (
+        priority_queue_service,
+        BoostReason,
+    )
+
+    async with database_service.get_session() as session:
+        # Verify asset belongs to user's organization
+        asset = await asset_service.get_asset(session=session, asset_id=asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        if asset.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        result = await priority_queue_service.boost_extraction(
+            session=session,
+            asset_id=asset_id,
+            reason=BoostReason.USER_REQUESTED,
+            organization_id=current_user.organization_id,
+        )
+
+        if result["status"] == "rate_limited":
+            raise HTTPException(
+                status_code=429,
+                detail=result["message"]
+            )
+
+        return result
+
+
+@router.get(
+    "/{asset_id}/queue-info",
+    summary="Get queue position and extraction info",
+    description="Get queue position and extraction service info for a pending asset.",
+)
+async def get_asset_queue_info(
+    asset_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get queue position and extraction service information for an asset.
+
+    Returns:
+    - Queue position (X of Y)
+    - Extraction service being used
+    - Run status (pending, running)
+    - Queue statistics
+
+    Use this when displaying processing status in the UI.
+    """
+    from ....services.priority_queue_service import priority_queue_service
+
+    async with database_service.get_session() as session:
+        # Verify asset belongs to user's organization
+        asset = await asset_service.get_asset(session=session, asset_id=asset_id)
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+        if asset.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        result = await priority_queue_service.get_asset_queue_info(
+            session=session,
+            asset_id=asset_id,
+        )
+
+        return result

@@ -19,7 +19,7 @@ import {
 } from 'lucide-react'
 import { objectStorageApi, organizationsApi, utils } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
-import FolderBreadcrumb from '../jobs/FolderBreadcrumb'
+import FolderBreadcrumb from '../shared/FolderBreadcrumb'
 import toast from 'react-hot-toast'
 
 interface StorageFile {

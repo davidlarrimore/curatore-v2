@@ -1,42 +1,28 @@
 """
-Celery tasks wrapping the existing document processing pipeline.
+Celery tasks for Curatore v2.
 
-REQUIRES object storage (S3/MinIO) - no filesystem fallback.
-
-Object Storage Mode (REQUIRED):
-- artifact_id is REQUIRED for all processing tasks
-- Source files are downloaded from object storage to temporary directory
-- Processed results are uploaded back to object storage
-- Artifact records are created in the database for tracking
-- Task fails if artifact_id is not provided
-- S3 lifecycle policies handle file retention and cleanup
+Handles extraction, scheduled tasks, SAM.gov integration, and web scraping.
 """
 import asyncio
 import logging
 import re
-import shutil
 import tempfile
 import uuid
 from datetime import datetime, timedelta
-from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from celery import shared_task, Task
-from sqlalchemy import select, and_
+from celery import shared_task
+from sqlalchemy import select
 
-from .services.document_service import document_service
-from .services.storage_service import storage_service
-from .services.job_service import (
-    record_job_status,
-    clear_active_job,
-    append_job_log,
-)
 from .services.database_service import database_service
 from .services.extraction_orchestrator import extraction_orchestrator
 from .services.config_loader import config_loader
-from .database.models import Job, JobDocument, JobLog
 from .config import settings
+
+
+# Logger for tasks
+logger = logging.getLogger("curatore.tasks")
 
 
 def _is_opensearch_enabled() -> bool:
@@ -44,328 +30,7 @@ def _is_opensearch_enabled() -> bool:
     opensearch_config = config_loader.get_opensearch_config()
     if opensearch_config:
         return opensearch_config.enabled
-    return _is_opensearch_enabled()
-
-
-class BaseTask(Task):
-    def on_success(self, retval: Any, task_id: str, args: Any, kwargs: Any):
-        try:
-            # Legacy Redis tracking
-            record_job_status(task_id, {
-                "job_id": task_id,
-                "document_id": kwargs.get("document_id") or (args[0] if args else None),
-                "status": "SUCCESS",
-                "finished_at": datetime.utcnow().isoformat(),
-                "result": retval,
-            })
-
-            # Database job tracking (Phase 2+)
-            job_document_id = kwargs.get("job_document_id")
-            if job_document_id:
-                asyncio.run(_update_job_document_success(job_document_id, retval))
-        finally:
-            doc_id = kwargs.get("document_id") or (args[0] if args else None)
-            if doc_id:
-                clear_active_job(doc_id, task_id)
-
-    def on_failure(self, exc: Exception, task_id: str, args: Any, kwargs: Any, einfo):
-        try:
-            # Legacy Redis tracking
-            record_job_status(task_id, {
-                "job_id": task_id,
-                "document_id": kwargs.get("document_id") or (args[0] if args else None),
-                "status": "FAILURE",
-                "finished_at": datetime.utcnow().isoformat(),
-                "error": str(exc),
-            })
-
-            # Database job tracking (Phase 2+)
-            job_document_id = kwargs.get("job_document_id")
-            if job_document_id:
-                asyncio.run(_update_job_document_failure(job_document_id, str(exc)))
-        finally:
-            doc_id = kwargs.get("document_id") or (args[0] if args else None)
-            if doc_id:
-                clear_active_job(doc_id, task_id)
-
-
-@shared_task(bind=True, base=BaseTask, autoretry_for=(), retry_backoff=True, retry_kwargs={"max_retries": 0})
-def process_document_task(
-    self,
-    document_id: str,
-    options: Dict[str, Any],
-    file_path: Optional[str] = None,
-    job_id: Optional[str] = None,
-    job_document_id: Optional[str] = None,
-    artifact_id: Optional[str] = None,
-    organization_id: Optional[str] = None,
-) -> Dict[str, Any]:
-    """
-    Process a document with optional job tracking.
-
-    REQUIRES object storage (S3/MinIO) - artifact_id is mandatory.
-
-    Processing flow:
-    - Downloads source file from object storage using artifact_id
-    - Processes document through extraction and quality evaluation pipeline
-    - Uploads processed result back to object storage
-    - Creates artifact records in database for tracking
-
-    Args:
-        document_id: Document ID to process
-        options: Processing options dict
-        file_path: Deprecated (object storage uses artifact_id)
-        job_id: Optional job ID for database tracking
-        job_document_id: Optional job document ID for database tracking
-        artifact_id: REQUIRED - artifact ID for object storage download
-        organization_id: Optional organization ID for multi-tenant isolation
-
-    Returns:
-        Dict with processing result including markdown content and quality scores
-
-    Raises:
-        RuntimeError: If artifact_id is not provided
-        RuntimeError: If file cannot be downloaded from object storage
-    """
-    # Legacy Redis tracking
-    record_job_status(self.request.id, {
-        "job_id": self.request.id,
-        "document_id": document_id,
-        "status": "STARTED",
-        "started_at": datetime.utcnow().isoformat(),
-    })
-
-    append_job_log(self.request.id, "info", f"Job started for document '{document_id}'")
-
-    # Database job tracking (Phase 2+)
-    if job_document_id:
-        asyncio.run(_update_job_document_started(job_document_id, self.request.id, document_id, file_path))
-    # Prepare domain options from incoming API shape
-    from .api.v1.models import V1ProcessingOptions, V1ProcessingResult
-    domain_options = V1ProcessingOptions(**(options or {})).to_domain()
-
-    logger = logging.getLogger("curatore.api")
-    # Log which extraction engine will be used
-    try:
-        engine = (domain_options.extraction_engine or "docling-external").lower()
-        has_docling = bool(getattr(document_service, "docling_base", None))
-        has_extraction = bool(getattr(document_service, "extract_base", None))
-
-        if engine == "docling":
-            base = getattr(document_service, "docling_base", "").rstrip("/")
-            path = "/v1/convert/file"
-            timeout = getattr(document_service, "docling_timeout", 60)
-            if has_docling:
-                append_job_log(self.request.id, "info", f"Extractor: Docling at {base}{path} (timeout {timeout}s)")
-                try:
-                    logger.info("Extractor selected: Docling %s%s (timeout %ss)", base, path, timeout)
-                except Exception:
-                    pass
-            else:
-                append_job_log(self.request.id, "warning", "Extractor: Docling selected (not configured)")
-        elif engine in {"default", "extraction", "extraction-service", "legacy"}:
-            base = getattr(document_service, "extract_base", "")
-            timeout = getattr(document_service, "extract_timeout", 60)
-            if has_extraction:
-                append_job_log(self.request.id, "info", f"Extractor: extraction-service at {base} (timeout {timeout}s)")
-                try:
-                    logger.info("Extractor selected: extraction-service %s (timeout %ss)", base, timeout)
-                except Exception:
-                    pass
-            else:
-                append_job_log(self.request.id, "warning", "Extractor: extraction-service selected (not configured)")
-        elif engine == "none":
-            append_job_log(self.request.id, "info", "Extractor: none (no external extraction)")
-        else:
-            append_job_log(self.request.id, "warning", f"Extractor: unsupported selection '{engine}'")
-    except Exception:
-        # Non-fatal; continue processing
-        pass
-
-    # Locate file: object storage REQUIRED
-    resolved_path = None
-    temp_dir = None  # Track temp directory for cleanup
-
-    # Enforce artifact_id requirement
-    if not artifact_id:
-        append_job_log(self.request.id, "error", "Missing artifact_id - object storage is required")
-        raise RuntimeError("artifact_id is required for object storage")
-
-    # Download from object storage
-    try:
-        append_job_log(self.request.id, "info", f"Fetching file from object storage (artifact={artifact_id[:8]}...)")
-        resolved_path, temp_dir = asyncio.run(_fetch_from_object_storage(artifact_id))
-        if resolved_path:
-            append_job_log(self.request.id, "info", f"Downloaded file to temp: {resolved_path.name}")
-        else:
-            append_job_log(self.request.id, "error", "Failed to download file from object storage")
-            raise RuntimeError("Failed to download file from object storage")
-    except Exception as e:
-        append_job_log(self.request.id, "error", f"Object storage fetch failed: {e}")
-        raise
-
-    # Get organization_id from parameter or job if available (for connection resolution and storage uploads)
-    org_id_resolved = organization_id  # Use parameter if provided
-    if not org_id_resolved and (job_document_id or job_id):
-        async def _get_organization_id():
-            async with database_service.get_session() as session:
-                if job_document_id:
-                    # Get organization_id from JobDocument -> Job
-                    result = await session.execute(
-                        select(Job.organization_id)
-                        .join(JobDocument, JobDocument.job_id == Job.id)
-                        .where(JobDocument.id == job_document_id)
-                    )
-                    return result.scalar_one_or_none()
-                elif job_id:
-                    # Get organization_id directly from Job
-                    result = await session.execute(
-                        select(Job.organization_id).where(Job.id == job_id)
-                    )
-                    return result.scalar_one_or_none()
-                return None
-
-        try:
-            org_id_resolved = asyncio.run(_get_organization_id())
-        except Exception as e:
-            logging.getLogger("curatore.tasks").warning(f"Failed to get organization_id: {e}")
-
-    # Run the existing async pipeline with organization context
-    try:
-        append_job_log(self.request.id, "info", "Conversion started")
-
-        async def _process_with_session():
-            async with database_service.get_session() as session:
-                return await document_service.process_document(
-                    document_id,
-                    resolved_path,
-                    domain_options,
-                    organization_id=org_id_resolved,
-                    session=session
-                )
-
-        result = asyncio.run(_process_with_session())
-        # Post-extraction confirmation log: which extractor actually produced content
-        try:
-            meta = getattr(result, 'processing_metadata', {}) or {}
-            ex = meta.get('extractor') if isinstance(meta, dict) else None
-            if isinstance(ex, dict) and ex:
-                eng = ex.get('engine') or ex.get('requested_engine') or 'unknown'
-                url = ex.get('url') or ''
-                ok = ex.get('ok')
-                err = ex.get('error')
-                status_txt = "ok" if ok else f"failed{f': {err}' if err else ''}"
-                msg = f"Extractor used: {eng}{' - ' + url if url else ''} ({status_txt})"
-                append_job_log(self.request.id, "info", msg)
-                if err:
-                    append_job_log(self.request.id, "warning", f"Extractor error detail: {err}")
-                # Docling-specific status/error reporting for Processing Panel visibility
-                if eng == 'docling':
-                    status_txt = ex.get('status')
-                    errors_list = ex.get('errors') or []
-                    ptime = ex.get('processing_time')
-                    if status_txt:
-                        append_job_log(self.request.id, "info", f"Docling status: {status_txt}{f', time: {ptime:.2f}s' if isinstance(ptime, (int, float)) else ''}")
-                    if isinstance(errors_list, list) and errors_list:
-                        first_err = errors_list[0]
-                        append_job_log(self.request.id, "warning", f"Docling reported {len(errors_list)} error(s); first: {first_err}")
-        except Exception:
-            pass
-        if result and getattr(result, 'conversion_result', None):
-            append_job_log(self.request.id, "success", f"Conversion complete (score {result.conversion_result.conversion_score}/100)")
-        append_job_log(self.request.id, "success", "Completed processing")
-
-        # Persist result via storage service (so existing endpoints work)
-        storage_service.save_processing_result(result)
-
-        # Upload processed result to object storage if enabled
-        if settings.use_object_storage and org_id_resolved and result:
-            try:
-                # Get markdown content from result attributes or read from file
-                markdown_content = getattr(result, 'optimized_markdown', None) or getattr(result, 'markdown', None)
-
-                # If not in memory, read from the markdown_path
-                if not markdown_content and hasattr(result, 'markdown_path') and result.markdown_path:
-                    markdown_path = Path(result.markdown_path)
-                    if markdown_path.exists():
-                        markdown_content = markdown_path.read_text(encoding='utf-8')
-
-                if markdown_content:
-                    append_job_log(self.request.id, "info", "Uploading processed result to object storage...")
-                    original_filename = resolved_path.name if resolved_path else f"{document_id}.txt"
-                    processed_artifact_id = asyncio.run(
-                        _upload_processed_to_object_storage(
-                            document_id=document_id,
-                            organization_id=str(org_id_resolved),
-                            markdown_content=markdown_content,
-                            original_filename=original_filename,
-                            job_id=job_id,
-                        )
-                    )
-                    if processed_artifact_id:
-                        append_job_log(self.request.id, "info", f"Uploaded to storage (artifact={processed_artifact_id[:8]}...)")
-                else:
-                    append_job_log(self.request.id, "warning", "No markdown content available to upload to object storage")
-            except Exception as e:
-                # Log but don't fail - filesystem result is already saved
-                append_job_log(self.request.id, "warning", f"Object storage upload failed: {e}")
-                logging.getLogger("curatore.tasks").warning(f"Object storage upload failed: {e}")
-
-        # Return a JSON-serializable V1ProcessingResult dict
-        return V1ProcessingResult.model_validate(result).model_dump()
-    except Exception as e:
-        append_job_log(self.request.id, "error", f"Processing error: {str(e)}")
-        raise
-    finally:
-        # Clean up temp directory if we downloaded from object storage
-        if temp_dir:
-            try:
-                shutil.rmtree(temp_dir)
-            except Exception:
-                pass
-
-
-@shared_task(bind=True, base=BaseTask, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
-def update_document_content_task(self, document_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
-    # payload: { content, options, improvement_prompt, apply_vector_optimization }
-    record_job_status(self.request.id, {
-        "job_id": self.request.id,
-        "document_id": document_id,
-        "status": "STARTED",
-        "started_at": datetime.utcnow().isoformat(),
-    })
-
-    from .api.v1.models import V1ProcessingOptions, V1ProcessingResult
-
-    options_dict = payload.get("options") or {}
-    content = payload.get("content") or ""
-    improvement_prompt = payload.get("improvement_prompt")
-    apply_vector_optimization = bool(payload.get("apply_vector_optimization") or False)
-
-    domain_options = V1ProcessingOptions(**options_dict).to_domain()
-
-    try:
-        append_job_log(self.request.id, "info", "Content update started")
-        result = asyncio.run(
-            document_service.update_document_content(
-                document_id=document_id,
-                content=content,
-                options=domain_options,
-                improvement_prompt=improvement_prompt,
-                apply_vector_optimization=apply_vector_optimization,
-            )
-        )
-        if not result:
-            append_job_log(self.request.id, "error", "Document not found or update failed")
-            raise RuntimeError("Document not found or update failed")
-        append_job_log(self.request.id, "success", "Content saved and re-evaluated")
-        append_job_log(self.request.id, "success", "Update complete")
-    except Exception as e:
-        append_job_log(self.request.id, "error", f"Update failed: {str(e)}")
-        raise
-
-    storage_service.save_processing_result(result)
-    return V1ProcessingResult.model_validate(result).model_dump()
+    return False
 
 
 # ============================================================================
@@ -737,6 +402,165 @@ async def _reindex_organization_async(
         return await index_service.reindex_organization(
             session, organization_id, batch_size
         )
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def reindex_sam_organization_task(
+    self,
+    organization_id: str,
+) -> Dict[str, Any]:
+    """
+    Reindex all SAM.gov data for an organization (Phase 7.6).
+
+    This task indexes all existing SAM notices and solicitations to OpenSearch
+    for unified search. Useful for initial setup or recovery.
+
+    Args:
+        organization_id: Organization UUID string
+
+    Returns:
+        Dict with reindex statistics
+    """
+    from uuid import UUID
+
+    logger = logging.getLogger("curatore.tasks.sam_indexing")
+
+    # Check if OpenSearch is enabled
+    if not _is_opensearch_enabled():
+        logger.info("OpenSearch disabled, skipping SAM reindex")
+        return {
+            "status": "disabled",
+            "message": "OpenSearch is disabled",
+            "solicitations_indexed": 0,
+            "notices_indexed": 0,
+        }
+
+    logger.info(f"Starting SAM reindex task for organization {organization_id}")
+
+    try:
+        result = asyncio.run(
+            _reindex_sam_organization_async(UUID(organization_id))
+        )
+
+        logger.info(
+            f"SAM reindex completed for org {organization_id}: "
+            f"{result.get('solicitations_indexed', 0)} solicitations, "
+            f"{result.get('notices_indexed', 0)} notices indexed"
+        )
+        return result
+
+    except Exception as e:
+        logger.error(f"SAM reindex task failed for org {organization_id}: {e}", exc_info=True)
+        return {
+            "status": "failed",
+            "message": str(e),
+            "solicitations_indexed": 0,
+            "notices_indexed": 0,
+        }
+
+
+async def _reindex_sam_organization_async(
+    organization_id,
+) -> Dict[str, Any]:
+    """
+    Async wrapper for SAM organization reindex.
+
+    Args:
+        organization_id: Organization UUID
+
+    Returns:
+        Dict with reindex results
+    """
+    from .services.opensearch_service import opensearch_service
+    from .services.sam_service import sam_service
+
+    logger = logging.getLogger("curatore.tasks.sam_indexing")
+
+    solicitations_indexed = 0
+    notices_indexed = 0
+    errors = []
+
+    async with database_service.get_session() as session:
+        # Get all solicitations for the organization
+        solicitations, total_count = await sam_service.list_solicitations(
+            session=session,
+            organization_id=organization_id,
+            limit=10000,  # Get all
+        )
+
+        logger.info(f"Found {total_count} solicitations to index")
+
+        for solicitation in solicitations:
+            try:
+                # Index solicitation
+                success = await opensearch_service.index_sam_solicitation(
+                    organization_id=organization_id,
+                    solicitation_id=solicitation.id,
+                    solicitation_number=solicitation.solicitation_number,
+                    title=solicitation.title,
+                    description=solicitation.description,
+                    notice_type=solicitation.notice_type,
+                    agency=solicitation.agency_name,
+                    sub_agency=solicitation.bureau_name,
+                    office=solicitation.office_name,
+                    posted_date=solicitation.posted_date,
+                    response_deadline=solicitation.response_deadline,
+                    naics_codes=[solicitation.naics_code] if solicitation.naics_code else None,
+                    psc_codes=[solicitation.psc_code] if solicitation.psc_code else None,
+                    set_aside=solicitation.set_aside_code,
+                    place_of_performance=_extract_place_of_performance(solicitation.place_of_performance),
+                    notice_count=solicitation.notice_count or 0,
+                    attachment_count=solicitation.attachment_count or 0,
+                    summary_status=solicitation.summary_status,
+                    is_active=(solicitation.status == "active"),
+                    created_at=solicitation.created_at,
+                )
+                if success:
+                    solicitations_indexed += 1
+
+                # Get and index notices for this solicitation
+                notices = await sam_service.list_notices(
+                    session=session,
+                    solicitation_id=solicitation.id,
+                )
+
+                for notice in notices:
+                    try:
+                        success = await opensearch_service.index_sam_notice(
+                            organization_id=organization_id,
+                            notice_id=notice.id,
+                            sam_notice_id=notice.sam_notice_id,
+                            solicitation_id=solicitation.id,
+                            solicitation_number=solicitation.solicitation_number,
+                            title=notice.title,
+                            description=notice.description,
+                            notice_type=notice.notice_type,
+                            agency=solicitation.agency_name,
+                            sub_agency=solicitation.bureau_name,
+                            office=solicitation.office_name,
+                            posted_date=notice.posted_date,
+                            response_deadline=notice.response_deadline,
+                            naics_codes=[solicitation.naics_code] if solicitation.naics_code else None,
+                            psc_codes=[solicitation.psc_code] if solicitation.psc_code else None,
+                            set_aside=solicitation.set_aside_code,
+                            place_of_performance=_extract_place_of_performance(solicitation.place_of_performance),
+                            version_number=notice.version_number,
+                            created_at=notice.created_at,
+                        )
+                        if success:
+                            notices_indexed += 1
+                    except Exception as e:
+                        errors.append(f"Notice {notice.id}: {str(e)}")
+
+            except Exception as e:
+                errors.append(f"Solicitation {solicitation.id}: {str(e)}")
+
+    return {
+        "status": "completed",
+        "solicitations_indexed": solicitations_indexed,
+        "notices_indexed": notices_indexed,
+        "errors": errors[:10] if errors else [],
+    }
 
 
 # ============================================================================
@@ -1211,552 +1035,47 @@ async def _execute_scheduled_task(
             await lock_service.release_lock(lock_resource, lock_id)
 
 
-@shared_task(bind=True)
-def cleanup_expired_jobs_task(self, dry_run: bool = False) -> Dict[str, Any]:
-    """
-    Scheduled task for cleaning up expired jobs.
-
-    This task runs daily (default: 3 AM UTC) to delete jobs that have exceeded
-    their retention period based on organization settings.
-
-    Args:
-        dry_run: If True, only report what would be deleted without actual deletion
-
-    Returns:
-        Dict with cleanup statistics:
-            {
-                "deleted_jobs": int,
-                "deleted_files": int,
-                "errors": int,
-                "completed_at": str
-            }
-    """
-    from .services.job_service import cleanup_expired_jobs
-
-    logger = logging.getLogger("curatore.jobs")
-    logger.info(f"Starting scheduled job cleanup task (dry_run={dry_run})")
-
-    try:
-        if dry_run:
-            logger.info("[DRY RUN] Would execute job cleanup (not implemented)")
-            return {
-                "deleted_jobs": 0,
-                "deleted_files": 0,
-                "errors": 0,
-                "completed_at": datetime.utcnow().isoformat(),
-                "dry_run": True,
-            }
-
-        result = asyncio.run(cleanup_expired_jobs())
-
-        logger.info(
-            f"Job cleanup completed: deleted {result['deleted_jobs']} jobs, "
-            f"{result['deleted_files']} files, {result['errors']} errors"
-        )
-
-        return result
-
-    except Exception as e:
-        logger.error(f"Error in job cleanup task: {e}")
-        raise
-
-
-# ============================================================================
-# OBJECT STORAGE HELPERS (Phase 6)
-# ============================================================================
-
-async def _fetch_from_object_storage(artifact_id: str) -> tuple[Optional[Path], Optional[Path]]:
-    """
-    Download a file from object storage to a temporary directory.
-
-    Args:
-        artifact_id: Artifact UUID string
-
-    Returns:
-        Tuple of (file_path, temp_dir_path) - temp_dir should be cleaned up after use
-        Returns (None, None) if artifact not found or download fails
-    """
-    from .services.minio_service import get_minio_service
-    from .services.artifact_service import artifact_service
-
-    minio = get_minio_service()
-    if not minio:
-        logger = logging.getLogger("curatore.tasks")
-        logger.warning("Object storage not enabled, cannot fetch artifact")
-        return None, None
-
-    async with database_service.get_session() as session:
-        artifact = await artifact_service.get_artifact(session, uuid.UUID(artifact_id))
-        if not artifact:
-            logger = logging.getLogger("curatore.tasks")
-            logger.warning(f"Artifact {artifact_id} not found in database")
-            return None, None
-
-        # Download object content using get_object which returns BytesIO
-        try:
-            content_io = minio.get_object(artifact.bucket, artifact.object_key)
-            content = content_io.getvalue()  # Get bytes from BytesIO
-        except Exception as e:
-            logger = logging.getLogger("curatore.tasks")
-            logger.error(f"Failed to download artifact {artifact_id}: {e}")
-            return None, None
-
-        # Write to temp directory
-        temp_dir = Path(tempfile.mkdtemp(prefix="curatore_storage_"))
-        temp_file = temp_dir / artifact.original_filename
-        temp_file.write_bytes(content)
-
-        return temp_file, temp_dir
-
-
-async def _upload_processed_to_object_storage(
-    document_id: str,
-    organization_id: str,
-    markdown_content: str,
-    original_filename: str,
-    job_id: Optional[str] = None,
-) -> Optional[str]:
-    """
-    Upload processed markdown content to object storage.
-
-    Args:
-        document_id: Document identifier
-        organization_id: Organization UUID string
-        markdown_content: Processed markdown content
-        original_filename: Original source filename
-        job_id: Optional job UUID string
-
-    Returns:
-        Artifact ID string if successful, None on failure
-    """
-    from io import BytesIO
-    from .services.minio_service import get_minio_service
-    from .services.artifact_service import artifact_service
-    from .database.models import Job
-
-    minio = get_minio_service()
-    if not minio:
-        logger = logging.getLogger("curatore.tasks")
-        logger.warning("Object storage not enabled, cannot upload processed result")
-        return None
-
-    def _slugify(value: str) -> str:
-        cleaned = re.sub(r"[^a-zA-Z0-9-_]+", "-", value.strip())
-        return cleaned.strip("-").lower()
-
-    job_folder = None
-    if job_id:
-        try:
-            async with database_service.get_session() as session:
-                result = await session.execute(select(Job).where(Job.id == uuid.UUID(job_id)))
-                job = result.scalar_one_or_none()
-                if job:
-                    job_folder = job.processed_folder
-        except Exception:
-            job_folder = None
-
-    if not job_folder:
-        slug = _slugify(f"job-{job_id}" if job_id else "job")
-        ts = datetime.utcnow().strftime("%Y%m%d-%H%M%S")
-        job_folder = f"{slug}_{ts}"
-
-    # Build object key: org_id/{job_name_timestamp}/filename.md
-    base_filename = Path(original_filename).stem
-    safe_document_id = _slugify(document_id) or "document"
-    processed_filename = f"{safe_document_id}_{base_filename}.md"
-    object_key = f"{organization_id}/{job_folder}/{processed_filename}"
-    bucket = minio.bucket_processed
-
-    try:
-        # Upload content
-        content_bytes = markdown_content.encode("utf-8")
-        data_stream = BytesIO(content_bytes)
-        etag = minio.put_object(
-            bucket=bucket,
-            key=object_key,
-            data=data_stream,
-            length=len(content_bytes),
-            content_type="text/markdown",
-        )
-
-        # Create artifact record
-        async with database_service.get_session() as session:
-            artifact = await artifact_service.create_artifact(
-                session=session,
-                organization_id=uuid.UUID(organization_id),
-                document_id=document_id,
-                artifact_type="processed",
-                bucket=bucket,
-                object_key=object_key,
-                original_filename=processed_filename,
-                content_type="text/markdown",
-                file_size=len(content_bytes),
-                etag=etag,
-                job_id=uuid.UUID(job_id) if job_id else None,
-                status="available",
-            )
-            await session.commit()
-            return str(artifact.id)
-
-    except Exception as e:
-        logger = logging.getLogger("curatore.tasks")
-        logger.error(f"Failed to upload processed result: {e}")
-        return None
-
-
-# ============================================================================
-# JOB DOCUMENT TRACKING HELPERS (Phase 2)
-# ============================================================================
-
-async def _update_job_document_started(
-    job_document_id: str,
-    celery_task_id: str,
-    document_id: str,
-    file_path: Optional[str] = None,
-) -> None:
-    """
-    Update job document status to RUNNING when task starts.
-
-    Args:
-        job_document_id: JobDocument UUID
-        celery_task_id: Celery task ID
-        document_id: Document ID
-        file_path: Optional file path
-    """
-    try:
-        async with database_service.get_session() as session:
-            result = await session.execute(
-                select(JobDocument).where(JobDocument.id == uuid.UUID(job_document_id))
-            )
-            job_doc = result.scalar_one_or_none()
-
-            if job_doc:
-                job_doc.status = "RUNNING"
-                job_doc.started_at = datetime.utcnow()
-                job_doc.celery_task_id = celery_task_id
-
-                # Update file info if available
-                if file_path:
-                    from pathlib import Path
-                    p = Path(file_path)
-                    job_doc.file_path = str(p)
-
-                    # Extract original filename from pattern: {document_id}_{original_filename}
-                    # Only update if the current filename is just the document_id (initial placeholder)
-                    if job_doc.filename == document_id:
-                        filename = p.name
-                        if filename.startswith(f"{document_id}_"):
-                            # Extract original filename by removing the document_id prefix
-                            job_doc.filename = filename[len(document_id) + 1:]
-                        else:
-                            job_doc.filename = filename
-
-                    if p.exists():
-                        job_doc.file_size = p.stat().st_size
-
-                # Log start
-                log_entry = JobLog(
-                    id=uuid.uuid4(),
-                    job_id=job_doc.job_id,
-                    document_id=document_id,
-                    level="INFO",
-                    message=f"Document processing started: {document_id}",
-                    log_metadata={"celery_task_id": celery_task_id},
-                )
-                session.add(log_entry)
-
-                await session.commit()
-
-                # Update job status to RUNNING if still QUEUED
-                await _update_job_status_if_needed(job_doc.job_id)
-
-    except Exception as e:
-        logging.getLogger("curatore.jobs").error(
-            f"Failed to update job document started: {e}"
-        )
-
-
-async def _update_job_document_success(
-    job_document_id: str, result: Dict[str, Any]
-) -> None:
-    """
-    Update job document status to COMPLETED on success.
-
-    Args:
-        job_document_id: JobDocument UUID
-        result: Processing result dict
-    """
-    from sqlalchemy import update as sql_update
-
-    try:
-        async with database_service.get_session() as session:
-            result_obj = await session.execute(
-                select(JobDocument).where(JobDocument.id == uuid.UUID(job_document_id))
-            )
-            job_doc = result_obj.scalar_one_or_none()
-
-            if job_doc:
-                job_doc.status = "COMPLETED"
-                job_doc.completed_at = datetime.utcnow()
-
-                # Calculate processing time
-                if job_doc.started_at:
-                    processing_time = (job_doc.completed_at - job_doc.started_at).total_seconds()
-                    job_doc.processing_time_seconds = processing_time
-
-                # Extract quality metrics from result
-                if result and isinstance(result, dict):
-                    conversion_result = result.get("conversion_result", {})
-                    if isinstance(conversion_result, dict):
-                        job_doc.conversion_score = conversion_result.get("conversion_score")
-
-                    quality_scores = result.get("llm_evaluation", {})
-                    if isinstance(quality_scores, dict):
-                        job_doc.quality_scores = quality_scores
-
-                    # Store processed file path
-                    if result.get("markdown_path"):
-                        job_doc.processed_file_path = result["markdown_path"]
-
-                # Log success
-                log_entry = JobLog(
-                    id=uuid.uuid4(),
-                    job_id=job_doc.job_id,
-                    document_id=job_doc.document_id,
-                    level="SUCCESS",
-                    message=f"Document processed successfully: {job_doc.document_id}",
-                    log_metadata={
-                        "conversion_score": job_doc.conversion_score,
-                    },
-                )
-                session.add(log_entry)
-
-                job_id = job_doc.job_id
-
-                # Use atomic SQL increment to prevent race conditions
-                # This ensures concurrent workers don't lose increments
-                await session.execute(
-                    sql_update(Job)
-                    .where(Job.id == job_id)
-                    .values(completed_documents=Job.completed_documents + 1)
-                )
-                await session.commit()
-
-                # Check if job is complete
-                await _check_job_completion(job_id)
-
-    except Exception as e:
-        logging.getLogger("curatore.jobs").error(
-            f"Failed to update job document success: {e}"
-        )
-
-
-async def _update_job_document_failure(
-    job_document_id: str, error_message: str
-) -> None:
-    """
-    Update job document status to FAILED on error.
-
-    Args:
-        job_document_id: JobDocument UUID
-        error_message: Error message
-    """
-    from sqlalchemy import update as sql_update
-
-    try:
-        async with database_service.get_session() as session:
-            result = await session.execute(
-                select(JobDocument).where(JobDocument.id == uuid.UUID(job_document_id))
-            )
-            job_doc = result.scalar_one_or_none()
-
-            if job_doc:
-                job_doc.status = "FAILED"
-                job_doc.completed_at = datetime.utcnow()
-                job_doc.error_message = error_message
-
-                # Calculate processing time
-                if job_doc.started_at:
-                    processing_time = (job_doc.completed_at - job_doc.started_at).total_seconds()
-                    job_doc.processing_time_seconds = processing_time
-
-                # Log failure
-                log_entry = JobLog(
-                    id=uuid.uuid4(),
-                    job_id=job_doc.job_id,
-                    document_id=job_doc.document_id,
-                    level="ERROR",
-                    message=f"Document processing failed: {job_doc.document_id}",
-                    log_metadata={"error": error_message},
-                )
-                session.add(log_entry)
-
-                job_id = job_doc.job_id
-
-                # Use atomic SQL increment to prevent race conditions
-                # This ensures concurrent workers don't lose increments
-                await session.execute(
-                    sql_update(Job)
-                    .where(Job.id == job_id)
-                    .values(failed_documents=Job.failed_documents + 1)
-                )
-                await session.commit()
-
-                # Check if job is complete
-                await _check_job_completion(job_id)
-
-    except Exception as e:
-        logging.getLogger("curatore.jobs").error(
-            f"Failed to update job document failure: {e}"
-        )
-
-
-async def _update_job_status_if_needed(job_id: uuid.UUID) -> None:
-    """
-    Update job status to RUNNING if it's still QUEUED and has started documents.
-
-    Args:
-        job_id: Job UUID
-    """
-    try:
-        async with database_service.get_session() as session:
-            result = await session.execute(select(Job).where(Job.id == job_id))
-            job = result.scalar_one_or_none()
-
-            if job and job.status == "QUEUED":
-                job.status = "RUNNING"
-                job.started_at = datetime.utcnow()
-
-                log_entry = JobLog(
-                    id=uuid.uuid4(),
-                    job_id=job.id,
-                    level="INFO",
-                    message="Job processing started",
-                )
-                session.add(log_entry)
-
-                await session.commit()
-
-    except Exception as e:
-        logging.getLogger("curatore.jobs").error(
-            f"Failed to update job status: {e}"
-        )
-
-
-async def _check_job_completion(job_id: uuid.UUID) -> None:
-    """
-    Check if all documents in a job are complete and update job status accordingly.
-
-    Uses actual document status counts rather than relying solely on job counters
-    to handle race conditions and ensure accuracy.
-
-    Args:
-        job_id: Job UUID
-    """
-    from sqlalchemy import func, and_
-    from sqlalchemy import update as sql_update
-
-    try:
-        async with database_service.get_session() as session:
-            # Get job
-            result = await session.execute(select(Job).where(Job.id == job_id))
-            job = result.scalar_one_or_none()
-
-            if not job:
-                return
-
-            # If job is already in terminal state, skip
-            if job.status in ["COMPLETED", "FAILED", "CANCELLED"]:
-                return
-
-            # Count actual document statuses from job_documents table
-            # This is more reliable than counters in case of race conditions
-            completed_count_result = await session.execute(
-                select(func.count(JobDocument.id)).where(
-                    and_(
-                        JobDocument.job_id == job_id,
-                        JobDocument.status == "COMPLETED"
-                    )
-                )
-            )
-            actual_completed = completed_count_result.scalar() or 0
-
-            failed_count_result = await session.execute(
-                select(func.count(JobDocument.id)).where(
-                    and_(
-                        JobDocument.job_id == job_id,
-                        JobDocument.status == "FAILED"
-                    )
-                )
-            )
-            actual_failed = failed_count_result.scalar() or 0
-
-            # Reconcile counters if they're out of sync
-            if job.completed_documents != actual_completed or job.failed_documents != actual_failed:
-                logging.getLogger("curatore.jobs").warning(
-                    f"Job {job_id} counter mismatch: "
-                    f"counters=({job.completed_documents}/{job.failed_documents}), "
-                    f"actual=({actual_completed}/{actual_failed}). Reconciling."
-                )
-                await session.execute(
-                    sql_update(Job)
-                    .where(Job.id == job_id)
-                    .values(
-                        completed_documents=actual_completed,
-                        failed_documents=actual_failed
-                    )
-                )
-                # Refresh job to get updated values
-                await session.refresh(job)
-
-            # Check if all documents are complete using actual counts
-            total_done = actual_completed + actual_failed
-            if total_done >= job.total_documents:
-                # Job is complete
-                if actual_failed > 0 and actual_completed == 0:
-                    # All failed
-                    job.status = "FAILED"
-                    job.error_message = f"All {actual_failed} documents failed"
-                elif actual_failed > 0:
-                    # Partial success
-                    job.status = "COMPLETED"
-                    job.error_message = f"{actual_failed}/{job.total_documents} documents failed"
-                else:
-                    # All succeeded
-                    job.status = "COMPLETED"
-
-                job.completed_at = datetime.utcnow()
-
-                # Log completion
-                log_entry = JobLog(
-                    id=uuid.uuid4(),
-                    job_id=job.id,
-                    level="SUCCESS" if job.status == "COMPLETED" else "ERROR",
-                    message=f"Job completed: {actual_completed} succeeded, {actual_failed} failed",
-                    log_metadata={
-                        "total_documents": job.total_documents,
-                        "completed_documents": actual_completed,
-                        "failed_documents": actual_failed,
-                    },
-                )
-                session.add(log_entry)
-
-                await session.commit()
-
-                logging.getLogger("curatore.jobs").info(
-                    f"Job {job.id} completed: {actual_completed}/{job.total_documents} succeeded"
-                )
-
-    except Exception as e:
-        logging.getLogger("curatore.jobs").error(
-            f"Failed to check job completion: {e}"
-        )
-
-
 
 # ============================================================================
 # SAM.GOV TASKS (Phase 7)
 # ============================================================================
+
+
+def _extract_place_of_performance(place_of_performance: Optional[Dict]) -> Optional[str]:
+    """
+    Extract place of performance as a string from the JSON structure.
+
+    The place_of_performance field has structure like:
+    {
+        "state": {"code": "VA", "name": "Virginia"},
+        "zip": "20146",
+        "country": {"code": "USA", "name": "UNITED STATES"}
+    }
+
+    Returns a formatted string like "Virginia, USA" or just the state/country name.
+    """
+    if not place_of_performance:
+        return None
+
+    parts = []
+
+    # Try to get state name
+    if "state" in place_of_performance and isinstance(place_of_performance["state"], dict):
+        state_name = place_of_performance["state"].get("name")
+        if state_name:
+            parts.append(state_name)
+
+    # Try to get country name
+    if "country" in place_of_performance and isinstance(place_of_performance["country"], dict):
+        country_name = place_of_performance["country"].get("name")
+        if country_name and country_name != "UNITED STATES":  # Don't append if just USA
+            parts.append(country_name)
+
+    # Fallback to zip if nothing else
+    if not parts and "zip" in place_of_performance:
+        return place_of_performance["zip"]
+
+    return ", ".join(parts) if parts else None
 
 
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
@@ -1794,14 +1113,44 @@ def sam_pull_task(
             - errors: List of error details
     """
     from .services.sam_pull_service import sam_pull_service
+    from .services.sam_service import sam_service
+    from .database.models import Run
 
     logger = logging.getLogger("curatore.sam")
     logger.info(f"Starting SAM pull task for search {search_id}")
 
+    run_id = None
+
     try:
-        async def _pull():
+        async def _create_run_and_pull():
+            nonlocal run_id
             async with database_service.get_session() as session:
-                return await sam_pull_service.pull_opportunities(
+                # Create a Run record for this pull
+                run = Run(
+                    organization_id=uuid.UUID(organization_id),
+                    run_type="sam_pull",
+                    origin="system",
+                    status="running",
+                    config={
+                        "search_id": search_id,
+                        "max_pages": max_pages,
+                        "page_size": page_size,
+                        "auto_download_attachments": auto_download_attachments,
+                    },
+                    started_at=datetime.utcnow(),
+                )
+                session.add(run)
+                await session.flush()
+                run_id = run.id
+
+                # Update the search with the run_id
+                search = await sam_service.get_search(session, uuid.UUID(search_id))
+                if search:
+                    search.last_pull_run_id = run.id
+                    await session.commit()
+
+                # Perform the pull
+                result = await sam_pull_service.pull_opportunities(
                     session=session,
                     search_id=uuid.UUID(search_id),
                     organization_id=uuid.UUID(organization_id),
@@ -1810,7 +1159,24 @@ def sam_pull_task(
                     auto_download_attachments=auto_download_attachments,
                 )
 
-        result = asyncio.run(_pull())
+                # Update Run with results
+                run.status = "completed" if result.get("status") == "success" else "completed"
+                run.completed_at = datetime.utcnow()
+                run.results_summary = {
+                    "total_fetched": result.get("total_fetched", 0),
+                    "new_solicitations": result.get("new_solicitations", 0),
+                    "updated_solicitations": result.get("updated_solicitations", 0),
+                    "new_notices": result.get("new_notices", 0),
+                    "new_attachments": result.get("new_attachments", 0),
+                    "status": result.get("status"),
+                }
+                if result.get("errors"):
+                    run.error_message = "; ".join(str(e) for e in result["errors"][:5])
+                await session.commit()
+
+                return result
+
+        result = asyncio.run(_create_run_and_pull())
 
         logger.info(
             f"SAM pull completed: {result.get('new_solicitations', 0)} new, "
@@ -1828,6 +1194,26 @@ def sam_pull_task(
 
     except Exception as e:
         logger.error(f"SAM pull task failed: {e}")
+
+        # Update Run status to failed if we have a run_id
+        if run_id:
+            try:
+                async def _mark_failed():
+                    async with database_service.get_session() as session:
+                        from sqlalchemy import select
+                        result = await session.execute(
+                            select(Run).where(Run.id == run_id)
+                        )
+                        run = result.scalar_one_or_none()
+                        if run:
+                            run.status = "failed"
+                            run.completed_at = datetime.utcnow()
+                            run.error_message = str(e)
+                            await session.commit()
+                asyncio.run(_mark_failed())
+            except Exception as inner_e:
+                logger.error(f"Failed to update run status: {inner_e}")
+
         raise
 
 
@@ -2020,6 +1406,517 @@ def sam_batch_summarize_task(
         raise
 
 
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 5})
+def sam_auto_summarize_task(
+    self,
+    solicitation_id: str,
+    organization_id: str,
+    is_update: bool = False,
+    wait_for_assets: bool = True,
+    _retry_count: int = 0,
+) -> Dict[str, Any]:
+    """
+    Celery task to auto-generate a summary for a solicitation after pull.
+
+    This task is triggered automatically after a SAM pull to generate
+    BD-focused summaries using LLM. If no LLM is configured, falls back
+    to using the notice description.
+
+    Priority Queue Behavior:
+    - This task runs on the 'processing_priority' queue
+    - If attachments have pending extractions, it boosts their priority
+    - Task will retry until all assets are ready (up to 5 retries)
+
+    Args:
+        solicitation_id: SamSolicitation UUID string
+        organization_id: Organization UUID string
+        is_update: Whether this is an update (new notice added)
+        wait_for_assets: Whether to wait for pending asset extractions
+        _retry_count: Internal retry counter for asset waiting
+
+    Returns:
+        Dict containing:
+            - solicitation_id: The solicitation UUID
+            - status: pending, ready, failed, no_llm, or waiting_for_assets
+            - summary_preview: First 200 chars of summary (if generated)
+    """
+    from datetime import datetime
+    from .services.sam_summarization_service import sam_summarization_service
+    from .services.sam_service import sam_service
+
+    logger = logging.getLogger("curatore.sam")
+    logger.info(f"Starting SAM auto-summarize task for solicitation {solicitation_id}")
+
+    try:
+        async def _check_and_boost_pending_assets():
+            """Check for pending assets and boost their priority using the priority queue service."""
+            from .services.priority_queue_service import (
+                priority_queue_service,
+                BoostReason,
+            )
+
+            async with database_service.get_session() as session:
+                # Get all attachment assets for this solicitation
+                asset_ids = await priority_queue_service.get_solicitation_attachment_assets(
+                    session=session,
+                    solicitation_id=uuid.UUID(solicitation_id),
+                )
+
+                if not asset_ids:
+                    return True, []  # No assets to wait for
+
+                # Check which are ready
+                all_ready, ready_ids, pending_ids = await priority_queue_service.check_assets_ready(
+                    session=session,
+                    asset_ids=asset_ids,
+                )
+
+                if all_ready:
+                    return True, []
+
+                # Boost pending assets
+                boost_result = await priority_queue_service.boost_multiple_extractions(
+                    session=session,
+                    asset_ids=pending_ids,
+                    reason=BoostReason.SAM_SUMMARIZATION,
+                    organization_id=uuid.UUID(organization_id),
+                )
+
+                logger.info(
+                    f"Solicitation {solicitation_id}: {len(pending_ids)} pending assets, "
+                    f"boosted {boost_result['boosted']} extractions"
+                )
+
+                return False, pending_ids
+
+        # Check for pending assets if configured to wait
+        if wait_for_assets:
+            all_ready, pending_ids = asyncio.run(_check_and_boost_pending_assets())
+
+            if not all_ready and _retry_count < 10:  # Max 10 retries (about 5 minutes total)
+                logger.info(
+                    f"Waiting for {len(pending_ids)} assets to complete extraction, "
+                    f"retry {_retry_count + 1}/10"
+                )
+                # Update status to indicate waiting
+                async def _update_waiting_status():
+                    async with database_service.get_session() as session:
+                        await sam_service.update_solicitation_summary_status(
+                            session=session,
+                            solicitation_id=uuid.UUID(solicitation_id),
+                            status="generating",  # Still show generating
+                        )
+                asyncio.run(_update_waiting_status())
+
+                # Retry after 30 seconds
+                sam_auto_summarize_task.apply_async(
+                    kwargs={
+                        "solicitation_id": solicitation_id,
+                        "organization_id": organization_id,
+                        "is_update": is_update,
+                        "wait_for_assets": True,
+                        "_retry_count": _retry_count + 1,
+                    },
+                    countdown=30,
+                    queue="processing_priority",
+                )
+                return {
+                    "solicitation_id": solicitation_id,
+                    "status": "waiting_for_assets",
+                    "pending_assets": len(pending_ids),
+                    "retry_count": _retry_count + 1,
+                }
+
+        async def _generate_summary():
+            async with database_service.get_session() as session:
+                # Generate the summary
+                summary = await sam_summarization_service.generate_auto_summary(
+                    session=session,
+                    solicitation_id=uuid.UUID(solicitation_id),
+                    organization_id=uuid.UUID(organization_id),
+                    is_update=is_update,
+                )
+
+                if summary:
+                    # Determine status based on whether LLM was used
+                    # Check if it's a fallback (no LLM)
+                    # Check both database connection and environment variable
+                    from .services.connection_service import connection_service
+                    llm_conn = await connection_service.get_default_connection(
+                        session, uuid.UUID(organization_id), "llm"
+                    )
+                    has_llm = (
+                        (llm_conn and llm_conn.is_active and llm_conn.config.get("api_key"))
+                        or settings.openai_api_key
+                    )
+                    status = "ready" if has_llm else "no_llm"
+
+                    # Update solicitation with summary and status
+                    await sam_service.update_solicitation_summary_status(
+                        session=session,
+                        solicitation_id=uuid.UUID(solicitation_id),
+                        status=status,
+                        summary_generated_at=datetime.utcnow() if status == "ready" else None,
+                    )
+
+                    # Also update the description field if we have a summary
+                    from sqlalchemy import update
+                    from .database.models import SamSolicitation
+                    await session.execute(
+                        update(SamSolicitation)
+                        .where(SamSolicitation.id == uuid.UUID(solicitation_id))
+                        .values(description=summary)
+                    )
+                    await session.commit()
+
+                    return {
+                        "solicitation_id": solicitation_id,
+                        "status": status,
+                        "summary_preview": summary[:200] + "..." if len(summary) > 200 else summary,
+                    }
+                else:
+                    # Mark as failed
+                    await sam_service.update_solicitation_summary_status(
+                        session=session,
+                        solicitation_id=uuid.UUID(solicitation_id),
+                        status="failed",
+                    )
+
+                    return {
+                        "solicitation_id": solicitation_id,
+                        "status": "failed",
+                        "error": "Summary generation returned None",
+                    }
+
+        result = asyncio.run(_generate_summary())
+        logger.info(f"Auto-summarize completed for {solicitation_id}: status={result.get('status')}")
+        return result
+
+    except Exception as e:
+        logger.error(f"SAM auto-summarize task failed: {e}")
+
+        # Mark as failed in DB
+        try:
+            async def _mark_failed():
+                async with database_service.get_session() as session:
+                    await sam_service.update_solicitation_summary_status(
+                        session=session,
+                        solicitation_id=uuid.UUID(solicitation_id),
+                        status="failed",
+                    )
+
+            asyncio.run(_mark_failed())
+        except Exception as inner_e:
+            logger.error(f"Failed to mark solicitation as failed: {inner_e}")
+
+        raise
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def sam_auto_summarize_notice_task(
+    self,
+    notice_id: str,
+    organization_id: str,
+    wait_for_assets: bool = True,
+    _retry_count: int = 0,
+) -> Dict[str, Any]:
+    """
+    Celery task to auto-generate a summary for a notice.
+
+    Works for both standalone notices (Special Notices without solicitation)
+    and solicitation-linked notices. Uses the notice's metadata, description,
+    and any attached documents to generate a comprehensive summary.
+
+    Args:
+        notice_id: SamNotice UUID string
+        organization_id: Organization UUID string
+        wait_for_assets: If True, retry if attachments are still processing
+        _retry_count: Internal retry counter for asset waiting
+
+    Returns:
+        Dict containing:
+            - notice_id: The notice UUID
+            - status: pending, ready, failed, no_llm, or waiting_for_assets
+            - summary_preview: First 200 chars of summary (if generated)
+    """
+    from datetime import datetime
+    from .services.sam_service import sam_service
+    from .services.llm_service import LLMService
+    from .services.connection_service import connection_service
+    from .database.models import SamNotice, SamAttachment, ExtractionResult
+
+    logger = logging.getLogger("curatore.sam")
+    logger.info(f"Starting SAM auto-summarize task for notice {notice_id}")
+
+    MAX_ASSET_WAIT_RETRIES = 10
+
+    try:
+        async def _generate_notice_summary():
+            async with database_service.get_session() as session:
+                # Get the notice with attachments
+                notice = await sam_service.get_notice(session, uuid.UUID(notice_id))
+                if not notice:
+                    logger.error(f"Notice not found: {notice_id}")
+                    return {"notice_id": notice_id, "status": "failed", "error": "Notice not found"}
+
+                # Check if we should wait for asset processing
+                if wait_for_assets and notice.attachments:
+                    pending_assets = [
+                        att for att in notice.attachments
+                        if att.download_status == "downloaded" and att.asset_id
+                    ]
+
+                    if pending_assets:
+                        # Check if any extractions are still pending
+                        from sqlalchemy import select, and_
+                        pending_extractions = await session.execute(
+                            select(ExtractionResult)
+                            .where(
+                                and_(
+                                    ExtractionResult.asset_id.in_([a.asset_id for a in pending_assets]),
+                                    ExtractionResult.status.in_(["pending", "running"])
+                                )
+                            )
+                        )
+                        if pending_extractions.scalars().first() and _retry_count < MAX_ASSET_WAIT_RETRIES:
+                            logger.info(f"Notice {notice_id} has pending extractions, retrying in 30s...")
+                            notice.summary_status = "pending"
+                            await session.commit()
+
+                            # Schedule retry
+                            sam_auto_summarize_notice_task.apply_async(
+                                kwargs={
+                                    "notice_id": notice_id,
+                                    "organization_id": organization_id,
+                                    "wait_for_assets": True,
+                                    "_retry_count": _retry_count + 1,
+                                },
+                                countdown=30,
+                                queue="processing_priority",
+                            )
+                            return {"notice_id": notice_id, "status": "waiting_for_assets"}
+
+                # Check for LLM availability - first try database connection
+                org_id = uuid.UUID(organization_id)
+                llm_conn = await connection_service.get_default_connection(session, org_id, "llm")
+
+                has_llm = (
+                    (llm_conn and llm_conn.is_active and llm_conn.config.get("api_key"))
+                    or settings.openai_api_key
+                )
+
+                if not has_llm:
+                    # No LLM - mark as no_llm, keep original description
+                    notice.summary_status = "no_llm"
+                    await session.commit()
+                    logger.info(f"No LLM available for notice {notice_id}, using original description")
+                    return {"notice_id": notice_id, "status": "no_llm"}
+
+                # Update status to generating
+                notice.summary_status = "generating"
+                await session.commit()
+
+                # Get extracted content from attachments
+                attachment_content = ""
+                if notice.attachments:
+                    from .services.minio_service import get_minio_service
+                    minio = get_minio_service()
+
+                    content_parts = []
+                    for att in notice.attachments:
+                        if att.download_status == "downloaded" and att.asset_id:
+                            # Get extraction result
+                            extraction = await session.execute(
+                                select(ExtractionResult)
+                                .where(ExtractionResult.asset_id == att.asset_id)
+                                .where(ExtractionResult.status == "completed")
+                                .order_by(ExtractionResult.created_at.desc())
+                                .limit(1)
+                            )
+                            ext_result = extraction.scalar_one_or_none()
+
+                            if ext_result and ext_result.extracted_object_key:
+                                try:
+                                    content = await minio.download_text(
+                                        bucket=ext_result.extracted_bucket,
+                                        object_key=ext_result.extracted_object_key,
+                                    )
+                                    if content:
+                                        content_parts.append(f"\n--- Attachment: {att.filename} ---\n{content[:5000]}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to fetch attachment content: {e}")
+
+                    if content_parts:
+                        attachment_content = "\n".join(content_parts)
+
+                # Build the prompt
+                notice_type_name = {
+                    "o": "Solicitation",
+                    "p": "Presolicitation",
+                    "k": "Combined Synopsis/Solicitation",
+                    "r": "Sources Sought",
+                    "s": "Special Notice",
+                    "a": "Amendment",
+                    "i": "Intent to Bundle",
+                    "g": "Sale of Surplus Property",
+                }.get(notice.notice_type, notice.notice_type or "Notice")
+
+                prompt = f"""You are a Business Development analyst at a government contracting company.
+Analyze this SAM.gov {notice_type_name} and provide a comprehensive summary.
+
+NOTICE INFORMATION:
+Title: {notice.title or 'Untitled'}
+Type: {notice_type_name}
+Agency: {notice.agency_name or 'Unknown'}
+Sub-Agency/Bureau: {notice.bureau_name or 'N/A'}
+Office: {notice.office_name or 'N/A'}
+NAICS Code: {notice.naics_code or 'N/A'}
+PSC Code: {notice.psc_code or 'N/A'}
+Set-Aside: {notice.set_aside_code or 'None'}
+Posted Date: {notice.posted_date.strftime('%Y-%m-%d') if notice.posted_date else 'Unknown'}
+Response Deadline: {notice.response_deadline.strftime('%Y-%m-%d %H:%M') if notice.response_deadline else 'N/A'}
+
+NOTICE DESCRIPTION:
+{notice.description or 'No description available'}
+
+{f"ATTACHMENT CONTENT:{attachment_content}" if attachment_content else ""}
+
+Provide your analysis in the following JSON format:
+{{
+    "summary": "A 2-3 paragraph summary explaining: (1) What this notice is about and its purpose; (2) Key requirements, information, or announcements; (3) Important dates and action items",
+    "notice_purpose": "Brief one-line description of the notice's primary purpose",
+    "key_information": [
+        {{"item": "Important detail or requirement", "category": "Requirements/Dates/Contacts/Action Items"}}
+    ],
+    "dates": {{
+        "posted": "Date posted",
+        "response_deadline": "Response deadline or 'N/A'",
+        "other_dates": ["Any other relevant dates mentioned"]
+    }},
+    "contacts": [
+        {{"name": "Contact name", "email": "Email", "phone": "Phone"}}
+    ],
+    "recommendation": "pursue/monitor/pass",
+    "recommendation_rationale": "Brief explanation of why BD team should take this action"
+}}
+
+Respond ONLY with valid JSON, no additional text."""
+
+                # Create LLM client from database connection or use default
+                llm_service = LLMService()
+                client = None
+                model = settings.openai_model or "gpt-4o-mini"
+
+                if llm_conn and llm_conn.is_active and llm_conn.config.get("api_key"):
+                    client = await llm_service._create_client_from_config(llm_conn.config)
+                    model = llm_conn.config.get("model", model)
+                    logger.info(f"Using database LLM connection for notice summary: {llm_conn.name}")
+
+                if not client:
+                    client = llm_service._client
+
+                if not client:
+                    logger.error(f"No LLM client available for notice {notice_id}")
+                    notice.summary_status = "failed"
+                    await session.commit()
+                    return {"notice_id": notice_id, "status": "failed", "error": "No LLM client available"}
+
+                # Call LLM
+                try:
+                    response = client.chat.completions.create(
+                        model=model,
+                        messages=[
+                            {
+                                "role": "system",
+                                "content": "You are a Business Development analyst at a government contracting company. Provide accurate, professional analysis of federal notices.",
+                            },
+                            {"role": "user", "content": prompt},
+                        ],
+                        temperature=0.3,
+                        max_tokens=4000,
+                    )
+
+                    response_text = response.choices[0].message.content
+                    if not response_text:
+                        notice.summary_status = "failed"
+                        await session.commit()
+                        return {"notice_id": notice_id, "status": "failed", "error": "LLM returned empty response"}
+
+                    # Parse JSON response
+                    import json
+                    import re
+
+                    parsed = None
+                    try:
+                        parsed = json.loads(response_text)
+                    except json.JSONDecodeError:
+                        # Try to extract JSON from markdown
+                        json_match = re.search(r"```(?:json)?\s*([\s\S]*?)```", response_text)
+                        if json_match:
+                            try:
+                                parsed = json.loads(json_match.group(1))
+                            except json.JSONDecodeError:
+                                pass
+                        if not parsed:
+                            json_match = re.search(r"\{[\s\S]*\}", response_text)
+                            if json_match:
+                                try:
+                                    parsed = json.loads(json_match.group(0))
+                                except json.JSONDecodeError:
+                                    pass
+
+                    if parsed:
+                        summary = parsed.get("summary", "")
+                        recommendation = parsed.get("recommendation", "")
+                        rationale = parsed.get("recommendation_rationale", "")
+                        if recommendation and rationale:
+                            summary += f"\n\n**Recommendation: {recommendation.upper()}** - {rationale}"
+                    else:
+                        summary = response_text[:2000]
+
+                    # Update notice with generated summary
+                    notice.description = summary
+                    notice.summary_status = "ready"
+                    notice.summary_generated_at = datetime.utcnow()
+                    await session.commit()
+
+                    logger.info(f"Generated summary for notice {notice_id}")
+                    return {
+                        "notice_id": notice_id,
+                        "status": "ready",
+                        "summary_preview": summary[:200] + "..." if len(summary) > 200 else summary,
+                    }
+
+                except Exception as e:
+                    logger.error(f"LLM error for notice {notice_id}: {e}")
+                    notice.summary_status = "failed"
+                    await session.commit()
+                    return {"notice_id": notice_id, "status": "failed", "error": str(e)}
+
+        result = asyncio.run(_generate_notice_summary())
+        logger.info(f"Auto-summarize completed for notice {notice_id}: status={result.get('status')}")
+        return result
+
+    except Exception as e:
+        logger.error(f"SAM notice auto-summarize task failed: {e}")
+
+        # Mark as failed in DB
+        try:
+            async def _mark_failed():
+                async with database_service.get_session() as session:
+                    from .services.sam_service import sam_service
+                    notice = await sam_service.get_notice(session, uuid.UUID(notice_id))
+                    if notice:
+                        notice.summary_status = "failed"
+                        await session.commit()
+
+            asyncio.run(_mark_failed())
+        except Exception as inner_e:
+            logger.error(f"Failed to mark notice as failed: {inner_e}")
+
+        raise
+
+
 @shared_task(bind=True)
 def sam_process_queued_requests_task(
     self,
@@ -2180,3 +2077,362 @@ def sam_process_queued_requests_task(
     except Exception as e:
         logger.error(f"SAM queue processing task failed: {e}")
         raise
+
+
+# ============================================================================
+# TIERED EXTRACTION: ENHANCEMENT TASK (Phase 2)
+# ============================================================================
+
+# File types that benefit from Docling enhancement (structured documents)
+ENHANCEMENT_ELIGIBLE_EXTENSIONS = {
+    ".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls"
+}
+
+
+def is_enhancement_eligible(filename: str) -> bool:
+    """Check if file type is eligible for Docling enhancement."""
+    from pathlib import Path
+    ext = Path(filename).suffix.lower()
+    return ext in ENHANCEMENT_ELIGIBLE_EXTENSIONS
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def enhance_extraction_task(
+    self,
+    asset_id: str,
+    run_id: str,
+    extraction_id: str,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """
+    Background task to enhance extraction quality using Docling.
+
+    This task runs after basic extraction completes successfully. It attempts
+    to extract the same asset using Docling and compares results. If Docling
+    produces significantly better output, the extraction is upgraded.
+
+    Args:
+        asset_id: Asset UUID string
+        run_id: Run UUID string (for the enhancement run)
+        extraction_id: ExtractionResult UUID string (for the enhancement result)
+        force: If True, always replace even if Docling output is not better
+
+    Returns:
+        Dict with enhancement result details:
+            - status: "enhanced", "skipped", "failed", "no_improvement"
+            - basic_length: Length of basic extraction
+            - enhanced_length: Length of Docling extraction
+            - improvement_percent: Percentage improvement in content length
+    """
+    logger = logging.getLogger("curatore.tasks.enhancement")
+    logger.info(f"Starting extraction enhancement for asset {asset_id}")
+
+    try:
+        result = asyncio.run(
+            _enhance_extraction_async(
+                asset_id=uuid.UUID(asset_id),
+                run_id=uuid.UUID(run_id),
+                extraction_id=uuid.UUID(extraction_id),
+                force=force,
+            )
+        )
+
+        logger.info(f"Enhancement completed for asset {asset_id}: {result.get('status')}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Enhancement task failed for asset {asset_id}: {e}", exc_info=True)
+        raise
+
+
+async def _enhance_extraction_async(
+    asset_id,
+    run_id,
+    extraction_id,
+    force: bool = False,
+) -> Dict[str, Any]:
+    """
+    Async implementation of extraction enhancement.
+
+    Enhancement logic:
+    1. Get the basic extraction content
+    2. Extract using Docling
+    3. Compare results (length, structure)
+    4. If Docling is significantly better (>20% more content), upgrade
+    5. Update asset.extraction_tier to "enhanced"
+    """
+    from io import BytesIO
+    from pathlib import Path
+
+    from .database.models import Asset, ExtractionResult, Run
+    from .services.asset_service import asset_service
+    from .services.run_service import run_service
+    from .services.extraction_result_service import extraction_result_service
+    from .services.run_log_service import run_log_service
+    from .services.minio_service import get_minio_service
+    from .services.document_service import document_service
+    from .services.storage_path_service import storage_paths
+
+    logger = logging.getLogger("curatore.tasks.enhancement")
+
+    IMPROVEMENT_THRESHOLD = 0.20  # 20% more content required for enhancement
+
+    async with database_service.get_session() as session:
+        # Get models
+        asset = await asset_service.get_asset(session, asset_id)
+        run = await run_service.get_run(session, run_id)
+        extraction = await extraction_result_service.get_extraction_result(session, extraction_id)
+
+        if not asset or not run or not extraction:
+            error = f"Asset, Run, or Extraction not found: {asset_id}, {run_id}, {extraction_id}"
+            logger.error(error)
+            return {"status": "failed", "error": error}
+
+        # Skip if already enhanced
+        if asset.extraction_tier == "enhanced" and not force:
+            logger.info(f"Asset {asset_id} already enhanced, skipping")
+            return {"status": "skipped", "reason": "already_enhanced"}
+
+        # Get basic extraction content for comparison
+        minio = get_minio_service()
+        if not minio:
+            return {"status": "failed", "error": "MinIO service unavailable"}
+
+        # Find the latest successful basic extraction
+        from sqlalchemy import select, and_
+        basic_extraction_result = await session.execute(
+            select(ExtractionResult)
+            .where(and_(
+                ExtractionResult.asset_id == asset_id,
+                ExtractionResult.status == "completed",
+                ExtractionResult.extraction_tier == "basic",
+            ))
+            .order_by(ExtractionResult.created_at.desc())
+            .limit(1)
+        )
+        basic_extraction = basic_extraction_result.scalar_one_or_none()
+
+        if not basic_extraction:
+            return {"status": "skipped", "reason": "no_basic_extraction"}
+
+        # Get basic extraction content
+        try:
+            basic_content_io = minio.get_object(
+                basic_extraction.extracted_bucket,
+                basic_extraction.extracted_object_key
+            )
+            basic_content = basic_content_io.getvalue().decode('utf-8')
+            basic_length = len(basic_content)
+        except Exception as e:
+            logger.error(f"Failed to read basic extraction: {e}")
+            return {"status": "failed", "error": f"Cannot read basic extraction: {e}"}
+
+        # Start the enhancement run
+        await run_service.start_run(session, run_id)
+        await extraction_result_service.update_extraction_status(session, extraction_id, "running")
+
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="progress",
+            message=f"Starting Docling enhancement for {asset.original_filename}",
+            context={
+                "asset_id": str(asset_id),
+                "basic_length": basic_length,
+            },
+        )
+
+        # Download asset to temp file for Docling processing
+        import tempfile
+        import shutil
+        import time
+
+        temp_dir = Path(tempfile.mkdtemp(prefix="curatore_enhance_"))
+        temp_input_file = temp_dir / asset.original_filename
+
+        try:
+            file_data = minio.get_object(asset.raw_bucket, asset.raw_object_key)
+            temp_input_file.write_bytes(file_data.getvalue())
+
+            # Extract using Docling specifically
+            # Find the first enabled Docling engine from config
+            start_time = time.time()
+
+            try:
+                # Get enabled Docling engine name from config
+                docling_engine_name = None
+                extraction_config = config_loader.get_extraction_config()
+                if extraction_config:
+                    engines = getattr(extraction_config, 'engines', [])
+                    for engine in engines:
+                        if hasattr(engine, 'engine_type') and engine.engine_type == 'docling':
+                            if hasattr(engine, 'enabled') and engine.enabled:
+                                docling_engine_name = engine.name
+                                break
+
+                if not docling_engine_name:
+                    logger.warning(f"No enabled Docling engine found in config, skipping enhancement")
+                    await extraction_result_service.record_extraction_failure(
+                        session=session,
+                        extraction_id=extraction_id,
+                        errors=["No Docling engine configured for enhancement"],
+                    )
+                    await run_service.fail_run(session, run_id, "No Docling engine configured")
+                    await session.commit()
+                    return {"status": "failed", "error": "No Docling engine configured"}
+
+                enhanced_content = await document_service._extract_content(
+                    temp_input_file,
+                    engine=docling_engine_name,  # Use actual Docling engine name from config
+                )
+                enhanced_length = len(enhanced_content) if enhanced_content else 0
+            except Exception as e:
+                logger.warning(f"Docling extraction failed: {e}")
+                await run_log_service.log_event(
+                    session=session,
+                    run_id=run_id,
+                    level="WARN",
+                    event_type="error",
+                    message=f"Docling extraction failed: {e}",
+                )
+                await extraction_result_service.record_extraction_failure(
+                    session=session,
+                    extraction_id=extraction_id,
+                    errors=[str(e)],
+                )
+                await run_service.fail_run(session, run_id, str(e))
+                await session.commit()
+                return {"status": "failed", "error": str(e)}
+
+            extraction_time = time.time() - start_time
+
+            # Compare results
+            improvement = (enhanced_length - basic_length) / basic_length if basic_length > 0 else 0
+            improvement_percent = improvement * 100
+
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="progress",
+                message=f"Enhancement comparison: basic={basic_length}, enhanced={enhanced_length}, improvement={improvement_percent:.1f}%",
+            )
+
+            # Decide whether to upgrade
+            should_upgrade = force or (improvement >= IMPROVEMENT_THRESHOLD)
+
+            if should_upgrade and enhanced_content:
+                # Upload enhanced content
+                extracted_bucket = settings.minio_bucket_processed
+                extracted_key = storage_paths.upload(
+                    str(asset.organization_id),
+                    str(asset_id),
+                    asset.original_filename,
+                    extracted=True
+                )
+
+                minio.put_object(
+                    bucket=extracted_bucket,
+                    key=extracted_key,
+                    data=BytesIO(enhanced_content.encode('utf-8')),
+                    length=len(enhanced_content.encode('utf-8')),
+                    content_type="text/markdown",
+                )
+
+                # Record successful enhancement
+                await extraction_result_service.record_extraction_success(
+                    session=session,
+                    extraction_id=extraction_id,
+                    bucket=extracted_bucket,
+                    key=extracted_key,
+                    extraction_time_seconds=extraction_time,
+                    warnings=[],
+                )
+
+                # Update extraction tier on the extraction result
+                extraction.extraction_tier = "enhanced"
+
+                # Update asset's extraction tier
+                asset.extraction_tier = "enhanced"
+
+                # Complete the run
+                await run_service.complete_run(
+                    session=session,
+                    run_id=run_id,
+                    results_summary={
+                        "status": "enhanced",
+                        "basic_length": basic_length,
+                        "enhanced_length": enhanced_length,
+                        "improvement_percent": improvement_percent,
+                    },
+                )
+
+                await run_log_service.log_summary(
+                    session=session,
+                    run_id=run_id,
+                    message=f"Enhancement successful: {improvement_percent:.1f}% improvement",
+                    context={
+                        "basic_length": basic_length,
+                        "enhanced_length": enhanced_length,
+                        "improvement_percent": improvement_percent,
+                    },
+                )
+
+                await session.commit()
+
+                logger.info(f"Asset {asset_id} enhanced: {improvement_percent:.1f}% improvement")
+
+                return {
+                    "status": "enhanced",
+                    "basic_length": basic_length,
+                    "enhanced_length": enhanced_length,
+                    "improvement_percent": improvement_percent,
+                }
+
+            else:
+                # No significant improvement, mark as completed but don't upgrade
+                await extraction_result_service.record_extraction_success(
+                    session=session,
+                    extraction_id=extraction_id,
+                    bucket=basic_extraction.extracted_bucket,
+                    key=basic_extraction.extracted_object_key,
+                    extraction_time_seconds=extraction_time,
+                    warnings=["Enhancement did not produce significant improvement"],
+                )
+
+                await run_service.complete_run(
+                    session=session,
+                    run_id=run_id,
+                    results_summary={
+                        "status": "no_improvement",
+                        "basic_length": basic_length,
+                        "enhanced_length": enhanced_length,
+                        "improvement_percent": improvement_percent,
+                        "threshold": IMPROVEMENT_THRESHOLD * 100,
+                    },
+                )
+
+                await run_log_service.log_summary(
+                    session=session,
+                    run_id=run_id,
+                    message=f"Enhancement completed: only {improvement_percent:.1f}% improvement (threshold: {IMPROVEMENT_THRESHOLD * 100}%)",
+                )
+
+                await session.commit()
+
+                return {
+                    "status": "no_improvement",
+                    "basic_length": basic_length,
+                    "enhanced_length": enhanced_length,
+                    "improvement_percent": improvement_percent,
+                    "threshold_percent": IMPROVEMENT_THRESHOLD * 100,
+                }
+
+        finally:
+            # Cleanup temp directory
+            if temp_dir.exists():
+                try:
+                    shutil.rmtree(temp_dir)
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup temp directory: {e}")

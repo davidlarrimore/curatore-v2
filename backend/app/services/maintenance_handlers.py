@@ -33,8 +33,6 @@ from sqlalchemy import select, func, and_, or_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..database.models import (
-    Job,
-    JobDocument,
     Asset,
     ExtractionResult,
     Artifact,
@@ -68,7 +66,7 @@ async def _log_event(
 
 
 # =============================================================================
-# Handler: Job Cleanup
+# Handler: Job Cleanup (DEPRECATED)
 # =============================================================================
 
 async def handle_job_cleanup(
@@ -77,121 +75,30 @@ async def handle_job_cleanup(
     config: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Delete expired jobs based on organization retention policies.
+    DEPRECATED: Job system has been removed in favor of Run-based tracking.
 
-    This handler:
-    1. Iterates over all organizations
-    2. Finds jobs past their expires_at timestamp
-    3. Deletes job documents and logs
-    4. Deletes the jobs themselves
-
-    Args:
-        session: Database session
-        run: Run context for tracking
-        config: Task configuration (may include dry_run flag)
+    This handler is kept as a no-op for backwards compatibility with
+    existing scheduled tasks that may reference "gc.cleanup".
 
     Returns:
-        Dict with cleanup statistics:
-        {
-            "deleted_jobs": int,
-            "deleted_documents": int,
-            "errors": int,
-            "organizations_processed": int,
-            "dry_run": bool
-        }
+        Dict indicating deprecation
     """
-    dry_run = config.get("dry_run", False)
-    now = datetime.utcnow()
-
     await _log_event(
         session, run.id, "INFO", "start",
-        f"Starting job cleanup (dry_run={dry_run})",
-        {"dry_run": dry_run}
+        "Job cleanup task is deprecated - Job system has been removed",
+        {"deprecated": True}
     )
 
-    deleted_jobs = 0
-    deleted_documents = 0
-    errors = 0
-    orgs_processed = 0
-
-    try:
-        # Find all expired jobs
-        expired_jobs_result = await session.execute(
-            select(Job)
-            .where(
-                and_(
-                    Job.expires_at.isnot(None),
-                    Job.expires_at <= now,
-                    Job.status.in_(["COMPLETED", "FAILED", "CANCELLED"]),
-                )
-            )
-            .order_by(Job.expires_at)
-        )
-        expired_jobs = list(expired_jobs_result.scalars().all())
-
-        await _log_event(
-            session, run.id, "INFO", "progress",
-            f"Found {len(expired_jobs)} expired jobs",
-            {"expired_count": len(expired_jobs)}
-        )
-
-        # Track organizations
-        org_ids = set()
-
-        for job in expired_jobs:
-            try:
-                org_ids.add(job.organization_id)
-
-                # Count documents
-                doc_count_result = await session.execute(
-                    select(func.count(JobDocument.id))
-                    .where(JobDocument.job_id == job.id)
-                )
-                doc_count = doc_count_result.scalar() or 0
-
-                if dry_run:
-                    logger.info(f"[DRY RUN] Would delete job {job.id} with {doc_count} documents")
-                else:
-                    # Delete job (cascades to documents and logs)
-                    await session.delete(job)
-                    deleted_jobs += 1
-                    deleted_documents += doc_count
-
-                    if deleted_jobs % 10 == 0:
-                        await session.flush()
-                        await _log_event(
-                            session, run.id, "INFO", "progress",
-                            f"Deleted {deleted_jobs} jobs so far",
-                        )
-
-            except Exception as e:
-                logger.error(f"Error deleting job {job.id}: {e}")
-                errors += 1
-
-        orgs_processed = len(org_ids)
-
-        if not dry_run:
-            await session.flush()
-
-    except Exception as e:
-        logger.error(f"Job cleanup failed: {e}")
-        await _log_event(
-            session, run.id, "ERROR", "error",
-            f"Job cleanup failed: {str(e)}",
-        )
-        raise
-
     summary = {
-        "deleted_jobs": deleted_jobs,
-        "deleted_documents": deleted_documents,
-        "errors": errors,
-        "organizations_processed": orgs_processed,
-        "dry_run": dry_run,
+        "status": "deprecated",
+        "message": "Job system removed. Use Run-based tracking instead.",
+        "deleted_jobs": 0,
+        "deleted_documents": 0,
     }
 
     await _log_event(
         session, run.id, "INFO", "summary",
-        f"Job cleanup complete: {deleted_jobs} jobs, {deleted_documents} documents deleted",
+        "Job cleanup skipped (deprecated)",
         summary
     )
 
@@ -407,7 +314,85 @@ async def handle_orphan_detection(
                     {"fixed_count": stuck_runs_fixed}
                 )
 
-        # 4. Find orphaned artifacts (documents that no longer exist)
+        # 4. Find assets with missing raw files in object storage
+        # These are assets that reference files that don't exist in MinIO/S3
+        missing_file_assets = 0
+        missing_file_fixed = 0
+        details["missing_file_asset_ids"] = []
+
+        try:
+            from .minio_service import get_minio_service
+            minio_service = get_minio_service()
+
+            # Check failed assets that might have missing files
+            # Also check pending assets older than 1 hour (they might have failed uploads)
+            check_cutoff = datetime.utcnow() - timedelta(hours=1)
+
+            assets_to_check_result = await session.execute(
+                select(Asset)
+                .where(
+                    and_(
+                        Asset.raw_bucket.isnot(None),
+                        Asset.raw_object_key.isnot(None),
+                        or_(
+                            Asset.status == "failed",
+                            and_(
+                                Asset.status == "pending",
+                                Asset.created_at < check_cutoff,
+                            ),
+                        ),
+                    )
+                )
+                .limit(500)  # Process up to 500 assets per run
+            )
+            assets_to_check = list(assets_to_check_result.scalars().all())
+
+            for asset in assets_to_check:
+                try:
+                    # Check if file exists in MinIO
+                    exists = minio_service.object_exists(
+                        bucket=asset.raw_bucket,
+                        key=asset.raw_object_key,
+                    )
+                    if not exists:
+                        missing_file_assets += 1
+                        details["missing_file_asset_ids"].append(str(asset.id))
+
+                        if auto_fix:
+                            # Mark as failed with clear error message
+                            asset.status = "failed"
+                            asset.source_metadata = {
+                                **(asset.source_metadata or {}),
+                                "missing_file_detected_at": datetime.utcnow().isoformat(),
+                                "missing_file_error": f"Raw file not found: {asset.raw_bucket}/{asset.raw_object_key}",
+                            }
+                            missing_file_fixed += 1
+                except Exception as e:
+                    logger.warning(f"Failed to check file existence for asset {asset.id}: {e}")
+
+            if missing_file_assets > 0:
+                await _log_event(
+                    session, run.id, "WARN", "progress",
+                    f"Found {missing_file_assets} assets with missing raw files in object storage",
+                    {"count": missing_file_assets, "sample_ids": details["missing_file_asset_ids"][:5]}
+                )
+
+                if auto_fix and missing_file_fixed > 0:
+                    await session.flush()
+                    await _log_event(
+                        session, run.id, "INFO", "fix",
+                        f"Marked {missing_file_fixed} assets with missing files as 'failed'",
+                        {"fixed_count": missing_file_fixed}
+                    )
+
+        except Exception as e:
+            logger.warning(f"Missing file check failed (non-fatal): {e}")
+            await _log_event(
+                session, run.id, "WARN", "progress",
+                f"Missing file check skipped: {str(e)}",
+            )
+
+        # 5. Find orphaned artifacts (documents that no longer exist)
         # This is a lightweight check - just count artifacts with missing documents
         artifact_count_result = await session.execute(
             select(func.count(Artifact.id))
@@ -428,6 +413,8 @@ async def handle_orphan_detection(
         "orphaned_assets": orphaned_assets,
         "stuck_pending_assets": stuck_pending_assets,
         "stuck_pending_fixed": stuck_pending_fixed,
+        "missing_file_assets": missing_file_assets,
+        "missing_file_fixed": missing_file_fixed,
         "orphaned_artifacts": orphaned_artifacts,
         "stuck_runs": stuck_runs,
         "stuck_runs_fixed": stuck_runs_fixed,
@@ -436,8 +423,8 @@ async def handle_orphan_detection(
     }
 
     # Log warning if orphans found
-    total_issues = orphaned_assets + stuck_pending_assets + stuck_runs
-    total_fixed = stuck_pending_fixed + stuck_runs_fixed
+    total_issues = orphaned_assets + stuck_pending_assets + stuck_runs + missing_file_assets
+    total_fixed = stuck_pending_fixed + stuck_runs_fixed + missing_file_fixed
     level = "WARN" if (total_issues - total_fixed) > 0 else "INFO"
     await _log_event(
         session, run.id, level, "summary",
@@ -578,7 +565,6 @@ async def handle_health_report(
     report = {
         "generated_at": datetime.utcnow().isoformat(),
         "assets": {},
-        "jobs": {},
         "runs": {},
         "organizations": {},
     }
@@ -598,24 +584,8 @@ async def handle_health_report(
             row[0]: row[1] for row in assets_by_status.fetchall()
         }
 
-        # Job statistics (last 24h)
-        cutoff_24h = datetime.utcnow() - timedelta(hours=24)
-        jobs_24h = await session.execute(
-            select(func.count(Job.id))
-            .where(Job.created_at >= cutoff_24h)
-        )
-        report["jobs"]["last_24h"] = jobs_24h.scalar() or 0
-
-        jobs_by_status = await session.execute(
-            select(Job.status, func.count(Job.id))
-            .where(Job.created_at >= cutoff_24h)
-            .group_by(Job.status)
-        )
-        report["jobs"]["by_status_24h"] = {
-            row[0]: row[1] for row in jobs_by_status.fetchall()
-        }
-
         # Run statistics (last 24h)
+        cutoff_24h = datetime.utcnow() - timedelta(hours=24)
         runs_24h = await session.execute(
             select(func.count(Run.id))
             .where(Run.created_at >= cutoff_24h)
@@ -845,6 +815,119 @@ async def handle_search_reindex(
 
 
 # =============================================================================
+# Stale Run Cleanup Handler
+# =============================================================================
+
+
+async def handle_stale_run_cleanup(
+    session: AsyncSession,
+    run: Run,
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Clean up stale runs that are stuck in pending/running state.
+
+    This handler finds runs that have been in 'pending' or 'running' status
+    for longer than the configured timeout and marks them as cancelled.
+
+    This prevents:
+    - Runs showing as "running" forever in the UI
+    - Confusion about extraction status
+    - Resource tracking issues
+
+    Args:
+        session: Database session
+        run: Run context for tracking
+        config: Task configuration:
+            - stale_running_hours: Hours before a 'running' run is stale (default: 2)
+            - stale_pending_hours: Hours before a 'pending' run is stale (default: 1)
+            - dry_run: If True, don't actually update (default: False)
+
+    Returns:
+        Dict with cleanup statistics
+    """
+    stale_running_hours = config.get("stale_running_hours", 2)
+    stale_pending_hours = config.get("stale_pending_hours", 1)
+    dry_run = config.get("dry_run", False)
+
+    now = datetime.utcnow()
+    running_cutoff = now - timedelta(hours=stale_running_hours)
+    pending_cutoff = now - timedelta(hours=stale_pending_hours)
+
+    results = {
+        "stale_running_cancelled": 0,
+        "stale_pending_cancelled": 0,
+        "errors": 0,
+        "dry_run": dry_run,
+    }
+
+    try:
+        # Find stale 'running' runs
+        stale_running_query = (
+            select(Run)
+            .where(Run.status == "running")
+            .where(Run.started_at < running_cutoff)
+        )
+        stale_running = await session.execute(stale_running_query)
+        stale_running_runs = list(stale_running.scalars().all())
+
+        # Find stale 'pending' runs
+        stale_pending_query = (
+            select(Run)
+            .where(Run.status == "pending")
+            .where(Run.created_at < pending_cutoff)
+        )
+        stale_pending = await session.execute(stale_pending_query)
+        stale_pending_runs = list(stale_pending.scalars().all())
+
+        logger.info(
+            f"Found {len(stale_running_runs)} stale running runs "
+            f"(started before {running_cutoff})"
+        )
+        logger.info(
+            f"Found {len(stale_pending_runs)} stale pending runs "
+            f"(created before {pending_cutoff})"
+        )
+
+        if not dry_run:
+            # Cancel stale running runs
+            for stale_run in stale_running_runs:
+                try:
+                    stale_run.status = "cancelled"
+                    stale_run.error_message = (
+                        f"Cleaned up: stuck in running state for >{stale_running_hours} hours"
+                    )
+                    results["stale_running_cancelled"] += 1
+                except Exception as e:
+                    logger.error(f"Failed to cancel stale running run {stale_run.id}: {e}")
+                    results["errors"] += 1
+
+            # Cancel stale pending runs
+            for stale_run in stale_pending_runs:
+                try:
+                    stale_run.status = "cancelled"
+                    stale_run.error_message = (
+                        f"Cleaned up: stuck in pending state for >{stale_pending_hours} hours"
+                    )
+                    results["stale_pending_cancelled"] += 1
+                except Exception as e:
+                    logger.error(f"Failed to cancel stale pending run {stale_run.id}: {e}")
+                    results["errors"] += 1
+
+            await session.flush()
+        else:
+            # Dry run - just count
+            results["stale_running_cancelled"] = len(stale_running_runs)
+            results["stale_pending_cancelled"] = len(stale_pending_runs)
+
+    except Exception as e:
+        logger.error(f"Stale run cleanup failed: {e}")
+        results["errors"] += 1
+
+    return results
+
+
+# =============================================================================
 # Handler Registry
 # =============================================================================
 
@@ -854,6 +937,7 @@ MAINTENANCE_HANDLERS = {
     "retention.enforce": handle_retention_enforcement,
     "health.report": handle_health_report,
     "search.reindex": handle_search_reindex,
+    "stale_run.cleanup": handle_stale_run_cleanup,
 }
 
 

@@ -5,7 +5,6 @@ from .routers import (
     auth,
     documents,
     system,
-    jobs,
     sharepoint,
     organizations,
     users,
@@ -29,7 +28,6 @@ api_router.include_router(api_keys.router)
 api_router.include_router(connections.router)
 api_router.include_router(documents.router)
 api_router.include_router(system.router)
-api_router.include_router(jobs.router)
 api_router.include_router(sharepoint.router)
 api_router.include_router(storage.router)
 # Phase 0: Asset and Run endpoints

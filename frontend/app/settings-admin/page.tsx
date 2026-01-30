@@ -1,21 +1,21 @@
 'use client'
 
 import { useState, useEffect } from 'react'
+import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { settingsApi, systemApi, usersApi } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
-import { JobStatsWidget } from '@/components/admin/JobStatsWidget'
 import InfrastructureHealthPanel from '@/components/admin/InfrastructureHealthPanel'
 import SystemMaintenanceTab from '@/components/admin/SystemMaintenanceTab'
+import ProcessingTab from '@/components/admin/ProcessingTab'
 import UserInviteForm from '@/components/users/UserInviteForm'
 import UserEditForm from '@/components/users/UserEditForm'
 import {
   Settings,
   Building2,
   User,
-  Briefcase,
   Server,
   Info,
   Loader2,
@@ -26,6 +26,7 @@ import {
   Users,
   UserPlus,
   Wrench,
+  Activity,
 } from 'lucide-react'
 
 interface UserData {
@@ -57,17 +58,15 @@ function SettingsAdminContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
-  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'jobs' | 'infrastructure' | 'users' | 'maintenance'>('organization')
+  const searchParams = useSearchParams()
+  const initialTab = searchParams.get('tab') as 'organization' | 'user' | 'processing' | 'infrastructure' | 'users' | 'maintenance' | null
+  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'processing' | 'infrastructure' | 'users' | 'maintenance'>(initialTab || 'organization')
   const [showMergedPreview, setShowMergedPreview] = useState(false)
 
   // Users management state
   const [users, setUsers] = useState<UserData[]>([])
   const [showInviteForm, setShowInviteForm] = useState(false)
   const [editingUser, setEditingUser] = useState<UserData | null>(null)
-
-  // Job management settings
-  const [jobConcurrencyLimit, setJobConcurrencyLimit] = useState(3)
-  const [jobRetentionDays, setJobRetentionDays] = useState(30)
 
   // Extraction engine settings
   const [availableEngines, setAvailableEngines] = useState<Array<{
@@ -117,12 +116,6 @@ function SettingsAdminContent() {
       setEditedOrgSettings(orgData.settings || {})
       setUserSettings(userData.settings || {})
       setEditedUserSettings(userData.settings || {})
-
-      // Load job management settings from organization settings
-      if (orgData.settings) {
-        setJobConcurrencyLimit(orgData.settings.job_concurrency_limit || 3)
-        setJobRetentionDays(orgData.settings.job_retention_days || 30)
-      }
 
       // Load extraction engine settings
       if (enginesData && Array.isArray(enginesData.engines)) {
@@ -245,29 +238,6 @@ function SettingsAdminContent() {
 
   const handleUserSettingChange = (key: string, value: any) => {
     setEditedUserSettings(prev => ({ ...prev, [key]: value }))
-  }
-
-  const handleSaveJobSettings = async () => {
-    if (!token) return
-
-    setIsSaving(true)
-    setError('')
-
-    try {
-      const updatedSettings = {
-        ...editedOrgSettings,
-        job_concurrency_limit: jobConcurrencyLimit,
-        job_retention_days: jobRetentionDays
-      }
-      await settingsApi.updateOrganizationSettings(token, updatedSettings)
-      setOrgSettings(updatedSettings)
-      setEditedOrgSettings(updatedSettings)
-      alert('✅ Job management settings saved successfully!')
-    } catch (err: any) {
-      setError(err.message || 'Failed to save job settings')
-    } finally {
-      setIsSaving(false)
-    }
   }
 
   const handleSaveExtractionEngine = async () => {
@@ -394,15 +364,15 @@ function SettingsAdminContent() {
                 User Settings
               </button>
               <button
-                onClick={() => setActiveTab('jobs')}
+                onClick={() => setActiveTab('processing')}
                 className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'jobs'
+                  activeTab === 'processing'
                     ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
                     : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
                 }`}
               >
-                <Briefcase className="w-4 h-4 mr-2" />
-                Job Management
+                <Activity className="w-4 h-4 mr-2" />
+                Processing
               </button>
               <button
                 onClick={() => setActiveTab('infrastructure')}
@@ -535,7 +505,7 @@ function SettingsAdminContent() {
             </div>
 
             <div className="space-y-4">
-              {Object.entries(editedOrgSettings).filter(([key]) => key !== 'default_extraction_engine' && key !== 'job_concurrency_limit' && key !== 'job_retention_days').map(([key, value]) => (
+              {Object.entries(editedOrgSettings).filter(([key]) => key !== 'default_extraction_engine').map(([key, value]) => (
                 <div key={key}>
                   {renderSettingField(key, value, handleOrgSettingChange)}
                 </div>
@@ -583,102 +553,9 @@ function SettingsAdminContent() {
           </div>
         )}
 
-        {activeTab === 'jobs' && (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Job Management
-              </h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                Monitor job activity and configure processing settings across your organization.
-              </p>
-            </div>
-
-            {/* Job Statistics Widget */}
-            <JobStatsWidget />
-
-            {/* Settings Section */}
-            <div className="border-t border-gray-200 dark:border-gray-700 pt-6">
-              <h3 className="text-base font-semibold text-gray-900 dark:text-white mb-4">
-                Job Processing Settings
-              </h3>
-            </div>
-
-            <div className="space-y-6">
-              {/* Concurrent Job Limit */}
-              <div>
-                <label htmlFor="job-concurrency" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Concurrent Job Limit
-                </label>
-                <select
-                  id="job-concurrency"
-                  value={jobConcurrencyLimit}
-                  onChange={(e) => setJobConcurrencyLimit(Number(e.target.value))}
-                  className="w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                >
-                  {[1, 2, 3, 4, 5, 6, 7, 8, 9, 10].map(num => (
-                    <option key={num} value={num}>{num}</option>
-                  ))}
-                </select>
-                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  Maximum number of jobs that can run simultaneously per organization
-                </p>
-              </div>
-
-              {/* Job Retention Days */}
-              <div>
-                <label htmlFor="job-retention" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Job Retention Period
-                </label>
-                <select
-                  id="job-retention"
-                  value={jobRetentionDays}
-                  onChange={(e) => setJobRetentionDays(Number(e.target.value))}
-                  className="w-full max-w-xs px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                >
-                  <option value={7}>7 days</option>
-                  <option value={30}>30 days</option>
-                  <option value={90}>90 days</option>
-                  <option value={0}>Indefinite (never delete)</option>
-                </select>
-                <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-                  How long to keep completed job records before automatic cleanup
-                </p>
-              </div>
-
-              {/* Info Box */}
-              <div className="bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-200 dark:border-indigo-800/50 rounded-lg p-4">
-                <div className="flex">
-                  <div className="flex-shrink-0">
-                    <Info className="h-5 w-5 text-indigo-500 dark:text-indigo-400" />
-                  </div>
-                  <div className="ml-3">
-                    <h3 className="text-sm font-medium text-indigo-800 dark:text-indigo-200">
-                      About Job Management
-                    </h3>
-                    <div className="mt-2 text-sm text-indigo-700 dark:text-indigo-300">
-                      <ul className="list-disc list-inside space-y-1">
-                        <li>Concurrent job limit prevents resource exhaustion</li>
-                        <li>Job retention helps maintain storage efficiency</li>
-                        <li>Changes take effect immediately for new jobs</li>
-                        <li>Running jobs continue with original settings</li>
-                      </ul>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <Button onClick={handleSaveJobSettings} disabled={isSaving}>
-                {isSaving ? 'Saving...' : 'Save Job Settings'}
-              </Button>
-              <Button variant="secondary" onClick={loadSettings}>
-                Reset
-              </Button>
-            </div>
-          </div>
-        )}
+            {activeTab === 'processing' && (
+              <ProcessingTab onError={(msg) => setError(msg)} />
+            )}
 
             {activeTab === 'infrastructure' && (
               <InfrastructureHealthPanel />

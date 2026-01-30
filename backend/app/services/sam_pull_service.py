@@ -311,30 +311,36 @@ class SamPullService:
 
         # Date range - SAM.gov requires MM/DD/YYYY format
         # SAM.gov requires BOTH postedFrom AND postedTo when using date filtering
+        # EXCEPTION: When searching by solicitation_number, skip date filtering to get full history
         # We use predefined date range options for better UX
-        date_range = search_config.get("date_range", "last_30_days")
-        today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
+        if search_config.get("solicitation_number"):
+            # Skip date filtering when searching by exact solicitation number
+            # We want ALL results for that solicitation regardless of date
+            logger.debug("Skipping date filter for solicitation_number search")
+        else:
+            date_range = search_config.get("date_range", "last_30_days")
+            today = datetime.utcnow().replace(hour=0, minute=0, second=0, microsecond=0)
 
-        # Translate date range option to actual dates
-        if date_range == "today":
-            posted_from_date = today
-            posted_to_date = today
-        elif date_range == "yesterday":
-            posted_from_date = today - timedelta(days=1)
-            posted_to_date = today - timedelta(days=1)
-        elif date_range == "last_7_days":
-            posted_from_date = today - timedelta(days=7)
-            posted_to_date = today
-        elif date_range == "last_90_days":
-            posted_from_date = today - timedelta(days=90)
-            posted_to_date = today
-        else:  # default to last_30_days
-            posted_from_date = today - timedelta(days=30)
-            posted_to_date = today
+            # Translate date range option to actual dates
+            if date_range == "today":
+                posted_from_date = today
+                posted_to_date = today
+            elif date_range == "yesterday":
+                posted_from_date = today - timedelta(days=1)
+                posted_to_date = today - timedelta(days=1)
+            elif date_range == "last_7_days":
+                posted_from_date = today - timedelta(days=7)
+                posted_to_date = today
+            elif date_range == "last_90_days":
+                posted_from_date = today - timedelta(days=90)
+                posted_to_date = today
+            else:  # default to last_30_days
+                posted_from_date = today - timedelta(days=30)
+                posted_to_date = today
 
-        params["postedFrom"] = posted_from_date.strftime("%m/%d/%Y")
-        params["postedTo"] = posted_to_date.strftime("%m/%d/%Y")
-        logger.debug(f"Date range '{date_range}': {params['postedFrom']} to {params['postedTo']}")
+            params["postedFrom"] = posted_from_date.strftime("%m/%d/%Y")
+            params["postedTo"] = posted_to_date.strftime("%m/%d/%Y")
+            logger.debug(f"Date range '{date_range}': {params['postedFrom']} to {params['postedTo']}")
 
         # Response deadline - SAM.gov requires MM/DD/YYYY format
         if search_config.get("deadline_from"):
@@ -353,6 +359,10 @@ class SamPullService:
         # Organization/Agency filter by name (department)
         if search_config.get("department"):
             params["organizationName"] = search_config["department"]
+
+        # Solicitation number filter (exact match)
+        if search_config.get("solicitation_number"):
+            params["solnum"] = search_config["solicitation_number"]
 
         return params
 
@@ -544,8 +554,11 @@ class SamPullService:
 
             return opportunities, total
 
+        except httpx.TimeoutException as e:
+            logger.error(f"SAM.gov API timeout after {self.timeout}s: {e}")
+            raise RuntimeError(f"SAM.gov API request timed out after {self.timeout} seconds. The API may be slow or unavailable.")
         except httpx.HTTPError as e:
-            logger.error(f"SAM.gov API error: {e}")
+            logger.error(f"SAM.gov API error: {type(e).__name__}: {e}")
             raise
 
     async def get_opportunity_details(
@@ -638,6 +651,7 @@ class SamPullService:
             "new_attachments": 0,
             "api_calls_made": 0,
             "errors": [],
+            "processed_solicitation_ids": [],  # Track solicitation IDs for auto-download
         }
 
         # Check rate limit before starting (if enabled)
@@ -717,7 +731,6 @@ class SamPullService:
                         await self._process_opportunity(
                             session=session,
                             organization_id=organization_id,
-                            search_id=search_id,
                             opportunity=opp,
                             results=results,
                             search_config=search_config,
@@ -744,14 +757,13 @@ class SamPullService:
             await sam_service.update_search_pull_status(
                 session, search_id, "success" if not results["errors"] else "partial"
             )
-            await sam_service.update_search_counts(session, search_id)
 
             results["completed_at"] = datetime.utcnow().isoformat()
             results["status"] = "success" if not results["errors"] else "partial"
 
             # Auto-download attachments if enabled
             # Check search_config for override, default to parameter value
-            # Always check for pending attachments, not just new ones
+            # Download attachments for solicitations processed in this pull
             should_download = search_config.get("download_attachments", auto_download_attachments)
             print(f"[SAM_DEBUG] Auto-download check: should_download={should_download}, auto_download_attachments={auto_download_attachments}")
             logger.info(f"Auto-download check: should_download={should_download}, auto_download_attachments={auto_download_attachments}")
@@ -764,20 +776,14 @@ class SamPullService:
                     "errors": [],
                 }
 
-                # Get all pending attachments for ALL solicitations in this search
-                # This ensures we download attachments from previous pulls that weren't downloaded
-                solicitations, _ = await sam_service.list_solicitations(
-                    session,
-                    organization_id=organization_id,
-                    search_id=search_id,
-                    limit=1000,  # Get all solicitations for this search
-                )
-                print(f"[SAM_DEBUG] Found {len(solicitations)} solicitations for search {search_id}")
-                for sol in solicitations:
-                    print(f"[SAM_DEBUG] Processing solicitation: {sol.id} - {sol.title[:50] if sol.title else 'N/A'}...")
+                # Download attachments for solicitations processed in this pull
+                solicitation_ids = results.get("processed_solicitation_ids", [])
+                print(f"[SAM_DEBUG] Found {len(solicitation_ids)} solicitations processed in this pull")
+                for sol_id in solicitation_ids:
+                    print(f"[SAM_DEBUG] Processing solicitation: {sol_id}...")
                     download_result = await self.download_all_attachments(
                         session=session,
-                        solicitation_id=sol.id,
+                        solicitation_id=UUID(sol_id),
                         organization_id=organization_id,
                     )
                     results["attachment_downloads"]["total"] += download_result["total"]
@@ -809,18 +815,19 @@ class SamPullService:
         self,
         session,  # AsyncSession
         organization_id: UUID,
-        search_id: UUID,
         opportunity: Dict[str, Any],
         results: Dict[str, Any],
         search_config: Optional[Dict[str, Any]] = None,
     ):
         """
-        Process a single opportunity - create/update solicitation and notices.
+        Process a single opportunity - create/update solicitation or standalone notice.
+
+        Special Notices (notice_type='s') are created as standalone notices without
+        a parent solicitation, since they are informational and don't have solicitation numbers.
 
         Args:
             session: Database session
             organization_id: Organization UUID
-            search_id: SamSearch UUID
             opportunity: Parsed opportunity data
             results: Results dict to update
             search_config: Optional search configuration (for download_attachments setting)
@@ -829,6 +836,8 @@ class SamPullService:
         if not notice_id:
             logger.warning("Skipping opportunity without notice_id")
             return
+
+        notice_type = opportunity.get("notice_type", "o")
 
         # Fetch full HTML description from the notice description API
         # The search API returns a URL in the description field, not the actual description
@@ -844,6 +853,14 @@ class SamPullService:
                 # Add rate limiting delay after description fetch
                 await asyncio.sleep(self.rate_limit_delay)
 
+        # Special Notices (type='s') are standalone - no solicitation record
+        if notice_type == "s":
+            await self._process_standalone_notice(
+                session, organization_id, opportunity, description, results
+            )
+            return
+
+        # For other notice types, create/update solicitation
         # Check if solicitation already exists
         existing = await sam_service.get_solicitation_by_notice_id(session, notice_id)
 
@@ -858,15 +875,17 @@ class SamPullService:
             )
             results["updated_solicitations"] += 1
             solicitation = existing
+            # Track solicitation ID for auto-download
+            if "processed_solicitation_ids" in results:
+                results["processed_solicitation_ids"].append(str(solicitation.id))
         else:
             # Create new solicitation
             solicitation = await sam_service.create_solicitation(
                 session=session,
                 organization_id=organization_id,
-                search_id=search_id,
                 notice_id=notice_id,
                 title=opportunity.get("title", "Untitled"),
-                notice_type=opportunity.get("notice_type", "o"),
+                notice_type=notice_type,
                 solicitation_number=opportunity.get("solicitation_number"),
                 description=description,
                 naics_code=opportunity.get("naics_code"),
@@ -885,17 +904,22 @@ class SamPullService:
             )
             results["new_solicitations"] += 1
 
+        # Track solicitation ID for auto-download
+        if "processed_solicitation_ids" in results:
+            results["processed_solicitation_ids"].append(str(solicitation.id))
+
         # Check for new notices (amendments)
         # For simplicity, we create a notice for each pull if it's new
         latest_notice = await sam_service.get_latest_notice(session, solicitation.id)
 
+        is_new_notice = False
         if not latest_notice:
             # Create initial notice
             notice = await sam_service.create_notice(
                 session=session,
                 solicitation_id=solicitation.id,
                 sam_notice_id=notice_id,
-                notice_type=opportunity.get("notice_type", "o"),
+                notice_type=notice_type,
                 version_number=1,
                 title=opportunity.get("title"),
                 description=description,  # Use fetched HTML description
@@ -903,6 +927,7 @@ class SamPullService:
                 response_deadline=opportunity.get("response_deadline"),
             )
             results["new_notices"] += 1
+            is_new_notice = True
         else:
             notice = latest_notice
 
@@ -925,6 +950,186 @@ class SamPullService:
 
         # Update solicitation counts
         await sam_service.update_solicitation_counts(session, solicitation.id)
+
+        # Index to OpenSearch for unified search (Phase 7.6)
+        await self._index_to_opensearch(
+            session=session,
+            solicitation=solicitation,
+            notice=notice,
+            opportunity=opportunity,
+        )
+
+        # Trigger auto-summary for new solicitations (Phase 7.6)
+        # For updates, we don't regenerate summary unless explicitly requested
+        if not existing:
+            from app.tasks import sam_auto_summarize_task
+            sam_auto_summarize_task.delay(
+                solicitation_id=str(solicitation.id),
+                organization_id=str(organization_id),
+                is_update=False,
+            )
+            logger.debug(f"Triggered auto-summary task for new solicitation {solicitation.id}")
+
+        # Trigger auto-summary for new notices (Phase 7.6)
+        # This generates a notice-specific summary focused on what the notice is about
+        if is_new_notice:
+            from app.tasks import sam_auto_summarize_notice_task
+            try:
+                sam_auto_summarize_notice_task.delay(
+                    notice_id=str(notice.id),
+                    organization_id=str(organization_id),
+                )
+                logger.debug(f"Triggered auto-summary task for notice {notice.id}")
+            except Exception as e:
+                logger.warning(f"Could not trigger auto-summary for notice: {e}")
+
+    async def _process_standalone_notice(
+        self,
+        session,  # AsyncSession
+        organization_id: UUID,
+        opportunity: Dict[str, Any],
+        description: Optional[str],
+        results: Dict[str, Any],
+    ):
+        """
+        Process a Special Notice as a standalone notice (no parent solicitation).
+
+        Special Notices are informational and don't have solicitation numbers,
+        so they are stored as standalone notices with their own organization_id.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            opportunity: Parsed opportunity data
+            description: Fetched description (already resolved from URL)
+            results: Results dict to update
+        """
+        notice_id = opportunity.get("notice_id")
+
+        # Check if standalone notice already exists
+        existing_notice = await sam_service.get_notice_by_sam_notice_id(
+            session, notice_id, organization_id=organization_id
+        )
+
+        if existing_notice:
+            # Update existing standalone notice
+            await sam_service.update_notice(
+                session,
+                notice_id=existing_notice.id,
+                title=opportunity.get("title"),
+                description=description,
+                response_deadline=opportunity.get("response_deadline"),
+            )
+            results["updated_notices"] = results.get("updated_notices", 0) + 1
+            notice = existing_notice
+            logger.debug(f"Updated standalone notice {notice.id}")
+        else:
+            # Create new standalone notice
+            notice = await sam_service.create_notice(
+                session=session,
+                solicitation_id=None,  # Standalone - no parent solicitation
+                organization_id=organization_id,
+                sam_notice_id=notice_id,
+                notice_type="s",  # Special Notice
+                version_number=1,
+                title=opportunity.get("title", "Untitled"),
+                description=description,
+                posted_date=opportunity.get("posted_date"),
+                response_deadline=opportunity.get("response_deadline"),
+                naics_code=opportunity.get("naics_code"),
+                psc_code=opportunity.get("psc_code"),
+                set_aside_code=opportunity.get("set_aside_code"),
+                agency_name=opportunity.get("agency_name"),
+                bureau_name=opportunity.get("bureau_name"),
+                office_name=opportunity.get("office_name"),
+                ui_link=opportunity.get("ui_link"),
+            )
+            results["new_standalone_notices"] = results.get("new_standalone_notices", 0) + 1
+            logger.info(f"Created standalone notice {notice.id}: {notice.title}")
+
+            # Trigger auto-summary for new standalone notices
+            from app.tasks import sam_auto_summarize_notice_task
+            try:
+                sam_auto_summarize_notice_task.delay(
+                    notice_id=str(notice.id),
+                    organization_id=str(organization_id),
+                )
+                logger.debug(f"Triggered auto-summary task for standalone notice {notice.id}")
+            except Exception as e:
+                # Task may not exist yet - log and continue
+                logger.warning(f"Could not trigger auto-summary for notice: {e}")
+
+        # Process attachments for standalone notices
+        attachments = opportunity.get("attachments", [])
+        for att_data in attachments:
+            await self._process_standalone_notice_attachment(
+                session=session,
+                notice_id=notice.id,
+                attachment_data=att_data,
+                results=results,
+            )
+
+    async def _process_standalone_notice_attachment(
+        self,
+        session,  # AsyncSession
+        notice_id: UUID,
+        attachment_data,
+        results: Dict[str, Any],
+    ):
+        """
+        Process an attachment for a standalone notice.
+
+        Similar to _process_attachment but without solicitation_id requirement.
+        """
+        # Handle both dict format and simple URL string format
+        if isinstance(attachment_data, str):
+            download_url = attachment_data
+            import re
+            match = re.search(r'/files/([a-f0-9]+)/download', attachment_data)
+            if match:
+                resource_id = match.group(1)
+            else:
+                import hashlib
+                resource_id = hashlib.md5(attachment_data.encode()).hexdigest()
+            filename = f"pending_{resource_id}"
+            file_type = None
+            file_size = None
+            description = None
+        else:
+            resource_id = attachment_data.get("resource_id")
+            download_url = attachment_data.get("download_url")
+            filename = attachment_data.get("filename", f"pending_{resource_id}")
+            file_type = attachment_data.get("file_type")
+            file_size = attachment_data.get("file_size")
+            description = attachment_data.get("description")
+
+        if not resource_id and not download_url:
+            return
+
+        # Check for existing attachment by resource_id or download_url
+        existing = await sam_service.get_attachment_by_resource_or_url(
+            session, resource_id=resource_id, download_url=download_url
+        )
+
+        if existing:
+            # Already have this attachment
+            results["skipped_attachments"] = results.get("skipped_attachments", 0) + 1
+            return
+
+        # Create new attachment record for standalone notice
+        attachment = await sam_service.create_attachment(
+            session=session,
+            solicitation_id=None,  # No solicitation for standalone notices
+            notice_id=notice_id,
+            resource_id=resource_id,
+            filename=filename,
+            file_type=file_type,
+            file_size=file_size,
+            download_url=download_url,
+            description=description,
+        )
+        results["new_attachments"] = results.get("new_attachments", 0) + 1
+        logger.debug(f"Created attachment {attachment.id} for standalone notice {notice_id}")
 
     async def _process_attachment(
         self,
@@ -1491,7 +1696,7 @@ class SamPullService:
                     "response_deadline": opp.get("response_deadline").isoformat() if opp.get("response_deadline") else None,
                     "agency": opp.get("organization", {}).get("name") if isinstance(opp.get("organization"), dict) else None,
                     "ui_link": opp.get("ui_link"),
-                    "attachments_count": len(opp.get("attachments", [])),
+                    "attachments_count": len(opp.get("attachments") or []),
                 })
 
             return {
@@ -1503,20 +1708,370 @@ class SamPullService:
                 "message": f"Found {total} matching opportunities. Showing {len(preview_results)} samples.",
             }
 
+        except httpx.TimeoutException as e:
+            logger.error(f"SAM.gov API timeout during preview: {e}")
+            return {
+                "success": False,
+                "error": "timeout",
+                "message": f"SAM.gov API request timed out after {self.timeout} seconds. Please try again.",
+            }
         except httpx.HTTPError as e:
-            logger.error(f"SAM.gov API error during preview: {e}")
+            logger.error(f"SAM.gov API error during preview: {type(e).__name__}: {e}")
             return {
                 "success": False,
                 "error": "api_error",
-                "message": f"API request failed: {e}",
+                "message": f"API request failed: {type(e).__name__}: {e}",
+            }
+        except RuntimeError as e:
+            # Raised by search_opportunities on timeout
+            logger.error(f"Runtime error during preview: {e}")
+            return {
+                "success": False,
+                "error": "timeout",
+                "message": str(e),
             }
         except Exception as e:
-            logger.error(f"Error during search preview: {e}")
+            logger.error(f"Error during search preview: {type(e).__name__}: {e}")
             return {
                 "success": False,
                 "error": "unknown",
-                "message": str(e),
+                "message": str(e) or f"Unknown error: {type(e).__name__}",
             }
+
+    async def _index_to_opensearch(
+        self,
+        session,  # AsyncSession
+        solicitation,  # SamSolicitation
+        notice,  # SamNotice
+        opportunity: Dict[str, Any],
+    ):
+        """
+        Index solicitation and notice to OpenSearch for unified search.
+
+        This enables SAM.gov data to appear in the platform's unified search
+        results alongside assets and other content.
+
+        Args:
+            session: Database session
+            solicitation: SamSolicitation instance
+            notice: SamNotice instance
+            opportunity: Raw opportunity data from API
+        """
+        from .config_loader import config_loader
+        from .opensearch_service import opensearch_service
+
+        # Check if OpenSearch is enabled
+        opensearch_config = config_loader.get_opensearch_config()
+        if not opensearch_config or not opensearch_config.enabled:
+            return
+
+        if not opensearch_service.is_available:
+            logger.debug("OpenSearch not available, skipping SAM indexing")
+            return
+
+        try:
+            # Index the solicitation
+            await opensearch_service.index_sam_solicitation(
+                organization_id=solicitation.organization_id,
+                solicitation_id=solicitation.id,
+                solicitation_number=solicitation.solicitation_number,
+                title=solicitation.title,
+                description=solicitation.description,
+                notice_type=solicitation.notice_type,
+                agency=solicitation.agency_name,
+                sub_agency=solicitation.bureau_name,
+                office=solicitation.office_name,
+                posted_date=solicitation.posted_date,
+                response_deadline=solicitation.response_deadline,
+                naics_codes=[solicitation.naics_code] if solicitation.naics_code else None,
+                psc_codes=[solicitation.psc_code] if solicitation.psc_code else None,
+                set_aside=solicitation.set_aside_code,
+                place_of_performance=solicitation.place_of_performance.get("city") if solicitation.place_of_performance else None,
+                notice_count=solicitation.notice_count or 0,
+                attachment_count=solicitation.attachment_count or 0,
+                summary_status=solicitation.summary_status,
+                is_active=solicitation.is_active,
+                created_at=solicitation.created_at,
+            )
+
+            # Index the notice
+            await opensearch_service.index_sam_notice(
+                organization_id=solicitation.organization_id,
+                notice_id=notice.id,
+                sam_notice_id=notice.sam_notice_id,
+                solicitation_id=solicitation.id,
+                solicitation_number=solicitation.solicitation_number,
+                title=notice.title,
+                description=notice.description,
+                notice_type=notice.notice_type,
+                agency=solicitation.agency_name,
+                sub_agency=solicitation.bureau_name,
+                office=solicitation.office_name,
+                posted_date=notice.posted_date,
+                response_deadline=notice.response_deadline,
+                naics_codes=[solicitation.naics_code] if solicitation.naics_code else None,
+                psc_codes=[solicitation.psc_code] if solicitation.psc_code else None,
+                set_aside=solicitation.set_aside_code,
+                place_of_performance=solicitation.place_of_performance.get("city") if solicitation.place_of_performance else None,
+                version_number=notice.version_number,
+                created_at=notice.created_at,
+            )
+
+            logger.debug(
+                f"Indexed SAM solicitation {solicitation.id} and notice {notice.id} to OpenSearch"
+            )
+
+        except Exception as e:
+            # Don't fail the pull if indexing fails
+            logger.warning(f"Failed to index SAM data to OpenSearch: {e}")
+
+    async def refresh_solicitation(
+        self,
+        session,  # AsyncSession
+        solicitation_id: UUID,
+        organization_id: UUID,
+    ) -> Dict[str, Any]:
+        """
+        Refresh a solicitation by re-fetching data from SAM.gov.
+
+        If the solicitation has a solicitation_number, searches by that to get
+        all related notices. If not (e.g., Special Notices), just fetches the
+        description for the existing notice_id.
+
+        Args:
+            session: Database session
+            solicitation_id: SamSolicitation UUID to refresh
+            organization_id: Organization UUID for connection lookup
+
+        Returns:
+            Refresh results summary
+        """
+        from .sam_service import sam_service
+
+        # Get the solicitation
+        solicitation = await sam_service.get_solicitation(
+            session, solicitation_id, include_notices=True
+        )
+        if not solicitation:
+            raise ValueError(f"Solicitation not found: {solicitation_id}")
+
+        if solicitation.organization_id != organization_id:
+            raise ValueError("Access denied to this solicitation")
+
+        notice_id = solicitation.notice_id
+        sol_number = solicitation.solicitation_number
+
+        results = {
+            "solicitation_id": str(solicitation_id),
+            "solicitation_number": sol_number,
+            "notice_id": notice_id,
+            "opportunities_found": 0,
+            "notices_created": 0,
+            "notices_updated": 0,
+            "description_updated": False,
+            "error": None,
+        }
+
+        # If no solicitation_number, just refresh the description for existing notices
+        # Don't search broadly - that could return unrelated results
+        if not sol_number:
+            logger.info(
+                f"Solicitation {solicitation_id} has no solicitation_number. "
+                f"Refreshing description only for notice_id: {notice_id}"
+            )
+            return await self._refresh_description_only(
+                session, solicitation, organization_id, results
+            )
+
+        # Has solicitation_number - search SAM.gov by solnum to get all related notices
+        logger.info(f"Refreshing solicitation {solicitation_id} from SAM.gov (solnum: {sol_number})")
+
+        try:
+            # Search SAM.gov by solicitation number
+            # Don't include date filters to get full history
+            search_config = {
+                "solicitation_number": sol_number,
+                "active_only": False,
+            }
+
+            opportunities, total = await self.search_opportunities(
+                search_config,
+                limit=100,
+                session=session,
+                organization_id=organization_id,
+            )
+
+            results["opportunities_found"] = len(opportunities)
+            logger.info(f"Found {len(opportunities)} opportunities for solicitation {sol_number}")
+
+            if not opportunities:
+                # No results from solnum search - fall back to description-only refresh
+                logger.info(f"No results for solnum search, falling back to description refresh")
+                return await self._refresh_description_only(
+                    session, solicitation, organization_id, results
+                )
+
+            # Get existing notices for this solicitation
+            existing_notices = await sam_service.list_notices(session, solicitation_id)
+            existing_notice_ids = {n.sam_notice_id for n in existing_notices}
+
+            # Track the latest opportunity for updating solicitation description
+            latest_opportunity = None
+            latest_posted_date = None
+
+            # Process each opportunity (notice)
+            for opp in opportunities:
+                opp_notice_id = opp.get("notice_id")
+                if not opp_notice_id:
+                    continue
+
+                # Fetch full description
+                description = opp.get("description")
+                if description and description.startswith("http"):
+                    logger.debug(f"Fetching full description for notice {opp_notice_id}")
+                    full_description = await self.fetch_notice_description(
+                        opp_notice_id, session, organization_id
+                    )
+                    if full_description:
+                        description = full_description
+                    # Rate limiting
+                    await asyncio.sleep(self.rate_limit_delay)
+
+                # Track latest for solicitation description
+                posted_date = opp.get("posted_date")
+                if posted_date and (latest_posted_date is None or posted_date > latest_posted_date):
+                    latest_posted_date = posted_date
+                    latest_opportunity = opp
+                    latest_opportunity["_fetched_description"] = description
+
+                # Check if notice already exists
+                if opp_notice_id in existing_notice_ids:
+                    # Update existing notice
+                    existing_notice = next(
+                        (n for n in existing_notices if n.sam_notice_id == opp_notice_id), None
+                    )
+                    if existing_notice:
+                        # Update if description was a URL or is different
+                        needs_update = (
+                            existing_notice.description and
+                            (existing_notice.description.startswith("http") or
+                             existing_notice.description != description)
+                        )
+                        if needs_update and description:
+                            await sam_service.update_notice(
+                                session,
+                                notice_id=existing_notice.id,
+                                title=opp.get("title"),
+                                description=description,
+                                response_deadline=opp.get("response_deadline"),
+                            )
+                            results["notices_updated"] += 1
+                            logger.debug(f"Updated notice {existing_notice.id} with fresh description")
+                else:
+                    # Create new notice (historical data we didn't have)
+                    version_number = len(existing_notices) + results["notices_created"] + 1
+                    await sam_service.create_notice(
+                        session=session,
+                        solicitation_id=solicitation_id,
+                        sam_notice_id=opp_notice_id,
+                        notice_type=opp.get("notice_type", "o"),
+                        version_number=version_number,
+                        title=opp.get("title"),
+                        description=description,
+                        posted_date=opp.get("posted_date"),
+                        response_deadline=opp.get("response_deadline"),
+                    )
+                    results["notices_created"] += 1
+                    logger.info(f"Created new notice {opp_notice_id} (version {version_number})")
+
+            # Update solicitation with latest opportunity's description
+            if latest_opportunity:
+                latest_description = latest_opportunity.get("_fetched_description")
+                if latest_description and latest_description != solicitation.description:
+                    await sam_service.update_solicitation(
+                        session,
+                        solicitation_id=solicitation.id,
+                        title=latest_opportunity.get("title") or solicitation.title,
+                        description=latest_description,
+                        response_deadline=latest_opportunity.get("response_deadline"),
+                    )
+                    results["description_updated"] = True
+                    logger.info(
+                        f"Updated solicitation {solicitation_id} with latest description "
+                        f"({len(latest_description)} chars)"
+                    )
+
+            await session.commit()
+            logger.info(f"Refresh completed for solicitation {solicitation_id}: {results}")
+
+        except Exception as e:
+            results["error"] = str(e)
+            logger.error(f"Error refreshing solicitation {solicitation_id}: {e}")
+
+        return results
+
+    async def _refresh_description_only(
+        self,
+        session,
+        solicitation,
+        organization_id: UUID,
+        results: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        """
+        Refresh only the description for a solicitation without searching broadly.
+
+        Used when there's no solicitation_number to search by.
+        """
+        from .sam_service import sam_service
+
+        notice_id = solicitation.notice_id
+        if not notice_id:
+            results["error"] = "Solicitation has no notice_id"
+            return results
+
+        try:
+            # Fetch the full description for this specific notice
+            logger.debug(f"Fetching description for notice {notice_id}")
+            description = await self.fetch_notice_description(
+                notice_id, session, organization_id
+            )
+
+            if not description:
+                results["error"] = f"Could not fetch description from SAM.gov for notice_id: {notice_id}"
+                logger.warning(results["error"])
+                return results
+
+            # Update solicitation description if different
+            if description != solicitation.description:
+                await sam_service.update_solicitation(
+                    session,
+                    solicitation_id=solicitation.id,
+                    description=description,
+                )
+                results["description_updated"] = True
+                logger.info(f"Updated solicitation description ({len(description)} chars)")
+
+            # Update notices with the same notice_id
+            notices = await sam_service.list_notices(session, solicitation.id)
+            for notice in notices:
+                if notice.sam_notice_id == notice_id:
+                    if notice.description and notice.description.startswith("http"):
+                        await sam_service.update_notice(
+                            session,
+                            notice_id=notice.id,
+                            description=description,
+                        )
+                        results["notices_updated"] += 1
+                        logger.debug(f"Updated notice {notice.id} with fresh description")
+
+            await session.commit()
+            logger.info(f"Description refresh completed: {results}")
+
+        except Exception as e:
+            results["error"] = str(e)
+            logger.error(f"Error refreshing description: {e}")
+
+        return results
 
 
 # Singleton instance

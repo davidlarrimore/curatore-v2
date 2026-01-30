@@ -2,7 +2,7 @@
 
 > **Full Requirements**: See `/UPDATED_DATA_ARCHITECTURE.md` (1400+ lines)
 > **Start Date**: 2026-01-28
-> **Current Phase**: Phase 6 Complete - Native Search with OpenSearch
+> **Current Phase**: Phase 7 Complete - SAM.gov Native Domain Integration
 
 ---
 
@@ -534,7 +534,7 @@ while maintaining stable production metadata.
 
 ---
 
-## Phase 6.2: Optional Integrations & Automation ⏳ NOT STARTED
+## Phase 6.2: Optional Integrations & Automation ⏳ PARTIAL
 
 **Goal**: Extend Curatore outward without destabilizing core.
 
@@ -545,14 +545,15 @@ while maintaining stable production metadata.
 - [ ] Vector DB sync actions
 - [ ] OpenWebUI publication
 - [ ] External notifications/webhooks
-- [ ] Limited automation chaining for stabilized workflows
+- [x] ~~Limited automation chaining~~ REMOVED - Current hardcoded chains sufficient
+- [x] **Deprecate Job system in favor of Runs** ✅ COMPLETE (2026-01-29)
 
 ### Frontend Tasks (Optional)
 - [ ] Global search bar in header
 - [ ] Search suggestions/autocomplete
 - [ ] Saved searches
 - [ ] Search analytics
-- [ ] Faceted search
+- [x] Faceted search ✅ DONE (2026-01-29)
 - [ ] Output destination configuration
 - [ ] Sync history and status views
 - [ ] Automation opt-in controls
@@ -561,24 +562,88 @@ while maintaining stable production metadata.
 
 ---
 
-## Phase 7: Native SAM.gov Domain Integration ⏳ NOT STARTED
+## Phase 7: Native SAM.gov Domain Integration ✅ COMPLETE
 
 **Goal**: Migrate SAM.gov from scripts into first-class domain pipeline.
 
+**Status**: 🎉 **PHASE 7 COMPLETE** - Full SAM.gov integration with AI summaries!
+
 ### Backend Tasks
-- [ ] Introduce `Solicitation` and `Notice` relational models
-- [ ] Implement SAM.gov API abstraction layer
-- [ ] Convert daily ingest script into scheduled system run
-- [ ] Integrate attachment ingestion with asset + extraction pipeline
-- [ ] Enable derived metadata and reporting runs
+- [x] Introduce `Solicitation` and `Notice` relational models ✅ DONE
+  - Created SamSearch, SamSolicitation, SamNotice, SamAttachment, SamSolicitationSummary models
+  - SamAgency, SamSubAgency reference data models
+  - SamApiUsage and SamQueuedRequest for rate limit tracking
+- [x] Implement SAM.gov API abstraction layer ✅ DONE
+  - Created sam_client.py for SAM.gov Opportunities API v2
+  - Created sam_service.py for business logic
+  - Rate limit tracking (1,000 calls/day)
+  - Request queuing when over limit
+- [x] Convert daily ingest script into scheduled system run ✅ DONE
+  - Created sam_pull_service.py for data ingestion
+  - sam_pull_task Celery task with rate limit handling
+  - sam_process_queued_requests_task for queue processing
+- [x] Integrate attachment ingestion with asset + extraction pipeline ✅ DONE
+  - SamAttachment links to Asset model
+  - sam_download_attachment_task downloads and triggers extraction
+  - Attachment deduplication by download URL
+- [x] Enable derived metadata and reporting runs ✅ DONE
+  - Created sam_summarization_service.py for LLM summaries
+  - sam_auto_summarize_task generates solicitation summaries
+  - sam_auto_summarize_notice_task generates notice summaries
+  - Uses database LLM connections (not just env vars)
+  - Includes attachment content in summaries
+
+### API Endpoints Added
+- `GET/POST /sam/searches` - List/create SAM searches
+- `GET/PATCH/DELETE /sam/searches/{id}` - CRUD operations
+- `POST /sam/searches/{id}/pull` - Trigger pull from SAM.gov
+- `GET /sam/solicitations` - List solicitations with filters
+- `GET /sam/solicitations/{id}` - Get solicitation details
+- `POST /sam/solicitations/{id}/regenerate-summary` - Regenerate AI summary
+- `GET /sam/notices` - List all notices
+- `GET /sam/notices/{id}` - Get notice details
+- `POST /sam/notices/{id}/regenerate-summary` - Regenerate notice summary
+- `GET /sam/dashboard` - Dashboard statistics
+- `GET /sam/usage` - API usage tracking
 
 ### Frontend Tasks
-- [ ] Add SAM.gov collection type
-- [ ] Solicitation-centric browsing and filtering
-- [ ] Notice history and attachment visibility
-- [ ] Executive report access and export
+- [x] Add SAM.gov collection type ✅ DONE
+  - Created /sam dashboard page with stats and navigation
+  - Created /sam/setup page for search management
+- [x] Solicitation-centric browsing and filtering ✅ DONE
+  - Created /sam/solicitations page with table view
+  - Filters: agency, type, status, date range
+  - NEW/UPDATED badges for recent activity
+- [x] Notice history and attachment visibility ✅ DONE
+  - Created /sam/notices page with table view
+  - Created /sam/notices/[id] detail page with tabs
+  - Notice timeline on solicitation detail
+  - Attachment list with download status
+- [x] Executive report access and export ✅ DONE
+  - AI Summary tab on solicitation detail page
+  - AI Summary tab on notice detail page
+  - Summary regeneration with loading states
+  - Compliance checklist in summaries
 
-**Dependencies**: Phase 5 complete (needs scheduling maturity)
+### Phase 7.6 Frontend Restructuring ✅ COMPLETE
+- [x] New route structure (/sam, /sam/setup, /sam/notices, /sam/solicitations)
+- [x] SAM Dashboard with stats cards and quick links
+- [x] Notices table with filters and pagination
+- [x] Notice detail page with AI summary generation
+- [x] Solicitations table with NEW/UPDATED badges
+- [x] Solicitation detail with AI summary and regenerate button
+- [x] Auto-summary on pull (triggered after data ingestion)
+- [x] Database LLM connection support (not just env vars)
+- [x] Attachment content included in summaries
+
+### Acceptance Criteria
+- [x] SAM.gov data flows through asset + extraction pipeline ✅
+- [x] Solicitations and notices are browsable with filters ✅
+- [x] AI summaries generate automatically on pull ✅
+- [x] Users can regenerate summaries manually ✅
+- [x] Rate limits are tracked and respected ✅
+
+**Dependencies**: Phase 5 complete ✅
 
 ---
 
@@ -674,6 +739,52 @@ curl http://localhost:8000/api/v1/runs | jq
 ---
 
 ## Implementation Backlog (Future Considerations)
+
+### Job System Deprecation ✅ COMPLETE (2026-01-29)
+
+**Context**: Curatore had two execution tracking systems:
+1. **Job** (legacy) - Batch document processing with quality scoring (`Job`, `JobDocument`, `JobLog`)
+2. **Run** (Phase 0+) - Universal execution tracking (`Run`, `RunLogEvent`, `ExtractionResult`)
+
+**Why Deprecate Jobs?**
+- Predated Phase 0 architecture refactor
+- Architecture says "users reason about assets, results—not jobs and queues"
+- Having two systems was confusing and increased maintenance burden
+- Run model is more flexible and handles the same use cases
+
+**What Was Removed**:
+
+**Backend:**
+- Deleted `backend/app/services/job_service.py` (~1120 lines)
+- Deleted `backend/app/api/v1/routers/jobs.py` (13 endpoints)
+- Removed Job-related Pydantic models from `backend/app/api/v1/models.py`
+- Updated `backend/app/tasks.py` - removed process_document_task and helpers
+- Updated `backend/app/celery_app.py` - removed job cleanup scheduled task
+- Updated `backend/app/services/maintenance_handlers.py` - made handle_job_cleanup no-op
+- Updated `backend/app/api/v1/routers/system.py` - removed job clearing from reset_system
+
+**Frontend:**
+- Deleted `frontend/app/jobs/` directory (list and detail pages)
+- Deleted `frontend/components/jobs/` directory (CreateJobPanel, JobReviewPanel, etc.)
+- Deleted `frontend/components/dashboard/JobStatsCard.tsx`
+- Deleted `frontend/lib/job-naming.ts`
+- Removed jobsApi from `frontend/lib/api.ts`
+- Updated `frontend/components/layout/StatusBar.tsx` to use runsApi
+- Updated `frontend/components/layout/LeftSidebar.tsx` to remove Jobs nav
+- Updated `frontend/components/layout/AppLayout.tsx` keyboard shortcut
+- Updated `frontend/app/page.tsx` dashboard to use runsApi
+- Updated `frontend/components/dashboard/RecentActivityCard.tsx` to use Runs
+- Updated `frontend/components/dashboard/QuickActionsCard.tsx` to use /assets
+- Updated `frontend/app/process/page.tsx` to redirect to /assets
+- Created `frontend/components/shared/FolderBreadcrumb.tsx` (moved from jobs)
+- Deprecated `frontend/components/ProcessingPanel.tsx` (legacy component)
+- Deprecated `frontend/components/stages/ReviewStage.tsx` (legacy component)
+
+**Database Migration**: Created migration `20260129_1300_drop_job_tables.py` to:
+- Drop jobs, job_documents, job_logs tables
+- Remove job_id column from artifacts table
+
+---
 
 ### Web Crawling Maturity ✅ RESOLVED (2026-01-29)
 
@@ -889,3 +1000,59 @@ curl http://localhost:8000/api/v1/runs | jq
   - Added --seed-scheduled-tasks argument to seed.py
   - Enhanced asset detail page with file preview for HTML, DOCX, XLSX, PPTX, text
   - ✅ Successfully indexed 317 assets, search working end-to-end
+- **2026-01-29**: 🚀 **PHASE 7 STARTED** - SAM.gov Native Domain Integration
+  - Created SAM.gov database models (SamSearch, SamSolicitation, SamNotice, SamAttachment, etc.)
+  - Created sam_client.py for SAM.gov Opportunities API v2
+  - Created sam_service.py, sam_pull_service.py for business logic
+  - Created sam_summarization_service.py for LLM-powered summaries
+  - Rate limit tracking (1,000 calls/day) with request queuing
+  - Celery tasks: sam_pull_task, sam_download_attachment_task, sam_auto_summarize_task
+- **2026-01-29**: ✅ Phase 7.6 Frontend Restructuring complete
+  - Created /sam dashboard page with stats cards
+  - Created /sam/setup page (moved from original /sam)
+  - Created /sam/notices page with filters and pagination
+  - Created /sam/notices/[id] detail page with AI summary tab
+  - Created /sam/solicitations page with NEW/UPDATED badges
+  - Refactored /sam/solicitations/[id] with AI summary regeneration
+  - SamNavigation component for consistent navigation
+- **2026-01-29**: ✅ Notice auto-summarization implemented
+  - sam_auto_summarize_notice_task generates summaries for notices
+  - Includes JSON data, description, and attachment content
+  - Triggered automatically on notice creation during pulls
+  - Manual regeneration via API and UI buttons
+- **2026-01-29**: 🐛 Fixed LLM availability detection
+  - Updated _check_llm_availability to check database connections first
+  - Fixed sam_auto_summarize_task to use database LLM connections
+  - Resolved "'LLMService' object has no attribute 'generate_text'" error
+  - Uses OpenAI client directly with chat.completions.create()
+- **2026-01-29**: 🎉 **PHASE 7 COMPLETE** - SAM.gov Native Domain Integration DONE!
+  - ✅ All backend tasks complete (models, services, API endpoints, auto-summarization)
+  - ✅ All frontend tasks complete (dashboard, notices, solicitations, summaries)
+  - ✅ All acceptance criteria met
+  - 🚀 SAM.gov data flows through asset pipeline with AI-powered analysis
+- **2026-01-29**: 📝 Added Job system deprecation to backlog (Phase 6.2 candidate)
+- **2026-01-29**: 🎉 **JOB SYSTEM DEPRECATED** - Complete removal of legacy Job system
+  - Deleted backend: job_service.py, jobs.py router, Job Pydantic models
+  - Removed process_document_task and job-related code from tasks.py
+  - Removed Job, JobDocument, JobLog models from database/models.py
+  - Deleted frontend: /jobs pages, job components, JobStatsCard, JobStatsWidget
+  - Deleted unused ProcessingPanel.tsx and ReviewStage.tsx components
+  - Updated StatusBar to use runsApi instead of jobsApi
+  - Updated dashboard to show Run stats instead of Job stats
+  - Removed Jobs nav from sidebar, Jobs tab from settings-admin
+  - Created shared FolderBreadcrumb component
+  - Created and applied migration 20260129_1300_drop_job_tables.py
+  - Dropped tables: jobs, job_documents, job_logs
+  - Removed job_id column from artifacts table and Artifact model
+  - Fixed login page Suspense boundary for Next.js 15 compatibility
+  - All services verified healthy after migration
+- **2026-01-29**: ✅ **FACETED SEARCH IMPLEMENTED** (Phase 6.2)
+  - Added FacetBucket and Facet dataclasses to opensearch_service.py
+  - Added search_with_facets() method with cross-filtering aggregations
+  - Added FacetBucketResponse, FacetResponse models to search.py router
+  - Updated SearchRequest with include_facets parameter (default true)
+  - Updated SearchResponse to include facets
+  - Added Facet TypeScript interfaces to frontend/lib/api.ts
+  - Updated search page with source type counts in filter chips
+  - Added collapsible content type filter section with checkboxes
+  - "Show X more" expands to show all content types

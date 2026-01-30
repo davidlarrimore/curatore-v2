@@ -152,12 +152,21 @@ class UploadIntegrationService:
             )
             return None
 
+        # Cancel any pending/running extraction runs for this asset
+        cancelled_count = await run_service.cancel_pending_runs_for_asset(
+            session=session,
+            asset_id=asset_id,
+            run_type="extraction",
+        )
+        if cancelled_count > 0:
+            logger.info(f"Cancelled {cancelled_count} previous extraction run(s) for asset {asset_id}")
+
         # Get extractor version from config if not provided
         if not extractor_version:
             from .config_loader import config_loader
             default_engine = config_loader.get_default_extraction_engine()
             if default_engine:
-                extractor_version = f"{default_engine.name}-{default_engine.engine_type}"
+                extractor_version = default_engine.name
             else:
                 extractor_version = "extraction-service"
 
@@ -324,7 +333,7 @@ class UploadIntegrationService:
             from .config_loader import config_loader
             default_engine = config_loader.get_default_extraction_engine()
             if default_engine:
-                extractor_version = f"{default_engine.name}-{default_engine.engine_type}"
+                extractor_version = default_engine.name
             else:
                 extractor_version = "extraction-service"
 
@@ -336,6 +345,15 @@ class UploadIntegrationService:
         # Check if asset is in a valid state for re-extraction
         if asset.status == "deleted":
             raise ValueError(f"Cannot re-extract deleted asset {asset_id}")
+
+        # Cancel any pending/running extraction runs for this asset
+        cancelled_count = await run_service.cancel_pending_runs_for_asset(
+            session=session,
+            asset_id=asset_id,
+            run_type="extraction",
+        )
+        if cancelled_count > 0:
+            logger.info(f"Cancelled {cancelled_count} previous extraction run(s) for asset {asset_id}")
 
         # Phase 1: Get current asset version
         current_version = await asset_service.get_current_asset_version(session, asset_id)

@@ -4,55 +4,48 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Curatore v2 is a RAG-ready document processing and optimization platform. It converts documents (PDF, DOCX, PPTX, TXT, Images) to Markdown, evaluates quality with an LLM, and optionally optimizes structure for vector databases. The application consists of:
+Curatore v2 is a RAG-ready document processing and curation platform. It converts documents (PDF, DOCX, PPTX, TXT, Images, Web Pages) to Markdown, provides full-text search, and supports LLM-powered analysis. The application consists of:
 
 - **Backend**: FastAPI (Python 3.12+) with async Celery workers
 - **Frontend**: Next.js 15.5 (TypeScript, React 19) with Tailwind CSS
 - **Extraction Service**: Separate microservice for document conversion
-- **Queue System**: Redis + Celery for async job processing
+- **Playwright Service**: Browser-based web rendering for JavaScript-heavy sites
+- **Queue System**: Redis + Celery for async processing
+- **Object Storage**: S3-compatible storage (MinIO/AWS S3) - Required
+- **OpenSearch**: Full-text search with faceted filtering (Optional)
 - **Optional Docling**: External document converter for rich PDFs/Office docs
-- **Optional Object Storage**: S3-compatible storage (MinIO/AWS S3) with integrated MinIO SDK
 
-## 🚧 ONGOING: Architecture Refactor (Multi-Session Project)
-
-**Status**: Phase 0 (Stabilization & Baseline Observability) - IN PROGRESS
-**Started**: 2026-01-28
-
-### Quick Start for Each Session
-
-1. **Read progress tracker first**: `/ARCHITECTURE_PROGRESS.md` (~300 lines)
-2. **Only reference full requirements when needed**: `/UPDATED_DATA_ARCHITECTURE.md` (~1400 lines)
-3. **Update progress tracker** as you complete tasks
-
-### Project Summary
-
-Curatore is evolving from a document processing tool into a curation-first platform that:
-- Separates import, canonicalization, processing, and output sync
-- Treats extraction as automatic infrastructure (not per-workflow config)
-- Prioritizes experimentation speed over premature automation
-- Maintains DB as source of truth with strict object store layout
+## Architecture Overview
 
 ### Core Architectural Principles
-1. **Extraction is infrastructure** - Automatic, opinionated, consistent
-2. **Experimentation precedes automation** - Test/compare before pipelines
-3. **Artifacts are first-class** - Every output is addressable and reusable
-4. **Separation of concerns** - Import ≠ Processing ≠ Output Sync
-5. **UI explains outcomes** - Users see assets/results, not jobs/queues
+1. **Extraction is infrastructure** - Automatic, opinionated, consistent (not per-workflow config)
+2. **Assets are first-class** - Every document is tracked with version history and provenance
+3. **Run-based execution** - All processing is tracked via Run records with structured logs
+4. **Database is source of truth** - Object store contains only bytes, DB has all metadata
+5. **UI explains outcomes** - Users see assets/results, not queues
 
-### Implementation Phases (0-7)
-- **Phase 0** (Current): Stabilization - Make behavior explicit and traceable
-- **Phase 1**: Asset versioning and Document Detail View
-- **Phase 2**: Bulk upload updates and collection health
-- **Phase 3**: Flexible metadata and experimentation core
-- **Phase 4**: Web scraping as durable data source
-- **Phase 5**: System maintenance and scheduling
-- **Phase 6**: Optional integrations (vector DB, webhooks)
-- **Phase 7**: SAM.gov native domain integration
+### Key Data Models
+- **Asset**: Immutable raw content with provenance and version history
+- **AssetVersion**: Individual versions of an asset
+- **ExtractionResult**: Extracted markdown content linked to asset version
+- **Run**: Universal execution tracking (extraction, crawl, summarization, maintenance)
+- **RunLogEvent**: Structured logging for runs
+- **AssetMetadata**: Flexible, versioned metadata (canonical vs experimental)
+- **ScrapeCollection/ScrapedAsset**: Web scraping with page/record distinction
+- **SamSearch/SamSolicitation/SamNotice**: SAM.gov federal opportunity tracking
+- **ScheduledTask**: Database-backed scheduled maintenance tasks
 
-### Token Efficiency Strategy
-- Each session reads progress tracker (~300 lines) instead of full requirements (~1400 lines)
-- Reference specific sections of UPDATED_DATA_ARCHITECTURE.md only when needed
-- Saves ~15,000 tokens per session startup
+### Data Flow
+```
+Upload/Scrape/Import → Asset Created → Automatic Extraction → OpenSearch Index
+                                              ↓
+                                    ExtractionResult (Markdown)
+                                              ↓
+                                    Available for Search/Analysis
+```
+
+### Architecture Refactor History
+The architecture refactor (Phases 0-7) was completed 2026-01-29. Documentation is archived in `docs/archive/`.
 
 ---
 
@@ -131,7 +124,7 @@ pytest extraction-service/tests -v
 ./scripts/api_smoke_test.sh
 ```
 
-### Queue & Job Management
+### Queue & Task Management
 
 ```bash
 # Check queue health (Redis, Celery, workers)
@@ -220,7 +213,7 @@ The backend follows a service-oriented architecture with clear separation of con
 - **`document_service.py`**: Core document processing pipeline
   - Multi-format conversion using selected extraction engines
   - OCR integration for image-based content extraction
-  - Delegates to extraction service or Docling based on per-job selection
+  - Delegates to extraction service or Docling based on configuration
   - Quality assessment and scoring algorithms
   - File management with UUID-based organization
 
@@ -241,11 +234,6 @@ The backend follows a service-oriented architecture with clear separation of con
   - Combined exports with merged documents
   - RAG-ready filtering with quality threshold application
   - Temporary file management with automatic cleanup
-
-- **`job_service.py`**: Redis-backed job tracking
-  - Per-document active job locks (prevents concurrent processing)
-  - Job status persistence and indexing
-  - Job logs and metadata management
 
 - **`extraction_client.py`**: HTTP client for extraction service
   - Handles communication with extraction-service or Docling
@@ -305,7 +293,6 @@ The backend follows a service-oriented architecture with clear separation of con
   - Prevents duplicate scheduled task execution
 
 - **`maintenance_handlers.py`**: Scheduled maintenance task handlers
-  - Job cleanup handler (expired jobs and data)
   - Orphan detection handler (storage cleanup)
   - Retention enforcement handler (policy compliance)
   - Health report handler (system status summary)
@@ -321,7 +308,6 @@ backend/app/
 │   └── v1/
 │       ├── routers/
 │       │   ├── documents.py       # Document upload, process, download
-│       │   ├── jobs.py            # Job status, polling
 │       │   ├── sharepoint.py      # SharePoint inventory, download
 │       │   ├── system.py          # Health, config, queue info
 │       │   ├── auth.py            # Authentication (login, register, refresh)
@@ -344,19 +330,18 @@ backend/app/
 
 ### Async Processing with Celery
 
-Documents are processed asynchronously to avoid blocking the API:
+Documents are processed asynchronously via Celery workers:
 
-1. **Upload**: `POST /api/v1/documents/upload` → returns `document_id`
-2. **Enqueue**: `POST /api/v1/documents/{document_id}/process` → returns `job_id`
-3. **Poll**: `GET /api/v1/jobs/{job_id}` → returns status (`PENDING`, `STARTED`, `SUCCESS`, `FAILURE`)
-4. **Result**: `GET /api/v1/documents/{document_id}/result` → returns processing result
-
-**Job Locks**: Only one job can process a document at a time. Attempting to enqueue while another job is active returns `409 Conflict` with the active job ID.
+1. **Upload**: `POST /api/v1/storage/upload/proxy` → creates Asset, triggers extraction
+2. **Automatic Extraction**: Celery task extracts content to Markdown
+3. **Poll**: `GET /api/v1/assets/{asset_id}` → check status (pending, ready, failed)
+4. **Result**: `GET /api/v1/assets/{asset_id}` → includes extraction_result with markdown
 
 **Key Files**:
 - `backend/app/celery_app.py`: Celery application setup
-- `backend/app/tasks.py`: Task definitions (e.g., `process_document_task`)
-- `backend/app/services/job_service.py`: Redis-backed job tracking
+- `backend/app/tasks.py`: Task definitions (extraction, indexing, crawling, etc.)
+- `backend/app/services/run_service.py`: Run-based execution tracking
+- `backend/app/services/extraction_orchestrator.py`: Extraction coordination
 
 ### Celery Beat & Scheduled Tasks
 
@@ -421,9 +406,9 @@ celery_app.conf.beat_schedule = {
         "task": "app.tasks.cleanup_expired_files",
         "schedule": crontab(hour=3, minute=0),  # Daily at 3 AM
     },
-    # Cleanup expired jobs
-    "cleanup-expired-jobs": {
-        "task": "app.tasks.cleanup_expired_jobs",
+    # Cleanup expired temp files
+    "cleanup-expired-files": {
+        "task": "app.tasks.cleanup_expired_files",
         "schedule": crontab(hour=4, minute=0),  # Daily at 4 AM
     },
 }
@@ -475,7 +460,7 @@ class ScheduledTask(Base):
 **Default Scheduled Tasks** (seeded automatically):
 | Task | Schedule | Description |
 |------|----------|-------------|
-| `gc.cleanup` | Daily 3 AM | Clean up expired jobs and orphaned data |
+| `gc.cleanup` | Daily 3 AM | Clean up orphaned data and temp files |
 | `orphan.detect` | Weekly Sunday 4 AM | Detect orphaned objects in storage |
 | `retention.enforce` | Daily 5 AM | Enforce data retention policies |
 | `health.report` | Daily 6 AM | Generate system health summary |
@@ -503,7 +488,7 @@ class ScheduledTask(Base):
 2. Register the handler in the same file:
    ```python
    MAINTENANCE_HANDLERS: Dict[str, MaintenanceHandler] = {
-       "gc.cleanup": handle_job_cleanup,
+       "gc.cleanup": handle_gc_cleanup,
        "orphan.detect": handle_orphan_detection,
        "retention.enforce": handle_retention_enforcement,
        "health.report": handle_health_report,
@@ -612,8 +597,8 @@ Curatore supports multiple extraction engines with content-type-based routing:
 | Content Type | Extraction Engine | Notes |
 |--------------|-------------------|-------|
 | HTML (web pages) | **Playwright** | Inline extraction during crawl |
-| PDF, DOCX, PPTX | **Extraction Service** or **Docling** | Separate extraction job |
-| Images | **Extraction Service** (Tesseract OCR) | Separate extraction job |
+| PDF, DOCX, PPTX | **Extraction Service** or **Docling** | Async extraction via Celery |
+| Images | **Extraction Service** (Tesseract OCR) | Async extraction via Celery |
 
 **Content-Type Routing** (automatic):
 - HTML content (`text/html`) is extracted inline by Playwright during web crawl
@@ -629,7 +614,7 @@ Curatore supports multiple extraction engines with content-type-based routing:
 **Playwright Service** (`playwright-service/`):
 - Browser-based rendering for JavaScript-heavy web scraping
 - Standalone FastAPI microservice on port 8011
-- Inline extraction: content is extracted during crawl (no separate job)
+- Inline extraction: content is extracted during crawl (no separate task)
 - Uses Chromium via Playwright for full JS rendering
 - Extracts: HTML, markdown, links, document links
 - Endpoint: `POST /api/v1/render`
@@ -1215,8 +1200,6 @@ When updating a page to match the design system:
 **Pages to Update:**
 - [ ] `/` (Dashboard/Home)
 - [ ] `/process` (Document Processing)
-- [ ] `/jobs` (Job List)
-- [ ] `/jobs/[id]` (Job Details)
 - [ ] `/settings-admin` (Admin Settings - includes Users tab)
 - [ ] `/storage` (Storage Management)
 - [x] `/connections` (Reference implementation)
@@ -1235,8 +1218,8 @@ When updating a page to match the design system:
    - Handles supported file types and OCR
 
 3. **Worker Task** (`backend/app/tasks.py`):
-   - Celery task wrapper that orchestrates the pipeline
-   - Manages job status and error handling
+   - Celery task definitions for extraction, indexing, crawling
+   - Manages Run status and error handling
 
 ### Adding New API Endpoints
 
@@ -1723,15 +1706,15 @@ python -m app.commands.seed --create-admin
 ### Debugging Processing Failures
 
 1. Check worker logs: `./scripts/tail_worker.sh`
-2. Check job status: `curl http://localhost:8000/api/v1/jobs/{job_id}`
-3. Check job logs: Job status response includes `logs` array
+2. Check asset status: `curl http://localhost:8000/api/v1/assets/{asset_id}`
+3. Check run logs: `curl http://localhost:8000/api/v1/runs/{run_id}/logs`
 4. Test extraction directly: `curl -X POST http://localhost:8010/api/v1/extract -F "file=@test.pdf"`
 
 ### Debugging Queue Issues
 
 1. Check queue health: `./scripts/queue_health.sh`
 2. Check Redis: `docker exec -it curatore-redis redis-cli`
-3. List pending jobs: `celery -A app.celery_app inspect active`
+3. List active tasks: `celery -A app.celery_app inspect active`
 4. Purge queue: `celery -A app.celery_app purge`
 
 ### Testing LLM Integration
@@ -1950,7 +1933,7 @@ Curatore uses Playwright for JavaScript-rendered web scraping with inline conten
 
 **Key Features**:
 - Full JavaScript rendering via Chromium browser
-- Inline extraction: Markdown is extracted during crawl (no separate job)
+- Inline extraction: Markdown is extracted during crawl (no separate task)
 - Automatic document discovery: Finds PDFs, DOCXs linked on pages
 - Content-type routing: HTML → Playwright, binary files → Docling
 
@@ -1990,125 +1973,29 @@ Curatore uses Playwright for JavaScript-rendered web scraping with inline conten
 - `PLAYWRIGHT_SERVICE_URL`: Playwright service endpoint (default: `http://playwright:8011`)
 - `PLAYWRIGHT_TIMEOUT`: Request timeout in seconds (default: `60`)
 
-### Job Management Workflow
-
-The job management system provides batch document processing with tracking, concurrency control, and retention policies:
-
-**Key Concepts**:
-- **Job**: A batch of documents processed together with shared options
-- **Job Document**: Individual document within a job with its own status tracking
-- **Job Lifecycle**: PENDING → QUEUED → RUNNING → COMPLETED/FAILED/CANCELLED
-- **Concurrency Limit**: Per-organization limit prevents resource exhaustion (default: 3)
-- **Retention Policy**: Auto-cleanup after configurable days (7/30/90/indefinite)
-
-**Typical Workflow**:
-
-1. **Create Job**: Batch multiple documents into a tracked job
-   ```bash
-   curl -X POST http://localhost:8000/api/v1/jobs \
-     -H "Authorization: Bearer $TOKEN" \
-     -H "Content-Type: application/json" \
-     -d '{
-       "document_ids": ["doc-123", "doc-456", "doc-789"],
-       "options": {
-         "quality_thresholds": {
-           "conversion_threshold": 70.0,
-           "clarity_threshold": 7.0
-         },
-         "ocr_settings": {
-           "enabled": true,
-           "language": "eng"
-         }
-       },
-       "name": "Q4 Report Processing",
-       "description": "Process Q4 financial reports",
-       "start_immediately": true
-     }'
-   ```
-
-   Returns job ID and starts processing immediately if `start_immediately=true`
-
-2. **Monitor Progress**: Poll job status for real-time updates
-   ```bash
-   curl http://localhost:8000/api/v1/jobs/{job_id} \
-     -H "Authorization: Bearer $TOKEN"
-   ```
-
-   Response includes:
-   - Overall job status
-   - Document-level progress (completed/failed counts)
-   - Processing logs
-   - Quality metrics and results
-
-3. **Cancel Job** (if needed): Immediate termination with cleanup
-   ```bash
-   curl -X POST http://localhost:8000/api/v1/jobs/{job_id}/cancel \
-     -H "Authorization: Bearer $TOKEN"
-   ```
-
-   Verification ensures:
-   - Celery tasks revoked
-   - Partial files deleted
-   - Job status updated to CANCELLED
-
-4. **View Organization Stats** (admins only): Org-wide job metrics
-   ```bash
-   curl http://localhost:8000/api/v1/jobs/stats/organization \
-     -H "Authorization: Bearer $TOKEN"
-   ```
-
-   Provides:
-   - Active jobs / concurrency limit
-   - Total jobs (24h/7d/30d)
-   - Average processing time
-   - Success rate percentage
-   - Storage usage
-
-**Frontend Integration**:
-- `/jobs` page: Job list view with filters and pagination
-- `/jobs/[id]` page: Job detail view with real-time updates
-- Create Job Panel: 3-step wizard (Select → Configure → Review)
-- Admin Settings: Concurrency limits and retention policies
-- Status Bar: User job count + org metrics (for admins)
-
-**Configuration**:
-- `DEFAULT_JOB_CONCURRENCY_LIMIT`: Max concurrent jobs per org (default: 3)
-- `DEFAULT_JOB_RETENTION_DAYS`: Days to retain jobs (default: 30)
-- `JOB_CLEANUP_ENABLED`: Enable auto-cleanup (default: true)
-- `JOB_CLEANUP_SCHEDULE_CRON`: Cleanup schedule (default: `0 3 * * *`)
-- `JOB_CANCELLATION_TIMEOUT`: Cancellation verification timeout (default: 30s)
-- `JOB_STATUS_POLL_INTERVAL`: Frontend polling interval (default: 2s)
-
-**Best Practices**:
-- Use descriptive job names for easy identification
-- Set appropriate retention policies based on compliance needs
-- Monitor org concurrency limits during peak usage
-- Cancel stuck jobs promptly to free up capacity
-- Review job logs for failed documents to identify patterns
-
 ## API Endpoints (v1)
 
 Base URL: `http://localhost:8000/api/v1`
 
-**Documents**:
+**Assets**:
+- `GET /assets` - List assets with filters
+- `GET /assets/{id}` - Get asset details with extraction result
+- `POST /assets/{id}/reextract` - Trigger re-extraction
+- `GET /assets/{id}/versions` - Get version history
+- `GET /assets/health` - Collection health metrics
+- `POST /assets/bulk-upload/preview` - Preview bulk upload changes
+- `POST /assets/bulk-upload/apply` - Apply bulk upload
+
+**Runs**:
+- `GET /runs` - List runs with filters
+- `GET /runs/{id}` - Get run details
+- `GET /runs/{id}/logs` - Get run logs
+- `POST /runs/{id}/retry` - Retry failed run
+
+**Documents** (legacy):
 - `POST /documents/upload` - Upload document
-- `POST /documents/{id}/process` - Enqueue processing job
 - `GET /documents/{id}/result` - Get processing result
 - `GET /documents/{id}/content` - Get markdown content
-- `GET /documents/{id}/download` - Download markdown file
-- `POST /documents/batch/process` - Process multiple documents
-
-**Jobs**:
-- `POST /jobs` - Create batch job
-- `GET /jobs` - List jobs (paginated, filtered by status)
-- `GET /jobs/{id}` - Get job details
-- `POST /jobs/{id}/start` - Start job (if not auto-started)
-- `POST /jobs/{id}/cancel` - Cancel job with verification
-- `DELETE /jobs/{id}` - Delete job (admin only, terminal state only)
-- `GET /jobs/{id}/logs` - Get job logs (paginated)
-- `GET /jobs/{id}/documents` - Get job documents with status
-- `GET /jobs/stats/user` - User's job statistics
-- `GET /jobs/stats/organization` - Org job stats (admin only)
 
 **SharePoint**:
 - `POST /sharepoint/inventory` - List SharePoint folder contents with metadata
@@ -2206,7 +2093,7 @@ Base URL: `http://localhost:8000/api/v1`
 - `GET /config/supported-formats` - Supported file formats
 - `GET /config/defaults` - Default configuration
 - `GET /system/queues` - Queue health and metrics
-- `GET /system/queues/summary` - Queue summary by batch or jobs
+- `GET /system/queues/summary` - Queue summary
 - `GET /system/health/backend` - Backend API health check
 - `GET /system/health/redis` - Redis health check
 - `GET /system/health/celery` - Celery worker health check

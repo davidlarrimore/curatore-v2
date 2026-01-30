@@ -139,8 +139,8 @@ export function AppLayout({ children }: AppLayoutProps) {
             break
           case 'j':
             e.preventDefault()
-            // Navigate to jobs page
-            window.location.href = '/jobs'
+            // Navigate to assets page
+            window.location.href = '/assets'
             break
           case 'p':
             e.preventDefault()
@@ -327,7 +327,7 @@ export function AppLayout({ children }: AppLayoutProps) {
 // Export keyboard shortcut help for documentation
 export const keyboardShortcuts = [
   { key: 'Cmd/Ctrl + B', description: 'Toggle sidebar' },
-  { key: 'Cmd/Ctrl + J', description: 'Navigate to Jobs page' },
+  { key: 'Cmd/Ctrl + J', description: 'Navigate to Assets page' },
   { key: 'Cmd/Ctrl + P', description: 'Navigate to Process page' },
   { key: 'Cmd/Ctrl + ,', description: 'Open settings' },
   { key: 'Cmd/Ctrl + K', description: 'Command palette (coming soon)' },

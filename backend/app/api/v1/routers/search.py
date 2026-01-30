@@ -44,7 +44,7 @@ class SearchRequest(BaseModel):
 
     query: str = Field(..., min_length=1, max_length=500, description="Search query")
     source_types: Optional[List[str]] = Field(
-        None, description="Filter by source types (upload, sharepoint, web_scrape)"
+        None, description="Filter by source types (upload, sharepoint, web_scrape, sam_gov)"
     )
     content_types: Optional[List[str]] = Field(
         None, description="Filter by content/MIME types"
@@ -60,6 +60,7 @@ class SearchRequest(BaseModel):
     )
     limit: int = Field(20, ge=1, le=100, description="Maximum results to return")
     offset: int = Field(0, ge=0, description="Offset for pagination")
+    include_facets: bool = Field(True, description="Include faceted counts in response")
 
 
 class SearchHitResponse(BaseModel):
@@ -78,6 +79,21 @@ class SearchHitResponse(BaseModel):
     )
 
 
+class FacetBucketResponse(BaseModel):
+    """Single bucket in a facet."""
+
+    value: str = Field(..., description="Facet value")
+    count: int = Field(..., description="Document count for this value")
+
+
+class FacetResponse(BaseModel):
+    """Facet aggregation result."""
+
+    field: str = Field(..., description="Field name for this facet")
+    buckets: List[FacetBucketResponse] = Field(..., description="Facet buckets")
+    total_other: int = Field(0, description="Count of documents not in top buckets")
+
+
 class SearchResponse(BaseModel):
     """Search results with metadata."""
 
@@ -86,6 +102,9 @@ class SearchResponse(BaseModel):
     offset: int = Field(..., description="Results offset")
     query: str = Field(..., description="Original search query")
     hits: List[SearchHitResponse] = Field(..., description="Matching results")
+    facets: Optional[Dict[str, FacetResponse]] = Field(
+        None, description="Faceted counts for filtering"
+    )
 
 
 class IndexStatsResponse(BaseModel):
@@ -153,17 +172,45 @@ async def search_assets(
                     detail="Invalid collection ID format",
                 )
 
-        results = await opensearch_service.search(
-            organization_id=current_user.organization_id,
-            query=request.query,
-            source_types=request.source_types,
-            content_types=request.content_types,
-            collection_ids=collection_uuids,
-            date_from=request.date_from,
-            date_to=request.date_to,
-            limit=request.limit,
-            offset=request.offset,
-        )
+        # Use search_with_facets if facets are requested
+        if request.include_facets:
+            results = await opensearch_service.search_with_facets(
+                organization_id=current_user.organization_id,
+                query=request.query,
+                source_types=request.source_types,
+                content_types=request.content_types,
+                collection_ids=collection_uuids,
+                date_from=request.date_from,
+                date_to=request.date_to,
+                limit=request.limit,
+                offset=request.offset,
+            )
+        else:
+            results = await opensearch_service.search(
+                organization_id=current_user.organization_id,
+                query=request.query,
+                source_types=request.source_types,
+                content_types=request.content_types,
+                collection_ids=collection_uuids,
+                date_from=request.date_from,
+                date_to=request.date_to,
+                limit=request.limit,
+                offset=request.offset,
+            )
+
+        # Build facets response if available
+        facets_response = None
+        if results.facets:
+            facets_response = {}
+            for field, facet in results.facets.items():
+                facets_response[field] = FacetResponse(
+                    field=facet.field,
+                    buckets=[
+                        FacetBucketResponse(value=b.value, count=b.count)
+                        for b in facet.buckets
+                    ],
+                    total_other=facet.total_other,
+                )
 
         return SearchResponse(
             total=results.total,
@@ -184,6 +231,7 @@ async def search_assets(
                 )
                 for hit in results.hits
             ],
+            facets=facets_response,
         )
 
     except HTTPException:
@@ -205,7 +253,7 @@ async def search_assets(
 async def search_assets_get(
     q: str = Query(..., min_length=1, max_length=500, description="Search query"),
     source_types: Optional[str] = Query(
-        None, description="Comma-separated source types (upload,sharepoint,web_scrape)"
+        None, description="Comma-separated source types (upload,sharepoint,web_scrape,sam_gov)"
     ),
     content_types: Optional[str] = Query(
         None, description="Comma-separated content types"
@@ -384,3 +432,183 @@ async def check_search_health(
         "index_prefix": index_prefix,
         "endpoint": endpoint,
     }
+
+
+# =========================================================================
+# SAM.gov SEARCH ENDPOINTS (Phase 7.6)
+# =========================================================================
+
+
+class SamSearchRequest(BaseModel):
+    """SAM.gov search request with query and optional filters."""
+
+    query: str = Field(..., min_length=1, max_length=500, description="Search query")
+    source_types: Optional[List[str]] = Field(
+        None, description="Filter by type (notices, solicitations)"
+    )
+    notice_types: Optional[List[str]] = Field(
+        None, description="Filter by notice types"
+    )
+    agencies: Optional[List[str]] = Field(
+        None, description="Filter by agencies"
+    )
+    date_from: Optional[datetime] = Field(
+        None, description="Filter by posted date >= (ISO format)"
+    )
+    date_to: Optional[datetime] = Field(
+        None, description="Filter by posted date <= (ISO format)"
+    )
+    limit: int = Field(20, ge=1, le=100, description="Maximum results to return")
+    offset: int = Field(0, ge=0, description="Offset for pagination")
+
+
+@router.post(
+    "/sam",
+    response_model=SearchResponse,
+    summary="Search SAM.gov data",
+    description="Full-text search across SAM.gov notices and solicitations.",
+)
+async def search_sam(
+    request: SamSearchRequest,
+    current_user: User = Depends(get_current_user),
+) -> SearchResponse:
+    """
+    Execute a full-text search across SAM.gov data.
+
+    Searches across notices and solicitations including titles, descriptions,
+    solicitation numbers, and agency names. Returns results with relevance
+    scoring and highlighted text snippets.
+
+    Filters can be applied by:
+    - Source type (notices, solicitations)
+    - Notice type (Combined Synopsis/Solicitation, etc.)
+    - Agency name
+    - Date range
+    """
+    if not _is_opensearch_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Search is not enabled. Enable OPENSEARCH_ENABLED to use search.",
+        )
+
+    try:
+        results = await opensearch_service.search_sam(
+            organization_id=current_user.organization_id,
+            query=request.query,
+            source_types=request.source_types,
+            notice_types=request.notice_types,
+            agencies=request.agencies,
+            date_from=request.date_from,
+            date_to=request.date_to,
+            limit=request.limit,
+            offset=request.offset,
+        )
+
+        return SearchResponse(
+            total=results.total,
+            limit=request.limit,
+            offset=request.offset,
+            query=request.query,
+            hits=[
+                SearchHitResponse(
+                    asset_id=hit.asset_id,
+                    score=hit.score,
+                    title=hit.title,
+                    filename=hit.filename,  # Solicitation number
+                    source_type=hit.source_type,  # sam_notice or sam_solicitation
+                    content_type=hit.content_type,  # Notice type
+                    url=hit.url,
+                    created_at=hit.created_at,
+                    highlights=hit.highlights,
+                )
+                for hit in results.hits
+            ],
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"SAM search failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"SAM search failed: {str(e)}",
+        )
+
+
+@router.get(
+    "/sam",
+    response_model=SearchResponse,
+    summary="Search SAM.gov data (GET)",
+    description="Full-text search across SAM.gov data using query parameters.",
+)
+async def search_sam_get(
+    q: str = Query(..., min_length=1, max_length=500, description="Search query"),
+    source_types: Optional[str] = Query(
+        None, description="Comma-separated types (notices,solicitations)"
+    ),
+    notice_types: Optional[str] = Query(
+        None, description="Comma-separated notice types"
+    ),
+    agencies: Optional[str] = Query(
+        None, description="Comma-separated agencies"
+    ),
+    limit: int = Query(20, ge=1, le=100, description="Maximum results"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    current_user: User = Depends(get_current_user),
+) -> SearchResponse:
+    """
+    Execute a full-text search across SAM.gov data using GET parameters.
+
+    Simpler alternative to POST /search/sam for basic queries.
+    """
+    if not _is_opensearch_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Search is not enabled. Enable OPENSEARCH_ENABLED to use search.",
+        )
+
+    # Parse comma-separated filters
+    source_type_list = source_types.split(",") if source_types else None
+    notice_type_list = notice_types.split(",") if notice_types else None
+    agency_list = agencies.split(",") if agencies else None
+
+    try:
+        results = await opensearch_service.search_sam(
+            organization_id=current_user.organization_id,
+            query=q,
+            source_types=source_type_list,
+            notice_types=notice_type_list,
+            agencies=agency_list,
+            limit=limit,
+            offset=offset,
+        )
+
+        return SearchResponse(
+            total=results.total,
+            limit=limit,
+            offset=offset,
+            query=q,
+            hits=[
+                SearchHitResponse(
+                    asset_id=hit.asset_id,
+                    score=hit.score,
+                    title=hit.title,
+                    filename=hit.filename,
+                    source_type=hit.source_type,
+                    content_type=hit.content_type,
+                    url=hit.url,
+                    created_at=hit.created_at,
+                    highlights=hit.highlights,
+                )
+                for hit in results.hits
+            ],
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"SAM search failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"SAM search failed: {str(e)}",
+        )

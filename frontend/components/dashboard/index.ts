@@ -1,5 +1,4 @@
 export { SystemHealthCard } from './SystemHealthCard'
-export { JobStatsCard } from './JobStatsCard'
 export { StorageOverviewCard } from './StorageOverviewCard'
 export { QuickActionsCard } from './QuickActionsCard'
 export { RecentActivityCard } from './RecentActivityCard'

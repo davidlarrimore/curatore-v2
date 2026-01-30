@@ -26,11 +26,10 @@ Usage:
         },
     )
 
-    # Get solicitations for a search
+    # Get solicitations for an organization
     solicitations, total = await sam_service.list_solicitations(
         session=session,
         organization_id=org_id,
-        search_id=search.id,
     )
 
     # Create a summary
@@ -180,11 +179,15 @@ class SamService:
         organization_id: UUID,
         status: Optional[str] = None,
         is_active: Optional[bool] = None,
+        include_archived: bool = False,
         limit: int = 50,
         offset: int = 0,
     ) -> Tuple[List[SamSearch], int]:
         """
         List searches for an organization.
+
+        Args:
+            include_archived: If False (default), excludes archived searches
 
         Returns:
             Tuple of (searches list, total count)
@@ -192,6 +195,10 @@ class SamService:
         query = select(SamSearch).where(
             SamSearch.organization_id == organization_id
         )
+
+        # Exclude archived by default
+        if not include_archived and status != "archived":
+            query = query.where(SamSearch.status != "archived")
 
         if status:
             query = query.where(SamSearch.status == status)
@@ -202,6 +209,9 @@ class SamService:
         count_query = select(func.count(SamSearch.id)).where(
             SamSearch.organization_id == organization_id
         )
+        # Exclude archived by default in count too
+        if not include_archived and status != "archived":
+            count_query = count_query.where(SamSearch.status != "archived")
         if status:
             count_query = count_query.where(SamSearch.status == status)
         if is_active is not None:
@@ -295,37 +305,6 @@ class SamService:
 
         return search
 
-    async def update_search_counts(
-        self,
-        session: AsyncSession,
-        search_id: UUID,
-    ) -> Optional[SamSearch]:
-        """Update denormalized counts for a search."""
-        search = await self.get_search(session, search_id)
-        if not search:
-            return None
-
-        # Count solicitations
-        sol_count = await session.execute(
-            select(func.count(SamSolicitation.id)).where(
-                SamSolicitation.search_id == search_id
-            )
-        )
-        search.solicitation_count = sol_count.scalar_one()
-
-        # Count notices
-        notice_count = await session.execute(
-            select(func.count(SamNotice.id))
-            .join(SamSolicitation)
-            .where(SamSolicitation.search_id == search_id)
-        )
-        search.notice_count = notice_count.scalar_one()
-
-        await session.commit()
-        await session.refresh(search)
-
-        return search
-
     # =========================================================================
     # SOLICITATION OPERATIONS
     # =========================================================================
@@ -334,7 +313,6 @@ class SamService:
         self,
         session: AsyncSession,
         organization_id: UUID,
-        search_id: UUID,
         notice_id: str,
         title: str,
         notice_type: str,
@@ -361,7 +339,6 @@ class SamService:
         Args:
             session: Database session
             organization_id: Organization UUID
-            search_id: Parent search UUID
             notice_id: SAM.gov unique notice ID
             title: Opportunity title
             notice_type: Type code (o, p, k, r, s)
@@ -387,7 +364,6 @@ class SamService:
         """
         solicitation = SamSolicitation(
             organization_id=organization_id,
-            search_id=search_id,
             notice_id=notice_id,
             solicitation_number=solicitation_number,
             title=title,
@@ -457,7 +433,6 @@ class SamService:
         self,
         session: AsyncSession,
         organization_id: UUID,
-        search_id: Optional[UUID] = None,
         status: Optional[str] = None,
         notice_type: Optional[str] = None,
         naics_code: Optional[str] = None,
@@ -470,6 +445,8 @@ class SamService:
         """
         List solicitations with filters.
 
+        Solicitations are organization-wide and not tied to any specific search.
+
         Returns:
             Tuple of (solicitations list, total count)
         """
@@ -477,8 +454,6 @@ class SamService:
             SamSolicitation.organization_id == organization_id
         )
 
-        if search_id:
-            query = query.where(SamSolicitation.search_id == search_id)
         if status:
             query = query.where(SamSolicitation.status == status)
         if notice_type:
@@ -502,8 +477,6 @@ class SamService:
         count_query = select(func.count(SamSolicitation.id)).where(
             SamSolicitation.organization_id == organization_id
         )
-        if search_id:
-            count_query = count_query.where(SamSolicitation.search_id == search_id)
         if status:
             count_query = count_query.where(SamSolicitation.status == status)
         if notice_type:
@@ -603,7 +576,7 @@ class SamService:
     async def create_notice(
         self,
         session: AsyncSession,
-        solicitation_id: UUID,
+        solicitation_id: Optional[UUID],
         sam_notice_id: str,
         notice_type: str,
         version_number: int = 1,
@@ -613,13 +586,26 @@ class SamService:
         response_deadline: Optional[datetime] = None,
         raw_json_bucket: Optional[str] = None,
         raw_json_key: Optional[str] = None,
+        # For standalone notices (when solicitation_id is None)
+        organization_id: Optional[UUID] = None,
+        naics_code: Optional[str] = None,
+        psc_code: Optional[str] = None,
+        set_aside_code: Optional[str] = None,
+        agency_name: Optional[str] = None,
+        bureau_name: Optional[str] = None,
+        office_name: Optional[str] = None,
+        ui_link: Optional[str] = None,
     ) -> SamNotice:
         """
-        Create a new notice (version) for a solicitation.
+        Create a new notice.
+
+        Can be either:
+        - A version of a solicitation (solicitation_id provided)
+        - A standalone notice like Special Notices (organization_id provided, no solicitation_id)
 
         Args:
             session: Database session
-            solicitation_id: Parent solicitation UUID
+            solicitation_id: Parent solicitation UUID (None for standalone notices)
             sam_notice_id: SAM.gov notice ID
             notice_type: Type code (o, p, k, r, s, a)
             version_number: Version number (1=original, 2+=amendments)
@@ -629,12 +615,21 @@ class SamService:
             response_deadline: Deadline at this version
             raw_json_bucket: MinIO bucket for raw JSON
             raw_json_key: MinIO key for raw JSON
+            organization_id: Organization UUID (required for standalone notices)
+            naics_code: NAICS code (for standalone notices)
+            psc_code: PSC code (for standalone notices)
+            set_aside_code: Set-aside code (for standalone notices)
+            agency_name: Agency name (for standalone notices)
+            bureau_name: Bureau name (for standalone notices)
+            office_name: Office name (for standalone notices)
+            ui_link: SAM.gov UI link
 
         Returns:
             Created SamNotice instance
         """
         notice = SamNotice(
             solicitation_id=solicitation_id,
+            organization_id=organization_id,
             sam_notice_id=sam_notice_id,
             notice_type=notice_type,
             version_number=version_number,
@@ -644,13 +639,24 @@ class SamService:
             response_deadline=response_deadline,
             raw_json_bucket=raw_json_bucket,
             raw_json_key=raw_json_key,
+            naics_code=naics_code,
+            psc_code=psc_code,
+            set_aside_code=set_aside_code,
+            agency_name=agency_name,
+            bureau_name=bureau_name,
+            office_name=office_name,
+            ui_link=ui_link,
+            summary_status="pending" if solicitation_id is None else None,
         )
 
         session.add(notice)
         await session.commit()
         await session.refresh(notice)
 
-        logger.info(f"Created notice {notice.id} (v{version_number}) for solicitation {solicitation_id}")
+        if solicitation_id:
+            logger.info(f"Created notice {notice.id} (v{version_number}) for solicitation {solicitation_id}")
+        else:
+            logger.info(f"Created standalone notice {notice.id} ({notice_type}): {title}")
 
         return notice
 
@@ -694,6 +700,38 @@ class SamService:
         )
         return result.scalar_one_or_none()
 
+    async def get_notice_by_sam_notice_id(
+        self,
+        session: AsyncSession,
+        sam_notice_id: str,
+        organization_id: Optional[UUID] = None,
+    ) -> Optional[SamNotice]:
+        """
+        Get a notice by its SAM.gov notice ID.
+
+        For standalone notices, also filter by organization_id to ensure
+        proper multi-tenant isolation.
+
+        Args:
+            session: Database session
+            sam_notice_id: SAM.gov notice ID
+            organization_id: Optional organization filter (for standalone notices)
+
+        Returns:
+            SamNotice or None
+        """
+        query = select(SamNotice).where(SamNotice.sam_notice_id == sam_notice_id)
+
+        if organization_id:
+            # For standalone notices, filter by organization
+            query = query.where(
+                (SamNotice.organization_id == organization_id) |
+                (SamNotice.solicitation_id.isnot(None))  # Allow solicitation-linked notices
+            )
+
+        result = await session.execute(query)
+        return result.scalar_one_or_none()
+
     async def update_notice_changes_summary(
         self,
         session: AsyncSession,
@@ -711,6 +749,44 @@ class SamService:
 
         return notice
 
+    async def update_notice(
+        self,
+        session: AsyncSession,
+        notice_id: UUID,
+        title: Optional[str] = None,
+        description: Optional[str] = None,
+        response_deadline: Optional[datetime] = None,
+    ) -> Optional[SamNotice]:
+        """
+        Update a notice with new data.
+
+        Args:
+            session: Database session
+            notice_id: Notice UUID
+            title: New title (optional)
+            description: New description (optional)
+            response_deadline: New response deadline (optional)
+
+        Returns:
+            Updated notice or None if not found
+        """
+        notice = await self.get_notice(session, notice_id)
+        if not notice:
+            return None
+
+        if title is not None:
+            notice.title = title
+        if description is not None:
+            notice.description = description
+        if response_deadline is not None:
+            notice.response_deadline = response_deadline
+
+        await session.commit()
+        await session.refresh(notice)
+
+        logger.info(f"Updated notice {notice_id}")
+        return notice
+
     # =========================================================================
     # ATTACHMENT OPERATIONS
     # =========================================================================
@@ -718,7 +794,7 @@ class SamService:
     async def create_attachment(
         self,
         session: AsyncSession,
-        solicitation_id: UUID,
+        solicitation_id: Optional[UUID],
         resource_id: str,
         filename: str,
         notice_id: Optional[UUID] = None,
@@ -730,9 +806,11 @@ class SamService:
         """
         Create a new attachment record.
 
+        Can be attached to either a solicitation or a standalone notice.
+
         Args:
             session: Database session
-            solicitation_id: Parent solicitation UUID
+            solicitation_id: Parent solicitation UUID (None for standalone notice attachments)
             resource_id: SAM.gov resource identifier
             filename: Original filename
             notice_id: Notice that introduced this attachment
@@ -818,6 +896,26 @@ class SamService:
         query = select(SamAttachment).where(
             SamAttachment.solicitation_id == solicitation_id
         )
+
+        if download_status:
+            query = query.where(SamAttachment.download_status == download_status)
+
+        query = query.order_by(SamAttachment.created_at.asc())
+
+        result = await session.execute(query)
+        return list(result.scalars().all())
+
+    async def list_notice_attachments(
+        self,
+        session: AsyncSession,
+        notice_id: UUID,
+        download_status: Optional[str] = None,
+    ) -> List[SamAttachment]:
+        """List attachments for a specific notice.
+
+        Works for both solicitation-linked and standalone notices.
+        """
+        query = select(SamAttachment).where(SamAttachment.notice_id == notice_id)
 
         if download_status:
             query = query.where(SamAttachment.download_status == download_status)
@@ -1166,49 +1264,206 @@ class SamService:
         session: AsyncSession,
         search_id: UUID,
     ) -> Dict[str, Any]:
-        """Get statistics for a search."""
+        """
+        Get statistics for a search.
+
+        Note: Since solicitations are decoupled from searches, this returns
+        pull-related statistics only, not solicitation counts.
+        """
         search = await self.get_search(session, search_id)
         if not search:
             return {}
 
-        # Count by status
-        status_counts = await session.execute(
-            select(SamSolicitation.status, func.count(SamSolicitation.id))
-            .where(SamSolicitation.search_id == search_id)
-            .group_by(SamSolicitation.status)
-        )
+        return {
+            "pull_frequency": search.pull_frequency,
+            "last_pull_at": search.last_pull_at.isoformat() if search.last_pull_at else None,
+            "last_pull_status": search.last_pull_status,
+            "is_active": search.is_active,
+            "status": search.status,
+        }
 
-        # Count by notice type
-        type_counts = await session.execute(
-            select(SamSolicitation.notice_type, func.count(SamSolicitation.id))
-            .where(SamSolicitation.search_id == search_id)
-            .group_by(SamSolicitation.notice_type)
-        )
+    # =========================================================================
+    # DASHBOARD & ORG-WIDE QUERIES (Phase 7.6)
+    # =========================================================================
 
-        # Upcoming deadlines (next 7 days)
+    async def get_dashboard_stats(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+    ) -> Dict[str, Any]:
+        """
+        Get dashboard statistics for the organization.
+
+        Returns aggregate counts for notices, solicitations, and recent activity.
+        """
         from datetime import timedelta
         now = datetime.utcnow()
-        week_from_now = now + timedelta(days=7)
+        seven_days_ago = now - timedelta(days=7)
 
-        upcoming = await session.execute(
-            select(func.count(SamSolicitation.id)).where(
+        # Total notices
+        total_notices = await session.execute(
+            select(func.count(SamNotice.id))
+            .join(SamSolicitation)
+            .where(SamSolicitation.organization_id == organization_id)
+        )
+
+        # Total solicitations
+        total_solicitations = await session.execute(
+            select(func.count(SamSolicitation.id))
+            .where(SamSolicitation.organization_id == organization_id)
+        )
+
+        # Recent notices (last 7 days)
+        recent_notices = await session.execute(
+            select(func.count(SamNotice.id))
+            .join(SamSolicitation)
+            .where(
                 and_(
-                    SamSolicitation.search_id == search_id,
-                    SamSolicitation.response_deadline >= now,
-                    SamSolicitation.response_deadline <= week_from_now,
+                    SamSolicitation.organization_id == organization_id,
+                    SamNotice.created_at >= seven_days_ago,
+                )
+            )
+        )
+
+        # New solicitations (last 7 days - based on first notice)
+        new_solicitations = await session.execute(
+            select(func.count(SamSolicitation.id))
+            .where(
+                and_(
+                    SamSolicitation.organization_id == organization_id,
+                    SamSolicitation.created_at >= seven_days_ago,
+                )
+            )
+        )
+
+        # Updated solicitations (last 7 days - have notice after first)
+        # Count solicitations where updated_at > created_at and within 7 days
+        updated_solicitations = await session.execute(
+            select(func.count(SamSolicitation.id))
+            .where(
+                and_(
+                    SamSolicitation.organization_id == organization_id,
+                    SamSolicitation.updated_at >= seven_days_ago,
+                    SamSolicitation.notice_count > 1,
                 )
             )
         )
 
         return {
-            "total_solicitations": search.solicitation_count,
-            "total_notices": search.notice_count,
-            "by_status": dict(status_counts.all()),
-            "by_type": dict(type_counts.all()),
-            "upcoming_deadlines_7d": upcoming.scalar_one(),
-            "last_pull_at": search.last_pull_at.isoformat() if search.last_pull_at else None,
-            "last_pull_status": search.last_pull_status,
+            "total_notices": total_notices.scalar_one(),
+            "total_solicitations": total_solicitations.scalar_one(),
+            "recent_notices_7d": recent_notices.scalar_one(),
+            "new_solicitations_7d": new_solicitations.scalar_one(),
+            "updated_solicitations_7d": updated_solicitations.scalar_one(),
         }
+
+    async def list_all_notices(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        agency: Optional[str] = None,
+        sub_agency: Optional[str] = None,
+        office: Optional[str] = None,
+        notice_type: Optional[str] = None,
+        posted_from: Optional[datetime] = None,
+        posted_to: Optional[datetime] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[List[SamNotice], int]:
+        """
+        List all notices for an organization with filters.
+
+        This queries across all solicitations in the organization,
+        not limited to a single search.
+
+        Returns:
+            Tuple of (notices list, total count)
+        """
+        # Build base query with organization filter via solicitation join
+        query = (
+            select(SamNotice)
+            .join(SamSolicitation)
+            .where(SamSolicitation.organization_id == organization_id)
+        )
+
+        # Apply filters
+        if agency:
+            query = query.where(SamSolicitation.agency_name.ilike(f"%{agency}%"))
+        if sub_agency:
+            query = query.where(SamSolicitation.bureau_name.ilike(f"%{sub_agency}%"))
+        if office:
+            query = query.where(SamSolicitation.office_name.ilike(f"%{office}%"))
+        if notice_type:
+            query = query.where(SamNotice.notice_type == notice_type)
+        if posted_from:
+            query = query.where(SamNotice.posted_date >= posted_from)
+        if posted_to:
+            query = query.where(SamNotice.posted_date <= posted_to)
+
+        # Build count query with same filters
+        count_query = (
+            select(func.count(SamNotice.id))
+            .join(SamSolicitation)
+            .where(SamSolicitation.organization_id == organization_id)
+        )
+        if agency:
+            count_query = count_query.where(SamSolicitation.agency_name.ilike(f"%{agency}%"))
+        if sub_agency:
+            count_query = count_query.where(SamSolicitation.bureau_name.ilike(f"%{sub_agency}%"))
+        if office:
+            count_query = count_query.where(SamSolicitation.office_name.ilike(f"%{office}%"))
+        if notice_type:
+            count_query = count_query.where(SamNotice.notice_type == notice_type)
+        if posted_from:
+            count_query = count_query.where(SamNotice.posted_date >= posted_from)
+        if posted_to:
+            count_query = count_query.where(SamNotice.posted_date <= posted_to)
+
+        count_result = await session.execute(count_query)
+        total = count_result.scalar_one()
+
+        # Get paginated results ordered by posted date descending
+        query = query.order_by(SamNotice.posted_date.desc().nullslast())
+        query = query.limit(limit).offset(offset)
+
+        result = await session.execute(query)
+        notices = list(result.scalars().all())
+
+        return notices, total
+
+    async def update_solicitation_summary_status(
+        self,
+        session: AsyncSession,
+        solicitation_id: UUID,
+        status: str,
+        summary_generated_at: Optional[datetime] = None,
+    ) -> Optional[SamSolicitation]:
+        """
+        Update the auto-summary status of a solicitation.
+
+        Args:
+            session: Database session
+            solicitation_id: Solicitation UUID
+            status: Summary status (pending, generating, ready, failed, no_llm)
+            summary_generated_at: When summary was generated (for status=ready)
+
+        Returns:
+            Updated solicitation or None if not found
+        """
+        solicitation = await self.get_solicitation(session, solicitation_id)
+        if not solicitation:
+            return None
+
+        solicitation.summary_status = status
+        if summary_generated_at:
+            solicitation.summary_generated_at = summary_generated_at
+
+        await session.commit()
+        await session.refresh(solicitation)
+
+        logger.info(f"Updated solicitation {solicitation_id} summary_status to {status}")
+
+        return solicitation
 
 
 # Singleton instance

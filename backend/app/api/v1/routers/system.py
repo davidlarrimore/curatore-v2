@@ -4,6 +4,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 import os
 from typing import Dict, Any, Optional, List
 import json
+import redis
 
 from ....config import settings
 from ..models import HealthStatus, LLMConnectionStatus
@@ -11,11 +12,16 @@ from ....services.llm_service import llm_service
 from ....services.document_service import document_service
 from ....services.storage_service import storage_service
 from ....services.zip_service import zip_service
-from ....services.job_service import get_redis_client
 from ....services.database_service import database_service
 from ....services.config_loader import config_loader
 from ....celery_app import app as celery_app
 from ....dependencies import get_current_user
+
+
+def get_redis_client():
+    """Get a Redis client for queue health checks."""
+    broker_url = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
+    return redis.Redis.from_url(broker_url)
 
 router = APIRouter(dependencies=[Depends(get_current_user)])
 
@@ -112,19 +118,11 @@ async def reset_system():
         # Clear in-memory storage cache
         storage_service.clear_all()
 
-        # Clear job status keys and locks in Redis
-        try:
-            from ....services.job_service import clear_all_jobs_and_locks
-            jobs_cleared = clear_all_jobs_and_locks()
-        except Exception:
-            jobs_cleared = {"jobs": 0, "active_locks": 0, "last_job_keys": 0}
-
         return {
             "success": True,
             "message": "System reset successfully",
             "timestamp": datetime.now(),
             "queue": {"revoked": revoked, "purged": purged},
-            "jobs_cleared": jobs_cleared,
             "temp_zips_deleted": zip_deleted,
             "minio_objects_deleted": minio_deleted,
         }

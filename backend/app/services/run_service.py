@@ -220,6 +220,65 @@ class RunService:
         )
         return list(result.scalars().all())
 
+    async def cancel_pending_runs_for_asset(
+        self,
+        session: AsyncSession,
+        asset_id: UUID,
+        run_type: Optional[str] = None,
+    ) -> int:
+        """
+        Cancel all pending or running runs for an asset.
+
+        Called before starting a new extraction to ensure only one
+        extraction runs at a time per asset. This prevents:
+        - Duplicate extraction work
+        - Race conditions
+        - Stale "running" runs from piling up
+
+        Args:
+            session: Database session
+            asset_id: Asset UUID
+            run_type: Optional run type filter (e.g., "extraction")
+
+        Returns:
+            Number of runs cancelled
+        """
+        asset_id_str = str(asset_id)
+
+        # Find all pending/running runs for this asset
+        query = (
+            select(Run)
+            .where(Run.input_asset_ids.contains([asset_id_str]))
+            .where(Run.status.in_(["pending", "running"]))
+        )
+
+        if run_type:
+            query = query.where(Run.run_type == run_type)
+
+        result = await session.execute(query)
+        runs_to_cancel = list(result.scalars().all())
+
+        cancelled_count = 0
+        for run in runs_to_cancel:
+            try:
+                # Only running runs can be cancelled per status transitions
+                if run.status == "running":
+                    run.status = "cancelled"
+                    run.error_message = "Superseded by new extraction request"
+                    cancelled_count += 1
+                    logger.info(f"Cancelled run {run.id} (superseded)")
+                elif run.status == "pending":
+                    # Pending runs: just set to cancelled directly
+                    run.status = "cancelled"
+                    run.error_message = "Superseded by new extraction request"
+                    cancelled_count += 1
+                    logger.info(f"Cancelled pending run {run.id} (superseded)")
+            except Exception as e:
+                logger.warning(f"Failed to cancel run {run.id}: {e}")
+
+        await session.flush()
+        return cancelled_count
+
     async def count_runs_by_organization(
         self,
         session: AsyncSession,

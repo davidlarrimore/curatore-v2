@@ -310,44 +310,25 @@ export const fileApi = {
 
 // -------------------- Processing API --------------------
 export const processingApi = {
+  /**
+   * @deprecated Job system has been removed. Use assetsApi.upload() instead
+   * which automatically triggers extraction via the Run system.
+   */
   async enqueueDocument(
-    documentId: string,
-    options: { auto_optimize?: boolean; quality_thresholds?: any } = {},
+    _documentId: string,
+    _options: { auto_optimize?: boolean; quality_thresholds?: any } = {},
   ): Promise<{ job_id: string; document_id: string; status: string; enqueued_at?: string }>
   {
-    const payload = mapOptionsToV1(options)
-    const job = await jobsApi.createJob(undefined, {
-      document_ids: [documentId],
-      options: payload,
-      name: `Document ${documentId}`,
-      description: 'Single document processing (job framework)',
-      start_immediately: true,
-    })
-
-    return {
-      job_id: job.id,
-      document_id: documentId,
-      status: job.status,
-      enqueued_at: job.queued_at || job.created_at,
-    }
+    throw new Error('Job system removed. Use assetsApi.upload() for automatic extraction.')
   },
 
-  async processBatch(request: { document_ids: string[]; options?: any }): Promise<{ job_id: string; document_ids: string[]; status: string }>
+  /**
+   * @deprecated Job system has been removed. Use assetsApi.upload() instead
+   * which automatically triggers extraction via the Run system.
+   */
+  async processBatch(_request: { document_ids: string[]; options?: any }): Promise<{ job_id: string; document_ids: string[]; status: string }>
   {
-    const payload = request.options ? mapOptionsToV1(request.options) : undefined
-    const job = await jobsApi.createJob(undefined, {
-      document_ids: request.document_ids,
-      options: payload,
-      name: `Batch job (${request.document_ids.length} documents)`,
-      description: 'Batch processing (job framework)',
-      start_immediately: true,
-    })
-
-    return {
-      job_id: job.id,
-      document_ids: request.document_ids,
-      status: job.status,
-    }
+    throw new Error('Job system removed. Use assetsApi.upload() for automatic extraction.')
   },
 
   async getProcessingResult(documentId: string): Promise<ProcessingResult> {
@@ -625,99 +606,66 @@ function mapOptionsToV1(options: any): any {
   return v1
 }
 
-// -------------------- Jobs API --------------------
-export const jobsApi = {
-  /**
-   * Create a new batch job for processing multiple documents
-   */
-  async createJob(token: string | undefined, data: {
-    document_ids: string[]
-    options?: Record<string, any>
-    name?: string
-    description?: string
-    start_immediately?: boolean
-  }): Promise<{
-    id: string
-    organization_id: string
-    user_id?: string
-    name: string
-    status: string
-    total_documents: number
-    created_at: string
-    queued_at?: string
-  }> {
-    const res = await fetch(apiUrl('/jobs'), {
-      method: 'POST',
-      headers: { ...jsonHeaders, ...authHeaders(token) },
-      body: JSON.stringify(data),
-    })
-    return handleJson(res)
-  },
-
-  /**
-   * Start a pending job
-   */
-  async startJob(token: string | undefined, jobId: string): Promise<{
-    id: string
-    status: string
-    queued_at?: string
-  }> {
-    const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}/start`), {
-      method: 'POST',
-      headers: authHeaders(token),
-    })
-    return handleJson(res)
-  },
-
-  /**
-   * Cancel a running job
-   */
-  async cancelJob(token: string | undefined, jobId: string): Promise<{
-    job_id: string
-    status: string
-    tasks_revoked: number
-    tasks_verified_stopped: number
-    verification_timeout: boolean
-    cancelled_at?: string
-    message?: string
-  }> {
-    const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}/cancel`), {
-      method: 'POST',
-      headers: authHeaders(token),
-    })
-    return handleJson(res)
-  },
-
-  /**
-   * List jobs with pagination and filtering
-   */
-  async listJobs(token: string | undefined, params?: {
-    status?: string
-    page?: number
-    page_size?: number
-  }): Promise<{
-    jobs: Array<{
-      id: string
-      name: string
-      status: string
-      total_documents: number
-      completed_documents: number
-      failed_documents: number
-      created_at: string
-      started_at?: string
-      completed_at?: string
-    }>
+// -------------------- Runs API --------------------
+export interface RunStats {
+  runs: {
+    by_status: Record<string, number>
+    by_type: Record<string, number>
     total: number
-    page: number
-    page_size: number
-    total_pages: number
+  }
+  recent_24h: {
+    by_status: Record<string, number>
+    total: number
+  }
+  assets: {
+    by_status: Record<string, number>
+    total: number
+  }
+  queues: {
+    processing_priority: number
+    processing: number
+    maintenance: number
+  }
+}
+
+export const runsApi = {
+  /**
+   * Get run statistics for the organization
+   */
+  async getStats(token?: string): Promise<RunStats> {
+    const res = await fetch(apiUrl('/runs/stats'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * List runs with optional filters
+   */
+  async listRuns(token?: string, params?: {
+    run_type?: string
+    status?: string
+    origin?: string
+    limit?: number
+    offset?: number
+  }): Promise<{
+    items: any[]
+    total: number
+    limit: number
+    offset: number
   }> {
-    const url = new URL(apiUrl('/jobs'))
-    if (params?.status) url.searchParams.set('status', params.status)
-    if (params?.page) url.searchParams.set('page', params.page.toString())
-    if (params?.page_size) url.searchParams.set('page_size', params.page_size.toString())
+    const query = new URLSearchParams()
+    if (params?.run_type) query.set('run_type', params.run_type)
+    if (params?.status) query.set('status', params.status)
+    if (params?.origin) query.set('origin', params.origin)
+    if (params?.limit) query.set('limit', String(params.limit))
+    if (params?.offset) query.set('offset', String(params.offset))
 
-    const res = await fetch(url.toString(), {
+    const queryStr = query.toString()
+    const url = queryStr ? `/runs?${queryStr}` : '/runs'
+
+    const res = await fetch(apiUrl(url), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -725,154 +673,17 @@ export const jobsApi = {
   },
 
   /**
-   * Get detailed job information
+   * Get queue statistics
    */
-  async getJob(token: string | undefined, jobId: string): Promise<{
-    id: string
-    name: string
-    status: string
-    total_documents: number
-    completed_documents: number
-    failed_documents: number
-    created_at: string
-    queued_at?: string
-    started_at?: string
-    completed_at?: string
-    documents: Array<{
-      id: string
-      document_id: string
-      filename: string
-      status: string
-      conversion_score?: number
-      error_message?: string
-      started_at?: string
-    }>
-    recent_logs: Array<{
-      id: string
-      timestamp: string
-      level: string
-      message: string
-    }>
-    processing_options: Record<string, any>
-    results_summary?: Record<string, any>
+  async getQueueStats(token?: string): Promise<{
+    priority: number
+    normal: number
+    maintenance: number
   }> {
-    const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}`), {
+    const res = await fetch(apiUrl('/runs/queues'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
-    return handleJson(res)
-  },
-
-  /**
-   * Get job logs with pagination
-   */
-  async getJobLogs(token: string | undefined, jobId: string, params?: {
-    page?: number
-    page_size?: number
-  }): Promise<Array<{
-    id: string
-    timestamp: string
-    level: string
-    message: string
-    metadata?: Record<string, any>
-  }>> {
-    const url = new URL(apiUrl(`/jobs/${encodeURIComponent(jobId)}/logs`))
-    if (params?.page) url.searchParams.set('page', params.page.toString())
-    if (params?.page_size) url.searchParams.set('page_size', params.page_size.toString())
-
-    const res = await fetch(url.toString(), {
-      headers: authHeaders(token),
-      cache: 'no-store',
-    })
-    return handleJson(res)
-  },
-
-  /**
-   * Get job documents with their processing status
-   */
-  async getJobDocuments(token: string | undefined, jobId: string): Promise<Array<{
-    id: string
-    document_id: string
-    filename: string
-    status: string
-    conversion_score?: number
-    quality_scores?: Record<string, any>
-    is_rag_ready?: boolean
-    error_message?: string
-    processing_time_seconds?: number
-  }>> {
-    const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}/documents`), {
-      headers: authHeaders(token),
-      cache: 'no-store',
-    })
-    return handleJson(res)
-  },
-
-  /**
-   * Delete a job (admin only, terminal states only)
-   */
-  async deleteJob(token: string | undefined, jobId: string): Promise<void> {
-    const res = await fetch(apiUrl(`/jobs/${encodeURIComponent(jobId)}`), {
-      method: 'DELETE',
-      headers: authHeaders(token),
-    })
-    if (!res.ok) {
-      let body: any = undefined
-      try { body = await res.json() } catch {}
-      const msg = (body && (body.detail || body.message)) || res.statusText
-      httpError(res, msg, body)
-    }
-  },
-
-  /**
-   * Get user's job statistics
-   */
-  async getUserStats(token: string | undefined): Promise<{
-    active_jobs: number
-    total_jobs_24h: number
-    total_jobs_7d: number
-    completed_jobs_24h: number
-    failed_jobs_24h: number
-  }> {
-    const res = await fetch(apiUrl('/jobs/stats/user'), {
-      headers: authHeaders(token),
-      cache: 'no-store',
-    })
-    return handleJson(res)
-  },
-
-  /**
-   * Get organization job statistics (admin only)
-   */
-  async getOrgStats(token: string | undefined): Promise<{
-    organization_id: string
-    active_jobs: number
-    queued_jobs: number
-    concurrency_limit: number
-    total_jobs: number
-    completed_jobs: number
-    failed_jobs: number
-    cancelled_jobs: number
-    total_documents_processed: number
-  }> {
-    const res = await fetch(apiUrl('/jobs/stats/organization'), {
-      headers: authHeaders(token),
-      cache: 'no-store',
-    })
-    return handleJson(res)
-  },
-
-  // Legacy endpoints (backward compatibility)
-  async getJobByDocument(documentId: string, token?: string): Promise<any> {
-    const encodedDocId = validateAndEncodeDocumentId(documentId)
-    const res = await fetch(apiUrl(`/jobs/by-document/${encodedDocId}`), {
-      cache: 'no-store',
-      headers: authHeaders(token)
-    })
-    if (!res.ok && res.status === 404) {
-      // Document may not have an associated job
-      return null
-    }
     return handleJson(res)
   },
 }
@@ -1940,6 +1751,25 @@ export interface AssetVersionHistory {
   total_versions: number
 }
 
+export interface AssetQueueInfo {
+  status: 'not_found' | 'ready' | 'failed' | 'pending' | 'processing' | 'queued'
+  asset_id: string
+  run_id?: string
+  run_status?: string
+  in_queue: boolean
+  queue_position?: number
+  total_pending?: number
+  extractor_version?: string
+  queue_stats?: {
+    processing_priority: number
+    processing: number
+    maintenance: number
+  }
+  created_at?: string
+  started_at?: string
+  message?: string
+}
+
 // ======================================================================
 // BULK UPLOAD INTERFACES (Phase 2)
 // ======================================================================
@@ -2115,6 +1945,17 @@ export const assetsApi = {
     const url = apiUrl(`/assets/${assetId}/reextract`)
     const res = await fetch(url, {
       method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get queue position and extraction info for a pending asset
+   */
+  async getAssetQueueInfo(token: string | undefined, assetId: string): Promise<AssetQueueInfo> {
+    const url = apiUrl(`/assets/${assetId}/queue-info`)
+    const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
@@ -2749,6 +2590,31 @@ export const scheduledTasksApi = {
 // -------------------- Search API (Phase 6) --------------------
 
 /**
+ * Single bucket in a facet aggregation
+ */
+export interface FacetBucket {
+  value: string
+  count: number
+}
+
+/**
+ * Facet aggregation result
+ */
+export interface Facet {
+  field: string
+  buckets: FacetBucket[]
+  total_other: number
+}
+
+/**
+ * Available facets in search response
+ */
+export interface SearchFacets {
+  source_type?: Facet
+  content_type?: Facet
+}
+
+/**
  * Search request parameters
  */
 export interface SearchRequest {
@@ -2760,6 +2626,7 @@ export interface SearchRequest {
   date_to?: string
   limit?: number
   offset?: number
+  include_facets?: boolean
 }
 
 /**
@@ -2786,6 +2653,7 @@ export interface SearchResponse {
   offset: number
   query: string
   hits: SearchHit[]
+  facets?: SearchFacets
 }
 
 /**
@@ -2918,17 +2786,35 @@ export interface SamSearch {
   is_active: boolean
   last_pull_at: string | null
   last_pull_status: string | null
+  last_pull_run_id: string | null
   pull_frequency: 'manual' | 'hourly' | 'daily'
-  solicitation_count: number
-  notice_count: number
   created_at: string
   updated_at: string
+  // Active pull tracking
+  is_pulling: boolean
+  current_pull_status: string | null  // pending, running, completed, failed
+}
+
+export interface SamPullHistoryItem {
+  id: string
+  run_type: string
+  status: string
+  started_at: string | null
+  completed_at: string | null
+  results_summary: {
+    total_fetched?: number
+    new_solicitations?: number
+    updated_solicitations?: number
+    new_notices?: number
+    new_attachments?: number
+    status?: string
+  } | null
+  error_message: string | null
 }
 
 export interface SamSolicitation {
   id: string
   organization_id: string
-  search_id: string
   notice_id: string
   solicitation_number: string | null
   title: string
@@ -2951,9 +2837,23 @@ export interface SamSolicitation {
   attachment_count: number
   created_at: string
   updated_at: string
+  // Phase 7.6: Auto-summary status
+  summary_status?: 'pending' | 'generating' | 'ready' | 'failed' | 'no_llm' | null
+  summary_generated_at?: string | null
 }
 
-export interface SamNotice {
+// Phase 7.6: Dashboard stats
+export interface SamDashboardStats {
+  total_notices: number
+  total_solicitations: number
+  recent_notices_7d: number
+  new_solicitations_7d: number
+  updated_solicitations_7d: number
+  api_usage: SamApiUsage | null
+}
+
+// Phase 7.6: Notice with solicitation context for org-wide listing
+export interface SamNoticeWithSolicitation {
   id: string
   solicitation_id: string
   sam_notice_id: string
@@ -2965,11 +2865,66 @@ export interface SamNotice {
   response_deadline: string | null
   changes_summary: string | null
   created_at: string
+  // Solicitation context
+  solicitation_number: string | null
+  agency_name: string | null
+  bureau_name: string | null
+  office_name: string | null
+}
+
+// Phase 7.6: Notice list response
+export interface SamNoticeListResponse {
+  items: SamNoticeWithSolicitation[]
+  total: number
+  limit: number
+  offset: number
+}
+
+// Phase 7.6: Notice filter params
+export interface SamNoticeListParams {
+  agency?: string
+  sub_agency?: string
+  office?: string
+  notice_type?: string
+  posted_from?: string
+  posted_to?: string
+  limit?: number
+  offset?: number
+}
+
+export interface SamNotice {
+  id: string
+  solicitation_id: string | null  // Nullable for standalone notices
+  organization_id: string | null  // For standalone notices
+  sam_notice_id: string
+  notice_type: string
+  version_number: number
+  title: string | null
+  description: string | null
+  posted_date: string | null
+  response_deadline: string | null
+  changes_summary: string | null
+  created_at: string
+  // Classification fields
+  naics_code: string | null
+  psc_code: string | null  // aka classification code
+  set_aside_code: string | null
+  // Agency hierarchy
+  agency_name: string | null
+  bureau_name: string | null
+  office_name: string | null
+  // UI link for standalone notices
+  ui_link: string | null
+  // Summary fields for standalone notices
+  summary_status: string | null  // pending, generating, ready, failed, no_llm
+  summary_generated_at: string | null
+  // Is this a standalone notice?
+  is_standalone: boolean
 }
 
 export interface SamAttachment {
   id: string
-  solicitation_id: string
+  solicitation_id: string | null  // Nullable for standalone notice attachments
   notice_id: string | null
   asset_id: string | null
   resource_id: string
@@ -3048,6 +3003,38 @@ export interface SamAgency {
 }
 
 export const samApi = {
+  // ========== Dashboard (Phase 7.6) ==========
+
+  async getDashboardStats(token: string | undefined): Promise<SamDashboardStats> {
+    const res = await fetch(apiUrl('/sam/dashboard'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async listAllNotices(
+    token: string | undefined,
+    params?: SamNoticeListParams
+  ): Promise<SamNoticeListResponse> {
+    const searchParams = new URLSearchParams()
+    if (params?.agency) searchParams.append('agency', params.agency)
+    if (params?.sub_agency) searchParams.append('sub_agency', params.sub_agency)
+    if (params?.office) searchParams.append('office', params.office)
+    if (params?.notice_type) searchParams.append('notice_type', params.notice_type)
+    if (params?.posted_from) searchParams.append('posted_from', params.posted_from)
+    if (params?.posted_to) searchParams.append('posted_to', params.posted_to)
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/sam/notices?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
   // ========== Searches ==========
 
   async listSearches(token: string | undefined, params?: {
@@ -3071,11 +3058,14 @@ export const samApi = {
   },
 
   async getSearch(token: string | undefined, searchId: string): Promise<SamSearch> {
+    console.log('[SAM API] getSearch - Request:', { searchId })
     const res = await fetch(apiUrl(`/sam/searches/${searchId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
-    return handleJson(res)
+    const result = await handleJson(res) as SamSearch
+    console.log('[SAM API] getSearch - Response:', result)
+    return result
   },
 
   async createSearch(token: string | undefined, data: {
@@ -3084,12 +3074,15 @@ export const samApi = {
     search_config: Record<string, any>
     pull_frequency?: string
   }): Promise<SamSearch> {
+    console.log('[SAM API] createSearch - Request:', data)
     const res = await fetch(apiUrl('/sam/searches'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
-    return handleJson(res)
+    const result = await handleJson(res) as SamSearch
+    console.log('[SAM API] createSearch - Response:', result)
+    return result
   },
 
   async updateSearch(token: string | undefined, searchId: string, data: {
@@ -3123,12 +3116,35 @@ export const samApi = {
     max_pages?: number
     page_size?: number
   }): Promise<Record<string, any>> {
+    console.log('[SAM API] triggerPull - Request:', { searchId, params })
     const res = await fetch(apiUrl(`/sam/searches/${searchId}/pull`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(params || {}),
     })
-    return handleJson(res)
+    const result = await handleJson(res) as Record<string, any>
+    console.log('[SAM API] triggerPull - Response:', result)
+    return result
+  },
+
+  async getPullHistory(token: string | undefined, searchId: string, params?: {
+    limit?: number
+    offset?: number
+  }): Promise<{ items: SamPullHistoryItem[]; total: number }> {
+    console.log('[SAM API] getPullHistory - Request:', { searchId, params })
+    const searchParams = new URLSearchParams()
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/sam/searches/${searchId}/pulls?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    type PullHistoryResponse = { items: SamPullHistoryItem[]; total: number }
+    const result = await handleJson(res) as PullHistoryResponse
+    console.log('[SAM API] getPullHistory - Response:', { total: result.total, itemCount: result.items?.length })
+    return result
   },
 
   async previewSearch(token: string | undefined, data: {
@@ -3144,26 +3160,38 @@ export const samApi = {
     error?: string
     remaining_calls?: number
   }> {
+    console.log('[SAM API] previewSearch - Request:', data)
     const res = await fetch(apiUrl('/sam/searches/preview'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
-    return handleJson(res)
+    type PreviewResponse = {
+      success: boolean
+      total_matching?: number
+      sample_count?: number
+      sample_results?: SamPreviewResult[]
+      search_config?: Record<string, any>
+      message: string
+      error?: string
+      remaining_calls?: number
+    }
+    const result = await handleJson(res) as PreviewResponse
+    console.log('[SAM API] previewSearch - Response:', result)
+    return result
   },
 
   // ========== Solicitations ==========
 
   async listSolicitations(token: string | undefined, params?: {
-    search_id?: string
     status?: string
     notice_type?: string
     naics_code?: string
     limit?: number
     offset?: number
   }): Promise<{ items: SamSolicitation[]; total: number; limit: number; offset: number }> {
+    console.log('[SAM API] listSolicitations - Request params:', params)
     const searchParams = new URLSearchParams()
-    if (params?.search_id) searchParams.append('search_id', params.search_id)
     if (params?.status) searchParams.append('status', params.status)
     if (params?.notice_type) searchParams.append('notice_type', params.notice_type)
     if (params?.naics_code) searchParams.append('naics_code', params.naics_code)
@@ -3175,7 +3203,10 @@ export const samApi = {
       headers: authHeaders(token),
       cache: 'no-store',
     })
-    return handleJson(res)
+    type ListResponse = { items: SamSolicitation[]; total: number; limit: number; offset: number }
+    const result = await handleJson(res) as ListResponse
+    console.log('[SAM API] listSolicitations - Response:', { total: result.total, itemCount: result.items?.length })
+    return result
   },
 
   async getSolicitation(token: string | undefined, solicitationId: string): Promise<SamSolicitation> {
@@ -3192,6 +3223,34 @@ export const samApi = {
       cache: 'no-store',
     })
     return handleJson(res)
+  },
+
+  async refreshSolicitation(token: string | undefined, solicitationId: string): Promise<{
+    solicitation_id: string
+    solicitation_number: string
+    opportunities_found: number
+    notices_created: number
+    notices_updated: number
+    description_updated: boolean
+    error?: string
+  }> {
+    console.log('[SAM API] refreshSolicitation - Request:', { solicitationId })
+    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/refresh`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    type RefreshResponse = {
+      solicitation_id: string
+      solicitation_number: string
+      opportunities_found: number
+      notices_created: number
+      notices_updated: number
+      description_updated: boolean
+      error?: string
+    }
+    const result = await handleJson(res) as RefreshResponse
+    console.log('[SAM API] refreshSolicitation - Response:', result)
+    return result
   },
 
   async getSolicitationAttachments(token: string | undefined, solicitationId: string, params?: {
@@ -3235,6 +3294,15 @@ export const samApi = {
     return handleJson(res)
   },
 
+  // Phase 7.6: Regenerate auto-summary
+  async regenerateSummary(token: string | undefined, solicitationId: string): Promise<SamSolicitation> {
+    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/regenerate-summary`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
   async downloadAllAttachments(token: string | undefined, solicitationId: string): Promise<Record<string, any>> {
     const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/download-attachments`), {
       method: 'POST',
@@ -3260,6 +3328,63 @@ export const samApi = {
     const res = await fetch(apiUrl(`/sam/notices/${noticeId}/generate-changes`), {
       method: 'POST',
       headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  async refreshNotice(token: string | undefined, noticeId: string): Promise<{
+    notice_id: string
+    description_updated: boolean
+    error?: string
+  }> {
+    console.log('[samApi.refreshNotice] Refreshing notice:', noticeId)
+    const res = await fetch(apiUrl(`/sam/notices/${noticeId}/refresh`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    const result = await handleJson(res)
+    console.log('[samApi.refreshNotice] Result:', result)
+    return result as {
+      notice_id: string
+      description_updated: boolean
+      error?: string
+    }
+  },
+
+  async regenerateNoticeSummary(token: string | undefined, noticeId: string): Promise<{
+    notice_id: string
+    status: string
+    message: string
+  }> {
+    const res = await fetch(apiUrl(`/sam/notices/${noticeId}/regenerate-summary`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  async getNoticeAttachments(
+    token: string | undefined,
+    noticeId: string,
+    downloadStatus?: string
+  ): Promise<SamAttachment[]> {
+    const params = new URLSearchParams()
+    if (downloadStatus) params.append('download_status', downloadStatus)
+    const url = apiUrl(`/sam/notices/${noticeId}/attachments?${params.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getNoticeDescription(token: string | undefined, noticeId: string): Promise<{
+    notice_id: string
+    description: string | null
+  }> {
+    const res = await fetch(apiUrl(`/sam/notices/${noticeId}/description`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -3383,6 +3508,42 @@ export const samApi = {
     })
     return handleJson(res)
   },
+
+  // ========== Search (Phase 7.6) ==========
+
+  async searchSam(token: string | undefined, params: {
+    query: string
+    source_types?: string[]  // 'notices' | 'solicitations'
+    notice_types?: string[]
+    agencies?: string[]
+    date_from?: string
+    date_to?: string
+    limit?: number
+    offset?: number
+  }): Promise<{
+    total: number
+    limit: number
+    offset: number
+    query: string
+    hits: Array<{
+      asset_id: string
+      score: number
+      title: string | null
+      filename: string | null  // Solicitation number
+      source_type: string | null  // 'sam_notice' | 'sam_solicitation'
+      content_type: string | null  // Notice type
+      url: string | null
+      created_at: string | null
+      highlights: Record<string, string[]>
+    }>
+  }> {
+    const res = await fetch(apiUrl('/search/sam'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(params),
+    })
+    return handleJson(res)
+  },
 }
 
 // Default export with all API modules
@@ -3393,7 +3554,6 @@ export default {
   fileApi,
   processingApi,
   contentApi,
-  jobsApi,
   authApi,
   connectionsApi,
   organizationsApi,
@@ -3402,6 +3562,7 @@ export default {
   objectStorageApi,
   usersApi,
   assetsApi,
+  runsApi,
   scrapeApi,
   scheduledTasksApi,
   searchApi,

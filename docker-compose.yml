@@ -97,9 +97,10 @@ services:
       dockerfile: Dockerfile
     container_name: curatore-worker
     # Auto-restart worker on code changes using watchdog/watchmedo
+    # Queue order matters: workers consume left-to-right, so priority queue is processed first
     command: >
       sh -c "watchmedo auto-restart --directory=/app/app --pattern=*.py --recursive --
-      celery -A app.celery_app worker -Q ${CELERY_DEFAULT_QUEUE:-processing} -l info --concurrency=${CELERY_CONCURRENCY:-4}"
+      celery -A app.celery_app worker -Q processing_priority,processing,maintenance -l info --concurrency=${CELERY_CONCURRENCY:-4}"
     environment:
       - PYTHONUNBUFFERED=1
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
