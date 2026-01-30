@@ -52,7 +52,8 @@ router = APIRouter(prefix="/assets", tags=["assets"])
 )
 async def list_assets(
     source_type: Optional[str] = Query(None, description="Filter by source type (upload, sharepoint, etc.)"),
-    status: Optional[str] = Query(None, description="Filter by status (pending, ready, failed)"),
+    status: Optional[str] = Query(None, description="Filter by status (pending, ready, failed, deleted)"),
+    include_deleted: bool = Query(False, description="Include deleted assets (default: False)"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results to return"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
     current_user: User = Depends(get_current_user),
@@ -64,6 +65,7 @@ async def list_assets(
             organization_id=current_user.organization_id,
             source_type=source_type,
             status=status,
+            include_deleted=include_deleted,
             limit=limit,
             offset=offset,
         )
@@ -73,6 +75,7 @@ async def list_assets(
             organization_id=current_user.organization_id,
             source_type=source_type,
             status=status,
+            include_deleted=include_deleted,
         )
 
         return AssetsListResponse(
@@ -392,6 +395,26 @@ async def reextract_asset(
 
         if asset.organization_id != current_user.organization_id:
             raise HTTPException(status_code=403, detail="Access denied")
+
+        # Pre-check: Verify the raw file exists in object storage
+        from ....services.minio_service import get_minio_service
+        from datetime import datetime
+        minio = get_minio_service()
+        if minio and asset.raw_bucket and asset.raw_object_key:
+            if not minio.object_exists(asset.raw_bucket, asset.raw_object_key):
+                # Mark asset as failed with clear error
+                asset.status = "failed"
+                asset.source_metadata = {
+                    **(asset.source_metadata or {}),
+                    "missing_file_detected_at": datetime.utcnow().isoformat(),
+                    "missing_file_error": f"Raw file not found: {asset.raw_bucket}/{asset.raw_object_key}",
+                }
+                await session.commit()
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Cannot re-extract: Raw file not found in storage. "
+                           f"The file may have been deleted. Asset has been marked as failed."
+                )
 
         # Trigger re-extraction
         try:

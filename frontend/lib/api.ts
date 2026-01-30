@@ -3552,6 +3552,7 @@ export interface SharePointSyncConfig {
   id: string
   organization_id: string
   connection_id: string | null
+  connection_name: string | null
   name: string
   slug: string
   description: string | null
@@ -3678,12 +3679,11 @@ export const sharepointSyncApi = {
     data: {
       name?: string
       description?: string
-      connection_id?: string
-      folder_url?: string
       sync_config?: Record<string, any>
       status?: string
       is_active?: boolean
       sync_frequency?: string
+      reset_existing_assets?: boolean
     }
   ): Promise<SharePointSyncConfig> {
     const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}`), {
@@ -3741,6 +3741,21 @@ export const sharepointSyncApi = {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ full_sync: fullSync }),
+    })
+    return handleJson(res)
+  },
+
+  async cancelStuckRuns(
+    token: string | undefined,
+    configId: string
+  ): Promise<{
+    message: string
+    cancelled_count: number
+    run_ids: string[]
+  }> {
+    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}/cancel-stuck`), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
     })
     return handleJson(res)
   },
@@ -3862,15 +3877,18 @@ export const sharepointSyncApi = {
       selected_items: Array<{
         id: string
         name: string
+        type?: string
         folder?: string
         drive_id?: string
         size?: number
         web_url?: string
         mime?: string
       }>
+      sync_config_id?: string
       sync_config_name?: string
       sync_config_description?: string
       create_sync_config?: boolean
+      sync_frequency?: string
     }
   ): Promise<{
     run_id: string
@@ -3883,6 +3901,28 @@ export const sharepointSyncApi = {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async removeItems(
+    token: string | undefined,
+    configId: string,
+    itemIds: string[],
+    deleteAssets: boolean = true
+  ): Promise<{
+    sync_config_id: string
+    documents_removed: number
+    assets_deleted: number
+    message: string
+  }> {
+    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}/remove-items`), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify({
+        item_ids: itemIds,
+        delete_assets: deleteAssets,
+      }),
     })
     return handleJson(res)
   },

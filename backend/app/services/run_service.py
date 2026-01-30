@@ -350,8 +350,10 @@ class RunService:
         old_status = run.status
 
         # Validate status transition
+        # Note: pending can transition to failed/cancelled directly if the task
+        # fails before it starts (e.g., import errors, configuration issues)
         valid_transitions = {
-            "pending": ["running"],
+            "pending": ["running", "failed", "cancelled"],
             "running": ["completed", "failed", "cancelled"],
             "completed": [],
             "failed": [],

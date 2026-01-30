@@ -107,7 +107,43 @@ class SharePointSyncService:
 
         Returns:
             Created SharePointSyncConfig instance
+
+        Raises:
+            ValueError: If a sync config with the same name or folder URL already exists
         """
+        # Check for existing config with same name (case-insensitive)
+        existing_name = await session.execute(
+            select(SharePointSyncConfig).where(
+                and_(
+                    SharePointSyncConfig.organization_id == organization_id,
+                    func.lower(SharePointSyncConfig.name) == func.lower(name),
+                    SharePointSyncConfig.status != "archived",  # Allow reusing names from archived configs
+                )
+            )
+        )
+        if existing_name.scalar_one_or_none():
+            raise ValueError(f"A sync configuration with the name '{name}' already exists")
+
+        # Normalize folder URL for comparison (remove trailing slashes, query params variations)
+        normalized_url = folder_url.rstrip("/").split("?")[0]
+
+        # Check for existing config with same folder URL
+        existing_url_result = await session.execute(
+            select(SharePointSyncConfig).where(
+                and_(
+                    SharePointSyncConfig.organization_id == organization_id,
+                    SharePointSyncConfig.status != "archived",  # Allow reusing URLs from archived configs
+                )
+            )
+        )
+        existing_configs = existing_url_result.scalars().all()
+        for existing in existing_configs:
+            existing_normalized = existing.folder_url.rstrip("/").split("?")[0]
+            if existing_normalized == normalized_url:
+                raise ValueError(
+                    f"A sync configuration for this SharePoint folder already exists: '{existing.name}'"
+                )
+
         # Generate unique slug
         base_slug = generate_slug(name)
         slug = base_slug
@@ -361,11 +397,12 @@ class SharePointSyncService:
         Permanently delete a sync config with full cleanup.
 
         This performs a complete removal including:
-        1. Delete all associated assets (soft delete)
-        2. Remove documents from OpenSearch index
-        3. Delete SharePointSyncedDocument records
-        4. Delete related Run records
-        5. Delete the sync config itself
+        1. Delete files from MinIO storage (raw and extracted)
+        2. Hard delete Asset records from database
+        3. Remove documents from OpenSearch index
+        4. Delete SharePointSyncedDocument records
+        5. Delete related Run records
+        6. Delete the sync config itself
 
         Args:
             session: Database session
@@ -377,17 +414,23 @@ class SharePointSyncService:
         """
         from .asset_service import asset_service
         from .index_service import index_service
+        from .minio_service import get_minio_service
         from sqlalchemy import delete as sql_delete, func
+        from ..database.models import ExtractionResult, AssetVersion
 
         config = await self.get_sync_config(session, sync_config_id)
         if not config:
             return {"error": "Sync config not found"}
 
+        minio = get_minio_service()
+
         stats = {
             "assets_deleted": 0,
+            "files_deleted": 0,
             "documents_deleted": 0,
             "runs_deleted": 0,
             "opensearch_removed": 0,
+            "storage_freed_bytes": 0,
             "errors": [],
         }
 
@@ -399,7 +442,7 @@ class SharePointSyncService:
         )
         synced_docs = list(docs_result.scalars().all())
 
-        # 2. Delete assets and remove from OpenSearch
+        # 2. Delete assets, files from MinIO, and remove from OpenSearch
         for doc in synced_docs:
             if doc.asset_id:
                 try:
@@ -410,10 +453,48 @@ class SharePointSyncService:
                     stats["errors"].append(f"OpenSearch removal failed for {doc.asset_id}: {e}")
 
                 try:
-                    # Soft delete the asset
+                    # Get asset to find file locations
                     asset = await asset_service.get_asset(session, doc.asset_id)
                     if asset:
-                        asset.status = "deleted"
+                        # Track storage freed
+                        if asset.file_size:
+                            stats["storage_freed_bytes"] += asset.file_size
+
+                        # Delete raw file from MinIO
+                        if minio and asset.raw_bucket and asset.raw_object_key:
+                            try:
+                                minio.delete_object(asset.raw_bucket, asset.raw_object_key)
+                                stats["files_deleted"] += 1
+                            except Exception as e:
+                                stats["errors"].append(f"Failed to delete raw file for {doc.asset_id}: {e}")
+
+                        # Delete extracted files from MinIO (via extraction results)
+                        extraction_result = await session.execute(
+                            select(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                        )
+                        extractions = list(extraction_result.scalars().all())
+                        for extraction in extractions:
+                            if minio and extraction.extracted_bucket and extraction.extracted_object_key:
+                                try:
+                                    minio.delete_object(extraction.extracted_bucket, extraction.extracted_object_key)
+                                    stats["files_deleted"] += 1
+                                except Exception as e:
+                                    pass  # Don't fail on extraction cleanup
+
+                        # Delete extraction results
+                        await session.execute(
+                            sql_delete(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                        )
+
+                        # Delete asset versions if any
+                        await session.execute(
+                            sql_delete(AssetVersion).where(AssetVersion.asset_id == asset.id)
+                        )
+
+                        # Hard delete the asset record
+                        await session.execute(
+                            sql_delete(Asset).where(Asset.id == asset.id)
+                        )
                         stats["assets_deleted"] += 1
                 except Exception as e:
                     stats["errors"].append(f"Asset deletion failed for {doc.asset_id}: {e}")
@@ -554,6 +635,7 @@ class SharePointSyncService:
         sharepoint_modified_by: Optional[str] = None,
         file_size: Optional[int] = None,
         run_id: Optional[UUID] = None,
+        sync_metadata: Optional[Dict[str, Any]] = None,
     ) -> SharePointSyncedDocument:
         """
         Create a synced document record.
@@ -574,6 +656,7 @@ class SharePointSyncService:
             sharepoint_modified_by: Last modifier email/name
             file_size: File size in bytes
             run_id: Run that created this record
+            sync_metadata: Additional sync metadata (hashes, IDs, etc.)
 
         Returns:
             Created SharePointSyncedDocument
@@ -595,6 +678,7 @@ class SharePointSyncService:
             sync_status="synced",
             last_synced_at=datetime.utcnow(),
             last_sync_run_id=run_id,
+            sync_metadata=sync_metadata or {},
         )
 
         session.add(doc)
@@ -667,8 +751,22 @@ class SharePointSyncService:
         Returns:
             Sync result dict with statistics
         """
-        from .sharepoint_service import sharepoint_inventory
+        from .sharepoint_service import sharepoint_inventory_stream
         from .run_service import run_service
+        from .run_log_service import run_log_service
+
+        # =================================================================
+        # PHASE 1: INITIALIZATION
+        # =================================================================
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 1: Initializing sync configuration",
+            context={"phase": "init", "sync_config_id": str(sync_config_id)},
+        )
+        await session.commit()
 
         # Get sync config
         config = await self.get_sync_config(session, sync_config_id)
@@ -684,6 +782,20 @@ class SharePointSyncService:
         exclude_patterns = sync_settings.get("exclude_patterns", [])
         max_file_size_mb = sync_settings.get("max_file_size_mb", 100)
 
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="progress",
+            message=f"Loaded sync config: {config.name}",
+            context={
+                "folder_url": config.folder_url,
+                "recursive": recursive,
+                "exclude_patterns": exclude_patterns,
+            },
+        )
+        await session.commit()
+
         # Get connection for auth
         connection = None
         if config.connection_id:
@@ -692,46 +804,24 @@ class SharePointSyncService:
             )
             connection = conn_result.scalar_one_or_none()
 
-        # Get folder inventory from SharePoint
-        logger.info(f"Getting SharePoint inventory for {config.folder_url}")
-
-        try:
-            inventory = await sharepoint_inventory(
-                folder_url=config.folder_url,
-                recursive=recursive,
-                include_folders=False,  # Only files
-                page_size=100,
-                max_items=None,  # Get all
-                organization_id=organization_id,
-                session=session,
-            )
-        except Exception as e:
-            logger.error(f"Failed to get SharePoint inventory: {e}")
-            raise
-
-        # Cache folder info
-        folder_info = inventory.get("folder", {})
-        if folder_info:
-            config.folder_name = folder_info.get("name")
-            config.folder_drive_id = folder_info.get("drive_id")
-            config.folder_item_id = folder_info.get("id")
-
-        items = inventory.get("items", [])
-        logger.info(f"Found {len(items)} files in SharePoint folder")
-
-        # Filter items
-        filtered_items = self._filter_items(
-            items, include_patterns, exclude_patterns, max_file_size_mb
+        # =================================================================
+        # PHASE 2: CONNECTING & STREAMING SYNC
+        # =================================================================
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 2: Connecting to SharePoint and starting streaming sync",
+            context={"phase": "connecting", "connection_id": str(config.connection_id) if config.connection_id else None},
         )
-        logger.info(f"After filtering: {len(filtered_items)} files to sync")
+        await session.commit()
 
-        # Track current item IDs for deletion detection
-        current_item_ids = {item.get("id") for item in filtered_items if item.get("id")}
+        logger.info(f"Starting streaming sync for {config.folder_url}")
 
-        # Process each item
-        total_files = len(filtered_items)
+        # Results tracking
         results = {
-            "total_files": total_files,
+            "total_files": 0,
             "new_files": 0,
             "updated_files": 0,
             "unchanged_files": 0,
@@ -741,9 +831,18 @@ class SharePointSyncService:
             "errors": [],
         }
 
-        # Initialize config stats for progress tracking
+        # Track all seen item IDs for deletion detection
+        current_item_ids = set()
+
+        # Progress tracking
+        processed_files = 0
+        folders_scanned = 0
+        last_log_time = datetime.utcnow()
+        log_interval_seconds = 5  # Log progress every 5 seconds
+
+        # Initialize config stats
         config.stats = {
-            "total_files": total_files,
+            "total_files": 0,
             "synced_files": 0,
             "processed_files": 0,
             "new_files": 0,
@@ -752,64 +851,185 @@ class SharePointSyncService:
             "failed_files": 0,
             "deleted_count": 0,
             "current_file": None,
-            "phase": "syncing",
+            "folders_scanned": 0,
+            "phase": "scanning_and_syncing",
         }
         await session.commit()
 
-        # Update run progress with total
-        await run_service.update_run_progress(
-            session=session,
-            run_id=run_id,
-            current=0,
-            total=total_files,
-            unit="files",
-        )
+        folder_info = None
 
-        for idx, item in enumerate(filtered_items):
-            current_file = item.get("name", "unknown")
-            try:
-                result = await self._sync_single_file(
+        # Callback for folder scanning progress
+        async def on_folder_scanned(folder_path: str, files_found: int, folders_pending: int):
+            nonlocal folders_scanned, last_log_time
+            folders_scanned += 1
+
+            # Log progress periodically (not on every folder to avoid spam)
+            now = datetime.utcnow()
+            if (now - last_log_time).total_seconds() >= log_interval_seconds:
+                last_log_time = now
+                await run_log_service.log_event(
                     session=session,
-                    config=config,
-                    item=item,
                     run_id=run_id,
-                    full_sync=full_sync,
+                    level="INFO",
+                    event_type="progress",
+                    message=f"Scanning: {folders_scanned} folders scanned, {processed_files} files synced, {folders_pending} folders remaining",
+                    context={
+                        "phase": "scanning_and_syncing",
+                        "folders_scanned": folders_scanned,
+                        "files_synced": processed_files,
+                        "folders_pending": folders_pending,
+                    },
                 )
-                results[result] += 1
-            except Exception as e:
-                logger.error(f"Failed to sync file {item.get('name')}: {e}")
-                results["failed_files"] += 1
-                results["errors"].append({
-                    "file": item.get("name"),
-                    "error": str(e),
-                })
+                await session.commit()
 
-            # Update incremental stats after each file
-            processed = idx + 1
-            config.stats = {
-                "total_files": total_files,
-                "synced_files": results["new_files"] + results["updated_files"] + results["unchanged_files"],
-                "processed_files": processed,
-                "new_files": results["new_files"],
-                "updated_files": results["updated_files"],
-                "unchanged_files": results["unchanged_files"],
-                "failed_files": results["failed_files"],
-                "deleted_count": 0,
-                "current_file": current_file,
-                "phase": "syncing",
-            }
+        try:
+            # Stream items and process them as they're discovered
+            async for folder_data, item in sharepoint_inventory_stream(
+                folder_url=config.folder_url,
+                recursive=recursive,
+                include_folders=False,  # Only files
+                page_size=100,
+                max_items=None,
+                organization_id=organization_id,
+                session=session,
+                on_folder_scanned=on_folder_scanned,
+            ):
+                # First yield is folder info
+                if folder_data is not None:
+                    folder_info = folder_data
+                    config.folder_name = folder_info.get("name")
+                    config.folder_drive_id = folder_info.get("drive_id")
+                    config.folder_item_id = folder_info.get("id")
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_id,
+                        level="INFO",
+                        event_type="progress",
+                        message=f"Connected to folder: {folder_info.get('name')}",
+                        context={"phase": "scanning_and_syncing", "folder_name": folder_info.get("name")},
+                    )
+                    await session.commit()
+                    continue
 
-            # Update run progress
-            await run_service.update_run_progress(
+                if item is None:
+                    continue
+
+                # Skip if item doesn't pass filters
+                if not self._item_passes_filter(item, include_patterns, exclude_patterns, max_file_size_mb):
+                    results["skipped_files"] += 1
+                    continue
+
+                results["total_files"] += 1
+                current_item_ids.add(item.get("id"))
+
+                # Process this file immediately
+                current_file = item.get("name", "unknown")
+                try:
+                    result = await self._sync_single_file(
+                        session=session,
+                        config=config,
+                        item=item,
+                        run_id=run_id,
+                        full_sync=full_sync,
+                    )
+                    results[result] += 1
+                    processed_files += 1
+
+                    # Log new/updated files
+                    if result == "new_files":
+                        await run_log_service.log_event(
+                            session=session,
+                            run_id=run_id,
+                            level="INFO",
+                            event_type="file_download",
+                            message=f"Downloaded: {current_file}",
+                            context={"phase": "scanning_and_syncing", "file": current_file, "action": "new"},
+                        )
+                    elif result == "updated_files":
+                        await run_log_service.log_event(
+                            session=session,
+                            run_id=run_id,
+                            level="INFO",
+                            event_type="file_download",
+                            message=f"Updated: {current_file}",
+                            context={"phase": "scanning_and_syncing", "file": current_file, "action": "updated"},
+                        )
+
+                except Exception as e:
+                    logger.error(f"Failed to sync file {current_file}: {e}")
+                    results["failed_files"] += 1
+                    results["errors"].append({"file": current_file, "error": str(e)})
+                    processed_files += 1
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_id,
+                        level="ERROR",
+                        event_type="file_error",
+                        message=f"Failed: {current_file}",
+                        context={"phase": "scanning_and_syncing", "file": current_file, "error": str(e)},
+                    )
+
+                # Update config stats periodically
+                config.stats = {
+                    "total_files": results["total_files"],
+                    "synced_files": results["new_files"] + results["updated_files"] + results["unchanged_files"],
+                    "processed_files": processed_files,
+                    "new_files": results["new_files"],
+                    "updated_files": results["updated_files"],
+                    "unchanged_files": results["unchanged_files"],
+                    "failed_files": results["failed_files"],
+                    "deleted_count": 0,
+                    "current_file": current_file,
+                    "folders_scanned": folders_scanned,
+                    "phase": "scanning_and_syncing",
+                }
+                await session.commit()
+
+        except Exception as e:
+            logger.error(f"Streaming sync failed: {e}")
+            await run_log_service.log_event(
                 session=session,
                 run_id=run_id,
-                current=processed,
-                total=total_files,
-                unit="files",
+                level="ERROR",
+                event_type="error",
+                message=f"Streaming sync failed: {e}",
+                context={"phase": "scanning_and_syncing", "error": str(e)},
             )
-
-            # Commit after each file to make progress visible
             await session.commit()
+            raise
+
+        # Log completion of scanning phase
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="progress",
+            message=f"Scanning complete: {folders_scanned} folders, {results['total_files']} files found, {processed_files} processed",
+            context={
+                "phase": "scanning_and_syncing",
+                "folders_scanned": folders_scanned,
+                "total_files": results["total_files"],
+                "processed": processed_files,
+                "new": results["new_files"],
+                "updated": results["updated_files"],
+                "unchanged": results["unchanged_files"],
+                "failed": results["failed_files"],
+            },
+        )
+        await session.commit()
+
+        # =================================================================
+        # PHASE 3: DETECTING DELETIONS
+        # =================================================================
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 3: Detecting deleted files",
+            context={"phase": "detecting_deletions"},
+        )
+        await session.commit()
 
         # Detect deleted files
         config.stats["phase"] = "detecting_deletions"
@@ -824,6 +1044,39 @@ class SharePointSyncService:
         )
         results["deleted_detected"] = deleted_count
 
+        if deleted_count > 0:
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="WARNING",
+                event_type="progress",
+                message=f"Detected {deleted_count} files deleted from SharePoint",
+                context={"phase": "detecting_deletions", "deleted_count": deleted_count},
+            )
+        else:
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="progress",
+                message="No deleted files detected",
+                context={"phase": "detecting_deletions", "deleted_count": 0},
+            )
+        await session.commit()
+
+        # =================================================================
+        # PHASE 4: COMPLETING SYNC
+        # =================================================================
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 4: Finalizing sync",
+            context={"phase": "completing"},
+        )
+        await session.commit()
+
         # Update final sync config stats and tracking
         config.last_sync_at = datetime.utcnow()
         config.last_sync_status = "success" if results["failed_files"] == 0 else "partial"
@@ -831,17 +1084,35 @@ class SharePointSyncService:
         config.stats = {
             "total_files": results["total_files"],
             "synced_files": results["new_files"] + results["updated_files"] + results["unchanged_files"],
-            "processed_files": total_files,
+            "processed_files": processed_files,
             "new_files": results["new_files"],
             "updated_files": results["updated_files"],
             "unchanged_files": results["unchanged_files"],
             "failed_files": results["failed_files"],
             "deleted_count": deleted_count,
+            "folders_scanned": folders_scanned,
             "current_file": None,
             "phase": "completed",
             "last_sync_results": results,
         }
 
+        await session.commit()
+
+        # Log final summary
+        status_msg = "completed successfully" if results["failed_files"] == 0 else "completed with errors"
+        await run_log_service.log_summary(
+            session=session,
+            run_id=run_id,
+            message=f"SharePoint sync {status_msg}: {results['new_files']} new, {results['updated_files']} updated, {results['unchanged_files']} unchanged, {results['failed_files']} failed, {deleted_count} deleted in source",
+            context={
+                "new_files": results["new_files"],
+                "updated_files": results["updated_files"],
+                "unchanged_files": results["unchanged_files"],
+                "failed_files": results["failed_files"],
+                "deleted_detected": deleted_count,
+                "status": "success" if results["failed_files"] == 0 else "partial",
+            },
+        )
         await session.commit()
 
         logger.info(
@@ -892,6 +1163,42 @@ class SharePointSyncService:
             filtered.append(item)
 
         return filtered
+
+    def _item_passes_filter(
+        self,
+        item: Dict[str, Any],
+        include_patterns: List[str],
+        exclude_patterns: List[str],
+        max_file_size_mb: int,
+    ) -> bool:
+        """Check if a single item passes the filter criteria."""
+        import fnmatch
+
+        # Skip folders
+        if item.get("type") == "folder":
+            return False
+
+        name = item.get("name", "")
+        size = item.get("size") or 0
+        max_size_bytes = max_file_size_mb * 1024 * 1024
+
+        # Check size
+        if size > max_size_bytes:
+            return False
+
+        # Check exclude patterns
+        if exclude_patterns:
+            excluded = any(fnmatch.fnmatch(name, p) for p in exclude_patterns)
+            if excluded:
+                return False
+
+        # Check include patterns (if specified, must match)
+        if include_patterns:
+            included = any(fnmatch.fnmatch(name, p) for p in include_patterns)
+            if not included:
+                return False
+
+        return True
 
     async def _sync_single_file(
         self,
@@ -959,7 +1266,7 @@ class SharePointSyncService:
         item: Dict[str, Any],
         run_id: UUID,
     ) -> str:
-        """Download a new file and create an asset."""
+        """Download a new file and create an asset with comprehensive metadata."""
         from .asset_service import asset_service
         from .minio_service import get_minio_service
         from .sharepoint_service import sharepoint_download
@@ -968,31 +1275,63 @@ class SharePointSyncService:
         if not minio_service:
             raise RuntimeError("MinIO service is not available")
 
+        # Basic identification
         item_id = item.get("id")
         name = item.get("name", "unknown")
         folder_path = item.get("folder", "").strip("/")
+        extension = item.get("extension", "")
+
+        # Size and URLs
         size = item.get("size")
         web_url = item.get("web_url")
-        etag = item.get("etag") or item.get("eTag")
-        created = item.get("created")
-        modified = item.get("modified")
-        created_by = item.get("created_by")
-        modified_by = item.get("last_modified_by")
         mime_type = item.get("mime") or item.get("file_type")
 
-        # Parse dates
-        created_at = None
-        modified_at = None
-        if created:
+        # Change detection
+        etag = item.get("etag") or item.get("eTag")
+        ctag = item.get("ctag")
+
+        # SharePoint timestamps
+        created = item.get("created")
+        modified = item.get("modified")
+
+        # File system timestamps (original file dates)
+        fs_created = item.get("fs_created")
+        fs_modified = item.get("fs_modified")
+
+        # Creator info (enhanced)
+        created_by = item.get("created_by")
+        created_by_email = item.get("created_by_email")
+        created_by_id = item.get("created_by_id")
+
+        # Modifier info (enhanced)
+        modified_by = item.get("last_modified_by")
+        modified_by_email = item.get("last_modified_by_email")
+        modified_by_id = item.get("last_modified_by_id")
+
+        # Content hashes
+        quick_xor_hash = item.get("quick_xor_hash")
+        sha1_hash = item.get("sha1_hash")
+        sha256_hash = item.get("sha256_hash")
+
+        # Additional metadata
+        description = item.get("description")
+        parent_path = item.get("parent_path")
+        drive_id_from_item = item.get("drive_id")
+
+        # Helper to parse ISO dates safely
+        def parse_date(date_str):
+            if not date_str:
+                return None
             try:
-                created_at = datetime.fromisoformat(created.replace("Z", "+00:00"))
+                return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
             except:
-                pass
-        if modified:
-            try:
-                modified_at = datetime.fromisoformat(modified.replace("Z", "+00:00"))
-            except:
-                pass
+                return None
+
+        # Parse all dates
+        created_at = parse_date(created)
+        modified_at = parse_date(modified)
+        fs_created_at = parse_date(fs_created)
+        fs_modified_at = parse_date(fs_modified)
 
         # Generate storage path
         org_id_str = str(config.organization_id)
@@ -1076,21 +1415,52 @@ class SharePointSyncService:
             content_type=mime_type or "application/octet-stream",
         )
 
-        # Create asset
+        # Create asset with comprehensive source metadata
         actual_size = len(file_content)
+        source_metadata = {
+            # Sync identification
+            "sync_config_id": str(config.id),
+            "sync_config_name": config.name,
+            "folder_url": config.folder_url,
+            # SharePoint identification
+            "sharepoint_item_id": item_id,
+            "sharepoint_drive_id": drive_id,
+            "sharepoint_path": folder_path,
+            "sharepoint_folder": folder_path.rsplit("/", 1)[0] if "/" in folder_path else "",
+            "sharepoint_web_url": web_url,
+            "sharepoint_parent_path": parent_path,
+            # File metadata
+            "file_extension": extension,
+            "description": description,
+            # Timestamps (ISO format strings for JSON serialization)
+            "sharepoint_created_at": created_at.isoformat() if created_at else None,
+            "sharepoint_modified_at": modified_at.isoformat() if modified_at else None,
+            "file_created_at": fs_created_at.isoformat() if fs_created_at else None,
+            "file_modified_at": fs_modified_at.isoformat() if fs_modified_at else None,
+            # Creator info
+            "created_by": created_by,
+            "created_by_email": created_by_email,
+            "created_by_id": created_by_id,
+            # Modifier info
+            "modified_by": modified_by,
+            "modified_by_email": modified_by_email,
+            "modified_by_id": modified_by_id,
+            # Content hashes from SharePoint
+            "sharepoint_quick_xor_hash": quick_xor_hash,
+            "sharepoint_sha1_hash": sha1_hash,
+            "sharepoint_sha256_hash": sha256_hash,
+            # Change detection
+            "sharepoint_etag": etag,
+            "sharepoint_ctag": ctag,
+        }
+        # Remove None values for cleaner storage
+        source_metadata = {k: v for k, v in source_metadata.items() if v is not None}
+
         asset = await asset_service.create_asset(
             session=session,
             organization_id=config.organization_id,
             source_type="sharepoint",
-            source_metadata={
-                "sync_config_id": str(config.id),
-                "sync_config_name": config.name,
-                "sharepoint_item_id": item_id,
-                "sharepoint_drive_id": drive_id,
-                "sharepoint_path": folder_path,
-                "sharepoint_web_url": web_url,
-                "folder_url": config.folder_url,
-            },
+            source_metadata=source_metadata,
             original_filename=name,
             raw_bucket=uploads_bucket,
             raw_object_key=storage_key,
@@ -1100,7 +1470,27 @@ class SharePointSyncService:
             status="pending",  # Will trigger extraction
         )
 
-        # Create synced document record
+        # Create synced document record with extended metadata
+        sync_metadata = {
+            # Content hashes for deduplication/verification
+            "quick_xor_hash": quick_xor_hash,
+            "sha1_hash": sha1_hash,
+            "sha256_hash": sha256_hash,
+            # Creator IDs for auditing
+            "created_by_id": created_by_id,
+            "modified_by_id": modified_by_id,
+            # File system dates (original file dates before upload)
+            "fs_created_at": fs_created_at.isoformat() if fs_created_at else None,
+            "fs_modified_at": fs_modified_at.isoformat() if fs_modified_at else None,
+            # SharePoint-specific
+            "ctag": ctag,
+            "description": description,
+            "parent_path": parent_path,
+            "extension": extension,
+        }
+        # Remove None values
+        sync_metadata = {k: v for k, v in sync_metadata.items() if v is not None}
+
         await self.create_synced_document(
             session=session,
             sync_config_id=config.id,
@@ -1117,6 +1507,7 @@ class SharePointSyncService:
             sharepoint_modified_by=modified_by,
             file_size=actual_size,
             run_id=run_id,
+            sync_metadata=sync_metadata,
         )
 
         await session.flush()
@@ -1141,21 +1532,48 @@ class SharePointSyncService:
         if not minio_service:
             raise RuntimeError("MinIO service is not available")
 
+        # Basic identification
         item_id = item.get("id")
         name = item.get("name", "unknown")
         folder_path = item.get("folder", "").strip("/")
+        extension = item.get("extension", "")
+
+        # Size and type
         size = item.get("size")
-        etag = item.get("etag") or item.get("eTag")
-        modified = item.get("modified")
-        modified_by = item.get("last_modified_by")
         mime_type = item.get("mime") or item.get("file_type")
 
-        modified_at = None
-        if modified:
+        # Change detection
+        etag = item.get("etag") or item.get("eTag")
+        ctag = item.get("ctag")
+
+        # Timestamps
+        modified = item.get("modified")
+        fs_modified = item.get("fs_modified")
+
+        # Modifier info (enhanced)
+        modified_by = item.get("last_modified_by")
+        modified_by_email = item.get("last_modified_by_email")
+        modified_by_id = item.get("last_modified_by_id")
+
+        # Content hashes
+        quick_xor_hash = item.get("quick_xor_hash")
+        sha1_hash = item.get("sha1_hash")
+        sha256_hash = item.get("sha256_hash")
+
+        # Additional metadata
+        description = item.get("description")
+
+        # Helper to parse dates
+        def parse_date(date_str):
+            if not date_str:
+                return None
             try:
-                modified_at = datetime.fromisoformat(modified.replace("Z", "+00:00"))
+                return datetime.fromisoformat(date_str.replace("Z", "+00:00"))
             except:
-                pass
+                return None
+
+        modified_at = parse_date(modified)
+        fs_modified_at = parse_date(fs_modified)
 
         # Get asset
         asset = await asset_service.get_asset(session, existing_doc.asset_id)
@@ -1234,11 +1652,45 @@ class SharePointSyncService:
         )
 
         # Update asset metadata
-        asset.file_size = len(file_content)  # Use actual downloaded size
+        actual_size = len(file_content)
+        asset.file_size = actual_size
         asset.file_hash = content_hash
         asset.content_type = mime_type or "application/octet-stream"
         asset.status = "pending"  # Re-trigger extraction
         asset.updated_at = datetime.utcnow()
+
+        # Update source_metadata with latest info
+        source_meta = asset.source_metadata or {}
+        source_meta.update({
+            "sharepoint_modified_at": modified_at.isoformat() if modified_at else None,
+            "file_modified_at": fs_modified_at.isoformat() if fs_modified_at else None,
+            "modified_by": modified_by,
+            "modified_by_email": modified_by_email,
+            "modified_by_id": modified_by_id,
+            "sharepoint_etag": etag,
+            "sharepoint_ctag": ctag,
+            "description": description,
+            "sharepoint_quick_xor_hash": quick_xor_hash,
+            "sharepoint_sha1_hash": sha1_hash,
+            "sharepoint_sha256_hash": sha256_hash,
+        })
+        # Remove None values
+        asset.source_metadata = {k: v for k, v in source_meta.items() if v is not None}
+
+        # Build updated sync_metadata
+        sync_metadata = existing_doc.sync_metadata or {}
+        sync_metadata.update({
+            "quick_xor_hash": quick_xor_hash,
+            "sha1_hash": sha1_hash,
+            "sha256_hash": sha256_hash,
+            "modified_by_id": modified_by_id,
+            "fs_modified_at": fs_modified_at.isoformat() if fs_modified_at else None,
+            "ctag": ctag,
+            "description": description,
+            "extension": extension,
+        })
+        # Remove None values
+        sync_metadata = {k: v for k, v in sync_metadata.items() if v is not None}
 
         # Update synced document record
         await self.update_synced_document(
@@ -1247,10 +1699,11 @@ class SharePointSyncService:
             content_hash=content_hash,
             sharepoint_modified_at=modified_at,
             sharepoint_modified_by=modified_by,
-            file_size=len(file_content),  # Use actual downloaded size
+            file_size=actual_size,
             sync_status="synced",
             last_synced_at=datetime.utcnow(),
             last_sync_run_id=run_id,
+            sync_metadata=sync_metadata,
         )
 
         await session.flush()
@@ -1328,27 +1781,83 @@ class SharePointSyncService:
         Args:
             session: Database session
             sync_config_id: Sync config UUID
-            delete_assets: If True, also soft-delete the Asset records
+            delete_assets: If True, also delete Asset records and files from storage
 
         Returns:
             Cleanup result with counts
         """
         from .asset_service import asset_service
+        from .minio_service import get_minio_service
+        from .index_service import index_service
+        from sqlalchemy import delete as sql_delete
+        from ..database.models import ExtractionResult, AssetVersion
 
         deleted_docs = await self.get_deleted_documents(session, sync_config_id)
+        minio = get_minio_service()
+
+        # Get organization_id from first doc's asset or config
+        organization_id = None
+        config = await self.get_sync_config(session, sync_config_id)
+        if config:
+            organization_id = config.organization_id
 
         results = {
             "documents_removed": 0,
             "assets_deleted": 0,
+            "files_deleted": 0,
+            "storage_freed_bytes": 0,
         }
 
         for doc in deleted_docs:
-            if delete_assets:
-                # Soft-delete the asset
+            if delete_assets and doc.asset_id:
                 asset = await asset_service.get_asset(session, doc.asset_id)
                 if asset:
-                    asset.status = "deleted"
-                    asset.updated_at = datetime.utcnow()
+                    # Track storage freed
+                    if asset.file_size:
+                        results["storage_freed_bytes"] += asset.file_size
+
+                    # Remove from OpenSearch
+                    if organization_id:
+                        try:
+                            await index_service.delete_asset_index(organization_id, doc.asset_id)
+                        except:
+                            pass
+
+                    # Delete raw file from MinIO
+                    if minio and asset.raw_bucket and asset.raw_object_key:
+                        try:
+                            minio.delete_object(asset.raw_bucket, asset.raw_object_key)
+                            results["files_deleted"] += 1
+                        except:
+                            pass
+
+                    # Delete extracted files
+                    extraction_result = await session.execute(
+                        select(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                    )
+                    extractions = list(extraction_result.scalars().all())
+                    for extraction in extractions:
+                        if minio and extraction.extracted_bucket and extraction.extracted_object_key:
+                            try:
+                                minio.delete_object(extraction.extracted_bucket, extraction.extracted_object_key)
+                                results["files_deleted"] += 1
+                            except:
+                                pass
+
+                    # Delete extraction results
+                    await session.execute(
+                        sql_delete(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                    )
+
+                    # Delete asset versions
+                    await session.execute(
+                        sql_delete(AssetVersion).where(AssetVersion.asset_id == asset.id)
+                    )
+
+                    # Hard delete the asset
+                    await session.execute(
+                        sql_delete(Asset).where(Asset.id == asset.id)
+                    )
                     results["assets_deleted"] += 1
 
             # Remove the synced document record
@@ -1360,7 +1869,413 @@ class SharePointSyncService:
 
         logger.info(
             f"Cleanup completed for sync config {sync_config_id}: "
-            f"docs={results['documents_removed']}, assets={results['assets_deleted']}"
+            f"docs={results['documents_removed']}, assets={results['assets_deleted']}, "
+            f"files={results['files_deleted']}, freed={results['storage_freed_bytes']} bytes"
+        )
+
+        return results
+
+    async def reset_all_synced_assets(
+        self,
+        session: AsyncSession,
+        sync_config_id: UUID,
+    ) -> Dict[str, int]:
+        """
+        Delete ALL synced assets and documents for a sync config.
+
+        Used when making breaking changes (folder_url, connection_id, or recursive: true->false)
+        that would invalidate existing synced data.
+
+        Args:
+            session: Database session
+            sync_config_id: Sync config UUID
+
+        Returns:
+            Reset result with counts:
+            {
+                "documents_removed": int,
+                "assets_deleted": int,
+                "files_deleted": int,
+                "storage_freed_bytes": int,
+            }
+        """
+        from .asset_service import asset_service
+        from .minio_service import get_minio_service
+        from .index_service import index_service
+        from sqlalchemy import delete as sql_delete
+        from ..database.models import ExtractionResult, AssetVersion
+
+        # Get all synced documents (not just deleted ones)
+        docs_result = await session.execute(
+            select(SharePointSyncedDocument).where(
+                SharePointSyncedDocument.sync_config_id == sync_config_id
+            )
+        )
+        all_docs = list(docs_result.scalars().all())
+
+        minio = get_minio_service()
+
+        # Get organization_id from config
+        organization_id = None
+        config = await self.get_sync_config(session, sync_config_id)
+        if config:
+            organization_id = config.organization_id
+
+        results = {
+            "documents_removed": 0,
+            "assets_deleted": 0,
+            "files_deleted": 0,
+            "storage_freed_bytes": 0,
+        }
+
+        for doc in all_docs:
+            if doc.asset_id:
+                asset = await asset_service.get_asset(session, doc.asset_id)
+                if asset:
+                    # Track storage freed
+                    if asset.file_size:
+                        results["storage_freed_bytes"] += asset.file_size
+
+                    # Remove from OpenSearch
+                    if organization_id:
+                        try:
+                            await index_service.delete_asset_index(organization_id, doc.asset_id)
+                        except:
+                            pass
+
+                    # Delete raw file from MinIO
+                    if minio and asset.raw_bucket and asset.raw_object_key:
+                        try:
+                            minio.delete_object(asset.raw_bucket, asset.raw_object_key)
+                            results["files_deleted"] += 1
+                        except:
+                            pass
+
+                    # Delete extracted files
+                    extraction_result = await session.execute(
+                        select(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                    )
+                    extractions = list(extraction_result.scalars().all())
+                    for extraction in extractions:
+                        if minio and extraction.extracted_bucket and extraction.extracted_object_key:
+                            try:
+                                minio.delete_object(extraction.extracted_bucket, extraction.extracted_object_key)
+                                results["files_deleted"] += 1
+                            except:
+                                pass
+
+                    # Delete extraction results
+                    await session.execute(
+                        sql_delete(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                    )
+
+                    # Delete asset versions
+                    await session.execute(
+                        sql_delete(AssetVersion).where(AssetVersion.asset_id == asset.id)
+                    )
+
+                    # Hard delete the asset
+                    await session.execute(
+                        sql_delete(Asset).where(Asset.id == asset.id)
+                    )
+                    results["assets_deleted"] += 1
+
+            # Remove the synced document record
+            await session.delete(doc)
+            results["documents_removed"] += 1
+
+        # Reset sync config stats
+        if config:
+            config.stats = {
+                "total_files": 0,
+                "synced_files": 0,
+                "deleted_count": 0,
+            }
+            config.last_sync_at = None
+            config.last_sync_status = None
+            config.last_sync_run_id = None
+
+        if results["documents_removed"] > 0:
+            await session.flush()
+
+        logger.info(
+            f"Reset completed for sync config {sync_config_id}: "
+            f"docs={results['documents_removed']}, assets={results['assets_deleted']}, "
+            f"files={results['files_deleted']}, freed={results['storage_freed_bytes']} bytes"
+        )
+
+        return results
+
+    async def remove_synced_items(
+        self,
+        session: AsyncSession,
+        sync_config_id: UUID,
+        sharepoint_item_ids: List[str],
+        delete_assets: bool = True,
+    ) -> Dict[str, int]:
+        """
+        Remove specific synced items from a sync config.
+
+        Args:
+            session: Database session
+            sync_config_id: Sync config UUID
+            sharepoint_item_ids: List of SharePoint item IDs to remove
+            delete_assets: If True, also delete Asset records and storage files
+
+        Returns:
+            Dict with counts:
+            {
+                "documents_removed": int,
+                "assets_deleted": int,
+                "files_deleted": int,
+            }
+        """
+        from .asset_service import asset_service
+        from .minio_service import get_minio_service
+        from .index_service import index_service
+        from sqlalchemy import delete as sql_delete
+        from ..database.models import ExtractionResult, AssetVersion
+
+        # Get documents matching the item IDs
+        docs_result = await session.execute(
+            select(SharePointSyncedDocument).where(
+                SharePointSyncedDocument.sync_config_id == sync_config_id,
+                SharePointSyncedDocument.sharepoint_item_id.in_(sharepoint_item_ids),
+            )
+        )
+        docs_to_remove = list(docs_result.scalars().all())
+
+        if not docs_to_remove:
+            return {
+                "documents_removed": 0,
+                "assets_deleted": 0,
+                "files_deleted": 0,
+            }
+
+        minio = get_minio_service()
+
+        # Get organization_id from config
+        config = await self.get_sync_config(session, sync_config_id)
+        organization_id = config.organization_id if config else None
+
+        results = {
+            "documents_removed": 0,
+            "assets_deleted": 0,
+            "files_deleted": 0,
+        }
+
+        for doc in docs_to_remove:
+            if delete_assets and doc.asset_id:
+                asset = await asset_service.get_asset(session, doc.asset_id)
+                if asset:
+                    # Remove from OpenSearch
+                    if organization_id:
+                        try:
+                            await index_service.delete_asset_index(organization_id, doc.asset_id)
+                        except:
+                            pass
+
+                    # Delete raw file from MinIO
+                    if minio and asset.raw_bucket and asset.raw_object_key:
+                        try:
+                            minio.delete_object(asset.raw_bucket, asset.raw_object_key)
+                            results["files_deleted"] += 1
+                        except:
+                            pass
+
+                    # Delete extracted files
+                    extraction_result = await session.execute(
+                        select(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                    )
+                    extractions = list(extraction_result.scalars().all())
+                    for extraction in extractions:
+                        if minio and extraction.extracted_bucket and extraction.extracted_object_key:
+                            try:
+                                minio.delete_object(extraction.extracted_bucket, extraction.extracted_object_key)
+                                results["files_deleted"] += 1
+                            except:
+                                pass
+
+                    # Delete extraction results
+                    await session.execute(
+                        sql_delete(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                    )
+
+                    # Delete asset versions
+                    await session.execute(
+                        sql_delete(AssetVersion).where(AssetVersion.asset_id == asset.id)
+                    )
+
+                    # Hard delete the asset
+                    await session.execute(
+                        sql_delete(Asset).where(Asset.id == asset.id)
+                    )
+                    results["assets_deleted"] += 1
+
+            # Remove the synced document record
+            await session.delete(doc)
+            results["documents_removed"] += 1
+
+        if results["documents_removed"] > 0:
+            await session.commit()
+
+        logger.info(
+            f"Removed {results['documents_removed']} items from sync config {sync_config_id}: "
+            f"assets={results['assets_deleted']}, files={results['files_deleted']}"
+        )
+
+        return results
+
+    async def cleanup_orphan_sharepoint_assets(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        delete_files: bool = True,
+    ) -> Dict[str, Any]:
+        """
+        Clean up orphan SharePoint assets.
+
+        Finds and deletes SharePoint assets that:
+        - Have source_type='sharepoint'
+        - Have a sync_config_id that no longer exists or is archived
+        - OR have no sync_config_id at all
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            delete_files: If True, delete files from MinIO (default True)
+
+        Returns:
+            Dict with cleanup statistics
+        """
+        from .asset_service import asset_service
+        from .minio_service import get_minio_service
+        from .index_service import index_service
+        from sqlalchemy import delete as sql_delete
+        from sqlalchemy.orm import load_only
+        from ..database.models import Asset, ExtractionResult, AssetVersion
+
+        minio = get_minio_service() if delete_files else None
+
+        results = {
+            "orphan_assets_found": 0,
+            "assets_deleted": 0,
+            "files_deleted": 0,
+            "storage_freed_bytes": 0,
+            "opensearch_removed": 0,
+            "errors": [],
+        }
+
+        # Get all SharePoint assets for this organization
+        assets_result = await session.execute(
+            select(Asset).where(
+                and_(
+                    Asset.organization_id == organization_id,
+                    Asset.source_type == "sharepoint",
+                    Asset.status != "deleted",
+                )
+            )
+        )
+        sharepoint_assets = list(assets_result.scalars().all())
+
+        # Get all active (non-archived) sync config IDs
+        configs_result = await session.execute(
+            select(SharePointSyncConfig.id).where(
+                and_(
+                    SharePointSyncConfig.organization_id == organization_id,
+                    SharePointSyncConfig.status != "archived",
+                )
+            )
+        )
+        active_config_ids = {str(c) for c in configs_result.scalars().all()}
+
+        # Find orphan assets
+        orphan_assets = []
+        for asset in sharepoint_assets:
+            source_meta = asset.source_metadata or {}
+            sync_config_id = source_meta.get("sync_config_id")
+
+            # Asset is orphan if:
+            # 1. No sync_config_id at all
+            # 2. sync_config_id doesn't exist in active configs
+            if not sync_config_id or sync_config_id not in active_config_ids:
+                orphan_assets.append(asset)
+
+        results["orphan_assets_found"] = len(orphan_assets)
+
+        if not orphan_assets:
+            logger.info(f"No orphan SharePoint assets found for org {organization_id}")
+            return results
+
+        logger.info(f"Found {len(orphan_assets)} orphan SharePoint assets for org {organization_id}")
+
+        # Delete orphan assets
+        for asset in orphan_assets:
+            try:
+                # Track storage freed
+                if asset.file_size:
+                    results["storage_freed_bytes"] += asset.file_size
+
+                # Remove from OpenSearch
+                try:
+                    await index_service.delete_asset_index(organization_id, asset.id)
+                    results["opensearch_removed"] += 1
+                except Exception as e:
+                    results["errors"].append(f"OpenSearch removal failed for {asset.id}: {e}")
+
+                # Delete raw file from MinIO
+                if minio and asset.raw_bucket and asset.raw_object_key:
+                    try:
+                        minio.delete_object(asset.raw_bucket, asset.raw_object_key)
+                        results["files_deleted"] += 1
+                    except Exception as e:
+                        results["errors"].append(f"Raw file deletion failed for {asset.id}: {e}")
+
+                # Delete extracted files
+                extraction_result = await session.execute(
+                    select(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                )
+                extractions = list(extraction_result.scalars().all())
+                for extraction in extractions:
+                    if minio and extraction.extracted_bucket and extraction.extracted_object_key:
+                        try:
+                            minio.delete_object(extraction.extracted_bucket, extraction.extracted_object_key)
+                            results["files_deleted"] += 1
+                        except:
+                            pass
+
+                # Delete extraction results
+                await session.execute(
+                    sql_delete(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                )
+
+                # Delete asset versions
+                await session.execute(
+                    sql_delete(AssetVersion).where(AssetVersion.asset_id == asset.id)
+                )
+
+                # Delete any orphan synced document records
+                await session.execute(
+                    sql_delete(SharePointSyncedDocument).where(
+                        SharePointSyncedDocument.asset_id == asset.id
+                    )
+                )
+
+                # Hard delete the asset
+                await session.execute(
+                    sql_delete(Asset).where(Asset.id == asset.id)
+                )
+                results["assets_deleted"] += 1
+
+            except Exception as e:
+                results["errors"].append(f"Failed to delete asset {asset.id}: {e}")
+
+        await session.commit()
+
+        logger.info(
+            f"Orphan SharePoint asset cleanup for org {organization_id}: "
+            f"found={results['orphan_assets_found']}, deleted={results['assets_deleted']}, "
+            f"files={results['files_deleted']}, freed={results['storage_freed_bytes']} bytes"
         )
 
         return results

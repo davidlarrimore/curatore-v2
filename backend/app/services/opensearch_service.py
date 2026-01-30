@@ -332,9 +332,38 @@ class OpenSearchService:
                             "url": {"type": "keyword"},
                             "collection_id": {"type": "keyword"},
                             "sync_config_id": {"type": "keyword"},
-                            "metadata": {"type": "object", "enabled": False},
+                            # File metadata for filtering
+                            "file_extension": {"type": "keyword"},
+                            "file_size": {"type": "long"},
+                            # Dates for filtering and sorting
                             "created_at": {"type": "date"},
                             "updated_at": {"type": "date"},
+                            "file_created_at": {"type": "date"},
+                            "file_modified_at": {"type": "date"},
+                            # People fields for filtering (searchable + keyword)
+                            "created_by": {
+                                "type": "text",
+                                "fields": {"keyword": {"type": "keyword"}},
+                            },
+                            "created_by_email": {"type": "keyword"},
+                            "modified_by": {
+                                "type": "text",
+                                "fields": {"keyword": {"type": "keyword"}},
+                            },
+                            "modified_by_email": {"type": "keyword"},
+                            # SharePoint-specific fields
+                            "sharepoint_path": {
+                                "type": "text",
+                                "fields": {"keyword": {"type": "keyword"}},
+                            },
+                            "sharepoint_folder": {"type": "keyword"},
+                            # Description field (searchable)
+                            "description": {
+                                "type": "text",
+                                "analyzer": "content_analyzer",
+                            },
+                            # Flexible metadata storage (disabled for indexing)
+                            "metadata": {"type": "object", "enabled": False},
                         }
                     },
                 },
@@ -361,6 +390,18 @@ class OpenSearchService:
         sync_config_id: Optional[UUID] = None,
         metadata: Optional[Dict[str, Any]] = None,
         created_at: Optional[datetime] = None,
+        # Enhanced metadata fields
+        file_extension: Optional[str] = None,
+        file_size: Optional[int] = None,
+        file_created_at: Optional[datetime] = None,
+        file_modified_at: Optional[datetime] = None,
+        created_by: Optional[str] = None,
+        created_by_email: Optional[str] = None,
+        modified_by: Optional[str] = None,
+        modified_by_email: Optional[str] = None,
+        sharepoint_path: Optional[str] = None,
+        sharepoint_folder: Optional[str] = None,
+        description: Optional[str] = None,
     ) -> bool:
         """
         Index or update a document.
@@ -378,6 +419,17 @@ class OpenSearchService:
             sync_config_id: SharePoint sync config ID (optional)
             metadata: Additional metadata to store (optional)
             created_at: Creation timestamp (optional)
+            file_extension: File extension for filtering (optional)
+            file_size: File size in bytes (optional)
+            file_created_at: Original file creation date (optional)
+            file_modified_at: Original file modification date (optional)
+            created_by: Creator display name (optional)
+            created_by_email: Creator email (optional)
+            modified_by: Last modifier display name (optional)
+            modified_by_email: Last modifier email (optional)
+            sharepoint_path: SharePoint relative path (optional)
+            sharepoint_folder: SharePoint folder name (optional)
+            description: File description (optional)
 
         Returns:
             True if indexed successfully, False otherwise
@@ -400,7 +452,7 @@ class OpenSearchService:
                     f"Content truncated to {max_length} chars for asset {asset_id}"
                 )
 
-            # Build document
+            # Build document with all available metadata
             doc = {
                 "asset_id": str(asset_id),
                 "title": title,
@@ -414,7 +466,22 @@ class OpenSearchService:
                 "metadata": metadata or {},
                 "created_at": (created_at or datetime.utcnow()).isoformat(),
                 "updated_at": datetime.utcnow().isoformat(),
+                # Enhanced metadata fields
+                "file_extension": file_extension,
+                "file_size": file_size,
+                "file_created_at": file_created_at.isoformat() if file_created_at else None,
+                "file_modified_at": file_modified_at.isoformat() if file_modified_at else None,
+                "created_by": created_by,
+                "created_by_email": created_by_email,
+                "modified_by": modified_by,
+                "modified_by_email": modified_by_email,
+                "sharepoint_path": sharepoint_path,
+                "sharepoint_folder": sharepoint_folder,
+                "description": description,
             }
+
+            # Remove None values to keep index clean
+            doc = {k: v for k, v in doc.items() if v is not None}
 
             # Index document (upsert)
             self._client.index(

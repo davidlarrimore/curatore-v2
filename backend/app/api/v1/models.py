@@ -1227,8 +1227,8 @@ class AssetVersionHistoryResponse(BaseModel):
 
 class RunLogEventResponse(BaseModel):
     """Run log event response model."""
-    id: str = Field(..., description="Log event UUID")
-    run_id: str = Field(..., description="Run UUID")
+    id: UUID = Field(..., description="Log event UUID")
+    run_id: UUID = Field(..., description="Run UUID")
     level: str = Field(..., description="Log level (INFO, WARN, ERROR)")
     event_type: str = Field(..., description="Event type (start, progress, retry, error, summary)")
     message: str = Field(..., description="Human-readable message")
@@ -1701,6 +1701,7 @@ class SharePointSyncConfigResponse(BaseModel):
     id: str = Field(..., description="Sync config UUID")
     organization_id: str = Field(..., description="Organization UUID")
     connection_id: Optional[str] = Field(None, description="SharePoint connection UUID")
+    connection_name: Optional[str] = Field(None, description="SharePoint connection name")
     name: str = Field(..., description="Sync config name")
     slug: str = Field(..., description="URL-friendly slug")
     description: Optional[str] = Field(None, description="Description")
@@ -1786,22 +1787,38 @@ class SharePointSyncConfigCreateRequest(BaseModel):
 
 
 class SharePointSyncConfigUpdateRequest(BaseModel):
-    """Request to update a SharePoint sync config."""
+    """Request to update a SharePoint sync config.
+
+    Safe changes (no asset impact):
+    - name, description, sync_frequency, is_active, status
+    - sync_config.include_patterns, sync_config.exclude_patterns (affects future syncs only)
+    - sync_config.recursive: false -> true (only adds more files)
+
+    Breaking changes (require reset_existing_assets=True):
+    - sync_config.recursive: true -> false (would orphan subfolder assets)
+
+    Cannot be changed (create a new sync config instead):
+    - folder_url
+    - connection_id
+    """
     name: Optional[str] = Field(None, min_length=1, max_length=255, description="Sync config name")
     description: Optional[str] = Field(None, max_length=2000, description="Description")
-    connection_id: Optional[str] = Field(None, description="SharePoint connection UUID")
-    folder_url: Optional[str] = Field(None, max_length=2048, description="SharePoint folder URL")
-    sync_config: Optional[Dict[str, Any]] = Field(None, description="Sync configuration")
+    sync_config: Optional[Dict[str, Any]] = Field(None, description="Sync configuration (recursive, include_patterns, exclude_patterns)")
     status: Optional[str] = Field(None, description="Status: active, paused, archived")
     is_active: Optional[bool] = Field(None, description="Whether sync is enabled")
-    sync_frequency: Optional[str] = Field(None, description="Sync frequency")
+    sync_frequency: Optional[str] = Field(None, description="Sync frequency: manual, hourly, daily")
+    reset_existing_assets: bool = Field(
+        default=False,
+        description="If True, delete all existing synced assets when disabling recursive mode"
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "name": "Updated Name",
-                "sync_config": {"recursive": False},
-                "status": "paused"
+                "sync_frequency": "daily",
+                "sync_config": {"exclude_patterns": ["~$*", "*.tmp"]},
+                "reset_existing_assets": False
             }
         }
 
@@ -1962,12 +1979,20 @@ class SharePointBrowseFolderResponse(BaseModel):
 
 
 class SharePointImportRequest(BaseModel):
-    """Request to import selected files from SharePoint."""
+    """Request to import selected files from SharePoint.
+
+    For new sync configs: set create_sync_config=True and provide sync_config_name.
+    For existing sync configs: set sync_config_id to add files to an existing config.
+    """
     connection_id: Optional[str] = Field(None, description="SharePoint connection UUID")
     folder_url: str = Field(..., min_length=1, max_length=2048, description="SharePoint folder URL")
     selected_items: List[Dict[str, Any]] = Field(
         ...,
         description="List of items to import with their IDs and paths"
+    )
+    sync_config_id: Optional[str] = Field(
+        None,
+        description="Existing sync config UUID to add files to"
     )
     sync_config_name: Optional[str] = Field(
         None,
@@ -1983,6 +2008,10 @@ class SharePointImportRequest(BaseModel):
         default=True,
         description="Whether to create a sync config for ongoing sync"
     )
+    sync_frequency: str = Field(
+        default="manual",
+        description="Sync frequency: manual, hourly, daily"
+    )
 
     class Config:
         json_schema_extra = {
@@ -1993,7 +2022,8 @@ class SharePointImportRequest(BaseModel):
                     {"id": "file2", "name": "guideline.docx", "folder": "Guidelines"}
                 ],
                 "sync_config_name": "IT Policies Import",
-                "create_sync_config": True
+                "create_sync_config": True,
+                "sync_frequency": "daily"
             }
         }
 
@@ -2047,5 +2077,43 @@ class SharePointCleanupResponse(BaseModel):
                 "documents_removed": 3,
                 "assets_deleted": 0,
                 "message": "Cleaned up 3 deleted documents"
+            }
+        }
+
+
+class SharePointRemoveItemsRequest(BaseModel):
+    """Request to remove specific synced items from a sync config."""
+    item_ids: List[str] = Field(
+        ...,
+        description="List of SharePoint item IDs to remove"
+    )
+    delete_assets: bool = Field(
+        default=True,
+        description="If true, also soft-delete the associated Asset records"
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "item_ids": ["01ABCDEF123456", "01ABCDEF789012"],
+                "delete_assets": True
+            }
+        }
+
+
+class SharePointRemoveItemsResponse(BaseModel):
+    """Response from remove items operation."""
+    sync_config_id: str = Field(..., description="Sync config UUID")
+    documents_removed: int = Field(..., description="Number of document records removed")
+    assets_deleted: int = Field(..., description="Number of assets soft-deleted")
+    message: str = Field(..., description="Status message")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "sync_config_id": "123e4567-e89b-12d3-a456-426614174000",
+                "documents_removed": 2,
+                "assets_deleted": 2,
+                "message": "Removed 2 items"
             }
         }

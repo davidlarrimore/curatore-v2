@@ -130,13 +130,11 @@ export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabPr
 
     setActionLoading(task.id)
     try {
-      const result = await scheduledTasksApi.triggerTask(token, task.id)
-      alert(`Task triggered successfully. Run ID: ${result.run_id.slice(0, 8)}...`)
+      await scheduledTasksApi.triggerTask(token, task.id)
       await loadData()
-      // Refresh runs for this task
-      if (expandedTask === task.id) {
-        await loadTaskRuns(task.id)
-      }
+      // Refresh runs for this task and expand to show the new run
+      setExpandedTask(task.id)
+      await loadTaskRuns(task.id)
     } catch (err: any) {
       console.error('Failed to trigger task:', err)
       onError?.(err.message || 'Failed to trigger task')

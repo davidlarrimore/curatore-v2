@@ -252,6 +252,26 @@ async def seed_scheduled_tasks() -> list:
                 "dry_run": False,
             },
         },
+        {
+            "name": "sharepoint_sync_hourly",
+            "display_name": "SharePoint Sync (Hourly)",
+            "description": "Trigger SharePoint syncs for all configs with 'hourly' frequency.",
+            "task_type": "sharepoint.scheduled_sync",
+            "scope_type": "global",
+            "schedule_expression": "0 * * * *",  # Every hour at minute 0
+            "enabled": True,
+            "config": {"frequency": "hourly"},
+        },
+        {
+            "name": "sharepoint_sync_daily",
+            "display_name": "SharePoint Sync (Daily)",
+            "description": "Trigger SharePoint syncs for all configs with 'daily' frequency.",
+            "task_type": "sharepoint.scheduled_sync",
+            "scope_type": "global",
+            "schedule_expression": "0 1 * * *",  # Daily at 1 AM UTC
+            "enabled": True,
+            "config": {"frequency": "daily"},
+        },
     ]
 
     created_tasks = []

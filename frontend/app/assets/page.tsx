@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
+import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { assetsApi, type CollectionHealth } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
@@ -546,9 +547,19 @@ function AssetsContent() {
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <div className="flex items-center gap-2">
-                              <div className="text-sm text-gray-900 dark:text-white capitalize">
-                                {asset.source_type.replace('_', ' ')}
-                              </div>
+                              {asset.source_type === 'sharepoint' && asset.source_metadata?.sync_config_id ? (
+                                <Link
+                                  href={`/sharepoint-sync/${asset.source_metadata.sync_config_id}`}
+                                  className="text-sm text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 hover:underline"
+                                  onClick={(e) => e.stopPropagation()}
+                                >
+                                  SharePoint
+                                </Link>
+                              ) : (
+                                <div className="text-sm text-gray-900 dark:text-white capitalize">
+                                  {asset.source_type.replace('_', ' ')}
+                                </div>
+                              )}
                             </div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">

@@ -24,7 +24,7 @@ from uuid import UUID
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from sqlalchemy import select, desc, func
 
-from app.database.models import Run, SharePointSyncConfig, SharePointSyncedDocument, Asset, User
+from app.database.models import Run, SharePointSyncConfig, SharePointSyncedDocument, Asset, User, Connection
 from app.dependencies import get_current_user, require_org_admin
 from app.services.database_service import database_service
 from app.services.sharepoint_sync_service import sharepoint_sync_service
@@ -46,6 +46,8 @@ from ..models import (
     SharePointImportResponse,
     SharePointCleanupRequest,
     SharePointCleanupResponse,
+    SharePointRemoveItemsRequest,
+    SharePointRemoveItemsResponse,
     RunResponse,
 )
 
@@ -65,6 +67,7 @@ def _config_to_response(
     is_syncing: bool = False,
     current_sync_status: Optional[str] = None,
     storage_stats: Optional[Dict[str, Any]] = None,
+    connection_name: Optional[str] = None,
 ) -> SharePointSyncConfigResponse:
     """Convert SharePointSyncConfig model to response."""
     # Merge storage_stats into stats if provided
@@ -76,6 +79,7 @@ def _config_to_response(
         id=str(config.id),
         organization_id=str(config.organization_id),
         connection_id=str(config.connection_id) if config.connection_id else None,
+        connection_name=connection_name,
         name=config.name,
         slug=config.slug,
         description=config.description,
@@ -136,6 +140,17 @@ async def _get_storage_stats(session, config_id: UUID) -> Dict[str, Any]:
     }
 
 
+async def _get_connection_name(session, connection_id: Optional[UUID]) -> Optional[str]:
+    """Get connection name by ID."""
+    if not connection_id:
+        return None
+    result = await session.execute(
+        select(Connection.name).where(Connection.id == connection_id)
+    )
+    row = result.scalar_one_or_none()
+    return row
+
+
 def _doc_to_response(
     doc: SharePointSyncedDocument,
     asset: Optional[Asset] = None,
@@ -169,12 +184,13 @@ def _doc_to_response(
 
 
 async def _check_active_sync(session, config_id: UUID) -> tuple[bool, Optional[str]]:
-    """Check if a sync is currently running for this config."""
+    """Check if a sync or import is currently running for this config."""
     # Use json_extract for SQLite compatibility
+    # Check both sharepoint_sync and sharepoint_import run types
     result = await session.execute(
         select(Run).where(
             func.json_extract(Run.config, "$.sync_config_id") == str(config_id),
-            Run.run_type == "sharepoint_sync",
+            Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
             Run.status.in_(["pending", "running"]),
         ).order_by(desc(Run.created_at)).limit(1)
     )
@@ -226,17 +242,20 @@ async def create_sync_config(
 ):
     """Create a new SharePoint sync config."""
     async with database_service.get_session() as session:
-        config = await sharepoint_sync_service.create_sync_config(
-            session=session,
-            organization_id=current_user.organization_id,
-            connection_id=UUID(request.connection_id) if request.connection_id else None,
-            name=request.name,
-            folder_url=request.folder_url,
-            description=request.description,
-            sync_config=request.sync_config,
-            sync_frequency=request.sync_frequency,
-            created_by=current_user.id,
-        )
+        try:
+            config = await sharepoint_sync_service.create_sync_config(
+                session=session,
+                organization_id=current_user.organization_id,
+                connection_id=UUID(request.connection_id) if request.connection_id else None,
+                name=request.name,
+                folder_url=request.folder_url,
+                description=request.description,
+                sync_config=request.sync_config,
+                sync_frequency=request.sync_frequency,
+                created_by=current_user.id,
+            )
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
 
         logger.info(f"Created SharePoint sync config {config.id} by user {current_user.id}")
 
@@ -260,8 +279,9 @@ async def get_sync_config(
 
         is_syncing, sync_status = await _check_active_sync(session, config.id)
         storage_stats = await _get_storage_stats(session, config.id)
+        connection_name = await _get_connection_name(session, config.connection_id)
 
-        return _config_to_response(config, is_syncing, sync_status, storage_stats)
+        return _config_to_response(config, is_syncing, sync_status, storage_stats, connection_name)
 
 
 @router.patch("/configs/{config_id}", response_model=SharePointSyncConfigResponse)
@@ -270,7 +290,22 @@ async def update_sync_config(
     request: SharePointSyncConfigUpdateRequest,
     current_user: User = Depends(require_org_admin),
 ):
-    """Update a SharePoint sync config."""
+    """
+    Update a SharePoint sync config.
+
+    Safe changes (no asset impact):
+    - name, description, sync_frequency, is_active, status
+    - sync_config.include_patterns, sync_config.exclude_patterns (affects future syncs only)
+    - sync_config.recursive: false -> true (only adds more files)
+
+    Breaking changes (require reset_existing_assets=True):
+    - folder_url (different folder = different files)
+    - connection_id (could be different SharePoint tenant)
+    - sync_config.recursive: true -> false (would orphan subfolder assets)
+
+    When reset_existing_assets=True is provided with breaking changes,
+    all existing synced assets will be deleted before applying the update.
+    """
     async with database_service.get_session() as session:
         config = await sharepoint_sync_service.get_sync_config(session, config_id)
 
@@ -280,18 +315,84 @@ async def update_sync_config(
         if config.organization_id != current_user.organization_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
+        # Check if sync is currently running
+        is_syncing, _ = await _check_active_sync(session, config.id)
+        if is_syncing:
+            raise HTTPException(
+                status_code=409,
+                detail="Cannot update while sync is in progress. Cancel the sync first."
+            )
+
+        # Reject folder_url changes - user must create a new sync config for a different folder
+        if request.folder_url is not None and request.folder_url != config.folder_url:
+            raise HTTPException(
+                status_code=400,
+                detail="Cannot change folder URL. To sync a different folder, create a new sync configuration."
+            )
+
+        # Reject connection_id changes - fundamental to the sync config
+        if request.connection_id is not None:
+            current_conn_id = str(config.connection_id) if config.connection_id else None
+            if request.connection_id != current_conn_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Cannot change connection. To use a different connection, create a new sync configuration."
+                )
+
+        # Detect breaking changes (only recursive: true -> false now)
+        breaking_changes = []
+
+        if request.sync_config is not None:
+            current_recursive = (config.sync_config or {}).get("recursive", True)
+            new_recursive = request.sync_config.get("recursive", current_recursive)
+            if current_recursive and not new_recursive:
+                breaking_changes.append("recursive: true -> false (would orphan subfolder assets)")
+
+        # Check if breaking changes require reset
+        if breaking_changes:
+            # Check if there are existing synced documents
+            docs_result = await session.execute(
+                select(func.count(SharePointSyncedDocument.id)).where(
+                    SharePointSyncedDocument.sync_config_id == config_id
+                )
+            )
+            doc_count = docs_result.scalar() or 0
+
+            if doc_count > 0 and not request.reset_existing_assets:
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "Breaking changes detected",
+                        "message": f"This update would invalidate {doc_count} existing synced assets. "
+                                   f"Set reset_existing_assets=true to delete all existing assets and proceed.",
+                        "breaking_changes": breaking_changes,
+                        "existing_assets": doc_count,
+                    }
+                )
+
+            # If reset is requested or no existing docs, proceed
+            if doc_count > 0 and request.reset_existing_assets:
+                logger.info(
+                    f"Resetting {doc_count} assets for sync config {config_id} due to breaking changes: "
+                    f"{breaking_changes}"
+                )
+                reset_result = await sharepoint_sync_service.reset_all_synced_assets(
+                    session=session,
+                    sync_config_id=config_id,
+                )
+                logger.info(f"Reset result: {reset_result}")
+
         # Build update dict from non-None fields
+        # Note: folder_url and connection_id cannot be changed (rejected above)
         updates = {}
         if request.name is not None:
             updates["name"] = request.name
         if request.description is not None:
             updates["description"] = request.description
-        if request.connection_id is not None:
-            updates["connection_id"] = UUID(request.connection_id) if request.connection_id else None
-        if request.folder_url is not None:
-            updates["folder_url"] = request.folder_url
         if request.sync_config is not None:
-            updates["sync_config"] = request.sync_config
+            # Merge with existing sync_config to preserve other settings
+            merged_sync_config = {**(config.sync_config or {}), **request.sync_config}
+            updates["sync_config"] = merged_sync_config
         if request.status is not None:
             updates["status"] = request.status
         if request.is_active is not None:
@@ -308,7 +409,8 @@ async def update_sync_config(
         logger.info(f"Updated SharePoint sync config {config_id} by user {current_user.id}")
 
         is_syncing, sync_status = await _check_active_sync(session, config.id)
-        return _config_to_response(updated, is_syncing, sync_status)
+        storage_stats = await _get_storage_stats(session, config.id)
+        return _config_to_response(updated, is_syncing, sync_status, storage_stats)
 
 
 @router.post("/configs/{config_id}/archive")
@@ -507,6 +609,55 @@ async def trigger_sync(
         )
 
 
+@router.post("/configs/{config_id}/cancel-stuck")
+async def cancel_stuck_runs(
+    config_id: UUID,
+    current_user: User = Depends(require_org_admin),
+):
+    """
+    Cancel any stuck pending/running runs for this sync config.
+
+    Use this endpoint when a sync appears stuck and you want to reset the state
+    to allow a new sync to be triggered.
+    """
+    async with database_service.get_session() as session:
+        config = await sharepoint_sync_service.get_sync_config(session, config_id)
+
+        if not config:
+            raise HTTPException(status_code=404, detail="Sync config not found")
+
+        if config.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Find and cancel stuck runs
+        result = await session.execute(
+            select(Run).where(
+                func.json_extract(Run.config, "$.sync_config_id") == str(config_id),
+                Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
+                Run.status.in_(["pending", "running"]),
+            )
+        )
+        stuck_runs = list(result.scalars().all())
+
+        cancelled_count = 0
+        for run in stuck_runs:
+            run.status = "cancelled"
+            run.error_message = "Manually cancelled by admin - run was stuck"
+            cancelled_count += 1
+
+        await session.commit()
+
+        logger.info(
+            f"Cancelled {cancelled_count} stuck runs for config {config_id} by user {current_user.id}"
+        )
+
+        return {
+            "message": f"Cancelled {cancelled_count} stuck runs",
+            "cancelled_count": cancelled_count,
+            "run_ids": [str(r.id) for r in stuck_runs],
+        }
+
+
 @router.get("/configs/{config_id}/history", response_model=SharePointSyncHistoryResponse)
 async def get_sync_history(
     config_id: UUID,
@@ -525,9 +676,10 @@ async def get_sync_history(
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Get runs for this config (use json_extract for SQLite compatibility)
+        # Include both sharepoint_sync and sharepoint_import runs
         result = await session.execute(
             select(Run).where(
-                Run.run_type == "sharepoint_sync",
+                Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
                 func.json_extract(Run.config, "$.sync_config_id") == str(config_id),
             ).order_by(desc(Run.created_at)).limit(limit).offset(offset)
         )
@@ -536,7 +688,7 @@ async def get_sync_history(
         # Get total count
         count_result = await session.execute(
             select(func.count(Run.id)).where(
-                Run.run_type == "sharepoint_sync",
+                Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
                 func.json_extract(Run.config, "$.sync_config_id") == str(config_id),
             )
         )
@@ -648,6 +800,63 @@ async def cleanup_deleted_documents(
         )
 
 
+@router.post(
+    "/configs/{config_id}/remove-items",
+    response_model=SharePointRemoveItemsResponse
+)
+async def remove_synced_items(
+    config_id: UUID,
+    request: SharePointRemoveItemsRequest,
+    current_user: User = Depends(require_org_admin),
+):
+    """
+    Remove specific synced items from a sync config.
+
+    This will:
+    - Delete the SharePointSyncedDocument records
+    - Optionally delete the associated Asset records and files
+
+    Args:
+        config_id: Sync config UUID
+        request: Request containing item_ids and delete_assets flag
+    """
+    async with database_service.get_session() as session:
+        config = await sharepoint_sync_service.get_sync_config(session, config_id)
+
+        if not config:
+            raise HTTPException(status_code=404, detail="Sync config not found")
+
+        if config.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        if not request.item_ids:
+            return SharePointRemoveItemsResponse(
+                sync_config_id=str(config_id),
+                documents_removed=0,
+                assets_deleted=0,
+                message="No items specified for removal",
+            )
+
+        result = await sharepoint_sync_service.remove_synced_items(
+            session=session,
+            sync_config_id=config_id,
+            sharepoint_item_ids=request.item_ids,
+            delete_assets=request.delete_assets,
+        )
+
+        logger.info(
+            f"Removed {result['documents_removed']} items from config {config_id} "
+            f"(assets_deleted={result['assets_deleted']})"
+        )
+
+        return SharePointRemoveItemsResponse(
+            sync_config_id=str(config_id),
+            documents_removed=result["documents_removed"],
+            assets_deleted=result["assets_deleted"],
+            message=f"Removed {result['documents_removed']} items",
+        )
+
+
 # =========================================================================
 # BROWSE AND IMPORT ENDPOINTS (Wizard Support)
 # =========================================================================
@@ -696,29 +905,49 @@ async def import_sharepoint_files(
     request: SharePointImportRequest,
     current_user: User = Depends(get_current_user),
 ):
-    """Import selected files from SharePoint."""
+    """Import selected files from SharePoint.
+
+    Can either:
+    - Create a new sync config (create_sync_config=True with sync_config_name)
+    - Add to an existing sync config (sync_config_id provided)
+    - Import without any sync config (create_sync_config=False and no sync_config_id)
+    """
     async with database_service.get_session() as session:
         sync_config_id = None
 
-        # Create sync config if requested
-        if request.create_sync_config and request.sync_config_name:
+        # Use existing sync config if provided
+        if request.sync_config_id:
+            config = await sharepoint_sync_service.get_sync_config(
+                session, UUID(request.sync_config_id)
+            )
+            if not config:
+                raise HTTPException(status_code=404, detail="Sync config not found")
+            if config.organization_id != current_user.organization_id:
+                raise HTTPException(status_code=403, detail="Access denied")
+            sync_config_id = request.sync_config_id
+
+        # Create new sync config if requested (and no existing config specified)
+        elif request.create_sync_config and request.sync_config_name:
             # Default to recursive=True for future syncs, with standard exclude patterns
             default_sync_config = {
                 "recursive": True,
                 "exclude_patterns": ["~$*", "*.tmp"],
             }
-            config = await sharepoint_sync_service.create_sync_config(
-                session=session,
-                organization_id=current_user.organization_id,
-                connection_id=UUID(request.connection_id) if request.connection_id else None,
-                name=request.sync_config_name,
-                folder_url=request.folder_url,
-                description=request.sync_config_description,
-                sync_config=default_sync_config,
-                sync_frequency="manual",
-                created_by=current_user.id,
-            )
-            sync_config_id = str(config.id)
+            try:
+                config = await sharepoint_sync_service.create_sync_config(
+                    session=session,
+                    organization_id=current_user.organization_id,
+                    connection_id=UUID(request.connection_id) if request.connection_id else None,
+                    name=request.sync_config_name,
+                    folder_url=request.folder_url,
+                    description=request.sync_config_description,
+                    sync_config=default_sync_config,
+                    sync_frequency=request.sync_frequency,
+                    created_by=current_user.id,
+                )
+                sync_config_id = str(config.id)
+            except ValueError as e:
+                raise HTTPException(status_code=400, detail=str(e))
 
         # Create run for tracking
         run = await run_service.create_run(

@@ -39,6 +39,9 @@ from ..database.models import (
     Run,
     RunLogEvent,
     Organization,
+    SharePointSyncConfig,
+    SharePointSyncedDocument,
+    AssetVersion,
 )
 
 logger = logging.getLogger("curatore.services.maintenance")
@@ -316,6 +319,7 @@ async def handle_orphan_detection(
 
         # 4. Find assets with missing raw files in object storage
         # These are assets that reference files that don't exist in MinIO/S3
+        # Check ALL non-deleted assets (ready, pending, failed) to catch missing files
         missing_file_assets = 0
         missing_file_fixed = 0
         details["missing_file_asset_ids"] = []
@@ -324,26 +328,18 @@ async def handle_orphan_detection(
             from .minio_service import get_minio_service
             minio_service = get_minio_service()
 
-            # Check failed assets that might have missing files
-            # Also check pending assets older than 1 hour (they might have failed uploads)
-            check_cutoff = datetime.utcnow() - timedelta(hours=1)
-
+            # Check all assets that have storage references and aren't deleted
+            # Include "ready" assets to catch files that were deleted after extraction
             assets_to_check_result = await session.execute(
                 select(Asset)
                 .where(
                     and_(
                         Asset.raw_bucket.isnot(None),
                         Asset.raw_object_key.isnot(None),
-                        or_(
-                            Asset.status == "failed",
-                            and_(
-                                Asset.status == "pending",
-                                Asset.created_at < check_cutoff,
-                            ),
-                        ),
+                        Asset.status.in_(["ready", "pending", "failed"]),
                     )
                 )
-                .limit(500)  # Process up to 500 assets per run
+                .limit(1000)  # Process up to 1000 assets per run
             )
             assets_to_check = list(assets_to_check_result.scalars().all())
 
@@ -392,7 +388,131 @@ async def handle_orphan_detection(
                 f"Missing file check skipped: {str(e)}",
             )
 
-        # 5. Find orphaned artifacts (documents that no longer exist)
+        # 5. Find and clean up orphan SharePoint assets
+        # These are assets with source_type='sharepoint' but their sync_config_id
+        # no longer exists or is archived
+        orphan_sharepoint_assets = 0
+        orphan_sharepoint_fixed = 0
+        details["orphan_sharepoint_asset_ids"] = []
+
+        try:
+            # Get all active (non-archived) sync config IDs
+            configs_result = await session.execute(
+                select(SharePointSyncConfig.id).where(
+                    SharePointSyncConfig.status != "archived"
+                )
+            )
+            active_config_ids = {str(c) for c in configs_result.scalars().all()}
+
+            # Get SharePoint assets
+            sp_assets_result = await session.execute(
+                select(Asset)
+                .where(
+                    and_(
+                        Asset.source_type == "sharepoint",
+                        Asset.status != "deleted",
+                    )
+                )
+                .limit(500)
+            )
+            sharepoint_assets = list(sp_assets_result.scalars().all())
+
+            # Find orphan SharePoint assets
+            orphan_sp_list = []
+            for asset in sharepoint_assets:
+                source_meta = asset.source_metadata or {}
+                sync_config_id = source_meta.get("sync_config_id")
+
+                # Asset is orphan if:
+                # 1. No sync_config_id at all
+                # 2. sync_config_id doesn't exist in active configs
+                if not sync_config_id or sync_config_id not in active_config_ids:
+                    orphan_sp_list.append(asset)
+
+            orphan_sharepoint_assets = len(orphan_sp_list)
+            details["orphan_sharepoint_asset_ids"] = [str(a.id) for a in orphan_sp_list[:20]]
+
+            if orphan_sharepoint_assets > 0:
+                await _log_event(
+                    session, run.id, "WARN", "progress",
+                    f"Found {orphan_sharepoint_assets} orphan SharePoint assets (sync config deleted/archived)",
+                    {"count": orphan_sharepoint_assets, "sample_ids": details["orphan_sharepoint_asset_ids"][:5]}
+                )
+
+                # Auto-fix: Delete orphan SharePoint assets and their files
+                if auto_fix:
+                    from .minio_service import get_minio_service
+                    from .index_service import index_service
+                    minio = get_minio_service()
+
+                    for asset in orphan_sp_list:
+                        try:
+                            # Remove from OpenSearch
+                            try:
+                                await index_service.delete_asset_index(asset.organization_id, asset.id)
+                            except:
+                                pass
+
+                            # Delete raw file from MinIO
+                            if minio and asset.raw_bucket and asset.raw_object_key:
+                                try:
+                                    minio.delete_object(asset.raw_bucket, asset.raw_object_key)
+                                except:
+                                    pass
+
+                            # Delete extracted files
+                            extraction_result = await session.execute(
+                                select(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                            )
+                            extractions = list(extraction_result.scalars().all())
+                            for extraction in extractions:
+                                if minio and extraction.extracted_bucket and extraction.extracted_object_key:
+                                    try:
+                                        minio.delete_object(extraction.extracted_bucket, extraction.extracted_object_key)
+                                    except:
+                                        pass
+
+                            # Delete extraction results
+                            await session.execute(
+                                delete(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                            )
+
+                            # Delete asset versions
+                            await session.execute(
+                                delete(AssetVersion).where(AssetVersion.asset_id == asset.id)
+                            )
+
+                            # Delete any orphan synced document records
+                            await session.execute(
+                                delete(SharePointSyncedDocument).where(
+                                    SharePointSyncedDocument.asset_id == asset.id
+                                )
+                            )
+
+                            # Hard delete the asset
+                            await session.execute(
+                                delete(Asset).where(Asset.id == asset.id)
+                            )
+                            orphan_sharepoint_fixed += 1
+
+                        except Exception as e:
+                            logger.error(f"Failed to delete orphan SharePoint asset {asset.id}: {e}")
+
+                    await session.flush()
+                    await _log_event(
+                        session, run.id, "INFO", "fix",
+                        f"Deleted {orphan_sharepoint_fixed} orphan SharePoint assets and their files",
+                        {"fixed_count": orphan_sharepoint_fixed}
+                    )
+
+        except Exception as e:
+            logger.warning(f"SharePoint orphan check failed (non-fatal): {e}")
+            await _log_event(
+                session, run.id, "WARN", "progress",
+                f"SharePoint orphan check skipped: {str(e)}",
+            )
+
+        # 6. Find orphaned artifacts (documents that no longer exist)
         # This is a lightweight check - just count artifacts with missing documents
         artifact_count_result = await session.execute(
             select(func.count(Artifact.id))
@@ -415,6 +535,8 @@ async def handle_orphan_detection(
         "stuck_pending_fixed": stuck_pending_fixed,
         "missing_file_assets": missing_file_assets,
         "missing_file_fixed": missing_file_fixed,
+        "orphan_sharepoint_assets": orphan_sharepoint_assets,
+        "orphan_sharepoint_fixed": orphan_sharepoint_fixed,
         "orphaned_artifacts": orphaned_artifacts,
         "stuck_runs": stuck_runs,
         "stuck_runs_fixed": stuck_runs_fixed,
@@ -423,8 +545,8 @@ async def handle_orphan_detection(
     }
 
     # Log warning if orphans found
-    total_issues = orphaned_assets + stuck_pending_assets + stuck_runs + missing_file_assets
-    total_fixed = stuck_pending_fixed + stuck_runs_fixed + missing_file_fixed
+    total_issues = orphaned_assets + stuck_pending_assets + stuck_runs + missing_file_assets + orphan_sharepoint_assets
+    total_fixed = stuck_pending_fixed + stuck_runs_fixed + missing_file_fixed + orphan_sharepoint_fixed
     level = "WARN" if (total_issues - total_fixed) > 0 else "INFO"
     await _log_event(
         session, run.id, level, "summary",
@@ -928,6 +1050,159 @@ async def handle_stale_run_cleanup(
 
 
 # =============================================================================
+# Handler: SharePoint Scheduled Sync
+# =============================================================================
+
+async def handle_sharepoint_scheduled_sync(
+    session: AsyncSession,
+    run: Run,
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Execute scheduled SharePoint sync for all configs with matching frequency.
+
+    This handler:
+    1. Finds all SharePointSyncConfigs with the specified frequency
+    2. Skips configs that already have a running sync
+    3. Triggers sharepoint_sync_task for each eligible config
+
+    Args:
+        session: Database session
+        run: Run context for tracking
+        config: Task configuration:
+            - frequency: "hourly" or "daily" (required)
+
+    Returns:
+        Dict with sync statistics:
+        {
+            "frequency": str,
+            "configs_found": int,
+            "syncs_triggered": int,
+            "syncs_skipped": int,
+            "errors": list
+        }
+    """
+    from uuid import uuid4
+
+    frequency = config.get("frequency")
+    if not frequency:
+        await _log_event(
+            session, run.id, "ERROR", "error",
+            "Missing 'frequency' in config (expected 'hourly' or 'daily')"
+        )
+        return {
+            "status": "failed",
+            "error": "Missing frequency configuration",
+        }
+
+    await _log_event(
+        session, run.id, "INFO", "start",
+        f"Starting scheduled SharePoint sync for frequency: {frequency}"
+    )
+
+    # Find all active sync configs with matching frequency
+    configs_result = await session.execute(
+        select(SharePointSyncConfig).where(
+            and_(
+                SharePointSyncConfig.sync_frequency == frequency,
+                SharePointSyncConfig.is_active == True,
+                SharePointSyncConfig.status == "active",
+            )
+        )
+    )
+    sync_configs = list(configs_result.scalars().all())
+
+    configs_found = len(sync_configs)
+    syncs_triggered = 0
+    syncs_skipped = 0
+    errors: List[str] = []
+
+    await _log_event(
+        session, run.id, "INFO", "progress",
+        f"Found {configs_found} SharePoint sync configs with frequency '{frequency}'"
+    )
+
+    for sync_config in sync_configs:
+        try:
+            # Check if there's already a running sync for this config
+            active_run_result = await session.execute(
+                select(Run).where(
+                    and_(
+                        Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
+                        Run.status.in_(["pending", "running"]),
+                        func.json_extract(Run.config, "$.sync_config_id") == str(sync_config.id),
+                    )
+                ).limit(1)
+            )
+            active_run = active_run_result.scalar_one_or_none()
+
+            if active_run:
+                await _log_event(
+                    session, run.id, "INFO", "progress",
+                    f"Skipping '{sync_config.name}' - sync already in progress (run_id={active_run.id})"
+                )
+                syncs_skipped += 1
+                continue
+
+            # Create a new run for this sync
+            sync_run = Run(
+                id=uuid4(),
+                organization_id=sync_config.organization_id,
+                run_type="sharepoint_sync",
+                origin="scheduled",
+                status="pending",
+                config={
+                    "sync_config_id": str(sync_config.id),
+                    "sync_config_name": sync_config.name,
+                    "full_sync": False,
+                    "triggered_by_task": str(run.id),
+                },
+            )
+            session.add(sync_run)
+            await session.flush()
+
+            # Trigger the sync task
+            from ..tasks import sharepoint_sync_task
+            sharepoint_sync_task.delay(
+                sync_config_id=str(sync_config.id),
+                organization_id=str(sync_config.organization_id),
+                run_id=str(sync_run.id),
+                full_sync=False,
+            )
+
+            syncs_triggered += 1
+            await _log_event(
+                session, run.id, "INFO", "progress",
+                f"Triggered sync for '{sync_config.name}' (run_id={sync_run.id})"
+            )
+
+        except Exception as e:
+            error_msg = f"Failed to trigger sync for '{sync_config.name}': {str(e)}"
+            logger.error(error_msg)
+            errors.append(error_msg)
+            await _log_event(
+                session, run.id, "ERROR", "error",
+                error_msg
+            )
+
+    summary = {
+        "frequency": frequency,
+        "configs_found": configs_found,
+        "syncs_triggered": syncs_triggered,
+        "syncs_skipped": syncs_skipped,
+        "errors": errors,
+    }
+
+    await _log_event(
+        session, run.id, "INFO", "summary",
+        f"Scheduled SharePoint sync complete: {syncs_triggered}/{configs_found} syncs triggered, {syncs_skipped} skipped",
+        summary
+    )
+
+    return summary
+
+
+# =============================================================================
 # Handler Registry
 # =============================================================================
 
@@ -938,6 +1213,7 @@ MAINTENANCE_HANDLERS = {
     "health.report": handle_health_report,
     "search.reindex": handle_search_reindex,
     "stale_run.cleanup": handle_stale_run_cleanup,
+    "sharepoint.scheduled_sync": handle_sharepoint_scheduled_sync,
 }
 
 

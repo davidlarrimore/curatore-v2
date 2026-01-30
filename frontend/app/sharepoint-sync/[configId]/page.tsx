@@ -34,7 +34,798 @@ import {
   Power,
   ToggleLeft,
   ToggleRight,
+  Save,
+  Shield,
+  CheckSquare,
+  Square,
 } from 'lucide-react'
+
+// ============================================================================
+// Edit Modal Component
+// ============================================================================
+
+interface SharePointBrowseItem {
+  id: string
+  name: string
+  type: 'file' | 'folder'
+  size?: number
+  modified?: string
+  web_url?: string
+  folder?: string
+  drive_id?: string
+  mime_type?: string
+}
+
+interface EditModalProps {
+  config: SharePointSyncConfig
+  token: string | null
+  isOpen: boolean
+  onClose: () => void
+  onSave: (updates: any, resetAssets: boolean) => Promise<{ success: boolean; error?: string }>
+  onImportFiles: (items: SharePointBrowseItem[]) => Promise<void>
+  onRemoveItems: (itemIds: string[]) => Promise<void>
+}
+
+function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRemoveItems }: EditModalProps) {
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'general' | 'folders'>('general')
+
+  // Form state
+  const [name, setName] = useState(config.name)
+  const [description, setDescription] = useState(config.description || '')
+  const [syncFrequency, setSyncFrequency] = useState(config.sync_frequency)
+  const [recursive, setRecursive] = useState(config.sync_config?.recursive ?? true)
+  const [includePatterns, setIncludePatterns] = useState(
+    (config.sync_config?.include_patterns || []).join(', ')
+  )
+  const [excludePatterns, setExcludePatterns] = useState(
+    (config.sync_config?.exclude_patterns || []).join(', ')
+  )
+
+  // Folder browser state
+  const [browseItems, setBrowseItems] = useState<SharePointBrowseItem[]>([])
+  const [isLoadingFolders, setIsLoadingFolders] = useState(false)
+  const [folderError, setFolderError] = useState('')
+
+  // Selection state
+  const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set())
+  const [syncedItemIds, setSyncedItemIds] = useState<Set<string>>(new Set())
+  const [initialSelectedItems, setInitialSelectedItems] = useState<Set<string>>(new Set())
+
+  // UI state
+  const [isSaving, setIsSaving] = useState(false)
+  const [error, setError] = useState('')
+  const [breakingChanges, setBreakingChanges] = useState<string[]>([])
+  const [showResetConfirm, setShowResetConfirm] = useState(false)
+  const [existingAssetCount, setExistingAssetCount] = useState(0)
+
+  // Reset form when config changes
+  useEffect(() => {
+    if (isOpen) {
+      setActiveTab('general')
+      setName(config.name)
+      setDescription(config.description || '')
+      setSyncFrequency(config.sync_frequency)
+      setRecursive(config.sync_config?.recursive ?? true)
+      setIncludePatterns((config.sync_config?.include_patterns || []).join(', '))
+      setExcludePatterns((config.sync_config?.exclude_patterns || []).join(', '))
+      setError('')
+      setFolderError('')
+      setBreakingChanges([])
+      setShowResetConfirm(false)
+      setBrowseItems([])
+      setSelectedItems(new Set())
+      setSyncedItemIds(new Set())
+      setInitialSelectedItems(new Set())
+    }
+  }, [config, isOpen])
+
+  // Load folder contents and synced documents when switching to folders tab
+  const loadFolderContents = useCallback(async () => {
+    if (!token || !config.folder_url) return
+
+    setIsLoadingFolders(true)
+    setFolderError('')
+
+    try {
+      // Load folder contents and synced documents in parallel
+      const [browseResponse, docsResponse] = await Promise.all([
+        sharepointSyncApi.browseFolder(token, {
+          connection_id: config.connection_id || undefined,
+          folder_url: config.folder_url,
+          recursive: false,
+          include_folders: true,
+        }),
+        sharepointSyncApi.listDocuments(token, config.id, { limit: 1000 }),
+      ])
+
+      const items = browseResponse.items || []
+      setBrowseItems(items)
+
+      // Get IDs of already synced items
+      const syncedIds = new Set<string>(
+        (docsResponse.documents || [])
+          .filter((doc: SharePointSyncedDocument) => doc.sync_status === 'synced')
+          .map((doc: SharePointSyncedDocument) => doc.sharepoint_item_id)
+      )
+      setSyncedItemIds(syncedIds)
+
+      // Pre-select synced items
+      const preSelected = new Set<string>(
+        items.filter(item => syncedIds.has(item.id)).map(item => item.id)
+      )
+      setSelectedItems(preSelected)
+      setInitialSelectedItems(new Set(preSelected))
+    } catch (err: any) {
+      setFolderError(err.message || 'Failed to load folder contents')
+    } finally {
+      setIsLoadingFolders(false)
+    }
+  }, [token, config.folder_url, config.connection_id, config.id])
+
+  // Load folders when tab changes
+  useEffect(() => {
+    if (activeTab === 'folders' && browseItems.length === 0 && !isLoadingFolders) {
+      loadFolderContents()
+    }
+  }, [activeTab, browseItems.length, isLoadingFolders, loadFolderContents])
+
+  // Toggle item selection
+  const toggleItemSelection = (itemId: string) => {
+    setSelectedItems(prev => {
+      const next = new Set(prev)
+      if (next.has(itemId)) {
+        next.delete(itemId)
+      } else {
+        next.add(itemId)
+      }
+      return next
+    })
+  }
+
+  // Select all items
+  const selectAllItems = () => {
+    const itemIds = browseItems.map(i => i.id)
+    setSelectedItems(new Set(itemIds))
+  }
+
+  // Select all files only
+  const selectAllFiles = () => {
+    const fileIds = browseItems.filter(i => i.type === 'file').map(i => i.id)
+    setSelectedItems(new Set(fileIds))
+  }
+
+  // Clear selection
+  const clearSelection = () => {
+    setSelectedItems(new Set())
+  }
+
+  // Calculate selection changes
+  const getSelectionChanges = useCallback(() => {
+    const newlySelected = [...selectedItems].filter(id => !initialSelectedItems.has(id))
+    const newlyDeselected = [...initialSelectedItems].filter(id => !selectedItems.has(id))
+    return { newlySelected, newlyDeselected }
+  }, [selectedItems, initialSelectedItems])
+
+  // Detect breaking changes
+  const detectBreakingChanges = useCallback(() => {
+    const changes: string[] = []
+
+    const wasRecursive = config.sync_config?.recursive ?? true
+    if (wasRecursive && !recursive) {
+      changes.push('Recursive disabled - files in subfolders will be orphaned')
+    }
+
+    return changes
+  }, [recursive, config])
+
+  // Build updates object
+  const buildUpdates = useCallback(() => {
+    const updates: Record<string, any> = {}
+
+    if (name !== config.name) updates.name = name
+    if (description !== (config.description || '')) updates.description = description
+    if (syncFrequency !== config.sync_frequency) updates.sync_frequency = syncFrequency
+
+    // Build sync_config updates
+    const syncConfigUpdates: Record<string, any> = {}
+    const wasRecursive = config.sync_config?.recursive ?? true
+    if (recursive !== wasRecursive) syncConfigUpdates.recursive = recursive
+
+    const newInclude = includePatterns
+      .split(',')
+      .map((p: string) => p.trim())
+      .filter(Boolean)
+    const oldInclude = config.sync_config?.include_patterns || []
+    if (JSON.stringify(newInclude) !== JSON.stringify(oldInclude)) {
+      syncConfigUpdates.include_patterns = newInclude
+    }
+
+    const newExclude = excludePatterns
+      .split(',')
+      .map((p: string) => p.trim())
+      .filter(Boolean)
+    const oldExclude = config.sync_config?.exclude_patterns || []
+    if (JSON.stringify(newExclude) !== JSON.stringify(oldExclude)) {
+      syncConfigUpdates.exclude_patterns = newExclude
+    }
+
+    if (Object.keys(syncConfigUpdates).length > 0) {
+      updates.sync_config = syncConfigUpdates
+    }
+
+    return updates
+  }, [name, description, syncFrequency, recursive, includePatterns, excludePatterns, config])
+
+  // Handle save attempt
+  const handleSave = async (resetAssets: boolean = false) => {
+    setError('')
+    setIsSaving(true)
+
+    try {
+      const updates = buildUpdates()
+      const { newlySelected, newlyDeselected } = getSelectionChanges()
+
+      // If no config changes and no selection changes, just close
+      if (Object.keys(updates).length === 0 && newlySelected.length === 0 && newlyDeselected.length === 0) {
+        onClose()
+        return
+      }
+
+      // Save config updates if there are any
+      if (Object.keys(updates).length > 0) {
+        const result = await onSave(updates, resetAssets)
+
+        if (!result.success) {
+          if (result.error) {
+            // Check if it's a breaking changes error
+            try {
+              const errorData = JSON.parse(result.error)
+              if (errorData.breaking_changes) {
+                setBreakingChanges(errorData.breaking_changes)
+                setExistingAssetCount(errorData.existing_assets || 0)
+                setShowResetConfirm(true)
+                return
+              } else {
+                setError(result.error)
+                return
+              }
+            } catch {
+              setError(result.error)
+              return
+            }
+          }
+          return
+        }
+      }
+
+      // Remove deselected items (items that were synced but user unchecked)
+      if (newlyDeselected.length > 0) {
+        await onRemoveItems(newlyDeselected)
+      }
+
+      // Import newly selected files
+      if (newlySelected.length > 0) {
+        const itemsToImport = browseItems.filter(item => newlySelected.includes(item.id))
+        await onImportFiles(itemsToImport)
+      }
+
+      onClose()
+    } catch (err: any) {
+      setError(err.message || 'Failed to save changes')
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  const { newlySelected, newlyDeselected } = getSelectionChanges()
+  const hasChanges = Object.keys(buildUpdates()).length > 0 || newlySelected.length > 0 || newlyDeselected.length > 0
+  const currentBreakingChanges = detectBreakingChanges()
+
+  if (!isOpen) return null
+
+  return (
+    <div className="fixed inset-0 z-50 overflow-y-auto">
+      {/* Backdrop */}
+      <div
+        className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
+        onClick={onClose}
+      />
+
+      {/* Modal - wider */}
+      <div className="flex min-h-full items-center justify-center p-4">
+        <div className="relative w-full max-w-4xl bg-white dark:bg-gray-800 rounded-2xl shadow-2xl">
+          {/* Header */}
+          <div className="flex items-center justify-between px-6 py-4 border-b border-gray-200 dark:border-gray-700">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center">
+                <Edit3 className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
+                  Edit Sync Configuration
+                </h2>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  Update settings for {config.name}
+                </p>
+              </div>
+            </div>
+            <button
+              onClick={onClose}
+              className="p-2 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700"
+            >
+              <X className="w-5 h-5" />
+            </button>
+          </div>
+
+          {/* Reset Confirmation View */}
+          {showResetConfirm ? (
+            <div className="p-6">
+              <div className="rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-4 mb-6">
+                <div className="flex items-start gap-3">
+                  <AlertTriangle className="w-6 h-6 text-red-600 dark:text-red-400 flex-shrink-0 mt-0.5" />
+                  <div>
+                    <h3 className="text-sm font-semibold text-red-800 dark:text-red-200 mb-2">
+                      Breaking Changes Detected
+                    </h3>
+                    <p className="text-sm text-red-700 dark:text-red-300 mb-3">
+                      This update will invalidate {existingAssetCount} existing synced assets.
+                      They must be deleted before proceeding.
+                    </p>
+                    <ul className="space-y-1">
+                      {breakingChanges.map((change, idx) => (
+                        <li key={idx} className="text-sm text-red-600 dark:text-red-400 flex items-center gap-2">
+                          <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
+                          {change}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-gray-50 dark:bg-gray-900/50 rounded-lg p-4 mb-6">
+                <p className="text-sm text-gray-700 dark:text-gray-300 mb-2">
+                  <strong>What will happen:</strong>
+                </p>
+                <ul className="text-sm text-gray-600 dark:text-gray-400 space-y-1">
+                  <li>• {existingAssetCount} assets and their extracted content will be deleted</li>
+                  <li>• Storage space will be freed</li>
+                  <li>• Documents will be removed from search</li>
+                  <li>• After update, run a sync to import files from the new location</li>
+                </ul>
+              </div>
+
+              <div className="flex items-center justify-end gap-3">
+                <Button
+                  variant="secondary"
+                  onClick={() => {
+                    setShowResetConfirm(false)
+                    setBreakingChanges([])
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={() => handleSave(true)}
+                  disabled={isSaving}
+                  className="gap-2 bg-red-600 hover:bg-red-700"
+                >
+                  {isSaving ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
+                  Delete Assets & Update
+                </Button>
+              </div>
+            </div>
+          ) : (
+            /* Normal Edit Form */
+            <>
+              {/* Connection & Folder Info - Always visible */}
+              <div className="px-6 pt-4 pb-2 bg-gray-50 dark:bg-gray-900/30">
+                <div className="flex flex-col sm:flex-row sm:items-start gap-4">
+                  {/* SharePoint Connection */}
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <FolderSync className="w-4 h-4 text-indigo-500" />
+                      <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                        SharePoint Connection
+                      </span>
+                      <div className="relative group">
+                        <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                        <div className="absolute left-0 top-full mt-2 px-3 py-2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-56 z-20 shadow-lg">
+                          <div className="absolute left-4 bottom-full w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-gray-900 dark:border-b-gray-700" />
+                          The connection cannot be changed. To use a different connection, create a new sync configuration.
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">
+                      {config.connection_name || 'Default Connection'}
+                    </p>
+                  </div>
+
+                  {/* SharePoint Folder */}
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <Folder className="w-4 h-4 text-indigo-500" />
+                      <span className="text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wide">
+                        SharePoint Folder
+                      </span>
+                      <div className="relative group">
+                        <Info className="w-3.5 h-3.5 text-gray-400 cursor-help" />
+                        <div className="absolute right-0 top-full mt-2 px-3 py-2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-56 z-20 shadow-lg">
+                          <div className="absolute right-4 bottom-full w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-gray-900 dark:border-b-gray-700" />
+                          The folder URL cannot be changed. To sync a different folder, create a new sync configuration.
+                        </div>
+                      </div>
+                    </div>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white truncate" title={config.folder_url}>
+                      {config.folder_name || config.folder_url.split('/').pop() || config.folder_url}
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Tabs */}
+              <div className="px-6 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/30">
+                <div className="flex gap-6">
+                  <button
+                    onClick={() => setActiveTab('general')}
+                    className={`py-3 text-sm font-medium border-b-2 transition-colors ${
+                      activeTab === 'general'
+                        ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                        : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                    }`}
+                  >
+                    General
+                  </button>
+                  <button
+                    onClick={() => setActiveTab('folders')}
+                    className={`py-3 text-sm font-medium border-b-2 transition-colors ${
+                      activeTab === 'folders'
+                        ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                        : 'border-transparent text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+                    }`}
+                  >
+                    Folders & Filters
+                  </button>
+                </div>
+              </div>
+
+              <div className="p-6 space-y-6 max-h-[50vh] overflow-y-auto">
+                {/* Error Message */}
+                {error && (
+                  <div className="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3">
+                    <div className="flex items-center gap-2">
+                      <AlertCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
+                      <p className="text-sm text-red-700 dark:text-red-300">{error}</p>
+                    </div>
+                  </div>
+                )}
+
+                {/* General Tab */}
+                {activeTab === 'general' && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Name *
+                      </label>
+                      <input
+                        type="text"
+                        value={name}
+                        onChange={e => setName(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Description
+                      </label>
+                      <textarea
+                        value={description}
+                        onChange={e => setDescription(e.target.value)}
+                        rows={3}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Sync Frequency
+                      </label>
+                      <select
+                        value={syncFrequency}
+                        onChange={e => setSyncFrequency(e.target.value)}
+                        className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                      >
+                        <option value="manual">Manual only</option>
+                        <option value="hourly">Hourly</option>
+                        <option value="daily">Daily</option>
+                      </select>
+                      <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                        You can always trigger a sync manually using the &quot;Sync Now&quot; button.
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Folders Tab */}
+                {activeTab === 'folders' && (
+                  <div className="space-y-6">
+                    {/* Recursive Setting */}
+                    <div className="flex items-center justify-between p-4 rounded-lg bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700">
+                      <div>
+                        <p className="text-sm font-medium text-gray-900 dark:text-white">
+                          Include Subfolders (Recursive)
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                          Sync files from all subfolders within this folder
+                        </p>
+                        {(config.sync_config?.recursive ?? true) && !recursive && (
+                          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1 flex items-center gap-1">
+                            <AlertTriangle className="w-3 h-3" />
+                            Disabling will require deleting subfolder assets
+                          </p>
+                        )}
+                      </div>
+                      <button
+                        onClick={() => setRecursive(!recursive)}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors ${
+                          recursive
+                            ? 'bg-indigo-600'
+                            : 'bg-gray-300 dark:bg-gray-600'
+                        }`}
+                      >
+                        <span
+                          className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${
+                            recursive ? 'translate-x-6' : 'translate-x-1'
+                          }`}
+                        />
+                      </button>
+                    </div>
+
+                    {/* File Filters */}
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-3">
+                        File Filters
+                      </h4>
+                      <div className="space-y-4">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Include Patterns (comma-separated)
+                          </label>
+                          <input
+                            type="text"
+                            value={includePatterns}
+                            onChange={e => setIncludePatterns(e.target.value)}
+                            placeholder="e.g., *.pdf, *.docx, *.xlsx"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                          />
+                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            Leave empty to include all files. Only matching files will be synced.
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Exclude Patterns (comma-separated)
+                          </label>
+                          <input
+                            type="text"
+                            value={excludePatterns}
+                            onChange={e => setExcludePatterns(e.target.value)}
+                            placeholder="e.g., ~$*, *.tmp, .DS_Store"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                          />
+                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            Files matching these patterns will be skipped during sync.
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Folder Browser with Selection */}
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="text-sm font-medium text-gray-900 dark:text-white">
+                          Select Files & Folders to Sync
+                        </h4>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={loadFolderContents}
+                          disabled={isLoadingFolders}
+                          className="gap-1.5"
+                        >
+                          <RefreshCw className={`w-3.5 h-3.5 ${isLoadingFolders ? 'animate-spin' : ''}`} />
+                          Refresh
+                        </Button>
+                      </div>
+
+                      {folderError ? (
+                        <div className="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-4 text-center">
+                          <AlertCircle className="w-6 h-6 text-red-500 mx-auto mb-2" />
+                          <p className="text-sm text-red-700 dark:text-red-300">{folderError}</p>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={loadFolderContents}
+                            className="mt-3"
+                          >
+                            Try Again
+                          </Button>
+                        </div>
+                      ) : isLoadingFolders ? (
+                        <div className="flex items-center justify-center py-8 border border-gray-200 dark:border-gray-700 rounded-lg">
+                          <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+                          <span className="ml-2 text-sm text-gray-500">Loading folder contents...</span>
+                        </div>
+                      ) : browseItems.length === 0 ? (
+                        <div className="text-center py-8 border border-gray-200 dark:border-gray-700 rounded-lg">
+                          <Folder className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+                          <p className="text-sm text-gray-500 dark:text-gray-400">
+                            No files found in this folder
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                          {/* Selection Controls */}
+                          <div className="flex items-center justify-between px-4 py-2 bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
+                            <div className="flex items-center gap-2">
+                              <Button variant="ghost" size="sm" onClick={selectAllItems}>
+                                Select All
+                              </Button>
+                              <Button variant="ghost" size="sm" onClick={selectAllFiles}>
+                                Files Only
+                              </Button>
+                              <Button variant="ghost" size="sm" onClick={clearSelection}>
+                                Clear
+                              </Button>
+                            </div>
+                            <span className="text-sm text-gray-500 dark:text-gray-400">
+                              {selectedItems.size} of {browseItems.length} selected
+                            </span>
+                          </div>
+
+                          {/* Item List */}
+                          <div className="max-h-64 overflow-y-auto divide-y divide-gray-100 dark:divide-gray-700">
+                            {browseItems.map((item) => {
+                              const isSelected = selectedItems.has(item.id)
+                              const isSynced = syncedItemIds.has(item.id)
+
+                              return (
+                                <button
+                                  key={item.id}
+                                  onClick={() => toggleItemSelection(item.id)}
+                                  className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer"
+                                >
+                                  {/* Checkbox */}
+                                  <div className="flex-shrink-0">
+                                    {isSelected ? (
+                                      <CheckSquare className="w-5 h-5 text-indigo-600" />
+                                    ) : (
+                                      <Square className="w-5 h-5 text-gray-400" />
+                                    )}
+                                  </div>
+
+                                  {/* File/Folder Icon and Name */}
+                                  <div className="flex items-center gap-2 min-w-0 flex-1">
+                                    {item.type === 'folder' ? (
+                                      <Folder className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                                    ) : (
+                                      <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                                    )}
+                                    <span className="text-sm text-gray-900 dark:text-white truncate">
+                                      {item.name}
+                                    </span>
+                                  </div>
+
+                                  {/* Status & Size */}
+                                  <div className="flex items-center gap-2 flex-shrink-0">
+                                    {item.size && (
+                                      <span className="text-xs text-gray-500 dark:text-gray-400">
+                                        {(item.size / 1024).toFixed(1)} KB
+                                      </span>
+                                    )}
+                                    {isSynced && (
+                                      <span className="text-xs px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400">
+                                        Synced
+                                      </span>
+                                    )}
+                                    {item.type === 'folder' && (
+                                      <span className="text-xs text-amber-600 dark:text-amber-400">
+                                        Folder
+                                      </span>
+                                    )}
+                                  </div>
+                                </button>
+                              )
+                            })}
+                          </div>
+
+                          {/* Footer with summary */}
+                          <div className="px-4 py-2 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700">
+                            <div className="flex items-center justify-between text-xs text-gray-500 dark:text-gray-400">
+                              <span>
+                                {browseItems.length} items in folder
+                                {recursive && ' (subfolders will also be synced)'}
+                              </span>
+                              {(() => {
+                                const { newlySelected, newlyDeselected } = getSelectionChanges()
+                                if (newlySelected.length > 0 || newlyDeselected.length > 0) {
+                                  return (
+                                    <span className="text-indigo-600 dark:text-indigo-400">
+                                      {newlySelected.length > 0 && `+${newlySelected.length} to add`}
+                                      {newlySelected.length > 0 && newlyDeselected.length > 0 && ', '}
+                                      {newlyDeselected.length > 0 && `${newlyDeselected.length} to remove`}
+                                    </span>
+                                  )
+                                }
+                                return null
+                              })()}
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Breaking Changes Warning */}
+                {currentBreakingChanges.length > 0 && (
+                  <div className="rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800 p-3">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400 flex-shrink-0 mt-0.5" />
+                      <div>
+                        <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                          Breaking changes detected
+                        </p>
+                        <ul className="mt-1 space-y-0.5">
+                          {currentBreakingChanges.map((change, idx) => (
+                            <li key={idx} className="text-xs text-amber-700 dark:text-amber-300">
+                              • {change}
+                            </li>
+                          ))}
+                        </ul>
+                        <p className="text-xs text-amber-600 dark:text-amber-400 mt-2">
+                          If there are existing synced assets, you&apos;ll be asked to confirm deletion.
+                        </p>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-end gap-3 px-6 py-4 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50 rounded-b-2xl">
+                <Button variant="secondary" onClick={onClose} disabled={isSaving}>
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={() => handleSave(false)}
+                  disabled={isSaving || !hasChanges || !name.trim()}
+                  className="gap-2"
+                >
+                  {isSaving ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Save className="w-4 h-4" />
+                  )}
+                  Save Changes
+                </Button>
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  )
+}
 
 // Format bytes to human readable
 function formatBytes(bytes: number, decimals = 1): string {
@@ -89,6 +880,7 @@ function SharePointSyncConfigContent() {
   const [syncHistory, setSyncHistory] = useState<SyncRun[]>([])
   const [toasts, setToasts] = useState<Toast[]>([])
   const [currentRun, setCurrentRun] = useState<SyncRun | null>(null)
+  const [showEditModal, setShowEditModal] = useState(false)
 
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -299,6 +1091,24 @@ function SharePointSyncConfigContent() {
     }
   }
 
+  const handleCancelStuck = async () => {
+    if (!token || !configId) return
+
+    if (!confirm('This will cancel any pending or running sync jobs. Continue?')) {
+      return
+    }
+
+    try {
+      const result = await sharepointSyncApi.cancelStuckRuns(token, configId)
+      addToast('success', result.message)
+      setIsSyncing(false)
+      await loadConfig()
+      await loadHistory()
+    } catch (err: any) {
+      addToast('error', `Failed to cancel stuck runs: ${err.message}`)
+    }
+  }
+
   const handleCleanup = async (deleteAssets: boolean = false) => {
     if (!token || !configId) return
 
@@ -396,6 +1206,94 @@ This action cannot be undone. Are you sure?`
       router.push('/sharepoint-sync')
     } catch (err: any) {
       addToast('error', `Failed to delete: ${err.message}`)
+    }
+  }
+
+  const handleSaveConfig = async (
+    updates: Record<string, any>,
+    resetAssets: boolean
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!token || !configId) {
+      return { success: false, error: 'Not authenticated' }
+    }
+
+    try {
+      await sharepointSyncApi.updateConfig(token, configId, {
+        ...updates,
+        reset_existing_assets: resetAssets,
+      })
+
+      addToast('success', 'Configuration updated successfully')
+
+      // Reload config and documents
+      await loadConfig()
+      await loadDocuments(activeTab === 'deleted' ? 'deleted_in_source' : 'synced')
+
+      return { success: true }
+    } catch (err: any) {
+      // Check if it's a structured error response
+      const detail = err.detail
+      if (detail && typeof detail === 'object' && detail.breaking_changes) {
+        return { success: false, error: JSON.stringify(detail) }
+      }
+      return { success: false, error: err.message || 'Failed to update configuration' }
+    }
+  }
+
+  const handleImportFiles = async (items: SharePointBrowseItem[]) => {
+    if (!token || !configId || !config || items.length === 0) return
+
+    try {
+      const itemsToImport = items.map(item => ({
+        id: item.id,
+        name: item.name,
+        type: item.type,
+        folder: item.folder || '',
+        drive_id: item.drive_id || config.folder_drive_id || undefined,
+        size: item.size,
+        web_url: item.web_url,
+        mime: item.mime_type,
+      }))
+
+      await sharepointSyncApi.importFiles(token, {
+        connection_id: config.connection_id || undefined,
+        folder_url: config.folder_url,
+        selected_items: itemsToImport,
+        sync_config_id: config.id, // Link to existing sync config
+        create_sync_config: false, // Don't create new config, use existing
+      })
+
+      addToast('success', `Started importing ${items.length} ${items.length === 1 ? 'item' : 'items'}`)
+
+      // Reload config and documents after a short delay
+      setTimeout(async () => {
+        await loadConfig()
+        await loadDocuments('synced')
+      }, 1000)
+    } catch (err: any) {
+      addToast('error', `Failed to import files: ${err.message}`)
+    }
+  }
+
+  const handleRemoveItems = async (itemIds: string[]) => {
+    if (!token || !configId || itemIds.length === 0) return
+
+    try {
+      const result = await sharepointSyncApi.removeItems(token, configId, itemIds, true)
+
+      addToast(
+        'success',
+        `Removed ${result.documents_removed} ${result.documents_removed === 1 ? 'item' : 'items'}${
+          result.assets_deleted > 0 ? ` and ${result.assets_deleted} ${result.assets_deleted === 1 ? 'asset' : 'assets'}` : ''
+        }`
+      )
+
+      // Reload config and documents
+      await loadConfig()
+      await loadDocuments('synced')
+    } catch (err: any) {
+      addToast('error', `Failed to remove items: ${err.message}`)
+      throw err // Re-throw so EditModal knows the operation failed
     }
   }
 
@@ -584,6 +1482,20 @@ This action cannot be undone. Are you sure?`
               </div>
             </div>
             <div className="flex items-center gap-3 flex-shrink-0">
+              {/* Edit Button - only when not archived */}
+              {config.status !== 'archived' && (
+                <Button
+                  variant="secondary"
+                  onClick={() => setShowEditModal(true)}
+                  disabled={isSyncing}
+                  className="gap-2"
+                  title="Edit configuration"
+                >
+                  <Edit3 className="w-4 h-4" />
+                  Edit
+                </Button>
+              )}
+
               {/* Sync Toggle - only when status is active */}
               {config.status === 'active' && (
                 <button
@@ -632,6 +1544,17 @@ This action cannot be undone. Are you sure?`
                     <RefreshCw className={`w-4 h-4 ${isSyncing ? 'animate-spin' : ''}`} />
                     Full Sync
                   </Button>
+                  {isSyncing && (
+                    <Button
+                      variant="ghost"
+                      onClick={handleCancelStuck}
+                      className="gap-2 text-red-600 hover:text-red-700 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20"
+                      title="Cancel any stuck or pending sync jobs"
+                    >
+                      <XCircle className="w-4 h-4" />
+                      Cancel Stuck
+                    </Button>
+                  )}
                 </>
               )}
 
@@ -1228,6 +2151,19 @@ This action cannot be undone. Are you sure?`
           </div>
         )}
       </div>
+
+      {/* Edit Modal */}
+      {config && (
+        <EditModal
+          config={config}
+          token={token}
+          isOpen={showEditModal}
+          onClose={() => setShowEditModal(false)}
+          onSave={handleSaveConfig}
+          onImportFiles={handleImportFiles}
+          onRemoveItems={handleRemoveItems}
+        />
+      )}
 
       {/* CSS for toast animation */}
       <style jsx>{`

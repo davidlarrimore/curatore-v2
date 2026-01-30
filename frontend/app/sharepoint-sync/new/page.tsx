@@ -156,10 +156,15 @@ function NewSharePointSyncContent() {
     setSelectedItems(new Set())
   }
 
+  // Track submission state separately to prevent double-clicks
+  const [isSubmitting, setIsSubmitting] = useState(false)
+
   // Create sync config and import
   const handleCreateSync = async () => {
-    if (!token) return
+    if (!token || isSubmitting) return
 
+    // Immediately disable button to prevent double-clicks
+    setIsSubmitting(true)
     setIsLoading(true)
     setError('')
 
@@ -177,6 +182,8 @@ function NewSharePointSyncContent() {
         syncConfig.exclude_patterns = excludePatterns.split(',').map(p => p.trim()).filter(Boolean)
       }
 
+      let syncConfigId: string | null = null
+
       // If files are selected, import them directly
       if (selectedItems.size > 0) {
         const itemsToImport = browseItems
@@ -184,6 +191,7 @@ function NewSharePointSyncContent() {
           .map(i => ({
             id: i.id,
             name: i.name,
+            type: i.type,  // Required to distinguish folders from files
             folder: i.folder || '',
             drive_id: i.drive_id || folderInfo?.drive_id,
             size: i.size,
@@ -191,17 +199,19 @@ function NewSharePointSyncContent() {
             mime: i.mime,
           }))
 
-        await sharepointSyncApi.importFiles(token, {
+        const result = await sharepointSyncApi.importFiles(token, {
           connection_id: selectedConnectionId || undefined,
           folder_url: folderUrl,
           selected_items: itemsToImport,
           sync_config_name: syncName,
           sync_config_description: syncDescription,
           create_sync_config: true,
+          sync_frequency: syncFrequency,
         })
+        syncConfigId = result.sync_config_id
       } else {
         // Create sync config without initial import
-        await sharepointSyncApi.createConfig(token, {
+        const result = await sharepointSyncApi.createConfig(token, {
           name: syncName,
           description: syncDescription,
           connection_id: selectedConnectionId || undefined,
@@ -209,14 +219,21 @@ function NewSharePointSyncContent() {
           sync_config: syncConfig,
           sync_frequency: syncFrequency,
         })
+        syncConfigId = result.id
       }
 
-      router.push('/sharepoint-sync')
+      // Redirect to the sync detail page to watch the import progress
+      if (syncConfigId) {
+        router.push(`/sharepoint-sync/${syncConfigId}`)
+      } else {
+        router.push('/sharepoint-sync')
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to create sync configuration')
-    } finally {
+      setIsSubmitting(false)
       setIsLoading(false)
     }
+    // Note: Don't reset isSubmitting on success - we're navigating away
   }
 
   // Step navigation
@@ -705,15 +722,20 @@ function NewSharePointSyncContent() {
             <Button
               variant="primary"
               onClick={handleCreateSync}
-              disabled={isLoading}
+              disabled={isLoading || isSubmitting}
               className="gap-2"
             >
-              {isLoading ? (
-                <Loader2 className="w-4 h-4 animate-spin" />
+              {isLoading || isSubmitting ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Creating...
+                </>
               ) : (
-                <CheckCircle2 className="w-4 h-4" />
+                <>
+                  <CheckCircle2 className="w-4 h-4" />
+                  Create Sync
+                </>
               )}
-              Create Sync
             </Button>
           ) : (
             <Button

@@ -67,6 +67,7 @@ class LockService:
     def __init__(self):
         """Initialize lock service with Redis connection from environment."""
         self._redis: Optional[redis.Redis] = None
+        self._redis_loop: Optional[asyncio.AbstractEventLoop] = None
         self._lock_prefix = "curatore:lock:"
 
     async def _get_redis(self) -> redis.Redis:
@@ -79,7 +80,11 @@ class LockService:
         Note:
             Uses CELERY_BROKER_URL for connection (same Redis as Celery)
         """
-        if self._redis is None:
+        loop = asyncio.get_running_loop()
+        if self._redis is None or self._redis_loop is None or self._redis_loop is not loop:
+            if self._redis:
+                await self._redis.close()
+            self._redis_loop = loop
             broker_url = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
             self._redis = await redis.from_url(broker_url, decode_responses=True)
         return self._redis
@@ -332,6 +337,7 @@ class LockService:
         if self._redis:
             await self._redis.close()
             self._redis = None
+            self._redis_loop = None
 
 
 # Global singleton instance

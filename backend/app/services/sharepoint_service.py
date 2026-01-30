@@ -66,28 +66,92 @@ def _build_item(
     folder_path: str,
     index: int,
 ) -> Optional[Dict[str, Any]]:
+    """
+    Build a normalized item dict from Microsoft Graph DriveItem.
+
+    Captures comprehensive metadata for searching and filtering:
+    - Basic info: name, type, size, extension
+    - Dates: created, modified (both from SharePoint and file system)
+    - People: creator/modifier names and emails
+    - Identifiers: id, etag, content hash
+    - Location: folder path, web URL, parent path
+    """
     is_folder = "folder" in item
     if is_folder and not include_folders:
         return None
+
     name = str(item.get("name", ""))
     ext = ""
     if not is_folder:
         ext = Path(name).suffix.lstrip(".")
+
+    # Extract user info with both name and email
+    created_by_info = item.get("createdBy", {}).get("user", {})
+    modified_by_info = item.get("lastModifiedBy", {}).get("user", {})
+
+    # Extract file hashes if available
+    file_info = item.get("file", {})
+    hashes = file_info.get("hashes", {})
+
+    # Extract file system info (original creation/modified times)
+    fs_info = item.get("fileSystemInfo", {})
+
+    # Extract parent reference for full path
+    parent_ref = item.get("parentReference", {})
+
     return {
+        # Basic identification
         "index": index,
         "name": name,
         "type": "folder" if is_folder else "file",
         "folder": _normalize_folder_path(folder_path),
         "extension": ext,
+        "id": item.get("id", ""),
+
+        # Size
         "size": item.get("size"),
+
+        # SharePoint timestamps
         "created": item.get("createdDateTime"),
         "modified": item.get("lastModifiedDateTime"),
-        "created_by": item.get("createdBy", {}).get("user", {}).get("displayName"),
-        "last_modified_by": item.get("lastModifiedBy", {}).get("user", {}).get("displayName"),
-        "mime": item.get("file", {}).get("mimeType"),
-        "file_type": item.get("file", {}).get("mimeType"),
-        "id": item.get("id", ""),
+
+        # File system timestamps (original file dates)
+        "fs_created": fs_info.get("createdDateTime"),
+        "fs_modified": fs_info.get("lastModifiedDateTime"),
+
+        # Creator info
+        "created_by": created_by_info.get("displayName"),
+        "created_by_email": created_by_info.get("email"),
+        "created_by_id": created_by_info.get("id"),
+
+        # Modifier info
+        "last_modified_by": modified_by_info.get("displayName"),
+        "last_modified_by_email": modified_by_info.get("email"),
+        "last_modified_by_id": modified_by_info.get("id"),
+
+        # File type info
+        "mime": file_info.get("mimeType"),
+        "file_type": file_info.get("mimeType"),
+
+        # Change detection
+        "etag": item.get("eTag"),
+        "ctag": item.get("cTag"),
+
+        # Content hashes for deduplication/verification
+        "quick_xor_hash": hashes.get("quickXorHash"),
+        "sha1_hash": hashes.get("sha1Hash"),
+        "sha256_hash": hashes.get("sha256Hash"),
+
+        # URLs and paths
         "web_url": item.get("webUrl"),
+        "parent_path": parent_ref.get("path"),
+        "drive_id": parent_ref.get("driveId"),
+
+        # Description (if set in SharePoint)
+        "description": item.get("description"),
+
+        # Sharing info
+        "shared": item.get("shared"),
     }
 
 
@@ -192,6 +256,79 @@ async def _collect_items(
                 if max_items is not None and fetched >= max_items:
                     return collected, fetched
     return collected, fetched
+
+
+async def _stream_items(
+    client: httpx.AsyncClient,
+    graph_base: str,
+    token: str,
+    drive_id: str,
+    root_id: str,
+    include_folders: bool,
+    recursive: bool,
+    page_size: int,
+    max_items: Optional[int],
+    on_folder_scanned: Optional[callable] = None,
+):
+    """
+    Async generator that yields items as they are discovered.
+
+    This allows processing files immediately while continuing to scan folders,
+    rather than waiting for the complete inventory.
+
+    Args:
+        on_folder_scanned: Optional callback called after each folder is scanned
+                          with (folder_path, files_found, folders_pending)
+
+    Yields:
+        Dict items as they are discovered
+    """
+    pending: List[Tuple[str, str]] = [(root_id, "")]
+    fetched = 0
+    index = 0
+
+    async def _list_children(item_id: str) -> List[Dict[str, Any]]:
+        url = f"{graph_base}/drives/{drive_id}/items/{item_id}/children"
+        headers = {"Authorization": f"Bearer {token}"}
+        params = {"$top": str(page_size)}
+        items: List[Dict[str, Any]] = []
+        while url:
+            response = await client.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+            page_items = data.get("value", [])
+            items.extend(page_items)
+            url = data.get("@odata.nextLink")
+            params = None
+        return items
+
+    while pending:
+        item_id, folder_path = pending.pop(0)
+        raw_items = await _list_children(item_id)
+        files_in_folder = 0
+
+        for raw in raw_items:
+            is_folder = "folder" in raw
+            if is_folder and recursive:
+                next_path = f"{folder_path}/{raw.get('name', '')}".strip("/")
+                pending.append((raw.get("id", ""), next_path))
+
+            index += 1
+            entry = _build_item(raw, include_folders, folder_path, index)
+            if entry:
+                if entry.get("type") == "file":
+                    files_in_folder += 1
+                fetched += 1
+                yield entry
+                if max_items is not None and fetched >= max_items:
+                    return
+
+        # Callback after scanning each folder
+        if on_folder_scanned:
+            try:
+                await on_folder_scanned(folder_path or "/", files_in_folder, len(pending))
+            except Exception:
+                pass  # Don't let callback errors stop the scan
 
 
 async def _get_sharepoint_credentials(
@@ -317,6 +454,90 @@ async def sharepoint_inventory(
         },
         "items": items,
     }
+
+
+async def sharepoint_inventory_stream(
+    folder_url: str,
+    recursive: bool,
+    include_folders: bool,
+    page_size: int,
+    max_items: Optional[int],
+    organization_id: Optional[UUID] = None,
+    session: Optional[AsyncSession] = None,
+    on_folder_scanned: Optional[callable] = None,
+):
+    """
+    Stream SharePoint folder contents, yielding items as they are discovered.
+
+    This is a streaming version of sharepoint_inventory that yields items
+    immediately as folders are scanned, rather than collecting everything first.
+
+    Args:
+        folder_url: SharePoint folder URL
+        recursive: Whether to recursively traverse subfolders
+        include_folders: Whether to include folders in the results
+        page_size: Number of items per page
+        max_items: Maximum number of items to return
+        organization_id: Optional organization ID for database connection lookup
+        session: Optional database session for connection lookup
+        on_folder_scanned: Optional callback(folder_path, files_found, folders_pending)
+
+    Yields:
+        Tuple of (folder_info, item) where folder_info is only set on first yield
+    """
+    credentials = await _get_sharepoint_credentials(organization_id, session)
+    tenant_id = credentials["tenant_id"]
+    client_id = credentials["client_id"]
+    client_secret = credentials["client_secret"]
+
+    token_payload = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "grant_type": "client_credentials",
+        "scope": _scope(),
+    }
+
+    graph_base = _graph_base_url()
+    share_id = _encode_share_url(folder_url)
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        token_resp = await client.post(_token_url(tenant_id), data=token_payload)
+        token_resp.raise_for_status()
+        token = token_resp.json().get("access_token")
+        if not token:
+            raise RuntimeError("No access_token returned from Microsoft identity platform.")
+
+        headers = {"Authorization": f"Bearer {token}"}
+        drive_resp = await client.get(f"{graph_base}/shares/{share_id}/driveItem", headers=headers)
+        drive_resp.raise_for_status()
+        folder = drive_resp.json()
+
+        drive_id, item_id = _extract_drive_info(folder)
+
+        folder_info = {
+            "name": folder.get("name", ""),
+            "id": folder.get("id", ""),
+            "web_url": folder.get("webUrl", ""),
+            "drive_id": drive_id,
+        }
+
+        # Yield folder info first
+        yield folder_info, None
+
+        # Stream items as they are discovered
+        async for item in _stream_items(
+            client,
+            graph_base,
+            token,
+            drive_id,
+            item_id,
+            include_folders,
+            recursive,
+            page_size,
+            max_items,
+            on_folder_scanned,
+        ):
+            yield None, item
 
 
 async def sharepoint_download(

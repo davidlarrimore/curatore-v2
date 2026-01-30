@@ -2,6 +2,7 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
+import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { assetsApi, type Run, type AssetMetadata, type AssetMetadataList, type AssetQueueInfo } from '@/lib/api'
 import { formatDateTime } from '@/lib/date-utils'
@@ -549,7 +550,16 @@ function AssetDetailContent() {
                 </div>
                 <div>
                   <p className="text-xs text-gray-500 dark:text-gray-400">Source</p>
-                  <p className="text-sm font-medium text-gray-900 dark:text-white">{formatSourceType(asset.source_type)}</p>
+                  {asset.source_type === 'sharepoint' && asset.source_metadata?.sync_config_id ? (
+                    <Link
+                      href={`/sharepoint-sync/${asset.source_metadata.sync_config_id}`}
+                      className="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-700 dark:hover:text-indigo-300 hover:underline"
+                    >
+                      SharePoint
+                    </Link>
+                  ) : (
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">{formatSourceType(asset.source_type)}</p>
+                  )}
                 </div>
               </div>
             </div>

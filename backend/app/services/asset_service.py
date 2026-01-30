@@ -301,6 +301,7 @@ class AssetService:
         organization_id: UUID,
         source_type: Optional[str] = None,
         status: Optional[str] = None,
+        include_deleted: bool = False,
         limit: int = 100,
         offset: int = 0,
     ) -> List[Asset]:
@@ -312,6 +313,7 @@ class AssetService:
             organization_id: Organization UUID
             source_type: Filter by source type (upload, sharepoint, etc.)
             status: Filter by status (pending, ready, failed, deleted)
+            include_deleted: If False (default), exclude assets with status='deleted'
             limit: Maximum results to return
             offset: Number of results to skip
 
@@ -324,7 +326,11 @@ class AssetService:
             query = query.where(Asset.source_type == source_type)
 
         if status:
+            # If explicit status filter, use it
             query = query.where(Asset.status == status)
+        elif not include_deleted:
+            # Exclude deleted assets by default unless explicitly requested
+            query = query.where(Asset.status != "deleted")
 
         query = query.order_by(Asset.created_at.desc()).limit(limit).offset(offset)
 
@@ -400,6 +406,7 @@ class AssetService:
         organization_id: UUID,
         source_type: Optional[str] = None,
         status: Optional[str] = None,
+        include_deleted: bool = False,
     ) -> int:
         """
         Count assets for an organization with optional filters.
@@ -409,6 +416,7 @@ class AssetService:
             organization_id: Organization UUID
             source_type: Filter by source type
             status: Filter by status
+            include_deleted: If False (default), exclude assets with status='deleted'
 
         Returns:
             Count of matching assets
@@ -422,6 +430,9 @@ class AssetService:
 
         if status:
             query = query.where(Asset.status == status)
+        elif not include_deleted:
+            # Exclude deleted assets by default
+            query = query.where(Asset.status != "deleted")
 
         result = await session.execute(query)
         return result.scalar_one()

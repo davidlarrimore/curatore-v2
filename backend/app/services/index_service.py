@@ -30,6 +30,7 @@ Version: 2.0.0
 """
 
 import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
@@ -142,7 +143,24 @@ class IndexService:
             collection_id = None
             sync_config_id = None
 
+            # Enhanced metadata fields
+            file_extension = None
+            file_size = asset.file_size
+            file_created_at = None
+            file_modified_at = None
+            created_by = None
+            created_by_email = None
+            modified_by = None
+            modified_by_email = None
+            sharepoint_path = None
+            sharepoint_folder = None
+            description = None
+
             source_meta = asset.source_metadata or {}
+
+            # Extract file extension from filename
+            if asset.original_filename and "." in asset.original_filename:
+                file_extension = asset.original_filename.rsplit(".", 1)[-1].lower()
 
             if asset.source_type == "web_scrape":
                 url = source_meta.get("url")
@@ -158,12 +176,61 @@ class IndexService:
                 sync_config_id = source_meta.get("sync_config_id")
                 if sync_config_id:
                     sync_config_id = UUID(sync_config_id)
+
                 # Use SharePoint path in title if available
                 sp_path = source_meta.get("sharepoint_path")
                 if sp_path:
                     title = f"{sp_path}/{asset.original_filename}"
 
-            # Index to OpenSearch
+                # Enhanced SharePoint metadata for search
+                sharepoint_path = sp_path
+                sharepoint_folder = source_meta.get("sharepoint_folder")
+                file_extension = source_meta.get("file_extension") or file_extension
+                description = source_meta.get("description")
+
+                # Creator/modifier info
+                created_by = source_meta.get("created_by")
+                created_by_email = source_meta.get("created_by_email")
+                modified_by = source_meta.get("modified_by")
+                modified_by_email = source_meta.get("modified_by_email")
+
+                # Parse file dates from source metadata
+                if source_meta.get("file_created_at"):
+                    try:
+                        file_created_at = datetime.fromisoformat(
+                            source_meta["file_created_at"].replace("Z", "+00:00")
+                        )
+                    except:
+                        pass
+                if source_meta.get("file_modified_at"):
+                    try:
+                        file_modified_at = datetime.fromisoformat(
+                            source_meta["file_modified_at"].replace("Z", "+00:00")
+                        )
+                    except:
+                        pass
+                # Fallback to SharePoint dates if file system dates not available
+                if not file_created_at and source_meta.get("sharepoint_created_at"):
+                    try:
+                        file_created_at = datetime.fromisoformat(
+                            source_meta["sharepoint_created_at"].replace("Z", "+00:00")
+                        )
+                    except:
+                        pass
+                if not file_modified_at and source_meta.get("sharepoint_modified_at"):
+                    try:
+                        file_modified_at = datetime.fromisoformat(
+                            source_meta["sharepoint_modified_at"].replace("Z", "+00:00")
+                        )
+                    except:
+                        pass
+
+            elif asset.source_type == "upload":
+                # For uploads, try to extract creator info if available
+                created_by = source_meta.get("uploaded_by")
+                created_by_email = source_meta.get("uploaded_by_email")
+
+            # Index to OpenSearch with enhanced metadata
             success = await opensearch_service.index_document(
                 organization_id=asset.organization_id,
                 asset_id=asset.id,
@@ -177,6 +244,18 @@ class IndexService:
                 sync_config_id=sync_config_id,
                 metadata=asset.source_metadata,
                 created_at=asset.created_at,
+                # Enhanced metadata
+                file_extension=file_extension,
+                file_size=file_size,
+                file_created_at=file_created_at,
+                file_modified_at=file_modified_at,
+                created_by=created_by,
+                created_by_email=created_by_email,
+                modified_by=modified_by,
+                modified_by_email=modified_by_email,
+                sharepoint_path=sharepoint_path,
+                sharepoint_folder=sharepoint_folder,
+                description=description,
             )
 
             if success:
@@ -301,13 +380,29 @@ class IndexService:
                                     f"Failed to fetch content for {asset.id}: {e}"
                                 )
 
-                    # Build document
+                    # Build document with enhanced metadata
                     title = asset.original_filename
                     url = None
                     collection_id = None
                     sync_config_id = None
 
+                    # Enhanced metadata fields
+                    file_extension = None
+                    file_created_at = None
+                    file_modified_at = None
+                    created_by = None
+                    created_by_email = None
+                    modified_by = None
+                    modified_by_email = None
+                    sharepoint_path = None
+                    sharepoint_folder = None
+                    description = None
+
                     source_meta = asset.source_metadata or {}
+
+                    # Extract file extension
+                    if asset.original_filename and "." in asset.original_filename:
+                        file_extension = asset.original_filename.rsplit(".", 1)[-1].lower()
 
                     if asset.source_type == "web_scrape":
                         url = source_meta.get("url")
@@ -321,21 +416,63 @@ class IndexService:
                         if sp_path:
                             title = f"{sp_path}/{asset.original_filename}"
 
-                    batch_docs.append(
-                        {
-                            "asset_id": str(asset.id),
-                            "title": title,
-                            "content": content,
-                            "filename": asset.original_filename,
-                            "source_type": asset.source_type,
-                            "content_type": asset.content_type,
-                            "url": url,
-                            "collection_id": collection_id,
-                            "sync_config_id": sync_config_id,
-                            "metadata": asset.source_metadata,
-                            "created_at": asset.created_at.isoformat(),
-                        }
-                    )
+                        # Enhanced SharePoint metadata
+                        sharepoint_path = sp_path
+                        sharepoint_folder = source_meta.get("sharepoint_folder")
+                        file_extension = source_meta.get("file_extension") or file_extension
+                        description = source_meta.get("description")
+                        created_by = source_meta.get("created_by")
+                        created_by_email = source_meta.get("created_by_email")
+                        modified_by = source_meta.get("modified_by")
+                        modified_by_email = source_meta.get("modified_by_email")
+
+                        # Parse dates
+                        for date_field, meta_key in [
+                            ("file_created_at", "file_created_at"),
+                            ("file_created_at", "sharepoint_created_at"),
+                            ("file_modified_at", "file_modified_at"),
+                            ("file_modified_at", "sharepoint_modified_at"),
+                        ]:
+                            if not locals().get(date_field) and source_meta.get(meta_key):
+                                try:
+                                    val = datetime.fromisoformat(
+                                        source_meta[meta_key].replace("Z", "+00:00")
+                                    )
+                                    if date_field == "file_created_at" and not file_created_at:
+                                        file_created_at = val
+                                    elif date_field == "file_modified_at" and not file_modified_at:
+                                        file_modified_at = val
+                                except:
+                                    pass
+
+                    doc = {
+                        "asset_id": str(asset.id),
+                        "title": title,
+                        "content": content,
+                        "filename": asset.original_filename,
+                        "source_type": asset.source_type,
+                        "content_type": asset.content_type,
+                        "url": url,
+                        "collection_id": collection_id,
+                        "sync_config_id": sync_config_id,
+                        "metadata": asset.source_metadata,
+                        "created_at": asset.created_at.isoformat(),
+                        # Enhanced metadata
+                        "file_extension": file_extension,
+                        "file_size": asset.file_size,
+                        "file_created_at": file_created_at.isoformat() if file_created_at else None,
+                        "file_modified_at": file_modified_at.isoformat() if file_modified_at else None,
+                        "created_by": created_by,
+                        "created_by_email": created_by_email,
+                        "modified_by": modified_by,
+                        "modified_by_email": modified_by_email,
+                        "sharepoint_path": sharepoint_path,
+                        "sharepoint_folder": sharepoint_folder,
+                        "description": description,
+                    }
+                    # Remove None values
+                    doc = {k: v for k, v in doc.items() if v is not None}
+                    batch_docs.append(doc)
 
                 except Exception as e:
                     logger.error(f"Error preparing asset {asset.id}: {e}")

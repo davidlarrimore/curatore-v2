@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from celery import shared_task
-from sqlalchemy import select
+from sqlalchemy import select, and_
 
 from .services.database_service import database_service
 from .services.extraction_orchestrator import extraction_orchestrator
@@ -2442,7 +2442,7 @@ async def _enhance_extraction_async(
 # PHASE 8: SHAREPOINT SYNC TASKS
 # ============================================================================
 
-@shared_task(bind=True)
+@shared_task(bind=True, soft_time_limit=3600, time_limit=3900)  # 60 minute soft limit, 65 minute hard limit
 def sharepoint_sync_task(
     self,
     sync_config_id: str,
@@ -2610,7 +2610,7 @@ async def _fail_sharepoint_sync_run(run_id, error_message: str):
         await session.commit()
 
 
-@shared_task(bind=True)
+@shared_task(bind=True, soft_time_limit=3600, time_limit=3900)  # 60 minute soft limit, 65 minute hard limit
 def sharepoint_import_task(
     self,
     connection_id: Optional[str],
@@ -2664,6 +2664,100 @@ def sharepoint_import_task(
         raise
 
 
+async def _expand_folders_to_files(
+    client: "httpx.AsyncClient",
+    headers: Dict[str, str],
+    graph_base: str,
+    items: list,
+    logger: "logging.Logger",
+) -> list:
+    """
+    Recursively expand folders into their file contents.
+
+    Takes a list of items that may contain folders and returns a flat list
+    of only files, recursively fetching folder contents.
+    """
+    expanded_files = []
+
+    async def list_folder_children(drive_id: str, folder_id: str, parent_path: str) -> list:
+        """Recursively list all files in a folder."""
+        files = []
+        url = f"{graph_base}/drives/{drive_id}/items/{folder_id}/children"
+        params = {"$top": "200"}  # Fetch in batches
+
+        while url:
+            response = await client.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            for child in data.get("value", []):
+                child_name = child.get("name", "")
+                child_path = f"{parent_path}/{child_name}".strip("/") if parent_path else child_name
+
+                if "folder" in child:
+                    # Recursively process subfolder
+                    child_id = child.get("id")
+                    if child_id:
+                        subfolder_files = await list_folder_children(drive_id, child_id, child_path)
+                        files.extend(subfolder_files)
+                else:
+                    # It's a file - extract metadata
+                    file_info = child.get("file", {})
+                    parent_ref = child.get("parentReference", {})
+                    created_by_info = child.get("createdBy", {}).get("user", {})
+                    modified_by_info = child.get("lastModifiedBy", {}).get("user", {})
+
+                    files.append({
+                        "id": child.get("id"),
+                        "name": child_name,
+                        "type": "file",
+                        "folder": parent_path,  # Relative path within the selected folder
+                        "size": child.get("size"),
+                        "mime": file_info.get("mimeType"),
+                        "file_type": file_info.get("mimeType"),
+                        "web_url": child.get("webUrl"),
+                        "drive_id": parent_ref.get("driveId"),
+                        "etag": child.get("eTag"),
+                        "created": child.get("createdDateTime"),
+                        "modified": child.get("lastModifiedDateTime"),
+                        "created_by": created_by_info.get("displayName"),
+                        "created_by_email": created_by_info.get("email"),
+                        "last_modified_by": modified_by_info.get("displayName"),
+                        "last_modified_by_email": modified_by_info.get("email"),
+                    })
+
+            url = data.get("@odata.nextLink")
+            params = None  # nextLink includes params
+
+        return files
+
+    for item in items:
+        item_type = item.get("type", "file")
+
+        if item_type == "folder":
+            # Expand folder contents
+            folder_name = item.get("name", "")
+            folder_id = item.get("id")
+            drive_id = item.get("drive_id")
+
+            if not folder_id or not drive_id:
+                logger.warning(f"Skipping folder '{folder_name}': missing id or drive_id")
+                continue
+
+            logger.info(f"Expanding folder '{folder_name}' to get files...")
+            try:
+                folder_files = await list_folder_children(drive_id, folder_id, folder_name)
+                logger.info(f"Found {len(folder_files)} files in folder '{folder_name}'")
+                expanded_files.extend(folder_files)
+            except Exception as e:
+                logger.error(f"Failed to expand folder '{folder_name}': {e}")
+        else:
+            # It's already a file, add as-is
+            expanded_files.append(item)
+
+    return expanded_files
+
+
 async def _sharepoint_import_async(
     connection_id: Optional[uuid.UUID],
     organization_id: uuid.UUID,
@@ -2674,6 +2768,9 @@ async def _sharepoint_import_async(
 ) -> Dict[str, Any]:
     """
     Async implementation of SharePoint import.
+
+    Handles both files and folders. When a folder is selected, recursively
+    fetches all files within that folder and imports them.
     """
     import hashlib
     import tempfile
@@ -2686,21 +2783,24 @@ async def _sharepoint_import_async(
     from .services.run_service import run_service
     from .services.run_log_service import run_log_service
     from .services.asset_service import asset_service
-    from .services.minio_service import minio_service
+    from .services.minio_service import get_minio_service
     from .services.upload_integration_service import upload_integration_service
     from .services.storage_path_service import storage_paths
 
     logger = logging.getLogger("curatore.tasks.sharepoint_import")
 
     async with database_service.get_session() as session:
-        # Start the run
+        # =================================================================
+        # PHASE 1: INITIALIZATION
+        # =================================================================
         await run_service.start_run(session, run_id)
         await run_log_service.log_event(
             session=session,
             run_id=run_id,
             level="INFO",
-            event_type="start",
-            message=f"Starting import of {len(selected_items)} files",
+            event_type="phase",
+            message="Phase 1: Initializing import",
+            context={"phase": "init", "selected_items": len(selected_items)},
         )
         await session.commit()
 
@@ -2711,6 +2811,28 @@ async def _sharepoint_import_async(
             sync_config = await sharepoint_sync_service.get_sync_config(session, sync_config_id)
             if sync_config:
                 sync_slug = sync_config.slug
+                await run_log_service.log_event(
+                    session=session,
+                    run_id=run_id,
+                    level="INFO",
+                    event_type="progress",
+                    message=f"Loaded sync config: {sync_config.name}",
+                    context={"sync_config_name": sync_config.name, "sync_slug": sync_slug},
+                )
+                await session.commit()
+
+        # =================================================================
+        # PHASE 2: CONNECTING TO SHAREPOINT
+        # =================================================================
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 2: Connecting to SharePoint",
+            context={"phase": "connecting"},
+        )
+        await session.commit()
 
         # Get SharePoint credentials
         credentials = await _get_sharepoint_credentials(organization_id, session)
@@ -2730,8 +2852,14 @@ async def _sharepoint_import_async(
         results = {
             "imported": 0,
             "failed": 0,
+            "skipped_folders": 0,
             "errors": [],
         }
+
+        # Get MinIO service
+        minio = get_minio_service()
+        if not minio:
+            raise RuntimeError("MinIO service is not available")
 
         async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
             # Get token
@@ -2741,7 +2869,79 @@ async def _sharepoint_import_async(
             token = token_resp.json().get("access_token")
             headers = {"Authorization": f"Bearer {token}"}
 
-            for item in selected_items:
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="progress",
+                message="Successfully authenticated with SharePoint",
+                context={"phase": "connecting"},
+            )
+            await session.commit()
+
+            # =================================================================
+            # PHASE 3: EXPANDING FOLDERS
+            # =================================================================
+            # Count folders vs files in selection
+            folder_count = sum(1 for item in selected_items if item.get("type") == "folder")
+            file_count = len(selected_items) - folder_count
+
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="phase",
+                message=f"Phase 3: Expanding {folder_count} folders and {file_count} files",
+                context={"phase": "expanding", "folders": folder_count, "files": file_count},
+            )
+            await session.commit()
+
+            files_to_import = await _expand_folders_to_files(
+                client=client,
+                headers=headers,
+                graph_base=graph_base,
+                items=selected_items,
+                logger=logger,
+            )
+
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="progress",
+                message=f"Expansion complete: Found {len(files_to_import)} files to import",
+                context={"phase": "expanding", "total_files": len(files_to_import)},
+            )
+            await session.commit()
+
+            # =================================================================
+            # PHASE 4: DOWNLOADING FILES
+            # =================================================================
+            total_files = len(files_to_import)
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="phase",
+                message=f"Phase 4: Downloading {total_files} files",
+                context={"phase": "downloading", "total_files": total_files},
+            )
+
+            # Update run progress
+            await run_service.update_run_progress(
+                session=session,
+                run_id=run_id,
+                current=0,
+                total=total_files,
+                unit="files",
+            )
+            await session.commit()
+
+            # Track progress milestones
+            last_logged_percent = 0
+            log_interval_percent = 10
+
+            for idx, item in enumerate(files_to_import):
                 item_id = item.get("id")
                 name = item.get("name", "unknown")
                 folder_path = item.get("folder", "").strip("/")
@@ -2787,8 +2987,8 @@ async def _sharepoint_import_async(
                     )
 
                     # Upload to MinIO
-                    uploads_bucket = minio_service.uploads_bucket
-                    await minio_service.upload_file(
+                    uploads_bucket = minio.bucket_uploads
+                    minio.upload_file(
                         bucket=uploads_bucket,
                         object_key=storage_key,
                         file_path=tmp_path,
@@ -2854,8 +3054,9 @@ async def _sharepoint_import_async(
                         session=session,
                         run_id=run_id,
                         level="INFO",
-                        event_type="progress",
-                        message=f"Imported: {name}",
+                        event_type="file_download",
+                        message=f"Downloaded: {name}",
+                        context={"phase": "downloading", "file": name, "folder": folder_path},
                     )
 
                 except Exception as e:
@@ -2867,11 +3068,59 @@ async def _sharepoint_import_async(
                         session=session,
                         run_id=run_id,
                         level="ERROR",
-                        event_type="error",
-                        message=f"Failed to import {name}: {e}",
+                        event_type="file_error",
+                        message=f"Failed to download: {name}",
+                        context={"phase": "downloading", "file": name, "error": str(e)},
                     )
 
+                # Update progress
+                processed = idx + 1
+                await run_service.update_run_progress(
+                    session=session,
+                    run_id=run_id,
+                    current=processed,
+                    total=total_files,
+                    unit="files",
+                )
+
+                # Log progress at percentage milestones
+                if total_files > 0:
+                    current_percent = int((processed / total_files) * 100)
+                    if current_percent >= last_logged_percent + log_interval_percent:
+                        last_logged_percent = (current_percent // log_interval_percent) * log_interval_percent
+                        await run_log_service.log_event(
+                            session=session,
+                            run_id=run_id,
+                            level="INFO",
+                            event_type="progress",
+                            message=f"Download progress: {processed}/{total_files} files ({current_percent}%)",
+                            context={
+                                "phase": "downloading",
+                                "processed": processed,
+                                "total": total_files,
+                                "percent": current_percent,
+                                "imported": results["imported"],
+                                "failed": results["failed"],
+                            },
+                        )
+
+                await session.commit()
+
+            # =================================================================
+            # PHASE 5: COMPLETING IMPORT
+            # =================================================================
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="phase",
+                message="Phase 5: Finalizing import",
+                context={"phase": "completing"},
+            )
+            await session.commit()
+
         # Complete the run
+        status_msg = "completed successfully" if results["failed"] == 0 else "completed with errors"
         await run_service.complete_run(
             session=session,
             run_id=run_id,
@@ -2881,7 +3130,13 @@ async def _sharepoint_import_async(
         await run_log_service.log_summary(
             session=session,
             run_id=run_id,
-            message=f"Import completed: {results['imported']} imported, {results['failed']} failed",
+            message=f"SharePoint import {status_msg}: {results['imported']} imported, {results['failed']} failed",
+            context={
+                "imported": results["imported"],
+                "failed": results["failed"],
+                "errors": results["errors"][:5] if results["errors"] else [],  # Limit errors in summary
+                "status": "success" if results["failed"] == 0 else "partial",
+            },
         )
 
         await session.commit()
