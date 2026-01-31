@@ -65,6 +65,7 @@ def _build_item(
     include_folders: bool,
     folder_path: str,
     index: int,
+    skip_shortcuts: bool = True,
 ) -> Optional[Dict[str, Any]]:
     """
     Build a normalized item dict from Microsoft Graph DriveItem.
@@ -75,7 +76,19 @@ def _build_item(
     - People: creator/modifier names and emails
     - Identifiers: id, etag, content hash
     - Location: folder path, web URL, parent path
+
+    Args:
+        item: Raw DriveItem from Microsoft Graph API
+        include_folders: Whether to include folder items
+        folder_path: Current folder path for context
+        index: Item index for ordering
+        skip_shortcuts: If True, skip shortcuts/links (items with remoteItem)
     """
+    # Skip shortcuts/links - they have a remoteItem property pointing to the actual file
+    # Shortcuts can cause duplicates since the real file will also be scanned
+    if skip_shortcuts and "remoteItem" in item:
+        return None
+
     is_folder = "folder" in item
     if is_folder and not include_folders:
         return None
