@@ -11,6 +11,17 @@ Key Features:
 - Re-crawl versioning for content updates
 - Document discovery and optional auto-download
 - Run-attributed crawl tracking
+- HTTP conditional requests (ETag/If-None-Match, Last-Modified/If-Modified-Since)
+  for efficient re-crawling - skips unchanged pages without re-downloading
+- Content hash-based change detection for pages that don't support conditional requests
+- Automatic OpenSearch indexing for inline-extracted content
+- Locale/language variant URL filtering to avoid duplicate content
+
+Efficiency Optimizations:
+- Uses HTTP 304 Not Modified responses to skip unchanged pages
+- Stores ETag and Last-Modified headers in scrape_metadata for future requests
+- URL-based skip for documents already in collection (avoids redundant downloads)
+- Smart external document filtering with CDN pattern recognition
 
 Usage:
     from app.services.crawl_service import crawl_service
@@ -41,6 +52,7 @@ Usage:
 import asyncio
 import hashlib
 import logging
+import random
 import re
 from datetime import datetime
 from typing import Dict, List, Optional, Any, Set, Tuple
@@ -62,6 +74,7 @@ from ..database.models import (
 )
 from ..config import settings
 from .run_service import run_service
+from .run_log_service import run_log_service
 from .asset_service import asset_service
 from .scrape_service import scrape_service, extract_url_path
 from .minio_service import get_minio_service
@@ -76,11 +89,17 @@ logger = logging.getLogger("curatore.crawl_service")
 DEFAULT_CRAWL_CONFIG = {
     "max_depth": 3,  # 0 means unlimited depth
     "max_pages": 100,
-    "delay_seconds": 1.0,
+    "delay_seconds": 2.0,  # Base delay between requests (increased for rate limiting)
+    "delay_jitter": 1.0,  # Random jitter added to delay (0-1.0 seconds)
     "timeout_seconds": 30,
     "respect_robots_txt": True,
     "user_agent": "Curatore/2.0 (+https://curatore.ai)",
     "follow_external_links": False,
+    # Rate limiting / backoff
+    "backoff_on_error": True,  # Exponential backoff on 403/429 errors
+    "max_consecutive_errors": 5,  # Stop crawl after N consecutive errors
+    # Locale exclusion
+    "exclude_locales": True,  # Exclude common locale/language variant paths
     # Playwright-specific options
     "wait_for_selector": None,  # CSS selector to wait for
     "wait_timeout_ms": 5000,  # Wait timeout for selector
@@ -90,7 +109,59 @@ DEFAULT_CRAWL_CONFIG = {
     # Document discovery
     "download_documents": False,  # Auto-download discovered documents
     "document_extensions": [".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"],
+    # External document handling (when download_documents=True)
+    # Modes: "smart" (default), "same_domain_only", "all", "none"
+    #   - "smart": Allow same domain, subdomains, known CDNs, and URLs containing site name
+    #   - "same_domain_only": Only allow documents from same domain/subdomains
+    #   - "all": Download all documents (legacy behavior)
+    #   - "none": Skip all external documents
+    "external_document_mode": "smart",
+    "allowed_document_domains": [],  # Additional domains to allow (e.g., ["company-assets.s3.amazonaws.com"])
+    "blocked_document_domains": [],  # Domains to always block (e.g., ["ads.example.com"])
 }
+
+# Known CDN patterns - these are commonly used to host legitimate site assets
+# Used when external_document_mode="smart"
+KNOWN_CDN_PATTERNS = [
+    # AWS
+    r".*\.cloudfront\.net$",
+    r".*\.s3\.amazonaws\.com$",
+    r".*\.s3-[\w-]+\.amazonaws\.com$",
+    r".*\.s3\.[\w-]+\.amazonaws\.com$",
+    # Azure
+    r".*\.blob\.core\.windows\.net$",
+    r".*\.azureedge\.net$",
+    # Google Cloud
+    r".*\.storage\.googleapis\.com$",
+    r".*\.googleusercontent\.com$",
+    # Akamai
+    r".*\.akamaized\.net$",
+    r".*\.akamai\.net$",
+    r".*\.akamaitechnologies\.com$",
+    # Cloudflare
+    r".*\.cloudflare\.com$",
+    r".*\.r2\.dev$",
+    # Fastly
+    r".*\.fastly\.net$",
+    r".*\.fastlylb\.net$",
+    # Generic CDN patterns
+    r".*\.cdn\.com$",
+    r".*-cdn\..*",
+    r"cdn\..*",
+    r"assets\..*",
+    r"static\..*",
+    r"files\..*",
+    r"media\..*",
+    r"downloads\..*",
+]
+
+# Common locale path patterns to exclude (when exclude_locales=True)
+# Matches paths like /en-us/, /en-gb/, /de-de/, /fr/, /es/, etc.
+LOCALE_PATTERNS = [
+    r"^/[a-z]{2}-[a-z]{2}/",  # /en-us/, /en-gb/, /de-de/, /fr-fr/
+    r"^/[a-z]{2}-[a-z]{2}$",  # /en-us, /en-gb (without trailing slash)
+    r"^/(?:af|sq|ar|hy|az|eu|be|bn|bs|bg|ca|zh|hr|cs|da|nl|et|fi|fr|gl|ka|de|el|gu|ht|he|hi|hu|is|id|ga|it|ja|kn|kk|ko|lv|lt|mk|ms|ml|mt|mr|mn|no|fa|pl|pt|pa|ro|ru|sr|sk|sl|es|sw|sv|ta|te|th|tr|uk|ur|uz|vi|cy)/",  # ISO 639-1 codes
+]
 
 
 class CrawlResult:
@@ -233,6 +304,129 @@ class CrawlService:
 
         return False
 
+    def is_locale_url(self, url: str, base_url: str) -> bool:
+        """
+        Check if URL is a locale/language variant of the base URL.
+
+        Detects paths like:
+        - /en-us/, /en-gb/, /de-de/, /fr-fr/ (region variants)
+        - /fr/, /de/, /es/, /ja/ (language-only paths)
+
+        Args:
+            url: URL to check
+            base_url: Original root URL to compare against
+
+        Returns:
+            True if URL appears to be a locale variant
+        """
+        url_path = urlparse(url).path.lower()
+        base_path = urlparse(base_url).path.lower()
+
+        # If base URL already has a locale path, don't exclude URLs with the same locale
+        # e.g., if root is /en-us/, allow /en-us/about but not /fr/about
+        for pattern in LOCALE_PATTERNS:
+            base_match = re.match(pattern, base_path)
+            url_match = re.match(pattern, url_path)
+
+            if url_match:
+                # URL has a locale prefix
+                if base_match:
+                    # Base also has locale - only allow if same locale
+                    return url_match.group(0) != base_match.group(0)
+                else:
+                    # Base doesn't have locale - this is a locale variant
+                    return True
+
+        return False
+
+    def _should_download_document(
+        self,
+        doc_url: str,
+        base_url: str,
+        config: Dict[str, Any],
+    ) -> Tuple[bool, str]:
+        """
+        Determine if a document should be downloaded based on its URL and config.
+
+        Uses a tiered approach to handle external documents:
+        1. Always allow same domain and subdomains
+        2. Allow if document hostname contains the site's brand/name
+        3. Allow known CDN patterns (CloudFront, S3, Azure, etc.)
+        4. Check explicit allow/block lists
+        5. Block everything else (for "smart" mode)
+
+        Args:
+            doc_url: Full URL of the document to download
+            base_url: Root URL of the site being crawled
+            config: Crawl configuration dict
+
+        Returns:
+            Tuple of (should_download, reason)
+        """
+        mode = config.get("external_document_mode", "smart")
+        allowed_domains = config.get("allowed_document_domains", [])
+        blocked_domains = config.get("blocked_document_domains", [])
+
+        doc_parsed = urlparse(doc_url)
+        base_parsed = urlparse(base_url)
+
+        doc_host = doc_parsed.netloc.lower()
+        base_host = base_parsed.netloc.lower()
+
+        # Extract base domain name (e.g., "steampunk" from "www.steampunk.com")
+        base_domain_parts = base_host.replace("www.", "").split(".")
+        site_name = base_domain_parts[0] if base_domain_parts else ""
+
+        # Mode: "all" - download everything (legacy behavior)
+        if mode == "all":
+            return True, "mode=all"
+
+        # Mode: "none" - skip all external documents
+        if mode == "none":
+            if doc_host == base_host:
+                return True, "same_host"
+            return False, "mode=none, external document"
+
+        # Check explicit block list first (applies to all modes)
+        for blocked in blocked_domains:
+            blocked_lower = blocked.lower()
+            if doc_host == blocked_lower or doc_host.endswith("." + blocked_lower):
+                return False, f"blocked_domain: {blocked}"
+
+        # Check explicit allow list (applies to all modes)
+        for allowed in allowed_domains:
+            allowed_lower = allowed.lower()
+            if doc_host == allowed_lower or doc_host.endswith("." + allowed_lower):
+                return True, f"allowed_domain: {allowed}"
+
+        # Tier 1: Same domain or subdomain - always allow
+        if doc_host == base_host:
+            return True, "same_host"
+
+        # Check if doc_host is a subdomain of base_host
+        # e.g., assets.steampunk.com is subdomain of steampunk.com
+        base_domain = ".".join(base_domain_parts[-2:]) if len(base_domain_parts) >= 2 else base_host
+        if doc_host.endswith("." + base_domain) or doc_host == base_domain:
+            return True, "subdomain"
+
+        # For same_domain_only mode, stop here
+        if mode == "same_domain_only":
+            return False, "external_domain (same_domain_only mode)"
+
+        # Tier 2: Document hostname contains site name (likely their CDN)
+        # e.g., "steampunk" in "steampunk-assets.s3.amazonaws.com"
+        if site_name and len(site_name) >= 3:  # Avoid matching short names like "a" or "io"
+            if site_name in doc_host:
+                return True, f"hostname_contains_site_name: {site_name}"
+
+        # Tier 3: Known CDN patterns
+        for pattern in KNOWN_CDN_PATTERNS:
+            if re.match(pattern, doc_host, re.IGNORECASE):
+                return True, f"known_cdn_pattern: {pattern}"
+
+        # Default: block external domains
+        return False, f"external_domain: {doc_host}"
+
     def extract_links_from_html(
         self,
         html: str,
@@ -266,8 +460,93 @@ class CrawlService:
 
         return list(links)
 
+    def is_locale_path(self, path: str) -> bool:
+        """
+        Check if a path represents a locale/language variant.
+
+        Used for filtering locale-specific URLs during crawling.
+        Matches patterns like /en-us/, /de-de/, /fr/, etc.
+
+        Args:
+            path: URL path to check (e.g., "/en-us/about")
+
+        Returns:
+            True if path starts with a locale pattern
+        """
+        path_lower = path.lower()
+        for pattern in LOCALE_PATTERNS:
+            if re.match(pattern, path_lower):
+                return True
+        return False
+
+    def extract_document_links_from_html(
+        self,
+        html: str,
+        base_url: str,
+        extensions: Optional[List[str]] = None,
+    ) -> List[Dict[str, str]]:
+        """
+        Extract document download links from HTML content.
+
+        Scans for links pointing to downloadable documents (PDF, DOCX, etc.)
+        and returns structured metadata for each discovered document.
+
+        Args:
+            html: HTML content to parse
+            base_url: Base URL for resolving relative links
+            extensions: List of file extensions to look for (e.g., [".pdf", ".docx"])
+
+        Returns:
+            List of dicts with keys: url, filename, extension, link_text
+        """
+        if extensions is None:
+            extensions = DEFAULT_CRAWL_CONFIG["document_extensions"]
+
+        documents = []
+        soup = BeautifulSoup(html, "html.parser")
+
+        for anchor in soup.find_all("a", href=True):
+            href = anchor["href"]
+
+            # Resolve relative URLs
+            absolute_url = urljoin(base_url, href)
+
+            # Check if URL ends with a document extension
+            url_lower = absolute_url.lower()
+            for ext in extensions:
+                if url_lower.endswith(ext.lower()):
+                    # Extract filename from URL
+                    parsed = urlparse(absolute_url)
+                    path_parts = parsed.path.split("/")
+                    filename = path_parts[-1] if path_parts else f"document{ext}"
+
+                    # Clean up filename
+                    if not filename:
+                        filename = f"document{ext}"
+
+                    documents.append({
+                        "url": absolute_url,
+                        "filename": filename,
+                        "extension": ext.lower(),
+                        "link_text": anchor.get_text(strip=True)[:100],
+                    })
+                    break  # Don't check other extensions for this link
+
+        return documents
+
     def compute_content_hash(self, content: str) -> str:
-        """Compute SHA-256 hash of content for change detection."""
+        """
+        Compute SHA-256 hash of content for change detection.
+
+        Used to determine if page content has changed since last crawl,
+        avoiding unnecessary re-processing of unchanged pages.
+
+        Args:
+            content: HTML content string
+
+        Returns:
+            64-character lowercase hex SHA-256 hash
+        """
         return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
     def _url_to_filename(self, url: str) -> str:
@@ -390,32 +669,61 @@ class CrawlService:
         self,
         url: str,
         config: Dict[str, Any],
-    ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+        etag: Optional[str] = None,
+        last_modified: Optional[str] = None,
+    ) -> Tuple[Optional[str], Optional[str], Optional[str], bool, Optional[str], Optional[str]]:
         """
         Fallback to httpx when Playwright is not available.
 
+        Supports HTTP conditional requests for efficient re-crawling.
+
+        Args:
+            url: URL to fetch
+            config: Crawl configuration
+            etag: ETag from previous response (for If-None-Match header)
+            last_modified: Last-Modified from previous response (for If-Modified-Since header)
+
         Returns:
-            Tuple of (html_content, content_type, error_message)
+            Tuple of (html_content, content_type, error_message, not_modified, new_etag, new_last_modified)
+            - not_modified: True if server returned 304 (content unchanged)
+            - new_etag/new_last_modified: Headers from response for future conditional requests
         """
         try:
             client = await self._get_http_client(config)
-            response = await client.get(url)
+
+            # Build conditional request headers
+            headers = {}
+            if etag:
+                headers["If-None-Match"] = etag
+            if last_modified:
+                headers["If-Modified-Since"] = last_modified
+
+            response = await client.get(url, headers=headers if headers else None)
+
+            # Handle 304 Not Modified - content unchanged
+            if response.status_code == 304:
+                logger.debug(f"304 Not Modified for {url}")
+                return None, None, None, True, etag, last_modified
 
             if response.status_code >= 400:
-                return None, None, f"HTTP {response.status_code}"
+                return None, None, f"HTTP {response.status_code}", False, None, None
 
             content_type = response.headers.get("content-type", "")
 
             # Only process HTML content
             if "text/html" not in content_type:
-                return None, content_type, f"Unsupported content type: {content_type}"
+                return None, content_type, f"Unsupported content type: {content_type}", False, None, None
 
-            return response.text, content_type, None
+            # Extract caching headers for future conditional requests
+            new_etag = response.headers.get("etag")
+            new_last_modified = response.headers.get("last-modified")
+
+            return response.text, content_type, None, False, new_etag, new_last_modified
 
         except httpx.RequestError as e:
-            return None, None, f"Request failed: {str(e)}"
+            return None, None, f"Request failed: {str(e)}", False, None, None
         except Exception as e:
-            return None, None, f"Unexpected error: {str(e)}"
+            return None, None, f"Unexpected error: {str(e)}", False, None, None
 
     async def crawl_url(
         self,
@@ -469,6 +777,9 @@ class CrawlService:
         # Try Playwright first, fallback to httpx
         playwright = await self._get_playwright_client()
 
+        # HTTP cache headers for conditional requests (only populated for httpx fallback)
+        http_cache_headers = {}
+
         if playwright:
             # Use Playwright for JS rendering with inline extraction
             html_content, markdown_content, discovered_urls, document_links, final_url, error = \
@@ -493,7 +804,42 @@ class CrawlService:
         else:
             # Fallback to httpx (no JS rendering)
             logger.warning(f"Playwright not configured, using httpx fallback for {normalized_url}")
-            html_content, content_type, error = await self._fetch_page_fallback(normalized_url, config)
+
+            # Get cached headers for conditional request (if page was crawled before)
+            cached_etag = None
+            cached_last_modified = None
+            if existing and existing.scrape_metadata:
+                cached_etag = existing.scrape_metadata.get("http_etag")
+                cached_last_modified = existing.scrape_metadata.get("http_last_modified")
+
+            html_content, content_type, error, not_modified, new_etag, new_last_modified = \
+                await self._fetch_page_fallback(
+                    normalized_url, config,
+                    etag=cached_etag,
+                    last_modified=cached_last_modified,
+                )
+
+            # Handle 304 Not Modified - page unchanged, skip processing
+            if not_modified and existing:
+                logger.info(f"Page unchanged (304): {normalized_url}")
+
+                # Still check for new documents on unchanged pages
+                documents_downloaded = 0
+                if config.get("download_documents", False):
+                    # Re-extract links from stored content to find any new documents
+                    pass  # Documents handled separately
+
+                return CrawlResult(
+                    url=normalized_url,
+                    success=True,
+                    asset_id=existing.asset_id,
+                    scraped_asset_id=existing.id,
+                    discovered_urls=[],  # Don't re-discover, page unchanged
+                    is_new=False,
+                    was_updated=False,
+                    documents_discovered=0,
+                    documents_downloaded=0,
+                )
 
             if error:
                 logger.warning(f"Failed to fetch {normalized_url}: {error}")
@@ -513,6 +859,13 @@ class CrawlService:
             markdown_content = None  # Will need extraction service
             document_links = []
             final_url = normalized_url
+
+            # Store HTTP caching headers for future conditional requests
+            http_cache_headers = {}
+            if new_etag:
+                http_cache_headers["http_etag"] = new_etag
+            if new_last_modified:
+                http_cache_headers["http_last_modified"] = new_last_modified
 
         # Compute content hash for change detection
         content_hash = self.compute_content_hash(html_content)
@@ -564,6 +917,7 @@ class CrawlService:
             existing.crawl_depth = crawl_depth
             existing.scrape_metadata = {
                 **existing.scrape_metadata,
+                **http_cache_headers,  # Include ETag/Last-Modified for future conditional requests
                 "content_hash": content_hash,
                 "last_crawled_at": datetime.utcnow().isoformat(),
                 "version_count": existing.scrape_metadata.get("version_count", 1) + 1,
@@ -614,6 +968,7 @@ class CrawlService:
             crawl_depth=crawl_depth,
             crawl_run_id=crawl_run_id,
             scrape_metadata={
+                **http_cache_headers,  # Include ETag/Last-Modified for future conditional requests
                 "content_hash": content_hash,
                 "content_type": "text/html",
                 "first_crawled_at": datetime.utcnow().isoformat(),
@@ -878,6 +1233,16 @@ class CrawlService:
             },
         )
 
+        # Trigger OpenSearch indexing if enabled
+        from .extraction_orchestrator import _is_opensearch_enabled
+        if _is_opensearch_enabled():
+            try:
+                from ..tasks import index_asset_task
+                index_asset_task.delay(asset_id=str(asset_id))
+                logger.debug(f"Queued asset {asset_id} for OpenSearch indexing")
+            except Exception as e:
+                logger.warning(f"Failed to queue OpenSearch indexing for {asset_id}: {e}")
+
         logger.debug(f"Stored inline extraction for asset {asset_id}")
 
     async def _download_discovered_documents(
@@ -912,11 +1277,52 @@ class CrawlService:
                 doc_filename = doc_link["filename"]
                 doc_extension = doc_link["extension"]
 
+                # Check if this document should be downloaded based on external domain rules
+                should_download, reason = self._should_download_document(
+                    doc_url, collection.root_url, config
+                )
+                if not should_download:
+                    logger.info(f"Skipping external document: {doc_filename} ({reason})")
+                    # Log as info, not warning - this is expected behavior
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=crawl_run_id,
+                        level="INFO",
+                        event_type="skip",
+                        message=f"Skipped external document: {doc_filename}",
+                        context={"url": doc_url, "reason": reason},
+                    )
+                    continue
+
+                # Check if document URL already exists in this collection (skip re-download)
+                existing_doc = await scrape_service.get_scraped_asset_by_url(
+                    session, collection.id, doc_url
+                )
+                if existing_doc:
+                    logger.debug(f"Document already scraped (URL match): {doc_filename}")
+                    continue
+
                 logger.info(f"Downloading document: {doc_filename} from {doc_url}")
+
+                # Get cached headers for conditional request (from any previous partial attempt)
+                cached_etag = None
+                cached_last_modified = None
+
+                # Build conditional request headers
+                headers = {}
+                if cached_etag:
+                    headers["If-None-Match"] = cached_etag
+                if cached_last_modified:
+                    headers["If-Modified-Since"] = cached_last_modified
 
                 # Download the file
                 client = await self._get_http_client(config)
-                response = await client.get(doc_url)
+                response = await client.get(doc_url, headers=headers if headers else None)
+
+                # Handle 304 Not Modified
+                if response.status_code == 304:
+                    logger.debug(f"Document unchanged (304): {doc_filename}")
+                    continue
 
                 if response.status_code != 200:
                     logger.warning(f"Failed to download {doc_url}: HTTP {response.status_code}")
@@ -929,6 +1335,10 @@ class CrawlService:
                 content_type = response.headers.get("content-type", "application/octet-stream")
                 if ";" in content_type:
                     content_type = content_type.split(";")[0].strip()
+
+                # Extract HTTP cache headers for future conditional requests
+                doc_etag = response.headers.get("etag")
+                doc_last_modified = response.headers.get("last-modified")
 
                 # Store to MinIO using human-readable path
                 minio_svc = get_minio_service()
@@ -965,6 +1375,7 @@ class CrawlService:
                 )
 
                 # Create asset with final storage path
+                # Extraction is automatically queued by asset_service.create_asset()
                 asset = await asset_service.create_asset(
                     session=session,
                     organization_id=collection.organization_id,
@@ -982,20 +1393,23 @@ class CrawlService:
                     content_type=content_type,
                     file_size=len(content),
                     file_hash=content_hash,
-                    status="pending",  # Will go through extraction
+                    status="pending",  # Will go through extraction (auto-queued)
                 )
 
-                # Trigger extraction (will use Docling for PDFs, etc.)
-                try:
-                    await upload_integration_service.trigger_extraction(
-                        session=session,
-                        asset_id=asset.id,
-                    )
-                    logger.info(f"Triggered extraction for downloaded document {asset.id}")
-                except Exception as e:
-                    logger.warning(f"Failed to trigger extraction for {asset.id}: {e}")
-
                 # Create scraped asset record for the document
+                doc_scrape_metadata = {
+                    "document_type": doc_extension,
+                    "original_filename": doc_filename,
+                    "link_text": doc_link.get("link_text", ""),
+                    "downloaded_at": datetime.utcnow().isoformat(),
+                    "content_hash": content_hash,
+                }
+                # Store HTTP cache headers for future conditional requests
+                if doc_etag:
+                    doc_scrape_metadata["http_etag"] = doc_etag
+                if doc_last_modified:
+                    doc_scrape_metadata["http_last_modified"] = doc_last_modified
+
                 await scrape_service.create_scraped_asset(
                     session=session,
                     asset_id=asset.id,
@@ -1003,18 +1417,38 @@ class CrawlService:
                     url=doc_url,
                     asset_subtype="document",
                     crawl_run_id=crawl_run_id,
-                    scrape_metadata={
-                        "document_type": doc_extension,
-                        "original_filename": doc_filename,
-                        "link_text": doc_link.get("link_text", ""),
-                        "downloaded_at": datetime.utcnow().isoformat(),
-                    },
+                    scrape_metadata=doc_scrape_metadata,
                 )
 
                 downloaded += 1
 
+                # Log document download
+                await run_log_service.log_event(
+                    session=session,
+                    run_id=crawl_run_id,
+                    level="INFO",
+                    event_type="progress",
+                    message=f"Downloaded document: {doc_filename}",
+                    context={
+                        "url": doc_url,
+                        "type": doc_extension,
+                        "size_bytes": len(content),
+                    },
+                )
+
             except Exception as e:
-                logger.exception(f"Failed to download document {doc_link.get('url')}: {e}")
+                # Get meaningful error message - some exceptions have empty str()
+                error_msg = str(e) if str(e) else type(e).__name__
+                logger.exception(f"Failed to download document {doc_link.get('url')}: {error_msg}")
+                # Log document download failure
+                await run_log_service.log_event(
+                    session=session,
+                    run_id=crawl_run_id,
+                    level="WARN",
+                    event_type="error",
+                    message=f"Failed to download document: {doc_link.get('filename', 'unknown')}",
+                    context={"url": doc_link.get("url"), "error": error_msg},
+                )
                 continue
 
         return downloaded
@@ -1089,17 +1523,57 @@ class CrawlService:
 
         max_depth = config.get("max_depth", 3)  # 0 or None means unlimited
         max_pages_limit = config.get("max_pages", 100)
-        delay = config.get("delay_seconds", 1.0)
+        delay = config.get("delay_seconds", 2.0)
+        delay_jitter = config.get("delay_jitter", 1.0)
+        exclude_locales = config.get("exclude_locales", True)
+        backoff_on_error = config.get("backoff_on_error", True)
+        max_consecutive_errors = config.get("max_consecutive_errors", 5)
 
         pages_crawled = 0
         pages_new = 0
         pages_updated = 0
         pages_failed = 0
+        pages_skipped_locale = 0
+        consecutive_errors = 0
+        current_backoff = 0  # Additional delay after errors
         total_documents_discovered = 0
         total_documents_downloaded = 0
 
+        # Set initial progress before crawling starts
+        await run_service.update_run_progress(
+            session=session,
+            run_id=run.id,
+            current=0,
+            total=min(len(visited), max_pages_limit),
+            unit="pages",
+            phase="starting",
+        )
+
+        # Log crawl start
+        await run_log_service.log_event(
+            session=session,
+            run_id=run.id,
+            level="INFO",
+            event_type="start",
+            message=f"Starting crawl for {collection.name} ({len(sources)} sources, max {max_pages_limit} pages, depth {max_depth})",
+        )
+
         try:
             while queue and pages_crawled < max_pages_limit:
+                # Check for too many consecutive errors (likely rate limited)
+                if consecutive_errors >= max_consecutive_errors:
+                    logger.warning(
+                        f"Stopping crawl after {consecutive_errors} consecutive errors - likely rate limited"
+                    )
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run.id,
+                        level="WARN",
+                        event_type="error",
+                        message=f"Stopping crawl after {consecutive_errors} consecutive errors (likely rate limited)",
+                    )
+                    break
+
                 url, source_id, parent_url, depth = queue.pop(0)
 
                 # Skip if exceeds depth (0 or None means unlimited)
@@ -1109,6 +1583,12 @@ class CrawlService:
                 # Check URL patterns
                 if not self.matches_patterns(url, collection.url_patterns):
                     logger.debug(f"Skipping {url} - doesn't match patterns")
+                    continue
+
+                # Check for locale URLs (if enabled)
+                if exclude_locales and self.is_locale_url(url, collection.root_url):
+                    logger.debug(f"Skipping {url} - locale variant")
+                    pages_skipped_locale += 1
                     continue
 
                 # Crawl the URL
@@ -1128,11 +1608,42 @@ class CrawlService:
                 total_documents_discovered += result.documents_discovered
                 total_documents_downloaded += result.documents_downloaded
 
+                # Extract page title/path for logging
+                url_path = extract_url_path(url)
+                short_url = url_path if len(url_path) <= 60 else url_path[:57] + "..."
+
                 if result.success:
+                    # Reset error tracking on success
+                    consecutive_errors = 0
+                    current_backoff = 0
+
                     if result.is_new:
                         pages_new += 1
+                        # Log new page
+                        await run_log_service.log_event(
+                            session=session,
+                            run_id=run.id,
+                            level="INFO",
+                            event_type="progress",
+                            message=f"New page: {short_url}",
+                            context={
+                                "url": url,
+                                "depth": depth,
+                                "links_found": len(result.discovered_urls),
+                                "documents_found": result.documents_discovered,
+                            },
+                        )
                     elif result.was_updated:
                         pages_updated += 1
+                        # Log updated page
+                        await run_log_service.log_event(
+                            session=session,
+                            run_id=run.id,
+                            level="INFO",
+                            event_type="progress",
+                            message=f"Updated page: {short_url}",
+                            context={"url": url, "depth": depth},
+                        )
 
                     # Add discovered URLs to queue
                     for discovered_url in result.discovered_urls:
@@ -1142,19 +1653,48 @@ class CrawlService:
                             queue.append((normalized_discovered, source_id, url, depth + 1))
                 else:
                     pages_failed += 1
+                    consecutive_errors += 1
 
-                # Update progress
+                    # Check for rate limiting errors (403, 429)
+                    is_rate_limited = result.error and ("403" in result.error or "429" in result.error)
+                    if is_rate_limited and backoff_on_error:
+                        # Exponential backoff: 5s, 10s, 20s, 40s...
+                        current_backoff = min(5 * (2 ** (consecutive_errors - 1)), 60)
+                        logger.warning(
+                            f"Rate limited ({result.error}), backing off for {current_backoff}s"
+                        )
+
+                    # Log failed page
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run.id,
+                        level="WARN",
+                        event_type="error",
+                        message=f"Failed to crawl: {short_url}" + (f" (backing off {current_backoff}s)" if current_backoff > 0 else ""),
+                        context={"url": url, "error": result.error, "consecutive_errors": consecutive_errors},
+                    )
+
+                # Update progress with detailed stats
                 await run_service.update_run_progress(
                     session=session,
                     run_id=run.id,
                     current=pages_crawled,
                     total=min(len(visited), max_pages_limit),
                     unit="pages",
+                    phase="crawling",
+                    details={
+                        "pages_new": pages_new,
+                        "pages_updated": pages_updated,
+                        "pages_failed": pages_failed,
+                        "urls_queued": len(queue),
+                        "documents_discovered": total_documents_discovered,
+                    },
                 )
 
-                # Rate limiting
-                if delay > 0:
-                    await asyncio.sleep(delay)
+                # Rate limiting with jitter and backoff
+                total_delay = delay + random.uniform(0, delay_jitter) + current_backoff
+                if total_delay > 0:
+                    await asyncio.sleep(total_delay)
 
             # Update collection stats
             await scrape_service.update_collection_stats(session, collection_id)
@@ -1165,11 +1705,25 @@ class CrawlService:
                 "pages_new": pages_new,
                 "pages_updated": pages_updated,
                 "pages_failed": pages_failed,
+                "pages_skipped_locale": pages_skipped_locale,
                 "urls_discovered": len(visited),
                 "urls_remaining": len(queue),
                 "documents_discovered": total_documents_discovered,
                 "documents_downloaded": total_documents_downloaded,
+                "stopped_early": consecutive_errors >= max_consecutive_errors,
             }
+
+            # Log completion summary
+            await run_log_service.log_summary(
+                session=session,
+                run_id=run.id,
+                message=(
+                    f"Crawl completed: {pages_crawled} pages processed "
+                    f"({pages_new} new, {pages_updated} updated, {pages_failed} failed)"
+                    + (f", {total_documents_downloaded} documents downloaded" if total_documents_downloaded > 0 else "")
+                ),
+                context=summary,
+            )
 
             await run_service.complete_run(session, run.id, results_summary=summary)
 
@@ -1183,6 +1737,14 @@ class CrawlService:
 
         except Exception as e:
             logger.error(f"Crawl failed for collection {collection_id}: {e}")
+            # Log error
+            await run_log_service.log_event(
+                session=session,
+                run_id=run.id,
+                level="ERROR",
+                event_type="error",
+                message=f"Crawl failed: {str(e)}",
+            )
             await run_service.fail_run(session, run.id, str(e))
             raise
 

@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Products - Example Company</title>
+</head>
+<body>
+    <header>
+        <nav>
+            <a href="/">Home</a>
+            <a href="/products">Products</a>
+        </nav>
+    </header>
+    <main>
+        <h1>Our Products</h1>
+
+        <div class="product-grid">
+            <article>
+                <h2><a href="/products/widget-a">Widget A</a></h2>
+                <p>Our most popular widget.</p>
+                <a href="/docs/widget-a-manual.pdf">User Manual (PDF)</a>
+            </article>
+
+            <article>
+                <h2><a href="/products/widget-b">Widget B</a></h2>
+                <p>Premium widget with advanced features.</p>
+                <a href="/docs/widget-b-specs.docx">Specifications (Word)</a>
+            </article>
+
+            <article>
+                <h2><a href="/products/widget-c">Widget C</a></h2>
+                <p>Budget-friendly option.</p>
+            </article>
+        </div>
+
+        <!-- Pagination -->
+        <nav class="pagination">
+            <a href="/products?page=1">1</a>
+            <a href="/products?page=2">2</a>
+            <a href="/products?page=3">3</a>
+        </nav>
+    </main>
+</body>
+</html>

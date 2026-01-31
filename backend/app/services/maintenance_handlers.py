@@ -947,104 +947,195 @@ async def handle_stale_run_cleanup(
     config: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Clean up stale runs that are stuck in pending/running state.
+    Clean up stale runs that are stuck in pending/submitted/running state.
 
-    This handler finds runs that have been in 'pending' or 'running' status
-    for longer than the configured timeout and marks them as cancelled.
+    This handler finds runs that have been stuck for longer than the configured
+    timeout and either retries them (up to max_retries) or marks them as failed.
 
-    This prevents:
-    - Runs showing as "running" forever in the UI
-    - Confusion about extraction status
-    - Resource tracking issues
+    Enhanced to handle:
+    - Submitted runs (Celery task may be lost) - shorter timeout
+    - Running runs (worker may have crashed)
+    - Pending runs (queue processing may have failed)
 
     Args:
         session: Database session
         run: Run context for tracking
         config: Task configuration:
             - stale_running_hours: Hours before a 'running' run is stale (default: 2)
+            - stale_submitted_minutes: Minutes before a 'submitted' run is stale (default: 30)
             - stale_pending_hours: Hours before a 'pending' run is stale (default: 1)
+            - max_retries: Max retry attempts before marking as failed (default: 3)
             - dry_run: If True, don't actually update (default: False)
 
     Returns:
         Dict with cleanup statistics
     """
+    from ..database.models import Asset
+
     stale_running_hours = config.get("stale_running_hours", 2)
+    stale_submitted_minutes = config.get("stale_submitted_minutes", 30)
     stale_pending_hours = config.get("stale_pending_hours", 1)
+    max_retries = config.get("max_retries", 3)
     dry_run = config.get("dry_run", False)
 
     now = datetime.utcnow()
     running_cutoff = now - timedelta(hours=stale_running_hours)
+    submitted_cutoff = now - timedelta(minutes=stale_submitted_minutes)
     pending_cutoff = now - timedelta(hours=stale_pending_hours)
 
     results = {
-        "stale_running_cancelled": 0,
-        "stale_pending_cancelled": 0,
+        "stale_submitted_reset": 0,
+        "stale_running_reset": 0,
+        "stale_pending_reset": 0,
+        "orphaned_maintenance_timed_out": 0,
+        "failed_max_retries": 0,
         "errors": 0,
         "dry_run": dry_run,
     }
 
+    await _log_event(
+        session, run.id, "INFO", "start",
+        f"Starting stale run cleanup (submitted>{stale_submitted_minutes}m, "
+        f"running>{stale_running_hours}h, pending>{stale_pending_hours}h, max_retries={max_retries})"
+    )
+
     try:
+        # Find stale 'submitted' runs (Celery task may be lost)
+        stale_submitted_query = (
+            select(Run)
+            .where(and_(
+                Run.run_type == "extraction",
+                Run.status == "submitted",
+                Run.submitted_to_celery_at < submitted_cutoff,
+            ))
+        )
+        stale_submitted = await session.execute(stale_submitted_query)
+        stale_submitted_runs = list(stale_submitted.scalars().all())
+
         # Find stale 'running' runs
         stale_running_query = (
             select(Run)
-            .where(Run.status == "running")
-            .where(Run.started_at < running_cutoff)
+            .where(and_(
+                Run.run_type == "extraction",
+                Run.status == "running",
+                Run.started_at < running_cutoff,
+            ))
         )
         stale_running = await session.execute(stale_running_query)
         stale_running_runs = list(stale_running.scalars().all())
 
-        # Find stale 'pending' runs
+        # Find stale 'pending' runs (queue processing failed)
         stale_pending_query = (
             select(Run)
-            .where(Run.status == "pending")
-            .where(Run.created_at < pending_cutoff)
+            .where(and_(
+                Run.run_type == "extraction",
+                Run.status == "pending",
+                Run.created_at < pending_cutoff,
+            ))
         )
         stale_pending = await session.execute(stale_pending_query)
         stale_pending_runs = list(stale_pending.scalars().all())
 
-        logger.info(
-            f"Found {len(stale_running_runs)} stale running runs "
-            f"(started before {running_cutoff})"
-        )
-        logger.info(
-            f"Found {len(stale_pending_runs)} stale pending runs "
-            f"(created before {pending_cutoff})"
+        await _log_event(
+            session, run.id, "INFO", "progress",
+            f"Found {len(stale_submitted_runs)} submitted, {len(stale_running_runs)} running, "
+            f"{len(stale_pending_runs)} pending stale runs"
         )
 
         if not dry_run:
-            # Cancel stale running runs
-            for stale_run in stale_running_runs:
-                try:
-                    stale_run.status = "cancelled"
-                    stale_run.error_message = (
-                        f"Cleaned up: stuck in running state for >{stale_running_hours} hours"
-                    )
-                    results["stale_running_cancelled"] += 1
-                except Exception as e:
-                    logger.error(f"Failed to cancel stale running run {stale_run.id}: {e}")
-                    results["errors"] += 1
+            all_stale_runs = [
+                (stale_submitted_runs, "submitted", "stale_submitted_reset"),
+                (stale_running_runs, "running", "stale_running_reset"),
+                (stale_pending_runs, "pending", "stale_pending_reset"),
+            ]
 
-            # Cancel stale pending runs
-            for stale_run in stale_pending_runs:
-                try:
-                    stale_run.status = "cancelled"
-                    stale_run.error_message = (
-                        f"Cleaned up: stuck in pending state for >{stale_pending_hours} hours"
-                    )
-                    results["stale_pending_cancelled"] += 1
-                except Exception as e:
-                    logger.error(f"Failed to cancel stale pending run {stale_run.id}: {e}")
-                    results["errors"] += 1
+            for runs_list, status_name, result_key in all_stale_runs:
+                for stale_run in runs_list:
+                    try:
+                        # Special handling for maintenance runs - they're time-sensitive
+                        # If a maintenance run is stuck pending, the scheduled time has passed
+                        # and retrying doesn't make sense - mark as timed_out immediately
+                        if stale_run.run_type == "system_maintenance" and status_name == "pending":
+                            stale_run.status = "timed_out"
+                            stale_run.completed_at = now
+                            stale_run.error_message = (
+                                "Orphaned maintenance run - Celery task was never executed. "
+                                "The scheduled time has passed."
+                            )
+                            results["orphaned_maintenance_timed_out"] += 1
+
+                            logger.warning(
+                                f"Maintenance run {stale_run.id} was orphaned (pending), marked as timed_out"
+                            )
+                            continue
+
+                        retry_count = (stale_run.config or {}).get("stale_retry_count", 0) + 1
+
+                        if retry_count > max_retries:
+                            # Too many retries, mark as failed
+                            stale_run.status = "failed"
+                            stale_run.completed_at = now
+                            stale_run.error_message = (
+                                f"Failed after {retry_count} attempts: stuck in {status_name} state"
+                            )
+                            results["failed_max_retries"] += 1
+
+                            # Update associated asset
+                            if stale_run.input_asset_ids:
+                                try:
+                                    asset_id = UUID(stale_run.input_asset_ids[0])
+                                    asset = await session.get(Asset, asset_id)
+                                    if asset and asset.status == "pending":
+                                        asset.status = "failed"
+                                        asset.source_metadata = {
+                                            **(asset.source_metadata or {}),
+                                            "failed_reason": f"Extraction failed after {retry_count} retries",
+                                            "failed_at": now.isoformat(),
+                                        }
+                                except Exception as e:
+                                    logger.warning(f"Failed to update asset for run {stale_run.id}: {e}")
+
+                            logger.warning(
+                                f"Run {stale_run.id} exceeded max retries ({retry_count}), marked as failed"
+                            )
+                        else:
+                            # Reset to pending for retry
+                            stale_run.status = "pending"
+                            stale_run.celery_task_id = None
+                            stale_run.submitted_to_celery_at = None
+                            stale_run.started_at = None
+                            stale_run.timeout_at = None
+                            stale_run.config = {
+                                **(stale_run.config or {}),
+                                "stale_retry_count": retry_count,
+                                "last_stale_reset_at": now.isoformat(),
+                                "stale_reason": f"Was stuck in {status_name} state",
+                            }
+                            results[result_key] += 1
+
+                            logger.info(
+                                f"Reset run {stale_run.id} from {status_name} to pending "
+                                f"(retry #{retry_count})"
+                            )
+
+                    except Exception as e:
+                        logger.error(f"Failed to process stale run {stale_run.id}: {e}")
+                        results["errors"] += 1
 
             await session.flush()
-        else:
-            # Dry run - just count
-            results["stale_running_cancelled"] = len(stale_running_runs)
-            results["stale_pending_cancelled"] = len(stale_pending_runs)
 
     except Exception as e:
         logger.error(f"Stale run cleanup failed: {e}")
         results["errors"] += 1
+
+    await _log_event(
+        session, run.id, "INFO", "complete",
+        f"Stale run cleanup complete: {results['stale_submitted_reset']} submitted reset, "
+        f"{results['stale_running_reset']} running reset, {results['stale_pending_reset']} pending reset, "
+        f"{results['orphaned_maintenance_timed_out']} orphaned maintenance timed out, "
+        f"{results['failed_max_retries']} failed (max retries)",
+        results
+    )
 
     return results
 
@@ -1130,7 +1221,7 @@ async def handle_sharepoint_scheduled_sync(
                     and_(
                         Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
                         Run.status.in_(["pending", "running"]),
-                        func.json_extract(Run.config, "$.sync_config_id") == str(sync_config.id),
+                        Run.config["sync_config_id"].astext == str(sync_config.id),
                     )
                 ).limit(1)
             )
@@ -1203,6 +1294,126 @@ async def handle_sharepoint_scheduled_sync(
 
 
 # =============================================================================
+# Queue Pending Assets Handler (Safety Net)
+# =============================================================================
+
+
+async def handle_queue_pending_assets(
+    session: AsyncSession,
+    run: Run,
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Safety-net handler to queue extractions for orphaned pending assets.
+
+    This runs frequently (every 5 minutes) to catch any assets that were
+    created without extraction being properly queued. This is a safety net -
+    the primary mechanism is auto-queueing in asset_service.
+
+    Scenarios this catches:
+    - Race conditions during high load
+    - Bugs in ingest services that don't call asset_service properly
+    - Manual database insertions
+    - Recovery after service restarts
+
+    Args:
+        session: Database session
+        run: Run context for tracking
+        config: Task configuration
+            - limit: Max assets to process per run (default: 100)
+            - min_age_seconds: Min age to avoid race conditions (default: 60)
+
+    Returns:
+        Dict with processing results
+    """
+    limit = config.get("limit", 100)
+    min_age_seconds = config.get("min_age_seconds", 60)
+
+    await _log_event(
+        session, run.id, "INFO", "start",
+        f"Starting queue pending assets check (limit={limit}, min_age={min_age_seconds}s)"
+    )
+
+    try:
+        from .extraction_queue_service import extraction_queue_service
+
+        # Find assets needing extraction
+        orphaned_ids = await extraction_queue_service.find_assets_needing_extraction(
+            session=session,
+            limit=limit,
+            min_age_seconds=min_age_seconds,
+        )
+
+        if not orphaned_ids:
+            await _log_event(
+                session, run.id, "INFO", "complete",
+                "No orphaned pending assets found"
+            )
+            return {
+                "orphaned_found": 0,
+                "queued": 0,
+                "skipped": 0,
+                "errors": 0,
+            }
+
+        await _log_event(
+            session, run.id, "WARN", "progress",
+            f"Found {len(orphaned_ids)} orphaned pending assets",
+            {"sample_ids": [str(aid) for aid in orphaned_ids[:5]]}
+        )
+
+        # Queue extractions for orphaned assets
+        queued = 0
+        skipped = 0
+        errors = 0
+        error_details = []
+
+        for asset_id in orphaned_ids:
+            try:
+                run_result, extraction, status = await extraction_queue_service.queue_extraction_for_asset(
+                    session=session,
+                    asset_id=asset_id,
+                )
+
+                if status == "queued":
+                    queued += 1
+                elif status in ("skipped_content_type", "already_pending"):
+                    skipped += 1
+                else:
+                    errors += 1
+                    error_details.append({"asset_id": str(asset_id), "status": status})
+
+            except Exception as e:
+                errors += 1
+                error_details.append({"asset_id": str(asset_id), "error": str(e)})
+                logger.error(f"Failed to queue extraction for orphaned asset {asset_id}: {e}")
+
+        await session.commit()
+
+        summary = {
+            "orphaned_found": len(orphaned_ids),
+            "queued": queued,
+            "skipped": skipped,
+            "errors": errors,
+            "error_details": error_details[:10] if error_details else [],
+        }
+
+        await _log_event(
+            session, run.id, "INFO", "complete",
+            f"Queue pending assets complete: {queued} queued, {skipped} skipped, {errors} errors",
+            summary
+        )
+
+        return summary
+
+    except Exception as e:
+        error_msg = f"Queue pending assets failed: {str(e)}"
+        logger.error(error_msg)
+        await _log_event(session, run.id, "ERROR", "error", error_msg)
+        raise
+
+
+# =============================================================================
 # Handler Registry
 # =============================================================================
 
@@ -1214,6 +1425,7 @@ MAINTENANCE_HANDLERS = {
     "search.reindex": handle_search_reindex,
     "stale_run.cleanup": handle_stale_run_cleanup,
     "sharepoint.scheduled_sync": handle_sharepoint_scheduled_sync,
+    "extraction.queue_pending": handle_queue_pending_assets,
 }
 
 

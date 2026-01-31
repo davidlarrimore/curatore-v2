@@ -43,7 +43,7 @@ import type {
   QueueDefinition,
   Asset,
 } from '@/lib/api';
-import { formatTimeAgo } from '@/lib/date-utils';
+import { formatTimeAgo, formatDateTime, formatDuration } from '@/lib/date-utils';
 
 // Status configuration
 const STATUS_CONFIG: Record<string, { color: string; bgColor: string; icon: React.ElementType; label: string }> = {
@@ -129,46 +129,6 @@ function JsonViewer({ data, title, defaultExpanded = false }: { data: unknown; t
   );
 }
 
-function formatDuration(startDate: string | Date, endDate?: string | Date | null): string {
-  const start = new Date(startDate);
-  const end = endDate ? new Date(endDate) : new Date();
-  let diffMs = end.getTime() - start.getTime();
-
-  // Handle negative durations (clock skew or timezone issues)
-  if (diffMs < 0) {
-    diffMs = Math.abs(diffMs);
-  }
-
-  if (diffMs < 1000) return `${diffMs}ms`;
-  if (diffMs < 60000) return `${(diffMs / 1000).toFixed(1)}s`;
-  if (diffMs < 3600000) {
-    const mins = Math.floor(diffMs / 60000);
-    const secs = Math.floor((diffMs % 60000) / 1000);
-    return `${mins}m ${secs}s`;
-  }
-  if (diffMs < 86400000) {
-    const hours = Math.floor(diffMs / 3600000);
-    const mins = Math.floor((diffMs % 3600000) / 60000);
-    return `${hours}h ${mins}m`;
-  }
-  // More than a day
-  const days = Math.floor(diffMs / 86400000);
-  const hours = Math.floor((diffMs % 86400000) / 3600000);
-  return `${days}d ${hours}h`;
-}
-
-function formatDateTime(date: string | Date): string {
-  return new Date(date).toLocaleString('en-US', {
-    year: 'numeric',
-    month: 'short',
-    day: 'numeric',
-    hour: '2-digit',
-    minute: '2-digit',
-    second: '2-digit',
-    hour12: true,
-  });
-}
-
 export default function JobDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -197,7 +157,7 @@ export default function JobDetailPage() {
       if (runWithLogs.run.run_type === 'extraction' && runWithLogs.run.input_asset_ids?.length) {
         try {
           const assetPromises = runWithLogs.run.input_asset_ids.map(id =>
-            assetsApi.getAsset(id).catch(() => null)
+            assetsApi.getAsset(undefined, id).catch(() => null)
           );
           const assetResults = await Promise.all(assetPromises);
           assets = assetResults.filter((a): a is Asset => a !== null);
@@ -431,6 +391,43 @@ export default function JobDetailPage() {
                     <dd className="font-medium text-gray-900 dark:text-white">
                       {formatDuration(run.started_at, run.completed_at)}
                       {isActive && <span className="text-gray-500"> (running)</span>}
+                    </dd>
+                  </div>
+                )}
+                {isActive && (
+                  <div className="pt-2 border-t border-gray-200 dark:border-gray-700">
+                    <dt className="text-gray-500 dark:text-gray-400 flex items-center gap-1">
+                      <Activity className="h-3 w-3" />
+                      Last Activity
+                    </dt>
+                    <dd className="font-medium text-gray-900 dark:text-white">
+                      {run.last_activity_at ? (
+                        <>
+                          {formatDateTime(run.last_activity_at)}
+                          <span className="text-gray-500 dark:text-gray-400 text-xs ml-2">
+                            ({formatTimeAgo(run.last_activity_at)})
+                          </span>
+                          {/* Warn if no activity for over 5 minutes */}
+                          {(() => {
+                            const lastActivity = new Date(run.last_activity_at).getTime();
+                            const now = Date.now();
+                            const inactiveMinutes = Math.floor((now - lastActivity) / 60000);
+                            if (inactiveMinutes >= 5) {
+                              return (
+                                <div className="mt-1 flex items-center gap-1 text-amber-600 dark:text-amber-400 text-xs">
+                                  <AlertTriangle className="h-3 w-3" />
+                                  Inactive for {inactiveMinutes}m (may timeout soon)
+                                </div>
+                              );
+                            }
+                            return null;
+                          })()}
+                        </>
+                      ) : (
+                        <span className="text-amber-600 dark:text-amber-400">
+                          No activity recorded
+                        </span>
+                      )}
                     </dd>
                   </div>
                 )}
