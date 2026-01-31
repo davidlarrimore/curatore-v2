@@ -1517,6 +1517,37 @@ class SharePointSyncService:
         )
         return result.scalar_one_or_none()
 
+    async def _find_asset_by_storage_key(
+        self,
+        session: AsyncSession,
+        raw_bucket: str,
+        raw_object_key: str,
+    ) -> Optional[Asset]:
+        """
+        Find an existing asset by its storage key (bucket + object key).
+
+        This is a fallback lookup that catches cases where an asset exists
+        but the SharePointSyncedDocument record was lost (e.g., during a
+        failed deletion or cleanup). Prevents UNIQUE constraint violations.
+
+        Args:
+            session: Database session
+            raw_bucket: MinIO bucket name
+            raw_object_key: Object key (path) in the bucket
+
+        Returns:
+            Asset if found, None otherwise
+        """
+        result = await session.execute(
+            select(Asset).where(
+                and_(
+                    Asset.raw_bucket == raw_bucket,
+                    Asset.raw_object_key == raw_object_key,
+                )
+            ).limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def _download_and_create_asset(
         self,
         session: AsyncSession,
@@ -1601,6 +1632,35 @@ class SharePointSyncService:
             extracted=False,
         )
 
+        # Check for existing asset with this storage key (handles orphaned assets)
+        # This prevents UNIQUE constraint violations when sync tracking record was lost
+        uploads_bucket = minio_service.bucket_uploads
+        existing_asset = await self._find_asset_by_storage_key(
+            session=session,
+            raw_bucket=uploads_bucket,
+            raw_object_key=storage_key,
+        )
+        if existing_asset:
+            logger.info(
+                f"Found existing asset {existing_asset.id} with storage key {storage_key}, "
+                f"creating sync tracking record instead of duplicate"
+            )
+            drive_id = item.get("drive_id") or config.folder_drive_id
+            await self.create_synced_document(
+                session=session,
+                sync_config_id=config.id,
+                asset_id=existing_asset.id,
+                sharepoint_item_id=item_id,
+                sharepoint_drive_id=drive_id,
+                sharepoint_path=folder_path,
+                sharepoint_web_url=web_url,
+                sharepoint_etag=etag,
+                content_hash=existing_asset.file_hash,
+                run_id=run_id,
+            )
+            await session.flush()
+            return "unchanged_files"
+
         # Download file to temp location, then upload to MinIO
         # For now, use SharePoint download and then upload to MinIO
         # In the future, this could stream directly
@@ -1664,7 +1724,6 @@ class SharePointSyncService:
 
         # Upload to MinIO
         from io import BytesIO
-        uploads_bucket = minio_service.bucket_uploads
         minio_service.put_object(
             bucket=uploads_bucket,
             key=storage_key,
