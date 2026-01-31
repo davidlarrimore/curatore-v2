@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
@@ -148,9 +148,16 @@ function JobManagerContent() {
   const [cancellingIds, setCancellingIds] = useState<Set<string>>(new Set())
   const [boostingIds, setBoostingIds] = useState<Set<string>>(new Set())
 
+  // Request ID to prevent stale responses from overwriting fresh data
+  // When filters change, we increment this counter and ignore responses with old IDs
+  const requestIdRef = useRef(0)
+
   // Load jobs and registry
   const loadData = useCallback(async (silent = false) => {
     if (!token) return
+
+    // Capture the request ID at the start of this request
+    const thisRequestId = ++requestIdRef.current
 
     if (!silent) {
       setIsLoading(true)
@@ -168,19 +175,29 @@ function JobManagerContent() {
         }),
       ])
 
+      // Only apply results if this is still the latest request
+      // This prevents stale auto-refresh results from overwriting filtered data
+      if (thisRequestId !== requestIdRef.current) {
+        return // A newer request has been started, ignore this response
+      }
+
       setRegistry(registryData)
       setJobs(jobsData.items)
       // Clear selections when data changes
       setSelectedIds(new Set())
     } catch (err: any) {
-      if (!silent) {
+      // Only show error if this is still the latest request
+      if (thisRequestId === requestIdRef.current && !silent) {
         setError(err.message || 'Failed to load job data')
       }
     } finally {
-      if (!silent) {
-        setIsLoading(false)
+      // Only update loading state if this is still the latest request
+      if (thisRequestId === requestIdRef.current) {
+        if (!silent) {
+          setIsLoading(false)
+        }
+        setIsRefreshing(false)
       }
-      setIsRefreshing(false)
     }
   }, [token, activeTab, statusFilter])
 
