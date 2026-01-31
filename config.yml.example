@@ -295,8 +295,9 @@ playwright:
   default_viewport_width: 1920
   default_viewport_height: 1080
 
-  # Default page load timeout in ms (optional, default: 30000)
-  default_timeout_ms: 30000
+  # Default page load timeout in ms (optional, default: 60000)
+  # Increase this for slow-loading sites (max: 300000 = 5 minutes)
+  default_timeout_ms: 60000
 
   # Default wait for selector timeout in ms (optional, default: 5000)
   default_wait_timeout_ms: 5000

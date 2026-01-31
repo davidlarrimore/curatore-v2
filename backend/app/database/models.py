@@ -36,7 +36,7 @@ from sqlalchemy import (
     Text,
     TypeDecorator,
 )
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID, JSONB
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -814,9 +814,8 @@ class AssetVersion(Base):
         foreign_keys="ExtractionResult.asset_version_id",
     )
 
-    # Indexes
+    # Indexes (asset_id already indexed via index=True on column)
     __table_args__ = (
-        Index("ix_asset_versions_asset_id", "asset_id"),
         Index("ix_asset_versions_asset_version", "asset_id", "version_number", unique=True),
         Index("ix_asset_versions_current", "asset_id", "is_current"),
     )
@@ -882,10 +881,25 @@ class Run(Base):
     origin = Column(String(50), nullable=False, default="user")  # user, system, scheduled
 
     # Run status
+    # Valid statuses: pending, submitted, running, completed, failed, timed_out, cancelled
+    # - pending: Queued in DB, NOT yet submitted to Celery
+    # - submitted: Sent to Celery, waiting for worker pickup
+    # - running: Worker actively processing
+    # - completed: Successfully finished
+    # - failed: Failed due to error
+    # - timed_out: Exceeded soft time limit
+    # - cancelled: Manually cancelled
     status = Column(String(50), nullable=False, default="pending", index=True)
 
-    # Input and configuration
-    input_asset_ids = Column(JSON, nullable=False, default=list, server_default="[]")
+    # Queue management fields (for extraction queue throttling)
+    celery_task_id = Column(String(255), nullable=True, index=True)
+    submitted_to_celery_at = Column(DateTime, nullable=True)
+    timeout_at = Column(DateTime, nullable=True)  # Legacy: absolute timeout (deprecated)
+    last_activity_at = Column(DateTime, nullable=True, index=True)  # Activity-based timeout tracking
+    queue_priority = Column(Integer, default=0, index=True)  # 0=normal, 1=high (user-requested)
+
+    # Input and configuration (JSONB for proper PostgreSQL containment queries)
+    input_asset_ids = Column(JSONB, nullable=False, default=list, server_default="[]")
     config = Column(JSON, nullable=False, default=dict, server_default="{}")
 
     # Progress tracking
@@ -918,6 +932,7 @@ class Run(Base):
         Index("ix_runs_org_created", "organization_id", "created_at"),
         Index("ix_runs_org_status", "organization_id", "status"),
         Index("ix_runs_type_status", "run_type", "status"),
+        Index("ix_runs_queue_priority_status", "queue_priority", "status"),  # Queue processing
     )
 
     def __repr__(self) -> str:
@@ -1644,10 +1659,8 @@ class ScheduledTask(Base):
     organization = relationship("Organization", backref="scheduled_tasks")
     last_run = relationship("Run", foreign_keys=[last_run_id])
 
-    # Indexes for common queries
+    # Indexes for common queries (single-column indexes already defined via index=True)
     __table_args__ = (
-        Index("ix_scheduled_tasks_enabled", "enabled"),
-        Index("ix_scheduled_tasks_task_type", "task_type"),
         Index("ix_scheduled_tasks_org_enabled", "organization_id", "enabled"),
         Index("ix_scheduled_tasks_next_run", "next_run_at"),
     )

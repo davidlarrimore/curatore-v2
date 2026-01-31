@@ -52,6 +52,7 @@ function NewSharePointSyncContent() {
   const [connections, setConnections] = useState<Connection[]>([])
   const [selectedConnectionId, setSelectedConnectionId] = useState<string | null>(null)
   const [folderUrl, setFolderUrl] = useState('')
+  const [syncMode, setSyncMode] = useState<'all' | 'selected'>('all')
   const [folderInfo, setFolderInfo] = useState<{
     name: string
     id: string
@@ -172,6 +173,7 @@ function NewSharePointSyncContent() {
       // Build sync config
       const syncConfig: Record<string, any> = {
         recursive,
+        selection_mode: syncMode,
       }
 
       if (includePatterns) {
@@ -184,8 +186,8 @@ function NewSharePointSyncContent() {
 
       let syncConfigId: string | null = null
 
-      // If files are selected, import them directly
-      if (selectedItems.size > 0) {
+      // If files are selected (only possible in 'selected' mode), import them directly
+      if (syncMode === 'selected' && selectedItems.size > 0) {
         const itemsToImport = browseItems
           .filter(i => selectedItems.has(i.id))
           .map(i => ({
@@ -470,10 +472,10 @@ function NewSharePointSyncContent() {
           {step === 'files' && (
             <div>
               <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
-                Select Items to Import
+                What would you like to sync?
               </h2>
               <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                Optionally select specific files or folders to import now, or skip to sync all items matching your filter patterns.
+                Choose to sync everything in the folder or select specific files and folders.
               </p>
 
               {folderInfo && (
@@ -485,72 +487,140 @@ function NewSharePointSyncContent() {
                 </div>
               )}
 
-              <div className="flex items-center justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <Button variant="secondary" size="sm" onClick={selectAllItems}>
-                    Select All
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={selectAllFiles}>
-                    Files Only
-                  </Button>
-                  <Button variant="ghost" size="sm" onClick={clearSelection}>
-                    Clear
-                  </Button>
-                </div>
-                <span className="text-sm text-gray-500 dark:text-gray-400">
-                  {selectedItems.size} selected
-                </span>
+              {/* Sync Mode Toggle */}
+              <div className="mb-6 space-y-3">
+                <button
+                  onClick={() => {
+                    setSyncMode('all')
+                    clearSelection()
+                  }}
+                  className={`w-full p-4 rounded-lg border text-left transition-colors ${
+                    syncMode === 'all'
+                      ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
+                      : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                      syncMode === 'all'
+                        ? 'bg-indigo-100 dark:bg-indigo-900/50'
+                        : 'bg-gray-100 dark:bg-gray-700'
+                    }`}>
+                      <FolderSync className={`w-4 h-4 ${
+                        syncMode === 'all'
+                          ? 'text-indigo-600 dark:text-indigo-400'
+                          : 'text-gray-500 dark:text-gray-400'
+                      }`} />
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900 dark:text-white">Sync All</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Sync everything in this folder (respects include/exclude patterns)
+                      </p>
+                    </div>
+                  </div>
+                </button>
+                <button
+                  onClick={() => setSyncMode('selected')}
+                  className={`w-full p-4 rounded-lg border text-left transition-colors ${
+                    syncMode === 'selected'
+                      ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
+                      : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${
+                      syncMode === 'selected'
+                        ? 'bg-indigo-100 dark:bg-indigo-900/50'
+                        : 'bg-gray-100 dark:bg-gray-700'
+                    }`}>
+                      <CheckSquare className={`w-4 h-4 ${
+                        syncMode === 'selected'
+                          ? 'text-indigo-600 dark:text-indigo-400'
+                          : 'text-gray-500 dark:text-gray-400'
+                      }`} />
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-900 dark:text-white">Select specific files/folders</p>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        Choose exactly which items to sync
+                      </p>
+                    </div>
+                  </div>
+                </button>
               </div>
 
-              {isLoading ? (
-                <div className="flex items-center justify-center py-8">
-                  <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
-                </div>
-              ) : browseItems.length === 0 ? (
-                <div className="text-center py-8">
-                  <Folder className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
-                  <p className="text-sm text-gray-500 dark:text-gray-400">
-                    No files found in this folder
-                  </p>
-                </div>
-              ) : (
-                <div className="max-h-96 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg divide-y divide-gray-100 dark:divide-gray-700">
-                  {browseItems.map((item) => (
-                    <button
-                      key={item.id}
-                      onClick={() => toggleItemSelection(item.id)}
-                      className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer"
-                    >
-                      <div className="flex-shrink-0">
-                        {selectedItems.has(item.id) ? (
-                          <CheckSquare className="w-5 h-5 text-indigo-600" />
-                        ) : (
-                          <Square className="w-5 h-5 text-gray-400" />
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2 min-w-0 flex-1">
-                        {item.type === 'folder' ? (
-                          <Folder className="w-4 h-4 text-amber-500 flex-shrink-0" />
-                        ) : (
-                          <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
-                        )}
-                        <div className="min-w-0">
-                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                            {item.name}
-                          </p>
-                          {item.size && (
-                            <p className="text-xs text-gray-500 dark:text-gray-400">
-                              {(item.size / 1024).toFixed(1)} KB
-                            </p>
+              {/* File Browser - Only shown when "selected" mode */}
+              {syncMode === 'selected' && (
+                <>
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <Button variant="secondary" size="sm" onClick={selectAllItems}>
+                        Select All
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={selectAllFiles}>
+                        Files Only
+                      </Button>
+                      <Button variant="ghost" size="sm" onClick={clearSelection}>
+                        Clear
+                      </Button>
+                    </div>
+                    <span className="text-sm text-gray-500 dark:text-gray-400">
+                      {selectedItems.size} selected
+                    </span>
+                  </div>
+
+                  {isLoading ? (
+                    <div className="flex items-center justify-center py-8">
+                      <Loader2 className="w-6 h-6 animate-spin text-indigo-600" />
+                    </div>
+                  ) : browseItems.length === 0 ? (
+                    <div className="text-center py-8">
+                      <Folder className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        No files found in this folder
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="max-h-96 overflow-y-auto border border-gray-200 dark:border-gray-700 rounded-lg divide-y divide-gray-100 dark:divide-gray-700">
+                      {browseItems.map((item) => (
+                        <button
+                          key={item.id}
+                          onClick={() => toggleItemSelection(item.id)}
+                          className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-750 cursor-pointer"
+                        >
+                          <div className="flex-shrink-0">
+                            {selectedItems.has(item.id) ? (
+                              <CheckSquare className="w-5 h-5 text-indigo-600" />
+                            ) : (
+                              <Square className="w-5 h-5 text-gray-400" />
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 min-w-0 flex-1">
+                            {item.type === 'folder' ? (
+                              <Folder className="w-4 h-4 text-amber-500 flex-shrink-0" />
+                            ) : (
+                              <FileText className="w-4 h-4 text-gray-400 flex-shrink-0" />
+                            )}
+                            <div className="min-w-0">
+                              <p className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                                {item.name}
+                              </p>
+                              {item.size && (
+                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                  {(item.size / 1024).toFixed(1)} KB
+                                </p>
+                              )}
+                            </div>
+                          </div>
+                          {item.type === 'folder' && (
+                            <span className="text-xs text-gray-400 flex-shrink-0">Folder</span>
                           )}
-                        </div>
-                      </div>
-                      {item.type === 'folder' && (
-                        <span className="text-xs text-gray-400 flex-shrink-0">Folder</span>
-                      )}
-                    </button>
-                  ))}
-                </div>
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </>
               )}
             </div>
           )}
@@ -692,7 +762,13 @@ function NewSharePointSyncContent() {
                       {recursive ? 'Yes' : 'No'}
                     </span>
                   </div>
-                  {selectedItems.size > 0 && (() => {
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-gray-500 dark:text-gray-400">Sync Mode</span>
+                    <span className="text-sm font-medium text-gray-900 dark:text-white">
+                      {syncMode === 'all' ? 'Sync All' : 'Selected Items'}
+                    </span>
+                  </div>
+                  {syncMode === 'selected' && selectedItems.size > 0 && (() => {
                     const selectedList = browseItems.filter(i => selectedItems.has(i.id))
                     const folderCount = selectedList.filter(i => i.type === 'folder').length
                     const fileCount = selectedList.filter(i => i.type === 'file').length

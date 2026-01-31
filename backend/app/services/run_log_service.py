@@ -93,6 +93,13 @@ class RunLogService:
         )
 
         session.add(event)
+
+        # Update run's last_activity_at for activity-based timeout tracking
+        from ..database.models import Run
+        run = await session.get(Run, run_id)
+        if run and run.status in ("submitted", "running"):
+            run.last_activity_at = datetime.utcnow()
+
         await session.commit()
         await session.refresh(event)
 

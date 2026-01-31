@@ -103,6 +103,7 @@ class ActiveJobItem(BaseModel):
     submitted_at: Optional[str]
     completed_at: Optional[str]
     timeout_at: Optional[str]
+    last_activity_at: Optional[str]  # For activity-based timeout tracking
 
     # Display fields
     display_name: str  # Computed from run_type + config
@@ -117,6 +118,7 @@ class ActiveJobItem(BaseModel):
 
     # For other job types
     config: Optional[Dict[str, Any]]  # Original config for detailed display
+    progress: Optional[Dict[str, Any]]  # Progress info if available
 
     # Capabilities (from queue_registry)
     can_cancel: bool
@@ -882,6 +884,7 @@ async def list_active_jobs(
                 submitted_at=run.submitted_to_celery_at.isoformat() if run.submitted_to_celery_at else None,
                 completed_at=run.completed_at.isoformat() if run.completed_at else None,
                 timeout_at=run.timeout_at.isoformat() if run.timeout_at else None,
+                last_activity_at=run.last_activity_at.isoformat() if run.last_activity_at else None,
                 display_name=display_name,
                 display_context=display_context,
                 asset_id=asset_id_str,
@@ -890,6 +893,7 @@ async def list_active_jobs(
                 extractor_version=extractor_version,
                 queue_position=queue_position,
                 config=run.config,
+                progress=run.progress,
                 can_cancel=can_cancel and run.status in ["pending", "submitted", "running"],
                 can_boost=can_boost and run.status == "pending" and (run.queue_priority or 0) == 0,
                 can_retry=can_retry and run.status in ["failed", "timed_out"],

@@ -127,9 +127,9 @@ class UploadIntegrationService:
         - HTML content: Skip (already extracted inline by Playwright during crawl)
         - Binary files (PDF, DOCX, etc.): Route to Docling/MarkItDown
 
-        Creates an extraction Run and ExtractionResult record. The actual
-        extraction execution will be handled by Celery workers. Links extraction
-        to the current asset version.
+        When extraction queue is enabled, this queues the extraction in the database
+        rather than immediately submitting to Celery. The queue is processed by a
+        periodic Celery beat task that throttles submissions based on capacity.
 
         Args:
             session: Database session
@@ -139,6 +139,8 @@ class UploadIntegrationService:
         Returns:
             Tuple of (Run, ExtractionResult) or None if skipped (HTML content)
         """
+        from .extraction_queue_service import extraction_queue_service
+
         # Get asset
         asset = await asset_service.get_asset(session, asset_id)
         if not asset:
@@ -152,6 +154,33 @@ class UploadIntegrationService:
             )
             return None
 
+        # Use extraction queue service if enabled
+        if extraction_queue_service.queue_enabled:
+            # Queue extraction (does NOT immediately submit to Celery)
+            # Duplicate prevention is handled by queue_extraction()
+            run, extraction, status = await extraction_queue_service.queue_extraction(
+                session=session,
+                asset_id=asset_id,
+                organization_id=asset.organization_id,
+                origin="system",
+                priority=0,  # Normal priority for automatic extractions
+                extractor_version=extractor_version,
+            )
+
+            if status == "already_pending":
+                logger.info(
+                    f"Extraction already pending for asset {asset_id}, "
+                    f"returning existing run {run.id}"
+                )
+            else:
+                logger.info(
+                    f"Queued extraction for asset {asset_id}: "
+                    f"run={run.id}, extraction={extraction.id}"
+                )
+
+            return (run, extraction)
+
+        # Fallback: Direct Celery submission (queue disabled)
         # Cancel any pending/running extraction runs for this asset
         cancelled_count = await run_service.cancel_pending_runs_for_asset(
             session=session,
@@ -222,7 +251,7 @@ class UploadIntegrationService:
                 "run_id": str(run.id),
                 "extraction_id": str(extraction.id),
             },
-            queue="processing",  # Use default queue
+            queue="extraction",
         )
 
         logger.info(
@@ -316,6 +345,9 @@ class UploadIntegrationService:
         Creates a new extraction Run with origin="user" to distinguish from
         automatic system extractions. Extracts the current version of the asset.
 
+        When extraction queue is enabled, this queues the extraction with HIGH
+        priority so user-requested re-extractions are processed before automatic ones.
+
         Args:
             session: Database session
             asset_id: Asset UUID to re-extract
@@ -328,14 +360,7 @@ class UploadIntegrationService:
         Raises:
             ValueError: If asset not found or not in a re-extractable state
         """
-        # Get extractor version from config if not provided
-        if not extractor_version:
-            from .config_loader import config_loader
-            default_engine = config_loader.get_default_extraction_engine()
-            if default_engine:
-                extractor_version = default_engine.name
-            else:
-                extractor_version = "extraction-service"
+        from .extraction_queue_service import extraction_queue_service
 
         # Get asset
         asset = await asset_service.get_asset(session, asset_id)
@@ -346,7 +371,7 @@ class UploadIntegrationService:
         if asset.status == "deleted":
             raise ValueError(f"Cannot re-extract deleted asset {asset_id}")
 
-        # Cancel any pending/running extraction runs for this asset
+        # Cancel any pending/running extraction runs for this asset first
         cancelled_count = await run_service.cancel_pending_runs_for_asset(
             session=session,
             asset_id=asset_id,
@@ -354,6 +379,36 @@ class UploadIntegrationService:
         )
         if cancelled_count > 0:
             logger.info(f"Cancelled {cancelled_count} previous extraction run(s) for asset {asset_id}")
+
+        # Use extraction queue service if enabled
+        if extraction_queue_service.queue_enabled:
+            # Queue extraction with HIGH priority (user-requested)
+            run, extraction, status = await extraction_queue_service.queue_extraction(
+                session=session,
+                asset_id=asset_id,
+                organization_id=asset.organization_id,
+                origin="user",
+                priority=1,  # High priority for user-requested re-extractions
+                user_id=user_id,
+                extractor_version=extractor_version,
+            )
+
+            logger.info(
+                f"Queued manual re-extraction for asset {asset_id}: "
+                f"run={run.id}, extraction={extraction.id}, priority=HIGH, user={user_id}"
+            )
+
+            return (run, extraction)
+
+        # Fallback: Direct Celery submission (queue disabled)
+        # Get extractor version from config if not provided
+        if not extractor_version:
+            from .config_loader import config_loader
+            default_engine = config_loader.get_default_extraction_engine()
+            if default_engine:
+                extractor_version = default_engine.name
+            else:
+                extractor_version = "extraction-service"
 
         # Phase 1: Get current asset version
         current_version = await asset_service.get_current_asset_version(session, asset_id)
@@ -410,7 +465,7 @@ class UploadIntegrationService:
                 "run_id": str(run.id),
                 "extraction_id": str(extraction.id),
             },
-            queue="processing",
+            queue="extraction",
         )
 
         logger.info(

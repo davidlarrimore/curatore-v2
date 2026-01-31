@@ -18,7 +18,8 @@ import {
   Globe,
   Search,
   Building2,
-  FolderSync
+  FolderSync,
+  Activity
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import clsx from 'clsx'
@@ -215,7 +216,39 @@ export function LeftSidebar({
       </nav>
 
       {/* Bottom section */}
-      <div className="mt-auto border-t border-gray-100 dark:border-gray-800 p-3">
+      <div className="mt-auto border-t border-gray-100 dark:border-gray-800 p-3 space-y-2">
+        {/* Extraction Queue button (only for org_admin) */}
+        {isAuthenticated && user?.role === 'org_admin' && (
+          <button
+            onClick={() => {
+              router.push('/admin/queue')
+              if (isMobile) onOpenChange(false)
+            }}
+            className={clsx(
+              "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
+              pathname === '/admin/queue'
+                ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg"
+                : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
+              collapsed && !isMobile && "justify-center px-2"
+            )}
+            title={collapsed && !isMobile ? 'Extraction Queue' : ''}
+          >
+            <Activity
+              className={clsx(
+                "w-5 h-5 shrink-0",
+                pathname === '/admin/queue' ? "text-white" : "text-gray-400 dark:text-gray-500"
+              )}
+            />
+            {(!collapsed || isMobile) && (
+              <>
+                <span className="flex-1 text-left">Queue</span>
+                {pathname === '/admin/queue' && (
+                  <ChevronRight className="w-4 h-4 text-white/70" />
+                )}
+              </>
+            )}
+          </button>
+        )}
         {/* Admin Settings button (only for org_admin) */}
         {isAuthenticated && user?.role === 'org_admin' && (
           <button

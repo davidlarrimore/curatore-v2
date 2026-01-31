@@ -81,6 +81,8 @@ echo "🐳 Using compose CLI: ${DC}"
 
 # --- Stop & remove stack (ignore failures for idempotency)
 echo "🛑 Stopping/removing stack..."
+# Include all profiles to ensure profile-based containers are also removed
+${DC} -f "${REPO_ROOT}/docker-compose.yml" --profile postgres --profile docling --profile search down -v --remove-orphans || true
 ${DC} -f "${REPO_ROOT}/docker-compose.yml" down -v --remove-orphans || true
 
 # --- Optional prune of dangling images (safe; no in-use images removed)

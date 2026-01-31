@@ -1427,8 +1427,11 @@ class SamPullService:
             if asset:
                 logger.info(f"Found existing asset {asset.id} for {object_key}, reusing")
             else:
-                # Create new Asset
-                asset = Asset(
+                # Create new Asset using centralized asset_service
+                # This automatically queues extraction
+                from .asset_service import asset_service
+                asset = await asset_service.create_asset(
+                    session=session,
                     organization_id=organization_id,
                     source_type="sam_gov",
                     source_metadata={
@@ -1447,12 +1450,8 @@ class SamPullService:
                     file_size=len(file_content),
                     raw_bucket=bucket,
                     raw_object_key=object_key,
-                    status="pending",  # Will be updated after extraction
+                    # auto_extract=True is default, extraction queued automatically
                 )
-
-                session.add(asset)
-                await session.commit()
-                await session.refresh(asset)
 
             # Update attachment with asset link
             await sam_service.update_attachment_download_status(
@@ -1460,17 +1459,6 @@ class SamPullService:
             )
 
             logger.info(f"Downloaded attachment {attachment_id} -> Asset {asset.id} ({real_filename})")
-
-            # Trigger extraction for the asset
-            try:
-                from .upload_integration_service import upload_integration_service
-                await upload_integration_service.trigger_extraction(
-                    session=session,
-                    asset_id=asset.id,
-                )
-                logger.info(f"Triggered extraction for Asset {asset.id}")
-            except Exception as e:
-                logger.warning(f"Failed to trigger extraction for Asset {asset.id}: {e}")
 
             return asset
 

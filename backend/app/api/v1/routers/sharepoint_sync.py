@@ -185,11 +185,11 @@ def _doc_to_response(
 
 async def _check_active_sync(session, config_id: UUID) -> tuple[bool, Optional[str]]:
     """Check if a sync or import is currently running for this config."""
-    # Use json_extract for SQLite compatibility
     # Check both sharepoint_sync and sharepoint_import run types
+    # PostgreSQL JSON: use column["key"].astext
     result = await session.execute(
         select(Run).where(
-            func.json_extract(Run.config, "$.sync_config_id") == str(config_id),
+            Run.config["sync_config_id"].astext == str(config_id),
             Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
             Run.status.in_(["pending", "running"]),
         ).order_by(desc(Run.created_at)).limit(1)
@@ -665,7 +665,7 @@ async def cancel_stuck_runs(
         # Find and cancel stuck runs
         result = await session.execute(
             select(Run).where(
-                func.json_extract(Run.config, "$.sync_config_id") == str(config_id),
+                Run.config["sync_config_id"].astext == str(config_id),
                 Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
                 Run.status.in_(["pending", "running"]),
             )
@@ -708,12 +708,12 @@ async def get_sync_history(
         if config.organization_id != current_user.organization_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
-        # Get runs for this config (use json_extract for SQLite compatibility)
+        # Get runs for this config
         # Include both sharepoint_sync and sharepoint_import runs
         result = await session.execute(
             select(Run).where(
                 Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
-                func.json_extract(Run.config, "$.sync_config_id") == str(config_id),
+                Run.config["sync_config_id"].astext == str(config_id),
             ).order_by(desc(Run.created_at)).limit(limit).offset(offset)
         )
         runs = list(result.scalars().all())
@@ -722,7 +722,7 @@ async def get_sync_history(
         count_result = await session.execute(
             select(func.count(Run.id)).where(
                 Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
-                func.json_extract(Run.config, "$.sync_config_id") == str(config_id),
+                Run.config["sync_config_id"].astext == str(config_id),
             )
         )
         total = count_result.scalar() or 0
@@ -759,7 +759,7 @@ async def get_sync_history(
 async def list_synced_documents(
     config_id: UUID,
     sync_status: Optional[str] = Query(None, description="Filter by status (synced, deleted_in_source, orphaned)"),
-    limit: int = Query(100, ge=1, le=500, description="Page size"),
+    limit: int = Query(100, ge=1, le=1000, description="Page size"),
     offset: int = Query(0, ge=0, description="Offset"),
     current_user: User = Depends(get_current_user),
 ):

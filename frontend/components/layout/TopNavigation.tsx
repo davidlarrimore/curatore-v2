@@ -73,7 +73,7 @@ export function TopNavigation({
   // Generate breadcrumbs based on current path
   const generateBreadcrumbs = () => {
     const segments = pathname.split('/').filter(Boolean)
-    const breadcrumbs = [{ name: 'Home', href: '/process' }]
+    const breadcrumbs = [{ name: 'Home', href: '/' }]
 
     segments.forEach((segment, index) => {
       const href = '/' + segments.slice(0, index + 1).join('/')

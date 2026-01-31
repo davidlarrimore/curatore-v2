@@ -78,6 +78,9 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
   const [description, setDescription] = useState(config.description || '')
   const [syncFrequency, setSyncFrequency] = useState(config.sync_frequency)
   const [recursive, setRecursive] = useState(config.sync_config?.recursive ?? true)
+  const [syncMode, setSyncMode] = useState<'all' | 'selected'>(
+    (config.sync_config?.selection_mode as 'all' | 'selected') || 'all'
+  )
   const [includePatterns, setIncludePatterns] = useState(
     (config.sync_config?.include_patterns || []).join(', ')
   )
@@ -110,6 +113,7 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
       setDescription(config.description || '')
       setSyncFrequency(config.sync_frequency)
       setRecursive(config.sync_config?.recursive ?? true)
+      setSyncMode((config.sync_config?.selection_mode as 'all' | 'selected') || 'all')
       setIncludePatterns((config.sync_config?.include_patterns || []).join(', '))
       setExcludePatterns((config.sync_config?.exclude_patterns || []).join(', '))
       setError('')
@@ -235,6 +239,9 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
     const wasRecursive = config.sync_config?.recursive ?? true
     if (recursive !== wasRecursive) syncConfigUpdates.recursive = recursive
 
+    const wasSelectionMode = config.sync_config?.selection_mode || 'all'
+    if (syncMode !== wasSelectionMode) syncConfigUpdates.selection_mode = syncMode
+
     const newInclude = includePatterns
       .split(',')
       .map((p: string) => p.trim())
@@ -258,7 +265,7 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
     }
 
     return updates
-  }, [name, description, syncFrequency, recursive, includePatterns, excludePatterns, config])
+  }, [name, description, syncFrequency, recursive, syncMode, includePatterns, excludePatterns, config])
 
   // Handle save attempt
   const handleSave = async (resetAssets: boolean = false) => {
@@ -559,6 +566,67 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
                 {/* Folders Tab */}
                 {activeTab === 'folders' && (
                   <div className="space-y-6">
+                    {/* Sync Mode Toggle */}
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-3">
+                        Sync Mode
+                      </h4>
+                      <div className="space-y-2">
+                        <button
+                          onClick={() => setSyncMode('all')}
+                          className={`w-full p-3 rounded-lg border text-left transition-colors ${
+                            syncMode === 'all'
+                              ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
+                              : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                              syncMode === 'all'
+                                ? 'bg-indigo-600'
+                                : 'bg-gray-200 dark:bg-gray-600'
+                            }`}>
+                              {syncMode === 'all' && (
+                                <CheckCircle2 className="w-4 h-4 text-white" />
+                              )}
+                            </div>
+                            <div>
+                              <p className="font-medium text-gray-900 dark:text-white text-sm">Sync All</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">
+                                Sync everything in this folder (respects include/exclude patterns)
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                        <button
+                          onClick={() => setSyncMode('selected')}
+                          className={`w-full p-3 rounded-lg border text-left transition-colors ${
+                            syncMode === 'selected'
+                              ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
+                              : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                          }`}
+                        >
+                          <div className="flex items-center gap-3">
+                            <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
+                              syncMode === 'selected'
+                                ? 'bg-indigo-600'
+                                : 'bg-gray-200 dark:bg-gray-600'
+                            }`}>
+                              {syncMode === 'selected' && (
+                                <CheckCircle2 className="w-4 h-4 text-white" />
+                              )}
+                            </div>
+                            <div>
+                              <p className="font-medium text-gray-900 dark:text-white text-sm">Select specific files/folders</p>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">
+                                Choose exactly which items to sync
+                              </p>
+                            </div>
+                          </div>
+                        </button>
+                      </div>
+                    </div>
+
                     {/* Recursive Setting */}
                     <div className="flex items-center justify-between p-4 rounded-lg bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700">
                       <div>
@@ -631,7 +699,8 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
                       </div>
                     </div>
 
-                    {/* Folder Browser with Selection */}
+                    {/* Folder Browser with Selection - Only shown in 'selected' mode */}
+                    {syncMode === 'selected' && (
                     <div>
                       <div className="flex items-center justify-between mb-3">
                         <h4 className="text-sm font-medium text-gray-900 dark:text-white">
@@ -775,6 +844,7 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
                         </div>
                       )}
                     </div>
+                    )}
                   </div>
                 )}
 

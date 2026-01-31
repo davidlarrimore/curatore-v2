@@ -3,10 +3,10 @@ SHELL := /bin/sh
 .PHONY: up down ps logs
 
 # Build profile flags based on environment variables
+# ENABLE_POSTGRES_SERVICE=true adds --profile postgres (default: true)
 # ENABLE_DOCLING_SERVICE=true adds --profile docling
-# USE_OBJECT_STORAGE=true adds --profile minio
 define get_profiles
-$(if $(filter true,$(ENABLE_DOCLING_SERVICE)),--profile docling) $(if $(filter true,$(USE_OBJECT_STORAGE)),--profile minio)
+$(if $(or $(filter true,$(ENABLE_POSTGRES_SERVICE)),$(if $(ENABLE_POSTGRES_SERVICE),,true)),--profile postgres) $(if $(filter true,$(ENABLE_DOCLING_SERVICE)),--profile docling)
 endef
 
 up:
@@ -23,17 +23,17 @@ up:
 	@echo "  🌐 Frontend:    http://localhost:3000"
 	@echo "  🔗 Backend:     http://localhost:8000"
 	@echo "  📦 Extraction:  http://localhost:8010"
+	@echo "  🪣 MinIO:       http://localhost:9001"
+	@if [ "$(ENABLE_POSTGRES_SERVICE)" = "true" ] || [ -z "$(ENABLE_POSTGRES_SERVICE)" ]; then \
+		echo "  🐘 PostgreSQL:  localhost:5432"; \
+	fi
 	@if [ "$(ENABLE_DOCLING_SERVICE)" = "true" ]; then \
 		echo "  📄 Docling:     http://localhost:5151"; \
-	fi
-	@if [ "$(USE_OBJECT_STORAGE)" = "true" ]; then \
-		echo "  💾 Storage:     http://localhost:8020"; \
-		echo "  🪣 MinIO:       http://localhost:9001"; \
 	fi
 
 down:
 	@echo "Stopping stack (including all profiles if present)..."
-	-docker compose --profile docling --profile minio down --remove-orphans
+	-docker compose --profile postgres --profile docling down --remove-orphans
 	-docker compose down --remove-orphans
 
 ps:

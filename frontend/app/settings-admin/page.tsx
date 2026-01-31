@@ -9,7 +9,6 @@ import { Badge } from '@/components/ui/Badge'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import InfrastructureHealthPanel from '@/components/admin/InfrastructureHealthPanel'
 import SystemMaintenanceTab from '@/components/admin/SystemMaintenanceTab'
-import ProcessingTab from '@/components/admin/ProcessingTab'
 import UserInviteForm from '@/components/users/UserInviteForm'
 import UserEditForm from '@/components/users/UserEditForm'
 import {
@@ -26,7 +25,6 @@ import {
   Users,
   UserPlus,
   Wrench,
-  Activity,
 } from 'lucide-react'
 
 interface UserData {
@@ -59,8 +57,8 @@ function SettingsAdminContent() {
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
   const searchParams = useSearchParams()
-  const initialTab = searchParams.get('tab') as 'organization' | 'user' | 'processing' | 'infrastructure' | 'users' | 'maintenance' | null
-  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'processing' | 'infrastructure' | 'users' | 'maintenance'>(initialTab || 'organization')
+  const initialTab = searchParams.get('tab') as 'organization' | 'user' | 'infrastructure' | 'users' | 'maintenance' | null
+  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'infrastructure' | 'users' | 'maintenance'>(initialTab || 'organization')
   const [showMergedPreview, setShowMergedPreview] = useState(false)
 
   // Users management state
@@ -364,17 +362,6 @@ function SettingsAdminContent() {
                 User Settings
               </button>
               <button
-                onClick={() => setActiveTab('processing')}
-                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'processing'
-                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-                }`}
-              >
-                <Activity className="w-4 h-4 mr-2" />
-                Processing
-              </button>
-              <button
                 onClick={() => setActiveTab('infrastructure')}
                 className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
                   activeTab === 'infrastructure'
@@ -552,10 +539,6 @@ function SettingsAdminContent() {
             </div>
           </div>
         )}
-
-            {activeTab === 'processing' && (
-              <ProcessingTab onError={(msg) => setError(msg)} />
-            )}
 
             {activeTab === 'infrastructure' && (
               <InfrastructureHealthPanel />

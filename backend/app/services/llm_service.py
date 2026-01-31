@@ -310,13 +310,20 @@ class LLMService:
             )
         
         try:
-            resp = self._client.chat.completions.create(
-                model=settings.openai_model,
-                messages=[{"role": "user", "content": "Hello, respond with just 'OK'"}],
-                max_tokens=10,
-                temperature=0
-            )
-            
+            # Run sync OpenAI call in thread pool to avoid blocking the event loop
+            # The OpenAI SDK uses sync httpx, which would block the FastAPI event loop
+            import asyncio
+
+            def _sync_test():
+                return self._client.chat.completions.create(
+                    model=settings.openai_model,
+                    messages=[{"role": "user", "content": "Hello, respond with just 'OK'"}],
+                    max_tokens=10,
+                    temperature=0
+                )
+
+            resp = await asyncio.to_thread(_sync_test)
+
             return LLMConnectionStatus(
                 connected=True,
                 endpoint=settings.openai_base_url,

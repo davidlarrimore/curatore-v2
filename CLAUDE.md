@@ -10,7 +10,7 @@ Curatore v2 is a document processing and curation platform that converts documen
 - **Backend**: FastAPI (Python 3.12+), Celery workers, SQLAlchemy
 - **Frontend**: Next.js 15.5, TypeScript, React 19, Tailwind CSS
 - **Services**: Redis, MinIO/S3, OpenSearch (optional), Playwright, Extraction Service
-- **Database**: SQLite (dev) / PostgreSQL (prod)
+- **Database**: PostgreSQL 16 (required)
 
 ### Architecture Principles
 1. **Extraction is infrastructure** - Automatic on upload, not per-workflow
@@ -61,6 +61,7 @@ docker exec curatore-backend python -m app.commands.seed --create-admin
 - Backend API: http://localhost:8000
 - API Docs: http://localhost:8000/docs
 - MinIO Console: http://localhost:9001
+- PostgreSQL: localhost:5432 (curatore/curatore_dev_password)
 
 ---
 
@@ -350,22 +351,83 @@ const handleDelete = async () => {
 
 ---
 
+## Database Configuration
+
+Curatore v2 requires PostgreSQL 16 as the database backend. The Docker setup includes a PostgreSQL container by default.
+
+### Default Configuration (Docker)
+
+PostgreSQL is enabled by default via Docker Compose profile:
+
+```bash
+# .env
+ENABLE_POSTGRES_SERVICE=true  # Set to false to use external PostgreSQL
+POSTGRES_DB=curatore
+POSTGRES_USER=curatore
+POSTGRES_PASSWORD=curatore_dev_password
+DATABASE_URL=postgresql+asyncpg://curatore:curatore_dev_password@postgres:5432/curatore
+```
+
+### Connection Pooling
+
+Connection pooling is optimized for PostgreSQL with configurable parameters:
+
+```bash
+# .env (optional - defaults shown)
+DB_POOL_SIZE=20          # Number of connections to maintain
+DB_MAX_OVERFLOW=40       # Extra connections during peak load
+DB_POOL_RECYCLE=3600     # Recycle connections after N seconds
+```
+
+### Using External PostgreSQL
+
+To use an external PostgreSQL database instead of the Docker container:
+
+1. Set `ENABLE_POSTGRES_SERVICE=false` in `.env`
+2. Update `DATABASE_URL` to point to your PostgreSQL instance:
+   ```bash
+   DATABASE_URL=postgresql+asyncpg://user:password@your-host:5432/curatore
+   ```
+3. Ensure the database exists and the user has appropriate permissions
+4. Run `docker exec curatore-backend python -c "from app.services.database_service import database_service; import asyncio; asyncio.run(database_service.init_db())"` to create tables
+
+### Database Initialization
+
+```bash
+# Create tables (if not using migrations)
+docker exec curatore-backend python -c "
+from app.services.database_service import database_service
+import asyncio
+asyncio.run(database_service.init_db())
+"
+
+# Seed admin user and scheduled tasks
+docker exec curatore-backend python -m app.commands.seed --create-admin
+```
+
+---
+
 ## Configuration
 
 ### Key Environment Variables
 
 ```bash
-# Required
+# Database (Required)
+ENABLE_POSTGRES_SERVICE=true
+DATABASE_URL=postgresql+asyncpg://curatore:curatore_dev_password@postgres:5432/curatore
+
+# Object Storage (Required)
 MINIO_ENDPOINT=minio:9000
 MINIO_ACCESS_KEY=minioadmin
 MINIO_SECRET_KEY=minioadmin
 
-# Optional
+# Optional Services
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
 OPENSEARCH_ENABLED=false
 SAM_API_KEY=your_key
 ENABLE_AUTH=false
+ENABLE_DOCLING_SERVICE=false
 ```
 
 ### YAML Configuration (Recommended)
@@ -460,6 +522,9 @@ docker exec -it curatore-worker celery -A app.celery_app inspect active
 # Check Redis
 docker exec -it curatore-redis redis-cli keys '*'
 
+# Check PostgreSQL
+docker exec -it curatore-postgres psql -U curatore -d curatore -c "\dt"
+
 # Test extraction
 curl -X POST http://localhost:8010/api/v1/extract -F "file=@test.pdf"
 ```
@@ -471,6 +536,7 @@ curl -X POST http://localhost:8010/api/v1/extract -F "file=@test.pdf"
 | Port | Service |
 |------|---------|
 | 3000 | Frontend |
+| 5432 | PostgreSQL |
 | 8000 | Backend API |
 | 8010 | Extraction Service |
 | 8011 | Playwright Service |

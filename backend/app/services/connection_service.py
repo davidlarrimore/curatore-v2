@@ -697,7 +697,7 @@ class PlaywrightConfigSchema(BaseModel):
     browser_pool_size: int = Field(default=3, ge=1, le=20, description="Browser pool size")
     default_viewport_width: int = Field(default=1920, ge=320, le=3840, description="Default viewport width")
     default_viewport_height: int = Field(default=1080, ge=240, le=2160, description="Default viewport height")
-    default_timeout_ms: int = Field(default=30000, ge=1000, le=120000, description="Default page load timeout (ms)")
+    default_timeout_ms: int = Field(default=60000, ge=1000, le=300000, description="Default page load timeout (ms)")
     default_wait_timeout_ms: int = Field(default=5000, ge=100, le=60000, description="Default wait for selector timeout (ms)")
     document_extensions: List[str] = Field(
         default=[".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"],
@@ -1626,7 +1626,7 @@ async def sync_default_connections_from_env(
                 config["browser_pool_size"] = int(os.environ.get("PLAYWRIGHT_BROWSER_POOL_SIZE", "3"))
                 config["default_viewport_width"] = 1920
                 config["default_viewport_height"] = 1080
-                config["default_timeout_ms"] = int(os.environ.get("PLAYWRIGHT_DEFAULT_TIMEOUT_MS", "30000"))
+                config["default_timeout_ms"] = int(os.environ.get("PLAYWRIGHT_DEFAULT_TIMEOUT_MS", "60000"))
                 config["default_wait_timeout_ms"] = int(os.environ.get("PLAYWRIGHT_DEFAULT_WAIT_TIMEOUT_MS", "5000"))
                 config["document_extensions"] = [".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"]
 

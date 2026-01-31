@@ -27,6 +27,7 @@ SUPPORTED_EXTS = {
     ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".csv",
     ".txt", ".md",
     ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff",
+    ".msg", ".eml",  # Email formats
 }
 
 # ---------------------------------------------------------------------------
@@ -159,6 +160,129 @@ def libreoffice_convert(src_path: str, target: str) -> Optional[str]:
     return None
 
 
+def extract_msg_email(path: str) -> str:
+    """
+    Extract content from Outlook .msg files and format as Markdown.
+    Returns formatted email content with headers and body.
+    """
+    try:
+        import extract_msg
+
+        msg = extract_msg.Message(path)
+
+        # Build markdown output
+        parts = []
+        parts.append("# Email Message\n")
+
+        # Email headers
+        parts.append("## Headers\n")
+        if msg.subject:
+            parts.append(f"**Subject:** {msg.subject}\n")
+        if msg.sender:
+            parts.append(f"**From:** {msg.sender}\n")
+        if msg.to:
+            parts.append(f"**To:** {msg.to}\n")
+        if msg.cc:
+            parts.append(f"**CC:** {msg.cc}\n")
+        if msg.date:
+            parts.append(f"**Date:** {msg.date}\n")
+
+        parts.append("\n---\n\n")
+
+        # Email body
+        parts.append("## Body\n\n")
+        body = msg.body
+        if body:
+            parts.append(body)
+        elif msg.htmlBody:
+            # If only HTML body available, note it
+            parts.append("*[HTML content - plain text not available]*\n")
+            # Try to extract some text from HTML
+            html_body = msg.htmlBody
+            if isinstance(html_body, bytes):
+                html_body = html_body.decode("utf-8", errors="ignore")
+            # Basic HTML stripping (not perfect but better than nothing)
+            import re
+            text = re.sub(r'<[^>]+>', ' ', html_body)
+            text = re.sub(r'\s+', ' ', text).strip()
+            parts.append(text)
+
+        # List attachments if any
+        if msg.attachments:
+            parts.append("\n\n---\n\n## Attachments\n\n")
+            for att in msg.attachments:
+                att_name = getattr(att, 'longFilename', None) or getattr(att, 'shortFilename', None) or 'Unknown'
+                parts.append(f"- {att_name}\n")
+
+        msg.close()
+        return "\n".join(parts)
+
+    except Exception as e:
+        logger.warning("extract_msg failed: %s", e, exc_info=True)
+        return ""
+
+
+def extract_eml_email(path: str) -> str:
+    """
+    Extract content from .eml files (standard email format) and format as Markdown.
+    Uses Python's built-in email library.
+    """
+    try:
+        import email
+        from email import policy
+
+        with open(path, 'rb') as f:
+            msg = email.message_from_binary_file(f, policy=policy.default)
+
+        # Build markdown output
+        parts = []
+        parts.append("# Email Message\n")
+
+        # Email headers
+        parts.append("## Headers\n")
+        if msg.get('Subject'):
+            parts.append(f"**Subject:** {msg.get('Subject')}\n")
+        if msg.get('From'):
+            parts.append(f"**From:** {msg.get('From')}\n")
+        if msg.get('To'):
+            parts.append(f"**To:** {msg.get('To')}\n")
+        if msg.get('Cc'):
+            parts.append(f"**CC:** {msg.get('Cc')}\n")
+        if msg.get('Date'):
+            parts.append(f"**Date:** {msg.get('Date')}\n")
+
+        parts.append("\n---\n\n")
+
+        # Email body
+        parts.append("## Body\n\n")
+        body = msg.get_body(preferencelist=('plain', 'html'))
+        if body:
+            content = body.get_content()
+            if body.get_content_type() == 'text/html':
+                # Basic HTML stripping
+                import re
+                content = re.sub(r'<[^>]+>', ' ', content)
+                content = re.sub(r'\s+', ' ', content).strip()
+            parts.append(content)
+
+        # List attachments
+        attachments = []
+        for part in msg.iter_attachments():
+            filename = part.get_filename() or 'Unknown'
+            attachments.append(filename)
+
+        if attachments:
+            parts.append("\n\n---\n\n## Attachments\n\n")
+            for att_name in attachments:
+                parts.append(f"- {att_name}\n")
+
+        return "\n".join(parts)
+
+    except Exception as e:
+        logger.warning("extract_eml failed: %s", e, exc_info=True)
+        return ""
+
+
 def _tuple(
     content_md: str,
     method: str,
@@ -251,6 +375,23 @@ def extract_markdown(
             except Exception as e:
                 logger.warning("text read failed: %s", e)
                 return _tuple("", "error", False, None)
+
+        # -------- Email files (.msg, .eml) --------
+        if ext == ".msg":
+            email_text = extract_msg_email(path)
+            if email_text:
+                logger.info("extract_markdown: msg email success; chars=%s", len(email_text))
+                return _tuple(email_text, "email", False, None)
+            logger.warning("extract_markdown: msg email extraction failed")
+            return _tuple("", "error", False, None)
+
+        if ext == ".eml":
+            email_text = extract_eml_email(path)
+            if email_text:
+                logger.info("extract_markdown: eml email success; chars=%s", len(email_text))
+                return _tuple(email_text, "email", False, None)
+            logger.warning("extract_markdown: eml email extraction failed")
+            return _tuple("", "error", False, None)
 
         # -------- Office/Text via MarkItDown (with PDF fallback if weak) --------
         if ext in {".docx", ".pptx", ".xlsx"}:

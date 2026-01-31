@@ -1,41 +1,69 @@
 'use client'
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef, useCallback } from 'react'
+import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { scrapeApi, ScrapeCollection } from '@/lib/api'
+import { useDeletionJobs } from '@/lib/deletion-jobs-context'
+import { scrapeApi, ScrapeCollection, CrawlStatus } from '@/lib/api'
 import Link from 'next/link'
+import toast from 'react-hot-toast'
 import {
   Globe,
   Plus,
   RefreshCw,
   Loader2,
   AlertTriangle,
-  Archive,
-  Play,
-  Pause,
+  Search,
   ExternalLink,
-  FolderOpen,
   FileText,
   Clock,
-  MoreHorizontal,
-  Pencil,
+  Play,
+  Pause,
+  Archive,
+  CheckCircle,
+  XCircle,
   Trash2,
+  MoreVertical,
+  Settings,
 } from 'lucide-react'
 
 export default function ScrapeCollectionsPage() {
+  const router = useRouter()
   const { token, user } = useAuth()
+  const { isDeleting, addJob } = useDeletionJobs()
   const [collections, setCollections] = useState<ScrapeCollection[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [crawlStatuses, setCrawlStatuses] = useState<Record<string, CrawlStatus>>({})
+  const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
+  const [deleting, setDeleting] = useState<string | null>(null)
+  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   const isAdmin = user?.role === 'org_admin' || user?.role === 'admin'
+
+  // Cleanup polling on unmount
+  useEffect(() => {
+    return () => {
+      if (pollIntervalRef.current) {
+        clearInterval(pollIntervalRef.current)
+      }
+    }
+  }, [])
 
   useEffect(() => {
     if (token) {
       loadCollections()
     }
   }, [token])
+
+  // Check crawl status for collections that might be running
+  useEffect(() => {
+    if (token && collections.length > 0) {
+      checkActiveCrawls()
+    }
+  }, [token, collections])
 
   async function loadCollections() {
     if (!token) return
@@ -51,36 +79,156 @@ export default function ScrapeCollectionsPage() {
     }
   }
 
-  const getStatusColor = (status: string) => {
-    switch (status) {
-      case 'active':
-        return 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400'
-      case 'paused':
-        return 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400'
-      case 'archived':
-        return 'bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400'
-      default:
-        return 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+  async function checkActiveCrawls() {
+    if (!token) return
+
+    // Check status for collections with recent crawl run IDs
+    const collectionsToCheck = collections.filter(c => c.last_crawl_run_id)
+
+    for (const collection of collectionsToCheck) {
+      try {
+        const status = await scrapeApi.getCrawlStatus(token, collection.id)
+        if (status.status === 'pending' || status.status === 'running') {
+          setCrawlStatuses(prev => ({ ...prev, [collection.id]: status }))
+          startPolling()
+        }
+      } catch {
+        // Ignore - no active crawl
+      }
     }
   }
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
+  function startPolling() {
+    if (pollIntervalRef.current) return // Already polling
+
+    pollIntervalRef.current = setInterval(async () => {
+      if (!token) return
+
+      const activeIds = Object.keys(crawlStatuses)
+      if (activeIds.length === 0) {
+        stopPolling()
+        return
+      }
+
+      for (const collectionId of activeIds) {
+        try {
+          const status = await scrapeApi.getCrawlStatus(token, collectionId)
+          if (status.status === 'completed' || status.status === 'failed') {
+            setCrawlStatuses(prev => {
+              const updated = { ...prev }
+              delete updated[collectionId]
+              return updated
+            })
+            loadCollections() // Refresh to get updated stats
+          } else {
+            setCrawlStatuses(prev => ({ ...prev, [collectionId]: status }))
+          }
+        } catch {
+          setCrawlStatuses(prev => {
+            const updated = { ...prev }
+            delete updated[collectionId]
+            return updated
+          })
+        }
+      }
+    }, 3000)
+  }
+
+  function stopPolling() {
+    if (pollIntervalRef.current) {
+      clearInterval(pollIntervalRef.current)
+      pollIntervalRef.current = null
+    }
+  }
+
+  async function handleDelete(collection: ScrapeCollection) {
+    if (!token) return
+
+    setDeleting(collection.id)
+    try {
+      const result = await scrapeApi.deleteCollection(token, collection.id)
+
+      // Add to global deletion tracking
+      addJob({
+        runId: result.run_id,
+        configId: collection.id,
+        configName: collection.name,
+        configType: 'scrape',
+      })
+
+      toast.success('Deletion started...')
+      setDeleteConfirm(null)
+      loadCollections()
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to delete collection')
+    } finally {
+      setDeleting(null)
+    }
+  }
+
+  const isCrawling = (collectionId: string) => {
+    const status = crawlStatuses[collectionId]
+    return status && (status.status === 'pending' || status.status === 'running')
+  }
+
+  const filteredCollections = collections.filter((c) => {
+    if (!searchQuery) return true
+    const query = searchQuery.toLowerCase()
+    return (
+      c.name.toLowerCase().includes(query) ||
+      c.root_url.toLowerCase().includes(query) ||
+      c.description?.toLowerCase().includes(query)
+    )
+  })
+
+  const getStatusBadge = (collection: ScrapeCollection) => {
+    // Check if deletion is in progress (either from DB status or from context)
+    if (collection.status === 'deleting' || isDeleting(collection.id)) {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Deleting...
+        </span>
+      )
+    }
+
+    // Check if crawl is in progress
+    if (isCrawling(collection.id)) {
+      const status = crawlStatuses[collection.id]
+      const progress = status?.progress?.percent
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Crawling{progress !== undefined && progress !== null ? ` ${progress}%` : '...'}
+        </span>
+      )
+    }
+
+    switch (collection.status) {
       case 'active':
-        return <Play className="w-3 h-3" />
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400">
+            <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
+            Active
+          </span>
+        )
       case 'paused':
-        return <Pause className="w-3 h-3" />
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400">
+            <Pause className="w-3 h-3" />
+            Paused
+          </span>
+        )
       case 'archived':
-        return <Archive className="w-3 h-3" />
+        return (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+            <Archive className="w-3 h-3" />
+            Archived
+          </span>
+        )
       default:
         return null
     }
-  }
-
-  const getModeGradient = (mode: string) => {
-    return mode === 'record_preserving'
-      ? 'from-indigo-500 to-purple-600'
-      : 'from-blue-500 to-cyan-500'
   }
 
   const formatDate = (dateStr: string | null) => {
@@ -93,24 +241,21 @@ export default function ScrapeCollectionsPage() {
     })
   }
 
-  const activeCount = collections.filter(c => c.status === 'active').length
-  const pausedCount = collections.filter(c => c.status === 'paused').length
-
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Page Header */}
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-8">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 mb-6">
           <div className="flex items-center gap-4">
-            <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 text-white shadow-lg shadow-indigo-500/25">
-              <Globe className="w-6 h-6" />
+            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600 text-white shadow-lg shadow-emerald-500/25">
+              <Globe className="w-5 h-5" />
             </div>
             <div>
-              <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white">
+              <h1 className="text-xl font-bold text-gray-900 dark:text-white">
                 Web Scraping
               </h1>
-              <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                Manage web scraping collections and crawled content
+              <p className="text-sm text-gray-500 dark:text-gray-400">
+                {collections.length} website{collections.length !== 1 ? 's' : ''} configured
               </p>
             </div>
           </div>
@@ -119,51 +264,41 @@ export default function ScrapeCollectionsPage() {
             <button
               onClick={loadCollections}
               disabled={loading}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+              className="p-2 text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 hover:bg-gray-100 dark:hover:bg-gray-800 rounded-lg transition-colors"
+              title="Refresh"
             >
               <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-              Refresh
             </button>
 
             {isAdmin && (
               <button
                 onClick={() => setShowCreateModal(true)}
-                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-indigo-500 to-purple-600 rounded-lg hover:from-indigo-600 hover:to-purple-700 shadow-lg shadow-indigo-500/25 transition-all"
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-emerald-500 to-teal-600 rounded-lg hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-500/25 transition-all"
               >
                 <Plus className="w-4 h-4" />
-                New Collection
+                Add Website
               </button>
             )}
           </div>
         </div>
 
-        {/* Stats Bar */}
-        <div className="flex flex-wrap items-center gap-4 text-sm mb-6">
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-300">
-            <span className="font-medium">{collections.length}</span>
-            <span>total</span>
-          </div>
-          <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400">
-            <span className="w-2 h-2 rounded-full bg-emerald-500"></span>
-            <span className="font-medium">{activeCount}</span>
-            <span>active</span>
-          </div>
-          {pausedCount > 0 && (
-            <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400">
-              <span className="w-2 h-2 rounded-full bg-amber-500"></span>
-              <span className="font-medium">{pausedCount}</span>
-              <span>paused</span>
-            </div>
-          )}
+        {/* Search Bar */}
+        <div className="relative mb-6">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search websites..."
+            className="w-full pl-10 pr-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+          />
         </div>
 
         {/* Error State */}
         {error && (
           <div className="mb-6 rounded-xl bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/50 p-4">
             <div className="flex items-center gap-3">
-              <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
-                <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
-              </div>
+              <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
               <p className="text-sm font-medium text-red-800 dark:text-red-200">{error}</p>
             </div>
           </div>
@@ -172,119 +307,219 @@ export default function ScrapeCollectionsPage() {
         {/* Loading State */}
         {loading && collections.length === 0 && (
           <div className="flex flex-col items-center justify-center py-16">
-            <div className="w-12 h-12 rounded-full border-4 border-gray-200 dark:border-gray-700 border-t-indigo-500 animate-spin"></div>
-            <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Loading collections...</p>
+            <Loader2 className="w-8 h-8 text-emerald-500 animate-spin" />
+            <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Loading websites...</p>
           </div>
         )}
 
         {/* Empty State */}
         {!loading && collections.length === 0 && (
-          <div className="relative overflow-hidden rounded-2xl border-2 border-dashed border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800/50 px-6 py-16 text-center">
-            <div className="absolute inset-0 pointer-events-none">
-              <div className="absolute -top-24 -right-24 w-64 h-64 rounded-full bg-gradient-to-br from-indigo-500/5 to-purple-500/5 blur-3xl"></div>
-              <div className="absolute -bottom-24 -left-24 w-64 h-64 rounded-full bg-gradient-to-br from-blue-500/5 to-cyan-500/5 blur-3xl"></div>
-            </div>
-
-            <div className="relative">
-              <div className="mx-auto w-20 h-20 rounded-2xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-xl shadow-indigo-500/25 mb-6">
-                <Globe className="w-10 h-10 text-white" />
-              </div>
-              <h3 className="text-xl font-semibold text-gray-900 dark:text-white mb-2">
-                No Scrape Collections
-              </h3>
-              <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto mb-8">
-                Create a collection to start crawling web content. Collections preserve scraped pages as durable records.
-              </p>
-              {isAdmin && (
-                <button
-                  onClick={() => setShowCreateModal(true)}
-                  className="inline-flex items-center gap-2 px-6 py-3 text-sm font-medium text-white bg-gradient-to-r from-indigo-500 to-purple-600 rounded-lg hover:from-indigo-600 hover:to-purple-700 shadow-lg shadow-indigo-500/25 transition-all"
-                >
-                  <Plus className="w-5 h-5" />
-                  Create First Collection
-                </button>
-              )}
-            </div>
+          <div className="text-center py-16">
+            <Globe className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+            <h3 className="text-lg font-medium text-gray-900 dark:text-white mb-2">
+              No websites configured
+            </h3>
+            <p className="text-gray-500 dark:text-gray-400 mb-6">
+              Add a website to start scraping its content.
+            </p>
+            {isAdmin && (
+              <button
+                onClick={() => setShowCreateModal(true)}
+                className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-emerald-500 to-teal-600 rounded-lg hover:from-emerald-600 hover:to-teal-700 shadow-lg shadow-emerald-500/25 transition-all"
+              >
+                <Plus className="w-4 h-4" />
+                Add First Website
+              </button>
+            )}
           </div>
         )}
 
-        {/* Collections Grid */}
-        {!loading && collections.length > 0 && (
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {collections.map((collection) => (
-              <Link
-                key={collection.id}
-                href={`/scrape/${collection.id}`}
-                className="group relative bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 hover:shadow-lg hover:shadow-gray-200/50 dark:hover:shadow-gray-900/50 transition-all duration-200 overflow-hidden"
-              >
-                {/* Status bar at top */}
-                <div className={`absolute top-0 left-0 right-0 h-1 bg-gradient-to-r ${getModeGradient(collection.collection_mode)}`} />
+        {/* Table */}
+        {!loading && filteredCollections.length > 0 && (
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                    Website
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden sm:table-cell">
+                    Status
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden md:table-cell">
+                    Pages
+                  </th>
+                  <th className="text-left px-4 py-3 text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider hidden lg:table-cell">
+                    Last Crawl
+                  </th>
+                  <th className="w-10"></th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                {filteredCollections.map((collection) => (
+                  <tr
+                    key={collection.id}
+                    className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
+                  >
+                    <td className="px-4 py-3">
+                      <Link href={`/scrape/${collection.id}`} className="block">
+                        <div className="flex items-center gap-3">
+                          <div className={`flex-shrink-0 w-8 h-8 rounded-lg flex items-center justify-center ${
+                            isCrawling(collection.id)
+                              ? 'bg-blue-100 dark:bg-blue-900/30'
+                              : 'bg-gray-100 dark:bg-gray-700'
+                          }`}>
+                            {isCrawling(collection.id) ? (
+                              <RefreshCw className="w-4 h-4 text-blue-500 dark:text-blue-400 animate-spin" />
+                            ) : (
+                              <Globe className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                            )}
+                          </div>
+                          <div className="min-w-0">
+                            <p className="font-medium text-gray-900 dark:text-white truncate">
+                              {collection.name}
+                            </p>
+                            <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
+                              {collection.root_url}
+                            </p>
+                          </div>
+                        </div>
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3 hidden sm:table-cell">
+                      {getStatusBadge(collection)}
+                    </td>
+                    <td className="px-4 py-3 hidden md:table-cell">
+                      <span className="text-sm text-gray-600 dark:text-gray-300">
+                        {collection.stats?.page_count || 0}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 hidden lg:table-cell">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">
+                        {formatDate(collection.last_crawl_at)}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1">
+                        {/* View Job link when crawling */}
+                        {isCrawling(collection.id) && crawlStatuses[collection.id]?.run_id && (
+                          <Link
+                            href={`/admin/queue/${crawlStatuses[collection.id].run_id}`}
+                            className="p-1.5 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition-colors"
+                            title="View running job"
+                          >
+                            <Settings className="w-4 h-4" />
+                          </Link>
+                        )}
 
-                <div className="p-5">
-                  {/* Header */}
-                  <div className="flex items-start justify-between mb-4">
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 mb-1">
-                        <h3 className="font-semibold text-gray-900 dark:text-white truncate">
-                          {collection.name}
-                        </h3>
+                        {/* Delete button for admins on archived collections */}
+                        {isAdmin && collection.status === 'archived' && !isDeleting(collection.id) && (
+                          <button
+                            onClick={(e) => {
+                              e.preventDefault()
+                              e.stopPropagation()
+                              setDeleteConfirm(collection.id)
+                            }}
+                            disabled={deleting === collection.id}
+                            className="p-1.5 text-gray-400 hover:text-red-600 dark:hover:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/30 rounded transition-colors"
+                            title="Delete collection"
+                          >
+                            {deleting === collection.id ? (
+                              <Loader2 className="w-4 h-4 animate-spin" />
+                            ) : (
+                              <Trash2 className="w-4 h-4" />
+                            )}
+                          </button>
+                        )}
+
+                        {/* View details link */}
+                        <Link
+                          href={`/scrape/${collection.id}`}
+                          className="p-1.5 text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+                          title="View details"
+                        >
+                          <ExternalLink className="w-4 h-4" />
+                        </Link>
                       </div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 truncate">
-                        {collection.root_url}
-                      </p>
-                    </div>
-                    <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${getStatusColor(collection.status)}`}>
-                      {getStatusIcon(collection.status)}
-                      <span className="capitalize">{collection.status}</span>
-                    </div>
-                  </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
 
-                  {/* Description */}
-                  {collection.description && (
-                    <p className="text-sm text-gray-600 dark:text-gray-300 line-clamp-2 mb-4">
-                      {collection.description}
+        {/* No Results */}
+        {!loading && collections.length > 0 && filteredCollections.length === 0 && (
+          <div className="text-center py-12">
+            <Search className="w-8 h-8 text-gray-300 dark:text-gray-600 mx-auto mb-3" />
+            <p className="text-gray-500 dark:text-gray-400">
+              No websites match "{searchQuery}"
+            </p>
+          </div>
+        )}
+
+        {/* Delete Confirmation Dialog */}
+        {deleteConfirm && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
+            <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl max-w-md w-full overflow-hidden">
+              <div className="p-6">
+                <div className="flex items-center gap-4 mb-4">
+                  <div className="flex-shrink-0 w-12 h-12 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+                    <Trash2 className="w-6 h-6 text-red-600 dark:text-red-400" />
+                  </div>
+                  <div>
+                    <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                      Delete Website
+                    </h3>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      This action cannot be undone
                     </p>
-                  )}
-
-                  {/* Stats */}
-                  <div className="grid grid-cols-2 gap-3 mb-4">
-                    <div className="flex items-center gap-2 text-sm">
-                      <FileText className="w-4 h-4 text-gray-400" />
-                      <span className="text-gray-600 dark:text-gray-300">
-                        {collection.stats?.page_count || 0} pages
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-2 text-sm">
-                      <FolderOpen className="w-4 h-4 text-indigo-500" />
-                      <span className="text-gray-600 dark:text-gray-300">
-                        {collection.stats?.record_count || 0} records
-                      </span>
-                    </div>
-                  </div>
-
-                  {/* Footer */}
-                  <div className="flex items-center justify-between pt-4 border-t border-gray-100 dark:border-gray-700">
-                    <div className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
-                      <Clock className="w-3 h-3" />
-                      <span>Last crawl: {formatDate(collection.last_crawl_at)}</span>
-                    </div>
-                    <span className={`text-xs px-2 py-0.5 rounded ${
-                      collection.collection_mode === 'record_preserving'
-                        ? 'bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400'
-                        : 'bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400'
-                    }`}>
-                      {collection.collection_mode === 'record_preserving' ? 'Preserving' : 'Snapshot'}
-                    </span>
                   </div>
                 </div>
-              </Link>
-            ))}
+                <p className="text-sm text-gray-600 dark:text-gray-300 mb-6">
+                  Are you sure you want to delete{' '}
+                  <span className="font-medium text-gray-900 dark:text-white">
+                    {collections.find(c => c.id === deleteConfirm)?.name}
+                  </span>
+                  ? This will permanently remove all scraped pages, documents, and associated data.
+                </p>
+                <div className="flex items-center justify-end gap-3">
+                  <button
+                    onClick={() => setDeleteConfirm(null)}
+                    className="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={() => {
+                      const collection = collections.find(c => c.id === deleteConfirm)
+                      if (collection) handleDelete(collection)
+                    }}
+                    disabled={deleting !== null}
+                    className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-red-600 hover:bg-red-700 rounded-lg disabled:opacity-50 transition-colors"
+                  >
+                    {deleting === deleteConfirm ? (
+                      <>
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                        Deleting...
+                      </>
+                    ) : (
+                      <>
+                        <Trash2 className="w-4 h-4" />
+                        Delete
+                      </>
+                    )}
+                  </button>
+                </div>
+              </div>
+            </div>
           </div>
         )}
 
-        {/* Create Modal - Placeholder */}
+        {/* Create Modal */}
         {showCreateModal && (
-          <CreateCollectionModal
+          <AddWebsiteModal
             onClose={() => setShowCreateModal(false)}
             onCreated={() => {
               setShowCreateModal(false)
@@ -297,8 +532,8 @@ export default function ScrapeCollectionsPage() {
   )
 }
 
-// Simple create modal component
-function CreateCollectionModal({
+// Add Website Modal with crawl options
+function AddWebsiteModal({
   onClose,
   onCreated,
 }: {
@@ -306,36 +541,119 @@ function CreateCollectionModal({
   onCreated: () => void
 }) {
   const { token } = useAuth()
+  const [url, setUrl] = useState('')
   const [name, setName] = useState('')
-  const [rootUrl, setRootUrl] = useState('')
   const [description, setDescription] = useState('')
-  const [mode, setMode] = useState<'record_preserving' | 'snapshot'>('record_preserving')
-  const [downloadDocuments, setDownloadDocuments] = useState(true)
-  const [maxDepth, setMaxDepth] = useState<number>(0) // 0 = unlimited
+  const [downloadDocuments, setDownloadDocuments] = useState(false) // Default OFF
+  const [maxDepth, setMaxDepth] = useState(2) // Default 2 levels
   const [loading, setLoading] = useState(false)
+  const [fetchingMeta, setFetchingMeta] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [metaFetched, setMetaFetched] = useState(false)
+  const urlInputRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    urlInputRef.current?.focus()
+  }, [])
+
+  // Auto-fetch website metadata when URL is entered
+  async function fetchWebsiteMeta(targetUrl: string) {
+    if (!targetUrl || metaFetched) return
+
+    // Validate URL format
+    try {
+      new URL(targetUrl)
+    } catch {
+      return
+    }
+
+    setFetchingMeta(true)
+    try {
+      // Use a CORS proxy or fetch via our backend (for now, extract from URL)
+      const urlObj = new URL(targetUrl)
+      const hostname = urlObj.hostname.replace('www.', '')
+
+      // Set a default name from hostname if not already set
+      if (!name) {
+        // Convert hostname to title case
+        const siteName = hostname
+          .split('.')
+          .slice(0, -1) // Remove TLD
+          .join(' ')
+          .replace(/-/g, ' ')
+          .split(' ')
+          .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+          .join(' ')
+        setName(siteName || hostname)
+      }
+
+      setMetaFetched(true)
+    } catch (err) {
+      console.error('Failed to fetch metadata:', err)
+    } finally {
+      setFetchingMeta(false)
+    }
+  }
+
+  // Debounced URL change handler
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      if (url && url.includes('.')) {
+        fetchWebsiteMeta(url)
+      }
+    }, 500)
+    return () => clearTimeout(timer)
+  }, [url])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
-    if (!token || !name || !rootUrl) return
+    if (!token || !url) return
+
+    // Validate URL
+    let finalUrl = url
+    if (!url.startsWith('http://') && !url.startsWith('https://')) {
+      finalUrl = 'https://' + url
+    }
+
+    try {
+      new URL(finalUrl)
+    } catch {
+      setError('Please enter a valid URL')
+      return
+    }
 
     setLoading(true)
     setError(null)
 
     try {
-      await scrapeApi.createCollection(token, {
-        name,
-        root_url: rootUrl,
+      // Create collection with auto-start crawl
+      const collection = await scrapeApi.createCollection(token, {
+        name: name || new URL(finalUrl).hostname,
+        root_url: finalUrl,
         description: description || undefined,
-        collection_mode: mode,
+        collection_mode: 'snapshot', // Default to snapshot
         crawl_config: {
           download_documents: downloadDocuments,
           max_depth: maxDepth,
         },
       })
+
+      // Auto-start crawl
+      try {
+        await scrapeApi.startCrawl(token, collection.id)
+      } catch (crawlErr: any) {
+        console.error('Failed to auto-start crawl:', crawlErr)
+        // Show error but don't fail - collection was created
+        setError(`Website added but crawl failed to start: ${crawlErr.message || 'Unknown error'}. You can start it manually.`)
+        setLoading(false)
+        // Still call onCreated to close modal and refresh list
+        setTimeout(() => onCreated(), 2000)
+        return
+      }
+
       onCreated()
     } catch (err: any) {
-      setError(err.message || 'Failed to create collection')
+      setError(err.message || 'Failed to create website')
     } finally {
       setLoading(false)
     }
@@ -343,11 +661,11 @@ function CreateCollectionModal({
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/50">
-      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl max-w-lg w-full overflow-hidden">
+      <div className="bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-xl max-w-md w-full overflow-hidden">
         {/* Header */}
-        <div className="relative bg-gradient-to-r from-indigo-600 via-purple-600 to-indigo-600 px-6 py-5">
-          <h2 className="text-xl font-bold text-white">Create Scrape Collection</h2>
-          <p className="text-indigo-100 text-sm mt-0.5">Configure a new web scraping collection</p>
+        <div className="relative bg-gradient-to-r from-emerald-600 to-teal-600 px-6 py-4">
+          <h2 className="text-lg font-bold text-white">Add Website</h2>
+          <p className="text-emerald-100 text-sm">Enter a URL to start scraping</p>
         </div>
 
         <form onSubmit={handleSubmit} className="p-6 space-y-4">
@@ -357,93 +675,60 @@ function CreateCollectionModal({
             </div>
           )}
 
+          {/* URL Input */}
           <div className="space-y-1.5">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Collection Name *
+              Website URL *
+            </label>
+            <div className="relative">
+              <Globe className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              <input
+                ref={urlInputRef}
+                type="text"
+                value={url}
+                onChange={(e) => {
+                  setUrl(e.target.value)
+                  setMetaFetched(false)
+                }}
+                placeholder="example.com"
+                required
+                className="w-full pl-10 pr-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+              />
+              {fetchingMeta && (
+                <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 w-4 h-4 text-emerald-500 animate-spin" />
+              )}
+            </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              We'll automatically detect the website name
+            </p>
+          </div>
+
+          {/* Name (auto-filled but editable) */}
+          <div className="space-y-1.5">
+            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+              Name
             </label>
             <input
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g., SAM.gov Opportunities"
-              required
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
+              placeholder="Website name (auto-detected)"
+              className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
             />
           </div>
 
+          {/* Description (optional) */}
           <div className="space-y-1.5">
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Root URL *
+              Description <span className="text-gray-400">(optional)</span>
             </label>
             <input
-              type="url"
-              value={rootUrl}
-              onChange={(e) => setRootUrl(e.target.value)}
-              placeholder="https://example.com"
-              required
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
-            />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Description
-            </label>
-            <textarea
+              type="text"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
-              placeholder="Brief description of what this collection will capture..."
-              rows={2}
-              className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all resize-none"
+              placeholder="What is this website about?"
+              className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-emerald-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
             />
-          </div>
-
-          <div className="space-y-1.5">
-            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-              Collection Mode
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <label
-                className={`flex items-center p-3 border rounded-lg cursor-pointer transition-all ${
-                  mode === 'record_preserving'
-                    ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20'
-                    : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="mode"
-                  value="record_preserving"
-                  checked={mode === 'record_preserving'}
-                  onChange={() => setMode('record_preserving')}
-                  className="sr-only"
-                />
-                <div>
-                  <p className="text-sm font-medium text-gray-900 dark:text-white">Record Preserving</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Never auto-delete records</p>
-                </div>
-              </label>
-              <label
-                className={`flex items-center p-3 border rounded-lg cursor-pointer transition-all ${
-                  mode === 'snapshot'
-                    ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
-                    : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
-                }`}
-              >
-                <input
-                  type="radio"
-                  name="mode"
-                  value="snapshot"
-                  checked={mode === 'snapshot'}
-                  onChange={() => setMode('snapshot')}
-                  className="sr-only"
-                />
-                <div>
-                  <p className="text-sm font-medium text-gray-900 dark:text-white">Snapshot</p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">Replace old pages on re-crawl</p>
-                </div>
-              </label>
-            </div>
           </div>
 
           {/* Crawl Depth */}
@@ -451,44 +736,38 @@ function CreateCollectionModal({
             <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
               Crawl Depth
             </label>
-            <p className="text-xs text-gray-500 dark:text-gray-400 mb-2">
-              How many levels deep to crawl from the root URL
-            </p>
             <div className="grid grid-cols-4 gap-2">
               {[
-                { value: 1, label: '1 Level' },
-                { value: 2, label: '2 Levels' },
-                { value: 3, label: '3 Levels' },
+                { value: 1, label: '1 level' },
+                { value: 2, label: '2 levels' },
+                { value: 3, label: '3 levels' },
                 { value: 0, label: 'All' },
               ].map((option) => (
-                <label
+                <button
                   key={option.value}
-                  className={`flex items-center justify-center p-3 rounded-lg border cursor-pointer transition-all ${
+                  type="button"
+                  onClick={() => setMaxDepth(option.value)}
+                  className={`px-3 py-2 text-sm font-medium rounded-lg border transition-colors ${
                     maxDepth === option.value
-                      ? 'border-indigo-500 bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400'
-                      : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 text-gray-700 dark:text-gray-300'
+                      ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400'
+                      : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800'
                   }`}
                 >
-                  <input
-                    type="radio"
-                    name="maxDepth"
-                    value={option.value}
-                    checked={maxDepth === option.value}
-                    onChange={() => setMaxDepth(option.value)}
-                    className="sr-only"
-                  />
-                  <span className="text-sm font-medium">{option.label}</span>
-                </label>
+                  {option.label}
+                </button>
               ))}
             </div>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              How many levels of links to follow from the starting page
+            </p>
           </div>
 
           {/* Download Documents Toggle */}
-          <label className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-xl cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
+          <label className="flex items-center justify-between p-3 bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700 rounded-lg cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors">
             <div>
               <p className="text-sm font-medium text-gray-900 dark:text-white">Download Documents</p>
-              <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                Automatically download PDFs, DOCX, and other documents found on pages
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Also download PDFs, Word docs, and other files
               </p>
             </div>
             <div className="relative">
@@ -498,12 +777,12 @@ function CreateCollectionModal({
                 onChange={(e) => setDownloadDocuments(e.target.checked)}
                 className="sr-only peer"
               />
-              <div className="w-11 h-6 bg-gray-200 peer-focus:ring-4 peer-focus:ring-indigo-300 dark:peer-focus:ring-indigo-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-5 after:w-5 after:transition-all peer-checked:bg-indigo-600"></div>
+              <div className="w-10 h-5 bg-gray-200 peer-focus:ring-2 peer-focus:ring-emerald-300 dark:peer-focus:ring-emerald-800 rounded-full peer dark:bg-gray-700 peer-checked:after:translate-x-full after:content-[''] after:absolute after:top-[2px] after:left-[2px] after:bg-white after:rounded-full after:h-4 after:w-4 after:transition-all peer-checked:bg-emerald-500"></div>
             </div>
           </label>
 
           {/* Actions */}
-          <div className="flex items-center justify-end gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+          <div className="flex items-center justify-end gap-3 pt-4">
             <button
               type="button"
               onClick={onClose}
@@ -513,11 +792,20 @@ function CreateCollectionModal({
             </button>
             <button
               type="submit"
-              disabled={loading || !name || !rootUrl}
-              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-indigo-500 to-purple-600 rounded-lg hover:from-indigo-600 hover:to-purple-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-indigo-500/25 transition-all"
+              disabled={loading || !url}
+              className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-emerald-500 to-teal-600 rounded-lg hover:from-emerald-600 hover:to-teal-700 disabled:opacity-50 disabled:cursor-not-allowed shadow-lg shadow-emerald-500/25 transition-all"
             >
-              {loading && <Loader2 className="w-4 h-4 animate-spin" />}
-              Create Collection
+              {loading ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                <>
+                  <Play className="w-4 h-4" />
+                  Add & Start Crawl
+                </>
+              )}
             </button>
           </div>
         </form>

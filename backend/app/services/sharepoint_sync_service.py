@@ -327,14 +327,14 @@ class SharePointSyncService:
 
         config.updated_at = datetime.utcnow()
 
-        # If disabling, cancel pending extractions for this sync config's assets
+        # If disabling, cancel all pending jobs for this sync config
         if is_disabling:
-            cancelled_count = await self._cancel_pending_extractions_for_sync_config(
+            cancelled_count = await self._cancel_pending_jobs_for_sync_config(
                 session, sync_config_id, config.organization_id
             )
             if cancelled_count > 0:
                 logger.info(
-                    f"Cancelled {cancelled_count} pending extraction(s) for disabled sync config {sync_config_id}"
+                    f"Cancelled {cancelled_count} pending job(s) for disabled sync config {sync_config_id}"
                 )
 
         await session.commit()
@@ -344,16 +344,18 @@ class SharePointSyncService:
 
         return config
 
-    async def _cancel_pending_extractions_for_sync_config(
+    async def _cancel_pending_jobs_for_sync_config(
         self,
         session: AsyncSession,
         sync_config_id: UUID,
         organization_id: UUID,
     ) -> int:
         """
-        Cancel all pending/submitted/running extraction jobs for assets in a sync config.
+        Cancel all pending jobs for assets in a sync config by storage path.
 
-        This is called when a sync config is disabled to prevent wasted processing.
+        Uses the sync config's slug to find ALL assets with matching storage paths,
+        regardless of whether they have SharePointSyncedDocument tracking records.
+        Cancels both extraction and extraction_enhancement jobs.
 
         Args:
             session: Database session
@@ -361,26 +363,39 @@ class SharePointSyncService:
             organization_id: Organization UUID
 
         Returns:
-            Number of extraction runs cancelled
+            Number of runs cancelled
         """
         from ..celery_app import app as celery_app
 
-        # Find all asset IDs linked to this sync config
-        asset_query = select(SharePointSyncedDocument.asset_id).where(
-            SharePointSyncedDocument.sync_config_id == sync_config_id
-        )
-        asset_result = await session.execute(asset_query)
-        asset_ids = [str(row[0]) for row in asset_result.fetchall()]
-
-        if not asset_ids:
+        # Get sync config to find slug
+        config = await self.get_sync_config(session, sync_config_id)
+        if not config or not config.slug:
             return 0
 
-        # Find all pending/submitted/running extraction runs for these assets
-        # Run.input_asset_ids is a JSON array, so we need to check if asset_id is in it
+        # Build storage path prefix: {org_id}/sharepoint/{slug}/
+        path_prefix = f"{organization_id}/sharepoint/{config.slug}/"
+
+        # Find all assets with this storage path prefix
+        asset_query = select(Asset.id).where(
+            and_(
+                Asset.organization_id == organization_id,
+                Asset.raw_object_key.like(f"{path_prefix}%"),
+            )
+        )
+        asset_result = await session.execute(asset_query)
+        asset_ids = {str(row[0]) for row in asset_result.fetchall()}
+
+        if not asset_ids:
+            logger.info(f"No assets found with path prefix {path_prefix}")
+            return 0
+
+        logger.info(f"Found {len(asset_ids)} assets with path prefix {path_prefix}")
+
+        # Find all pending jobs (extraction and extraction_enhancement)
         runs_query = select(Run).where(
             and_(
                 Run.organization_id == organization_id,
-                Run.run_type == "extraction",
+                Run.run_type.in_(["extraction", "extraction_enhancement"]),
                 Run.status.in_(["pending", "submitted", "running"]),
             )
         )
@@ -389,25 +404,21 @@ class SharePointSyncService:
 
         cancelled_count = 0
         for run in runs:
-            # Check if any of the run's input assets belong to this sync config
             run_asset_ids = run.input_asset_ids or []
             if any(asset_id in asset_ids for asset_id in run_asset_ids):
                 # Revoke Celery task if submitted
                 if run.celery_task_id and run.status in ("submitted", "running"):
                     try:
                         celery_app.control.revoke(run.celery_task_id, terminate=True)
-                        logger.info(f"Revoked Celery task {run.celery_task_id} for run {run.id}")
                     except Exception as e:
-                        logger.warning(f"Failed to revoke Celery task {run.celery_task_id}: {e}")
+                        logger.warning(f"Failed to revoke task {run.celery_task_id}: {e}")
 
-                # Update run status
                 run.status = "cancelled"
                 run.completed_at = datetime.utcnow()
-                run.error_message = "Cancelled: SharePoint sync disabled"
+                run.error_message = "Cancelled: SharePoint sync archived"
                 cancelled_count += 1
 
-                logger.info(f"Cancelled extraction run {run.id} (sync config disabled)")
-
+        logger.info(f"Cancelled {cancelled_count} jobs for sync config {sync_config_id}")
         return cancelled_count
 
     async def archive_sync_config_with_opensearch_cleanup(
@@ -439,16 +450,15 @@ class SharePointSyncService:
 
         stats = {
             "opensearch_removed": 0,
-            "extractions_cancelled": 0,
+            "jobs_cancelled": 0,
             "errors": [],
         }
 
-        # Cancel any pending extraction jobs for this sync config's assets
-        if config.is_active:
-            cancelled_count = await self._cancel_pending_extractions_for_sync_config(
-                session, sync_config_id, organization_id
-            )
-            stats["extractions_cancelled"] = cancelled_count
+        # Cancel all pending jobs (extraction + enhancement) by storage path
+        cancelled_count = await self._cancel_pending_jobs_for_sync_config(
+            session, sync_config_id, organization_id
+        )
+        stats["jobs_cancelled"] = cancelled_count
 
         # Get all synced documents
         docs_result = await session.execute(
@@ -477,7 +487,7 @@ class SharePointSyncService:
         logger.info(
             f"Archived sync config {sync_config_id}: "
             f"opensearch_removed={stats['opensearch_removed']}, "
-            f"extractions_cancelled={stats['extractions_cancelled']}"
+            f"jobs_cancelled={stats['jobs_cancelled']}"
         )
 
         return stats
@@ -524,95 +534,103 @@ class SharePointSyncService:
             "files_deleted": 0,
             "documents_deleted": 0,
             "runs_deleted": 0,
-            "extractions_cancelled": 0,
+            "jobs_cancelled": 0,
             "opensearch_removed": 0,
             "storage_freed_bytes": 0,
             "errors": [],
         }
 
-        # 0. Cancel any pending extraction jobs before deleting
-        cancelled_count = await self._cancel_pending_extractions_for_sync_config(
+        # 0. Cancel all pending jobs (extraction + enhancement) by storage path
+        cancelled_count = await self._cancel_pending_jobs_for_sync_config(
             session, sync_config_id, organization_id
         )
-        stats["extractions_cancelled"] = cancelled_count
+        stats["jobs_cancelled"] = cancelled_count
 
-        # 1. Get all synced documents
+        # 1. Find ALL assets by storage path (not just tracked ones)
+        # This catches orphaned assets from failed syncs
+        path_prefix = f"{organization_id}/sharepoint/{config.slug}/"
+        assets_result = await session.execute(
+            select(Asset).where(
+                and_(
+                    Asset.organization_id == organization_id,
+                    Asset.raw_object_key.like(f"{path_prefix}%"),
+                )
+            )
+        )
+        assets = list(assets_result.scalars().all())
+        logger.info(f"Found {len(assets)} assets with path prefix {path_prefix}")
+
+        # 2. Delete assets, files from MinIO, and remove from OpenSearch
+        for asset in assets:
+            try:
+                # Remove from OpenSearch
+                await index_service.delete_asset_index(organization_id, asset.id)
+                stats["opensearch_removed"] += 1
+            except Exception as e:
+                stats["errors"].append(f"OpenSearch removal failed for {asset.id}: {e}")
+
+            try:
+                # Track storage freed
+                if asset.file_size:
+                    stats["storage_freed_bytes"] += asset.file_size
+
+                # Delete raw file from MinIO
+                if minio and asset.raw_bucket and asset.raw_object_key:
+                    try:
+                        minio.delete_object(asset.raw_bucket, asset.raw_object_key)
+                        stats["files_deleted"] += 1
+                    except Exception as e:
+                        stats["errors"].append(f"Failed to delete raw file for {asset.id}: {e}")
+
+                # Delete extracted files from MinIO (via extraction results)
+                extraction_result = await session.execute(
+                    select(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                )
+                extractions = list(extraction_result.scalars().all())
+                for extraction in extractions:
+                    if minio and extraction.extracted_bucket and extraction.extracted_object_key:
+                        try:
+                            minio.delete_object(extraction.extracted_bucket, extraction.extracted_object_key)
+                            stats["files_deleted"] += 1
+                        except Exception as e:
+                            pass  # Don't fail on extraction cleanup
+
+                # Delete extraction results
+                await session.execute(
+                    sql_delete(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                )
+
+                # Delete asset versions if any
+                await session.execute(
+                    sql_delete(AssetVersion).where(AssetVersion.asset_id == asset.id)
+                )
+
+                # Hard delete the asset record
+                await session.execute(
+                    sql_delete(Asset).where(Asset.id == asset.id)
+                )
+                stats["assets_deleted"] += 1
+            except Exception as e:
+                stats["errors"].append(f"Asset deletion failed for {asset.id}: {e}")
+
+        # 3. Delete SharePointSyncedDocument records
         docs_result = await session.execute(
-            select(SharePointSyncedDocument).where(
+            select(func.count()).select_from(SharePointSyncedDocument).where(
                 SharePointSyncedDocument.sync_config_id == sync_config_id
             )
         )
-        synced_docs = list(docs_result.scalars().all())
-
-        # 2. Delete assets, files from MinIO, and remove from OpenSearch
-        for doc in synced_docs:
-            if doc.asset_id:
-                try:
-                    # Remove from OpenSearch
-                    await index_service.delete_asset_index(organization_id, doc.asset_id)
-                    stats["opensearch_removed"] += 1
-                except Exception as e:
-                    stats["errors"].append(f"OpenSearch removal failed for {doc.asset_id}: {e}")
-
-                try:
-                    # Get asset to find file locations
-                    asset = await asset_service.get_asset(session, doc.asset_id)
-                    if asset:
-                        # Track storage freed
-                        if asset.file_size:
-                            stats["storage_freed_bytes"] += asset.file_size
-
-                        # Delete raw file from MinIO
-                        if minio and asset.raw_bucket and asset.raw_object_key:
-                            try:
-                                minio.delete_object(asset.raw_bucket, asset.raw_object_key)
-                                stats["files_deleted"] += 1
-                            except Exception as e:
-                                stats["errors"].append(f"Failed to delete raw file for {doc.asset_id}: {e}")
-
-                        # Delete extracted files from MinIO (via extraction results)
-                        extraction_result = await session.execute(
-                            select(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
-                        )
-                        extractions = list(extraction_result.scalars().all())
-                        for extraction in extractions:
-                            if minio and extraction.extracted_bucket and extraction.extracted_object_key:
-                                try:
-                                    minio.delete_object(extraction.extracted_bucket, extraction.extracted_object_key)
-                                    stats["files_deleted"] += 1
-                                except Exception as e:
-                                    pass  # Don't fail on extraction cleanup
-
-                        # Delete extraction results
-                        await session.execute(
-                            sql_delete(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
-                        )
-
-                        # Delete asset versions if any
-                        await session.execute(
-                            sql_delete(AssetVersion).where(AssetVersion.asset_id == asset.id)
-                        )
-
-                        # Hard delete the asset record
-                        await session.execute(
-                            sql_delete(Asset).where(Asset.id == asset.id)
-                        )
-                        stats["assets_deleted"] += 1
-                except Exception as e:
-                    stats["errors"].append(f"Asset deletion failed for {doc.asset_id}: {e}")
-
-        # 3. Delete SharePointSyncedDocument records
+        docs_count = docs_result.scalar() or 0
         await session.execute(
             sql_delete(SharePointSyncedDocument).where(
                 SharePointSyncedDocument.sync_config_id == sync_config_id
             )
         )
-        stats["documents_deleted"] = len(synced_docs)
+        stats["documents_deleted"] = docs_count
 
-        # 4. Delete related Runs (using json_extract for SQLite compatibility)
+        # 4. Delete related Runs (PostgreSQL JSON: column["key"].astext)
         runs_result = await session.execute(
             select(Run).where(
-                func.json_extract(Run.config, "$.sync_config_id") == str(sync_config_id)
+                Run.config["sync_config_id"].astext == str(sync_config_id)
             )
         )
         runs = list(runs_result.scalars().all())
@@ -638,8 +656,9 @@ class SharePointSyncService:
 
         logger.info(
             f"Deleted sync config {sync_config_id} with cleanup: "
-            f"assets={stats['assets_deleted']}, docs={stats['documents_deleted']}, "
-            f"runs={stats['runs_deleted']}, opensearch={stats['opensearch_removed']}"
+            f"assets={stats['assets_deleted']}, files={stats['files_deleted']}, "
+            f"docs={stats['documents_deleted']}, runs={stats['runs_deleted']}, "
+            f"jobs_cancelled={stats['jobs_cancelled']}, opensearch={stats['opensearch_removed']}"
         )
 
         return stats
@@ -884,13 +903,19 @@ class SharePointSyncService:
         exclude_patterns = sync_settings.get("exclude_patterns", [])
         max_file_size_mb = sync_settings.get("max_file_size_mb", 100)
 
-        # Folder/file selection filters
+        # Selection mode: 'all' syncs everything, 'selected' uses folder/file selection
+        selection_mode = sync_settings.get("selection_mode", "all")
+
+        # Folder/file selection filters (only used when selection_mode is 'selected')
         # selected_folders: List of folder paths - sync all contents recursively
         # selected_files: List of {item_id, path, name} - sync only these specific files
         selected_folders = sync_settings.get("selected_folders", [])
         selected_files = sync_settings.get("selected_files", [])
         selected_file_ids = {f.get("item_id") for f in selected_files if f.get("item_id")}
-        has_selection_filter = bool(selected_folders or selected_files)
+        # Only apply selection filter if mode is 'selected' AND there are selections
+        has_selection_filter = (
+            selection_mode == "selected" and bool(selected_folders or selected_files)
+        )
 
         await run_log_service.log_event(
             session=session,
@@ -902,6 +927,7 @@ class SharePointSyncService:
                 "folder_url": config.folder_url,
                 "recursive": recursive,
                 "exclude_patterns": exclude_patterns,
+                "selection_mode": selection_mode,
                 "selected_folders": len(selected_folders),
                 "selected_files": len(selected_files),
             },
@@ -1575,13 +1601,13 @@ class SharePointSyncService:
             Asset if found, None otherwise
         """
         # Query assets by source_metadata JSON field
-        # Use json_extract for SQLite compatibility
+        # PostgreSQL JSON: column["key"].astext
         result = await session.execute(
             select(Asset).where(
                 and_(
                     Asset.organization_id == organization_id,
                     Asset.source_type == "sharepoint",
-                    func.json_extract(Asset.source_metadata, "$.sharepoint_item_id") == sharepoint_item_id,
+                    Asset.source_metadata["sharepoint_item_id"].astext == sharepoint_item_id,
                 )
             ).limit(1)
         )

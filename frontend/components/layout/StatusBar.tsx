@@ -4,8 +4,9 @@
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { Activity, Clock, ChevronRight, CheckCircle, XCircle, Loader2 } from 'lucide-react'
-import { API_PATH_VERSION, runsApi } from '@/lib/api'
+import { API_PATH_VERSION } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
+import { useQueue } from '@/lib/queue-context'
 import { formatCurrentTime, DISPLAY_TIMEZONE_ABBR } from '@/lib/date-utils'
 import clsx from 'clsx'
 
@@ -25,14 +26,16 @@ interface StatusBarProps {
 
 export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
   const router = useRouter()
-  const { accessToken, isAuthenticated } = useAuth()
+  const { isAuthenticated } = useAuth()
+  const { stats, activeCount } = useQueue()
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [currentTime, setCurrentTime] = useState<Date | null>(null)
-  const [activeRuns, setActiveRuns] = useState(0)
-  const [totalRuns24h, setTotalRuns24h] = useState(0)
-  const [completedRuns24h, setCompletedRuns24h] = useState(0)
-  const [failedRuns24h, setFailedRuns24h] = useState(0)
   const [isClient, setIsClient] = useState(false)
+
+  // Derive stats from queue context
+  const completedRuns24h = stats?.recent_24h.completed || 0
+  const failedRuns24h = stats?.recent_24h.failed || 0
+  const totalRuns24h = completedRuns24h + failedRuns24h + (stats?.recent_24h.timed_out || 0)
 
   // Fix hydration issue by only showing time after client-side hydration
   useEffect(() => {
@@ -45,34 +48,6 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
 
     return () => clearInterval(timer)
   }, [])
-
-  // Poll run stats from the authenticated runs API
-  useEffect(() => {
-    if (!accessToken || !isAuthenticated) return
-
-    let mounted = true
-    const poll = async () => {
-      try {
-        const stats = await runsApi.getStats(accessToken)
-        if (!mounted) return
-
-        // Calculate active runs (pending + running)
-        const runningCount = stats.runs.by_status['running'] || 0
-        const pendingCount = stats.runs.by_status['pending'] || 0
-        setActiveRuns(runningCount + pendingCount)
-
-        // Get 24h stats
-        setTotalRuns24h(stats.recent_24h.total || 0)
-        setCompletedRuns24h(stats.recent_24h.by_status['completed'] || 0)
-        setFailedRuns24h(stats.recent_24h.by_status['failed'] || 0)
-      } catch {
-        // ignore transient errors
-      }
-    }
-    poll()
-    const interval = setInterval(poll, Number(process.env.NEXT_PUBLIC_JOB_POLL_INTERVAL_MS || 10000))
-    return () => { mounted = false; clearInterval(interval) }
-  }, [accessToken, isAuthenticated])
 
   // formatTime is now handled by formatCurrentTime from date-utils
 
@@ -137,12 +112,12 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
         {/* Divider */}
         <div className="hidden lg:block w-px h-4 bg-gray-200 dark:bg-gray-700"></div>
 
-        {/* Processing Button */}
+        {/* Processing Button - Links to Queue Admin */}
         <button
-          onClick={() => router.push('/settings-admin?tab=processing')}
+          onClick={() => router.push('/admin/queue')}
           className={clsx(
             "hidden lg:flex items-center gap-3 px-3 py-1.5 rounded-lg transition-all group",
-            activeRuns > 0
+            activeCount > 0
               ? "bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/30"
               : "hover:bg-gray-100 dark:hover:bg-gray-800"
           )}
@@ -150,11 +125,11 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
           <div className="flex items-center gap-2">
             <Activity className={clsx(
               "w-4 h-4",
-              activeRuns > 0 ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-500 dark:text-gray-400'
+              activeCount > 0 ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-500 dark:text-gray-400'
             )} />
             <span className={clsx(
               "text-xs font-medium",
-              activeRuns > 0 ? 'text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-300'
+              activeCount > 0 ? 'text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-300'
             )}>
               Processing
             </span>
@@ -162,13 +137,13 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
 
           {/* Run stats */}
           <div className="flex items-center gap-2 text-xs">
-            {activeRuns > 0 ? (
+            {activeCount > 0 ? (
               <div className="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400">
                 <span className="relative flex h-2 w-2">
                   <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
                   <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
                 </span>
-                <span className="font-mono font-medium">{activeRuns}</span>
+                <span className="font-mono font-medium">{activeCount}</span>
                 <span className="text-indigo-500 dark:text-indigo-400">active</span>
               </div>
             ) : totalRuns24h > 0 ? (

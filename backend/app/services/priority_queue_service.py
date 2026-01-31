@@ -42,9 +42,9 @@ logger = logging.getLogger("curatore.priority")
 
 
 class PriorityTier(str, Enum):
-    """Task priority tiers."""
+    """Task priority tiers mapped to Celery queues."""
     HIGH = "processing_priority"      # User-initiated, time-sensitive
-    NORMAL = "processing"             # Background processing
+    NORMAL = "extraction"             # Default extraction queue
     LOW = "maintenance"               # Scheduled maintenance, cleanup
 
 

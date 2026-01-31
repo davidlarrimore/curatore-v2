@@ -36,7 +36,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import select
 
 from fastapi.responses import PlainTextResponse
@@ -58,7 +58,7 @@ from app.api.v1.models import (
     CrawlCollectionResponse,
     CrawlStatusResponse,
 )
-from app.database.models import User, ScrapeCollection, ScrapedAsset
+from app.database.models import User, ScrapeCollection, ScrapedAsset, Run
 from app.dependencies import get_current_user, require_org_admin
 from app.services.scrape_service import scrape_service
 from app.services.crawl_service import crawl_service
@@ -66,6 +66,7 @@ from app.services.run_service import run_service
 from app.services.database_service import database_service
 from app.services.extraction_result_service import extraction_result_service
 from app.services.minio_service import get_minio_service
+from app.tasks import async_delete_scrape_collection_task
 
 # Initialize router
 router = APIRouter(prefix="/scrape", tags=["Web Scraping"])
@@ -333,20 +334,31 @@ async def update_collection(
 
 @router.delete(
     "/collections/{collection_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-    summary="Archive collection",
-    description="Archive a scrape collection (soft delete)."
+    summary="Delete collection",
+    description="Initiate async deletion of a scrape collection with full cleanup."
 )
 async def delete_collection(
     collection_id: str,
     current_user: User = Depends(require_org_admin),
-) -> None:
+):
     """
-    Archive a collection (soft delete).
+    Initiate async deletion of a scrape collection.
 
-    Args:
-        collection_id: Collection UUID
-        current_user: Current user (must be org_admin)
+    This endpoint returns immediately with a run_id that tracks the deletion progress.
+    The actual cleanup happens asynchronously in a background task, performing:
+    - Cancel pending extraction jobs
+    - Delete files from MinIO storage (raw and extracted)
+    - Hard delete Asset records from database
+    - Remove documents from OpenSearch index
+    - Delete ScrapedAsset records
+    - Delete ScrapeSource records
+    - Delete related Run records (except the deletion tracking run)
+    - Delete the collection itself
+
+    Returns:
+        message: Status message
+        run_id: UUID of the run tracking the deletion
+        status: "deleting"
     """
     logger.info(f"Collection deletion requested for {collection_id} by {current_user.email}")
 
@@ -365,9 +377,52 @@ async def delete_collection(
                 detail="Collection not found"
             )
 
-        await scrape_service.delete_collection(session, UUID(collection_id))
+        # Check if deletion is already in progress
+        if collection.status == "deleting":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Deletion already in progress for this collection"
+            )
 
-        logger.info(f"Collection archived: {collection.name} (id: {collection_id})")
+        # Set status to deleting
+        collection.status = "deleting"
+        await session.commit()
+
+        # Create a run to track the deletion
+        run = Run(
+            organization_id=current_user.organization_id,
+            run_type="scrape_delete",
+            origin="user",
+            status="pending",
+            config={
+                "collection_id": str(collection_id),
+                "collection_name": collection.name,
+                "action": "delete_collection",
+            },
+            created_by=current_user.id,
+        )
+        session.add(run)
+        await session.commit()
+        await session.refresh(run)
+
+        # Queue the async deletion task
+        async_delete_scrape_collection_task.delay(
+            collection_id=str(collection_id),
+            organization_id=str(current_user.organization_id),
+            run_id=str(run.id),
+            collection_name=collection.name,
+        )
+
+        logger.info(
+            f"Queued async deletion for scrape collection {collection_id} by user {current_user.id}, "
+            f"run_id={run.id}"
+        )
+
+        return {
+            "message": "Deletion initiated",
+            "run_id": str(run.id),
+            "status": "deleting",
+        }
 
 
 # =========================================================================
@@ -383,7 +438,6 @@ async def delete_collection(
 )
 async def start_crawl(
     collection_id: str,
-    background_tasks: BackgroundTasks,
     request: Optional[CrawlCollectionRequest] = None,
     current_user: User = Depends(get_current_user),
 ) -> CrawlCollectionResponse:
@@ -393,7 +447,6 @@ async def start_crawl(
     Args:
         collection_id: Collection UUID
         request: Optional crawl options
-        background_tasks: FastAPI background tasks
         current_user: Current authenticated user
 
     Returns:
@@ -422,46 +475,33 @@ async def start_crawl(
                 detail=f"Cannot crawl collection with status '{collection.status}'"
             )
 
-        # Start crawl run
+        # Create crawl run record
         run = await crawl_service.start_crawl(
             session=session,
             collection_id=UUID(collection_id),
             user_id=current_user.id,
         )
 
-        # Run crawl in background
+        # Queue Celery task
+        from app.tasks import scrape_crawl_task
+
         max_pages = request.max_pages if request else None
 
-        # Capture run_id for the background task
-        run_id = run.id
+        scrape_crawl_task.delay(
+            collection_id=str(collection_id),
+            organization_id=str(current_user.organization_id),
+            run_id=str(run.id),
+            user_id=str(current_user.id),
+            max_pages=max_pages,
+        )
 
-        async def run_crawl():
-            async with database_service.get_session() as bg_session:
-                try:
-                    logger.info(f"Starting background crawl for collection {collection_id}, run {run_id}")
-                    result = await crawl_service.crawl_collection(
-                        session=bg_session,
-                        collection_id=UUID(collection_id),
-                        user_id=current_user.id,
-                        max_pages=max_pages,
-                        run_id=run_id,
-                    )
-                    logger.info(f"Crawl completed for {collection_id}: {result}")
-                except Exception as e:
-                    logger.error(f"Crawl failed for {collection_id}: {e}", exc_info=True)
-                    # Mark run as failed
-                    try:
-                        await run_service.fail_run(bg_session, run_id, str(e))
-                    except Exception as fail_err:
-                        logger.error(f"Failed to mark run as failed: {fail_err}")
-
-        background_tasks.add_task(run_crawl)
+        logger.info(f"Queued scrape crawl task for collection {collection_id}, run {run.id}")
 
         return CrawlCollectionResponse(
             run_id=str(run.id),
             collection_id=collection_id,
-            status="running",
-            message="Crawl started successfully"
+            status="pending",
+            message="Crawl queued successfully"
         )
 
 

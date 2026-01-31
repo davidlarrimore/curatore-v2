@@ -245,11 +245,11 @@ class RunService:
         """
         asset_id_str = str(asset_id)
 
-        # Find all pending/running runs for this asset
+        # Find all pending/submitted/running runs for this asset
         query = (
             select(Run)
             .where(Run.input_asset_ids.contains([asset_id_str]))
-            .where(Run.status.in_(["pending", "running"]))
+            .where(Run.status.in_(["pending", "submitted", "running"]))
         )
 
         if run_type:
@@ -261,16 +261,18 @@ class RunService:
         cancelled_count = 0
         for run in runs_to_cancel:
             try:
-                # Only running runs can be cancelled per status transitions
-                if run.status == "running":
+                # Cancel the run and set error message
+                if run.status in ("running", "submitted"):
                     run.status = "cancelled"
                     run.error_message = "Superseded by new extraction request"
+                    run.completed_at = datetime.utcnow()
                     cancelled_count += 1
-                    logger.info(f"Cancelled run {run.id} (superseded)")
+                    logger.info(f"Cancelled {run.status} run {run.id} (superseded)")
                 elif run.status == "pending":
                     # Pending runs: just set to cancelled directly
                     run.status = "cancelled"
                     run.error_message = "Superseded by new extraction request"
+                    run.completed_at = datetime.utcnow()
                     cancelled_count += 1
                     logger.info(f"Cancelled pending run {run.id} (superseded)")
             except Exception as e:
@@ -350,13 +352,19 @@ class RunService:
         old_status = run.status
 
         # Validate status transition
-        # Note: pending can transition to failed/cancelled directly if the task
+        # Note: pending can transition to submitted, failed/cancelled directly if the task
         # fails before it starts (e.g., import errors, configuration issues)
+        # Status flow for queue-enabled:
+        #   pending -> submitted -> running -> completed/failed/timed_out/cancelled
+        # Status flow for queue-disabled (legacy):
+        #   pending -> running -> completed/failed/cancelled
         valid_transitions = {
-            "pending": ["running", "failed", "cancelled"],
-            "running": ["completed", "failed", "cancelled"],
+            "pending": ["submitted", "running", "failed", "cancelled"],
+            "submitted": ["running", "timed_out", "cancelled"],
+            "running": ["completed", "failed", "timed_out", "cancelled"],
             "completed": [],
             "failed": [],
+            "timed_out": [],
             "cancelled": [],
         }
 
@@ -367,15 +375,20 @@ class RunService:
             )
 
         run.status = status
+        now = datetime.utcnow()
 
         # Update timestamps
         if status == "running" and not run.started_at:
-            run.started_at = datetime.utcnow()
-        elif status in ["completed", "failed", "cancelled"]:
-            run.completed_at = datetime.utcnow()
+            run.started_at = now
+        elif status in ["completed", "failed", "timed_out", "cancelled"]:
+            run.completed_at = now
 
-        # Set error message for failed runs
-        if status == "failed" and error_message:
+        # Track activity for running jobs (activity-based timeout)
+        if status in ("submitted", "running"):
+            run.last_activity_at = now
+
+        # Set error message for failed/timed_out runs
+        if status in ("failed", "timed_out") and error_message:
             run.error_message = error_message
 
         await session.commit()
@@ -392,6 +405,8 @@ class RunService:
         current: int,
         total: Optional[int] = None,
         unit: str = "items",
+        phase: Optional[str] = None,
+        details: Optional[Dict[str, Any]] = None,
     ) -> Optional[Run]:
         """
         Update run progress tracking.
@@ -402,9 +417,29 @@ class RunService:
             current: Current progress value
             total: Total items (None if unknown)
             unit: Progress unit (documents, pages, urls, etc.)
+            phase: Current execution phase (e.g., "scanning", "processing", "finalizing")
+            details: Additional progress details (e.g., {"new_files": 5, "errors": 1})
 
         Returns:
             Updated Run instance or None if not found
+
+        Example progress structures:
+
+            # Simple progress
+            {"current": 5, "total": 10, "unit": "files", "percent": 50}
+
+            # Detailed progress with phase
+            {
+                "current": 25,
+                "total": 100,
+                "unit": "files",
+                "percent": 25,
+                "phase": "processing",
+                "folders_scanned": 10,
+                "new_files": 5,
+                "updated_files": 3,
+                "errors": 0
+            }
         """
         run = await self.get_run(session, run_id)
         if not run:
@@ -415,12 +450,26 @@ class RunService:
         if total and total > 0:
             percent = min(100, int((current / total) * 100))
 
-        run.progress = {
+        # Build progress dict
+        progress = {
             "current": current,
             "total": total,
             "unit": unit,
             "percent": percent,
         }
+
+        # Add phase if provided
+        if phase:
+            progress["phase"] = phase
+
+        # Merge additional details
+        if details:
+            progress.update(details)
+
+        run.progress = progress
+
+        # Track activity for timeout detection
+        run.last_activity_at = datetime.utcnow()
 
         await session.commit()
         await session.refresh(run)
@@ -505,6 +554,35 @@ class RunService:
             Updated Run instance or None if not found
         """
         return await self.update_run_status(session, run_id, "cancelled")
+
+    async def touch_activity(
+        self,
+        session: AsyncSession,
+        run_id: UUID,
+    ) -> Optional[Run]:
+        """
+        Update last_activity_at to current time without changing other fields.
+
+        Used to indicate the job is still alive when logging events or
+        doing work that doesn't update progress.
+
+        Args:
+            session: Database session
+            run_id: Run UUID
+
+        Returns:
+            Updated Run instance or None if not found
+        """
+        run = await self.get_run(session, run_id)
+        if not run:
+            return None
+
+        run.last_activity_at = datetime.utcnow()
+
+        await session.commit()
+        await session.refresh(run)
+
+        return run
 
 
 # Singleton instance

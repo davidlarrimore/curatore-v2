@@ -15,7 +15,7 @@ services:
     volumes:
       # Hot-reload app code without stomping other layers
       - ./backend/app:/app/app
-      # Database persistence
+      # Application data directory (logs, temp files)
       - ./backend/data:/app/data
       # YAML configuration (optional, falls back to env vars if not present)
       - ./config.yml:/app/config.yml:ro
@@ -23,6 +23,11 @@ services:
       - PYTHONUNBUFFERED=1
       - DEBUG=${DEBUG:-false}
       - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000"]}
+      # Database (PostgreSQL)
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://curatore:curatore_dev_password@postgres:5432/curatore}
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-20}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-40}
+      - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
       # LLM
       - OPENAI_API_KEY=${OPENAI_API_KEY}
       - OPENAI_MODEL=${OPENAI_MODEL:-gpt-4o-mini}
@@ -97,12 +102,19 @@ services:
       dockerfile: Dockerfile
     container_name: curatore-worker
     # Auto-restart worker on code changes using watchdog/watchmedo
-    # Queue order matters: workers consume left-to-right, so priority queue is processed first
+    # Queue order: priority first, then by job type, maintenance last
     command: >
       sh -c "watchmedo auto-restart --directory=/app/app --pattern=*.py --recursive --
-      celery -A app.celery_app worker -Q processing_priority,processing,maintenance -l info --concurrency=${CELERY_CONCURRENCY:-4}"
+      celery -A app.celery_app worker -Q processing_priority,extraction,sam,scrape,sharepoint,maintenance -l info --concurrency=${CELERY_CONCURRENCY:-4}"
     environment:
       - PYTHONUNBUFFERED=1
+      # Mark as Celery worker for database service (uses NullPool to avoid event loop issues)
+      - CELERY_WORKER=1
+      # Database (PostgreSQL)
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://curatore:curatore_dev_password@postgres:5432/curatore}
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-20}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-40}
+      - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       - CELERY_DEFAULT_QUEUE=${CELERY_DEFAULT_QUEUE:-processing}
@@ -148,7 +160,7 @@ services:
       - OPENSEARCH_INDEX_PREFIX=${OPENSEARCH_INDEX_PREFIX:-curatore}
     volumes:
       - ./backend/app:/app/app
-      # Database persistence (shared with backend)
+      # Application data directory (shared with backend)
       - ./backend/data:/app/data
       # YAML configuration (optional, falls back to env vars if not present)
       - ./config.yml:/app/config.yml:ro
@@ -167,6 +179,11 @@ services:
     command: celery -A app.celery_app beat -l info
     environment:
       - PYTHONUNBUFFERED=1
+      # Database (PostgreSQL)
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://curatore:curatore_dev_password@postgres:5432/curatore}
+      - DB_POOL_SIZE=${DB_POOL_SIZE:-20}
+      - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-40}
+      - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       - CELERY_DEFAULT_QUEUE=${CELERY_DEFAULT_QUEUE:-processing}
@@ -207,10 +224,12 @@ services:
       celery -A app.celery_app worker -Q maintenance -l info --concurrency=2 -n maintenance@%h"
     environment:
       - PYTHONUNBUFFERED=1
+      # Mark as Celery worker for database service (uses NullPool to avoid event loop issues)
+      - CELERY_WORKER=1
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
-      # Database (match backend)
-      - DATABASE_URL=${DATABASE_URL:-sqlite+aiosqlite:///./data/curatore.db}
+      # Database (PostgreSQL - match backend)
+      - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://curatore:curatore_dev_password@postgres:5432/curatore}
       - DB_POOL_SIZE=${DB_POOL_SIZE:-20}
       - DB_MAX_OVERFLOW=${DB_MAX_OVERFLOW:-40}
       - DB_POOL_RECYCLE=${DB_POOL_RECYCLE:-3600}
@@ -304,7 +323,7 @@ services:
       - DEBUG=${DEBUG:-false}
       - BROWSER_POOL_SIZE=${PLAYWRIGHT_BROWSER_POOL_SIZE:-3}
       - BROWSER_HEADLESS=true
-      - DEFAULT_TIMEOUT_MS=${PLAYWRIGHT_DEFAULT_TIMEOUT_MS:-30000}
+      - DEFAULT_TIMEOUT_MS=${PLAYWRIGHT_DEFAULT_TIMEOUT_MS:-60000}
       - DEFAULT_WAIT_TIMEOUT_MS=${PLAYWRIGHT_DEFAULT_WAIT_TIMEOUT_MS:-5000}
     volumes:
       # Hot-reload playwright service code
@@ -322,6 +341,32 @@ services:
       retries: 3
     # Run with reload for live dev edits
     command: uvicorn app.main:app --host 0.0.0.0 --port 8011 --reload
+
+  # --------------------------------------------------------------------------
+  # POSTGRES: PostgreSQL database (enable with ENABLE_POSTGRES_SERVICE=true)
+  # --------------------------------------------------------------------------
+  postgres:
+    profiles:
+      - postgres
+    image: postgres:16-alpine
+    container_name: curatore-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-curatore}
+      POSTGRES_USER: ${POSTGRES_USER:-curatore}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-curatore_dev_password}
+      # Performance tuning for development
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-curatore} -d ${POSTGRES_DB:-curatore}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
   # --------------------------------------------------------------------------
   # DOCLING: As a second Extraction Engine option
@@ -395,5 +440,6 @@ services:
       retries: 5
 
 volumes:
+  postgres_data:
   minio_data:
   opensearch_data:

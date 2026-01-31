@@ -599,13 +599,13 @@ class ScheduledTaskService:
             return []
 
         # Find runs that were created for this task
-        # Use json_extract for SQLite compatibility
+        # PostgreSQL JSON: column["key"].astext
         result = await session.execute(
             select(Run)
             .where(
                 and_(
                     Run.run_type == "system_maintenance",
-                    func.json_extract(Run.config, "$.scheduled_task_id") == str(task_id),
+                    Run.config["scheduled_task_id"].astext == str(task_id),
                 )
             )
             .order_by(Run.created_at.desc())

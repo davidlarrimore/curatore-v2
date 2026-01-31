@@ -63,7 +63,8 @@ class DocumentService:
     DEFAULT_EXTS: Set[str] = {
         ".pdf", ".doc", ".docx", ".ppt", ".pptx",
         ".xls", ".xlsx", ".csv", ".txt", ".md",
-        ".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".bmp"
+        ".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".bmp",
+        ".msg", ".eml"  # Email formats
     }
 
     def __init__(self) -> None:

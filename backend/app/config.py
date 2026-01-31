@@ -21,7 +21,7 @@ Usage:
 """
 
 from pathlib import Path
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings
@@ -343,6 +343,46 @@ class Settings(BaseSettings):
     )
     sam_rate_limit_delay: float = Field(
         default=0.5, description="Delay between SAM.gov API requests in seconds"
+    )
+
+    # =========================================================================
+    # EXTRACTION QUEUE CONFIGURATION
+    # =========================================================================
+    extraction_max_concurrent: int = Field(
+        default=10, description="Max concurrent extractions submitted to Celery at once"
+    )
+    extraction_submission_interval: int = Field(
+        default=5, description="Seconds between queue submission checks"
+    )
+    extraction_duplicate_cooldown: int = Field(
+        default=30, description="Seconds before allowing re-extract on same asset"
+    )
+    extraction_timeout_buffer: int = Field(
+        default=60, description="DEPRECATED: Extra seconds added to soft_time_limit for timeout_at calculation"
+    )
+    extraction_queue_enabled: bool = Field(
+        default=True, description="Enable database-backed extraction queue (if False, submit directly to Celery)"
+    )
+
+    # =========================================================================
+    # ACTIVITY-BASED TIMEOUT SETTINGS
+    # =========================================================================
+    # Jobs are considered stale if they haven't reported activity within this window.
+    # Activity is updated on: progress updates, status changes, log events.
+    run_activity_timeout_seconds: int = Field(
+        default=300, description="Seconds of inactivity before a running job is marked as timed_out (default: 5 minutes)"
+    )
+
+    # =========================================================================
+    # QUEUE PARAMETER OVERRIDES (Runtime Tuning Only)
+    # =========================================================================
+    # Queue types are defined programmatically in backend/app/services/queue_registry.py.
+    # This setting provides RUNTIME PARAMETER OVERRIDES only - not queue definitions.
+    # Overridable parameters: max_concurrent, timeout_seconds, submission_interval, enabled
+    # Example: queues: { "extraction": { "max_concurrent": 5 }, "sam": { "max_concurrent": 2 } }
+    queues: Optional[Dict[str, Dict[str, Any]]] = Field(
+        default=None,
+        description="Runtime parameter overrides for queue types (max_concurrent, timeout_seconds, etc.)"
     )
 
     class Config:

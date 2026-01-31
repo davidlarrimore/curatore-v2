@@ -2093,6 +2093,7 @@ export interface Run {
   created_at: string
   started_at: string | null
   completed_at: string | null
+  last_activity_at: string | null
   created_by: string | null
 }
 
@@ -2517,7 +2518,7 @@ export interface ScrapeCollection {
   root_url: string
   url_patterns: Array<{ type: 'include' | 'exclude'; pattern: string }>
   crawl_config: Record<string, any>
-  status: 'active' | 'paused' | 'archived'
+  status: 'active' | 'paused' | 'archived' | 'deleting'
   last_crawl_at: string | null
   last_crawl_run_id: string | null
   stats: Record<string, any>
@@ -2545,7 +2546,7 @@ export interface ScrapedAsset {
   asset_id: string
   collection_id: string
   source_id: string | null
-  asset_subtype: 'page' | 'record'
+  asset_subtype: 'page' | 'record' | 'document'
   url: string
   url_path: string | null
   parent_url: string | null
@@ -2559,6 +2560,7 @@ export interface ScrapedAsset {
   updated_at: string
   original_filename: string | null
   asset_status: string | null
+  title: string | null
 }
 
 export interface PathTreeNode {
@@ -2567,6 +2569,8 @@ export interface PathTreeNode {
   page_count: number
   record_count: number
   has_children: boolean
+  is_directory: boolean
+  child_count: number
 }
 
 export interface ScrapeCollectionCreateRequest {
@@ -2656,9 +2660,10 @@ export const scrapeApi = {
   },
 
   /**
-   * Archive a collection
+   * Delete a collection (async with cleanup)
+   * Returns immediately with a run_id to track the deletion progress
    */
-  async deleteCollection(token: string | undefined, collectionId: string): Promise<void> {
+  async deleteCollection(token: string | undefined, collectionId: string): Promise<{ message: string; run_id: string; status: string }> {
     const url = apiUrl(`/scrape/collections/${collectionId}`)
     const res = await fetch(url, {
       method: 'DELETE',
@@ -2668,6 +2673,7 @@ export const scrapeApi = {
       const error = await res.text()
       throw new Error(error || res.statusText)
     }
+    return res.json()
   },
 
   // ========== Crawl Management ==========

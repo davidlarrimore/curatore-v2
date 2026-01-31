@@ -37,7 +37,10 @@ from ..models import (
     AssetMetadataListResponse,
     AssetMetadataPromoteResponse,
     AssetMetadataCompareResponse,
+    # Unified Queue models
+    AssetQueueInfoResponse,
 )
+from ....services.status_mapper import get_unified_status, UnifiedStatus
 
 logger = logging.getLogger("curatore.api.assets")
 
@@ -1537,25 +1540,34 @@ async def boost_asset_extraction(
 
 @router.get(
     "/{asset_id}/queue-info",
+    response_model=AssetQueueInfoResponse,
     summary="Get queue position and extraction info",
     description="Get queue position and extraction service info for a pending asset.",
 )
 async def get_asset_queue_info(
     asset_id: UUID,
     current_user: User = Depends(get_current_user),
-):
+) -> AssetQueueInfoResponse:
     """
     Get queue position and extraction service information for an asset.
 
-    Returns:
-    - Queue position (X of Y)
-    - Extraction service being used
-    - Run status (pending, running)
-    - Queue statistics
+    Returns enhanced queue information including:
+    - unified_status: Canonical status (queued, submitted, processing, completed, failed, timed_out, cancelled)
+    - run_id: Current extraction run ID
+    - in_queue: Whether extraction is queued/processing
+    - queue_position: Position in queue (if pending)
+    - total_pending: Total items in queue
+    - estimated_wait_seconds: Rough estimate of wait time
+    - submitted_to_celery: Whether task has been sent to Celery
+    - timeout_at: When the task will be considered timed out
+    - celery_task_id: Celery task ID (if submitted)
+    - extractor_version: Extraction service being used
 
     Use this when displaying processing status in the UI.
     """
-    from ....services.priority_queue_service import priority_queue_service
+    from ....services.extraction_queue_service import extraction_queue_service
+    from ....database.models import Run, ExtractionResult
+    from sqlalchemy import select, and_
 
     async with database_service.get_session() as session:
         # Verify asset belongs to user's organization
@@ -1565,9 +1577,83 @@ async def get_asset_queue_info(
         if asset.organization_id != current_user.organization_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
-        result = await priority_queue_service.get_asset_queue_info(
-            session=session,
-            asset_id=asset_id,
-        )
+        # If asset is already ready or failed, return simple response
+        if asset.status == "ready":
+            return AssetQueueInfoResponse(
+                unified_status=UnifiedStatus.COMPLETED.value,
+                asset_id=str(asset_id),
+                in_queue=False,
+            )
 
-        return result
+        if asset.status == "failed":
+            return AssetQueueInfoResponse(
+                unified_status=UnifiedStatus.FAILED.value,
+                asset_id=str(asset_id),
+                in_queue=False,
+            )
+
+        # Find the most recent extraction run for this asset
+        asset_id_str = str(asset_id)
+        result = await session.execute(
+            select(Run)
+            .where(and_(
+                Run.run_type == "extraction",
+                Run.input_asset_ids.contains([asset_id_str]),
+            ))
+            .order_by(Run.created_at.desc())
+            .limit(1)
+        )
+        run = result.scalar_one_or_none()
+
+        if not run:
+            return AssetQueueInfoResponse(
+                unified_status=UnifiedStatus.QUEUED.value,
+                asset_id=str(asset_id),
+                in_queue=False,
+            )
+
+        # Get extraction result for extractor version
+        ext_result = await session.execute(
+            select(ExtractionResult)
+            .where(and_(
+                ExtractionResult.run_id == run.id,
+                ExtractionResult.asset_id == asset_id,
+            ))
+            .limit(1)
+        )
+        extraction = ext_result.scalar_one_or_none()
+
+        extractor_version = None
+        if extraction:
+            extractor_version = extraction.extractor_version
+        elif run.config:
+            extractor_version = run.config.get("extractor_version")
+
+        # Get unified status using the status mapper
+        unified_status = get_unified_status(asset=asset, run=run, extraction_result=extraction)
+
+        # Build response
+        queue_position = None
+        total_pending = None
+        estimated_wait_seconds = None
+
+        # Add queue position if still pending
+        if run.status == "pending":
+            queue_info = await extraction_queue_service.get_queue_position(session, run.id)
+            queue_position = queue_info.get("queue_position")
+            total_pending = queue_info.get("total_pending")
+            estimated_wait_seconds = queue_info.get("estimated_wait_seconds")
+
+        return AssetQueueInfoResponse(
+            unified_status=unified_status.value,
+            asset_id=str(asset_id),
+            run_id=str(run.id),
+            in_queue=run.status in ("pending", "submitted", "running"),
+            queue_position=queue_position,
+            total_pending=total_pending,
+            estimated_wait_seconds=estimated_wait_seconds,
+            submitted_to_celery=run.status in ("submitted", "running"),
+            timeout_at=run.timeout_at.isoformat() if run.timeout_at else None,
+            celery_task_id=run.celery_task_id,
+            extractor_version=extractor_version,
+        )

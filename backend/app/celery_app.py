@@ -77,7 +77,8 @@ app.conf.update(
         # =================================================================
         # SCRAPE QUEUE - Web scraping tasks
         # =================================================================
-        "app.tasks.execute_scrape_task": {"queue": "scrape"},
+        "app.tasks.scrape_crawl_task": {"queue": "scrape"},
+        "app.tasks.async_delete_scrape_collection_task": {"queue": "maintenance"},
 
         # =================================================================
         # SHAREPOINT QUEUE - SharePoint sync tasks

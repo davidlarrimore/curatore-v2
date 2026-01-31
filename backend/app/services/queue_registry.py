@@ -232,8 +232,8 @@ class ScrapeQueue(QueueDefinition):
         super().__init__(
             queue_type="scrape",
             celery_queue="scrape",
-            run_type_aliases=[],
-            can_cancel=False,
+            run_type_aliases=["scrape_crawl", "scrape_delete"],
+            can_cancel=True,  # Enable cancellation via Celery revoke
             can_boost=False,
             can_retry=False,
             label="Web Scrape",

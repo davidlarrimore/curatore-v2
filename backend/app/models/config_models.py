@@ -344,8 +344,8 @@ class QueueConfig(BaseModel):
         description="Redis URL for storing task results"
     )
     default_queue: str = Field(
-        default="processing",
-        description="Default queue name for processing tasks"
+        default="extraction",
+        description="Default queue name for tasks"
     )
     worker_concurrency: int = Field(
         default=4,
@@ -356,6 +356,11 @@ class QueueConfig(BaseModel):
         default=3600,
         ge=1,
         description="Task timeout in seconds"
+    )
+    extraction_max_concurrent: int = Field(
+        default=10,
+        ge=1,
+        description="Maximum concurrent extractions submitted to Celery at once"
     )
 
 
@@ -405,9 +410,9 @@ class PlaywrightConfig(BaseModel):
         description="Default browser viewport height"
     )
     default_timeout_ms: int = Field(
-        default=30000,
+        default=60000,
         ge=1000,
-        le=120000,
+        le=300000,
         description="Default page load timeout in milliseconds"
     )
     default_wait_timeout_ms: int = Field(

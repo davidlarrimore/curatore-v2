@@ -1254,6 +1254,7 @@ class RunResponse(BaseModel):
     created_at: datetime = Field(..., description="Creation timestamp")
     started_at: Optional[datetime] = Field(None, description="Start timestamp")
     completed_at: Optional[datetime] = Field(None, description="Completion timestamp")
+    last_activity_at: Optional[datetime] = Field(None, description="Last activity timestamp (for timeout tracking)")
     created_by: Optional[UUID] = Field(None, description="User UUID who created the run")
 
     class Config:
@@ -1811,6 +1812,10 @@ class SharePointSyncConfigUpdateRequest(BaseModel):
         default=False,
         description="If True, delete all existing synced assets when disabling recursive mode"
     )
+    # These fields are included for validation but cannot be changed
+    # The endpoint will reject any attempt to modify them
+    folder_url: Optional[str] = Field(None, description="Cannot be changed - create new config instead")
+    connection_id: Optional[str] = Field(None, description="Cannot be changed - create new config instead")
 
     class Config:
         json_schema_extra = {
@@ -2115,5 +2120,130 @@ class SharePointRemoveItemsResponse(BaseModel):
                 "documents_removed": 2,
                 "assets_deleted": 2,
                 "message": "Removed 2 items"
+            }
+        }
+
+
+# =========================================================================
+# UNIFIED QUEUE MODELS
+# =========================================================================
+
+
+class ExtractionQueueInfo(BaseModel):
+    """Extraction queue counts."""
+    pending: int = Field(..., description="Extractions waiting in queue")
+    submitted: int = Field(..., description="Extractions submitted to worker")
+    running: int = Field(..., description="Extractions currently processing")
+    max_concurrent: int = Field(..., description="Maximum concurrent extractions")
+
+
+class CeleryQueuesInfo(BaseModel):
+    """Celery queue lengths."""
+    processing_priority: int = Field(default=0, description="High priority queue length")
+    extraction: int = Field(default=0, description="Extraction queue length")
+    sam: int = Field(default=0, description="SAM.gov queue length")
+    scrape: int = Field(default=0, description="Web scrape queue length")
+    sharepoint: int = Field(default=0, description="SharePoint queue length")
+    maintenance: int = Field(default=0, description="Maintenance queue length")
+
+
+class ThroughputInfo(BaseModel):
+    """Extraction throughput metrics."""
+    per_minute: float = Field(..., description="Extractions completed per minute")
+    avg_extraction_seconds: Optional[float] = Field(None, description="Average extraction time in seconds")
+
+
+class Recent24hInfo(BaseModel):
+    """Last 24 hours statistics."""
+    completed: int = Field(..., description="Extractions completed in last 24h")
+    failed: int = Field(..., description="Extractions failed in last 24h")
+    timed_out: int = Field(..., description="Extractions timed out in last 24h")
+
+
+class WorkersInfo(BaseModel):
+    """Celery worker information."""
+    active: int = Field(..., description="Number of active workers")
+    tasks_running: int = Field(..., description="Total tasks currently running")
+
+
+class UnifiedQueueStatsResponse(BaseModel):
+    """
+    Unified queue statistics response.
+
+    Consolidates all queue information into a single response:
+    - extraction_queue: Database-tracked queue counts
+    - celery_queues: Redis queue lengths
+    - throughput: Processing rate metrics
+    - recent_24h: Last 24 hours statistics
+    - workers: Worker status
+    """
+    extraction_queue: ExtractionQueueInfo
+    celery_queues: CeleryQueuesInfo
+    throughput: ThroughputInfo
+    recent_24h: Recent24hInfo
+    workers: WorkersInfo
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "extraction_queue": {
+                    "pending": 5,
+                    "submitted": 2,
+                    "running": 3,
+                    "max_concurrent": 10
+                },
+                "celery_queues": {
+                    "processing_priority": 0,
+                    "extraction": 5,
+                    "sam": 0,
+                    "scrape": 0,
+                    "sharepoint": 0,
+                    "maintenance": 2
+                },
+                "throughput": {
+                    "per_minute": 2.4,
+                    "avg_extraction_seconds": 45.2
+                },
+                "recent_24h": {
+                    "completed": 142,
+                    "failed": 3,
+                    "timed_out": 1
+                },
+                "workers": {
+                    "active": 2,
+                    "tasks_running": 3
+                }
+            }
+        }
+
+
+class AssetQueueInfoResponse(BaseModel):
+    """Queue information for a specific asset."""
+    unified_status: str = Field(..., description="Unified status (queued, submitted, processing, completed, failed, timed_out, cancelled)")
+    asset_id: str = Field(..., description="Asset UUID")
+    run_id: Optional[str] = Field(None, description="Current extraction run UUID")
+    in_queue: bool = Field(..., description="Whether extraction is queued/processing")
+    queue_position: Optional[int] = Field(None, description="Position in queue (if pending)")
+    total_pending: Optional[int] = Field(None, description="Total items in queue")
+    estimated_wait_seconds: Optional[float] = Field(None, description="Estimated wait time")
+    submitted_to_celery: Optional[bool] = Field(None, description="Whether task has been sent to Celery")
+    timeout_at: Optional[str] = Field(None, description="Task timeout timestamp")
+    celery_task_id: Optional[str] = Field(None, description="Celery task ID")
+    extractor_version: Optional[str] = Field(None, description="Extraction service version")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "unified_status": "queued",
+                "asset_id": "123e4567-e89b-12d3-a456-426614174000",
+                "run_id": "456e4567-e89b-12d3-a456-426614174000",
+                "in_queue": True,
+                "queue_position": 3,
+                "total_pending": 10,
+                "estimated_wait_seconds": 135.0,
+                "submitted_to_celery": False,
+                "timeout_at": None,
+                "celery_task_id": None,
+                "extractor_version": "markitdown-1.0"
             }
         }

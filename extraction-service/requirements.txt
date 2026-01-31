@@ -11,5 +11,8 @@ pypdfium2>=4.30.0          # rasterize PDFs for OCR fallback
 pytesseract>=0.3.10
 Pillow>=10.0.0
 
+# Email parsing
+extract-msg>=0.48.0        # Parse Outlook .msg files
+
 # Helpers
 filetype>=1.2.0

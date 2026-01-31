@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { assetsApi, type CollectionHealth } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
+import { ExtractionStatus } from '@/components/ui/ExtractionStatus'
 import {
   FileText,
   RefreshCw,
@@ -140,48 +141,26 @@ function AssetsContent() {
     router.push(`/assets/${assetId}`)
   }
 
-  const getStatusConfig = (status: string) => {
+  // Get description text for status
+  const getStatusDescription = (status: string): string => {
     switch (status) {
       case 'ready':
-        return {
-          label: 'Extraction Complete',
-          shortLabel: 'Ready',
-          description: 'Content extracted and ready to use',
-          icon: <CheckCircle className="w-4 h-4" />,
-          bgColor: 'bg-emerald-50 dark:bg-emerald-900/20',
-          textColor: 'text-emerald-700 dark:text-emerald-400',
-          borderColor: 'border-emerald-200 dark:border-emerald-800',
-        }
+      case 'completed':
+        return 'Content extracted and ready to use'
       case 'pending':
-        return {
-          label: 'Extracting Content',
-          shortLabel: 'Processing',
-          description: 'Converting document to markdown',
-          icon: <Loader2 className="w-4 h-4 animate-spin" />,
-          bgColor: 'bg-blue-50 dark:bg-blue-900/20',
-          textColor: 'text-blue-700 dark:text-blue-400',
-          borderColor: 'border-blue-200 dark:border-blue-800',
-        }
+      case 'queued':
+      case 'submitted':
+      case 'processing':
+      case 'running':
+        return 'Converting document to markdown'
       case 'failed':
-        return {
-          label: 'Needs Attention',
-          shortLabel: 'Failed',
-          description: 'Extraction failed - click to view details',
-          icon: <AlertTriangle className="w-4 h-4" />,
-          bgColor: 'bg-amber-50 dark:bg-amber-900/20',
-          textColor: 'text-amber-700 dark:text-amber-400',
-          borderColor: 'border-amber-200 dark:border-amber-800',
-        }
+        return 'Extraction failed - click to view details'
+      case 'timed_out':
+        return 'Extraction timed out - try re-extracting'
+      case 'cancelled':
+        return 'Extraction was cancelled'
       default:
-        return {
-          label: status,
-          shortLabel: status,
-          description: 'Unknown status',
-          icon: <AlertTriangle className="w-4 h-4" />,
-          bgColor: 'bg-gray-50 dark:bg-gray-900/20',
-          textColor: 'text-gray-700 dark:text-gray-400',
-          borderColor: 'border-gray-200 dark:border-gray-700',
-        }
+        return 'Unknown status'
     }
   }
 
@@ -476,7 +455,7 @@ function AssetsContent() {
                   </thead>
                   <tbody className="bg-white dark:bg-gray-800 divide-y divide-gray-200 dark:divide-gray-700">
                     {filteredAssets.map((asset) => {
-                      const statusConfig = getStatusConfig(asset.status)
+                      const statusDescription = getStatusDescription(asset.status)
                       return (
                         <tr
                           key={asset.id}
@@ -510,12 +489,9 @@ function AssetsContent() {
                           </td>
                           <td className="px-6 py-4">
                             <div className="flex flex-col gap-1.5">
-                              <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${statusConfig.bgColor} ${statusConfig.textColor} w-fit`}>
-                                {statusConfig.icon}
-                                <span>{statusConfig.shortLabel}</span>
-                              </div>
+                              <ExtractionStatus status={asset.status} />
                               <div className="text-xs text-gray-500 dark:text-gray-400">
-                                {statusConfig.description}
+                                {statusDescription}
                               </div>
                             </div>
                           </td>

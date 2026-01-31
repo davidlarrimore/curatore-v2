@@ -1,10 +1,9 @@
 # backend/app/services/database_service.py
 """
-Database service for async SQLAlchemy session management.
+Database service for async SQLAlchemy session management with PostgreSQL.
 
 Provides a singleton service for managing database connections,
-sessions, and health checks. Supports both SQLite (development)
-and PostgreSQL (production).
+sessions, and health checks. PostgreSQL is the required database backend.
 
 Usage:
     from app.services.database_service import database_service
@@ -19,6 +18,12 @@ Usage:
 
     # Health check
     health = await database_service.health_check()
+
+PostgreSQL Configuration:
+    Connection pooling is configured via environment variables:
+    - DB_POOL_SIZE: Number of connections to maintain (default: 20)
+    - DB_MAX_OVERFLOW: Extra connections allowed during peak load (default: 40)
+    - DB_POOL_RECYCLE: Recycle connections after N seconds (default: 3600)
 """
 
 from __future__ import annotations
@@ -35,18 +40,28 @@ from sqlalchemy.ext.asyncio import (
     async_sessionmaker,
     create_async_engine,
 )
+from sqlalchemy.pool import NullPool
 
 from ..config import settings
 from ..database.base import Base
 
 
+def _is_celery_worker() -> bool:
+    """Check if we're running inside a Celery worker process."""
+    # Celery sets these environment variables in worker processes
+    return (
+        os.getenv("CELERY_WORKER") == "1" or
+        "celery" in os.getenv("_", "").lower() or
+        os.getenv("FORKED_BY_MULTIPROCESSING") == "1"
+    )
+
+
 class DatabaseService:
     """
-    Database service for managing async SQLAlchemy sessions.
+    Database service for managing async SQLAlchemy sessions with PostgreSQL.
 
     Follows existing Curatore service patterns (singleton with global instance).
-    Supports both SQLite (development) and PostgreSQL (production) with
-    appropriate connection pooling and configuration.
+    Optimized for PostgreSQL with connection pooling and health monitoring.
 
     Attributes:
         _engine: Async SQLAlchemy engine
@@ -65,7 +80,7 @@ class DatabaseService:
         Initialize database service.
 
         Reads DATABASE_URL from environment/config and creates async engine
-        with appropriate settings for SQLite or PostgreSQL.
+        with PostgreSQL connection pooling.
         """
         self._logger = logging.getLogger("curatore.database")
         self._engine: Optional[AsyncEngine] = None
@@ -74,60 +89,63 @@ class DatabaseService:
 
     def _initialize_engine(self) -> None:
         """
-        Initialize database engine based on DATABASE_URL.
+        Initialize PostgreSQL database engine.
 
-        SQLite Configuration:
-            - Uses aiosqlite async driver
-            - check_same_thread=False for async support
-            - Creates data directory if needed
+        Configuration:
+            - Uses asyncpg async driver for PostgreSQL
+            - Connection pooling with configurable size
+            - Pool pre-ping for connection health validation
+            - Pool recycle to prevent stale connections
 
-        PostgreSQL Configuration:
-            - Uses asyncpg async driver
-            - Connection pooling: size=20, max_overflow=40
-            - Pool pre-ping for connection health
-            - Pool recycle every 3600 seconds
+        Environment Variables:
+            - DATABASE_URL: PostgreSQL connection string
+            - DB_POOL_SIZE: Connection pool size (default: 20)
+            - DB_MAX_OVERFLOW: Max overflow connections (default: 40)
+            - DB_POOL_RECYCLE: Recycle time in seconds (default: 3600)
+
+        Raises:
+            ValueError: If DATABASE_URL is not a PostgreSQL URL
         """
         # Get database URL from environment
         database_url = os.getenv(
-            "DATABASE_URL", "sqlite+aiosqlite:///./data/curatore.db"
+            "DATABASE_URL",
+            "postgresql+asyncpg://curatore:curatore_dev_password@postgres:5432/curatore"
         )
 
-        self._logger.info(f"Initializing database: {database_url.split('@')[-1].split('?')[0]}")
-
-        # SQLite configuration
-        if database_url.startswith("sqlite"):
-            # Create data directory if it doesn't exist
-            if ":///" in database_url:
-                db_path = database_url.split("///")[1].split("?")[0]
-                db_dir = os.path.dirname(db_path)
-                if db_dir and not os.path.exists(db_dir):
-                    os.makedirs(db_dir, exist_ok=True)
-                    self._logger.info(f"Created database directory: {db_dir}")
-
-            connect_args = {"check_same_thread": False, "timeout": 30}
-            self._engine = create_async_engine(
-                database_url,
-                connect_args=connect_args,
-                pool_pre_ping=True,
-                echo=settings.debug,
+        # Validate PostgreSQL URL
+        if "postgresql" not in database_url.lower():
+            raise ValueError(
+                f"PostgreSQL is required. Got: {database_url.split('@')[0]}...\n"
+                "Set DATABASE_URL to a PostgreSQL connection string:\n"
+                "  postgresql+asyncpg://user:password@host:5432/database"
             )
 
-            # Enable WAL mode for better concurrency with SQLite
-            # WAL allows concurrent reads during writes and reduces lock contention
-            from sqlalchemy import event
+        # Log connection info (hide password)
+        safe_url = database_url.split("@")[-1] if "@" in database_url else database_url
+        self._logger.info(f"Initializing PostgreSQL database: {safe_url}")
 
-            @event.listens_for(self._engine.sync_engine, "connect")
-            def set_sqlite_pragma(dbapi_connection, connection_record):
-                cursor = dbapi_connection.cursor()
-                cursor.execute("PRAGMA journal_mode=WAL")
-                cursor.execute("PRAGMA synchronous=NORMAL")
-                cursor.execute("PRAGMA busy_timeout=30000")
-                cursor.close()
+        # Check if we're in a Celery worker - if so, use NullPool
+        # to avoid asyncio event loop issues with pooled connections
+        is_celery = _is_celery_worker()
 
-            self._logger.info("Using SQLite database with WAL mode (development mode)")
-
-        # PostgreSQL configuration
+        if is_celery:
+            # Celery workers: Use NullPool to create fresh connections per task
+            # This avoids "attached to a different loop" errors when asyncio.run()
+            # creates a new event loop for each task
+            self._engine = create_async_engine(
+                database_url,
+                poolclass=NullPool,  # No connection pooling - fresh connection each time
+                echo=settings.debug,
+                connect_args={
+                    "server_settings": {
+                        "application_name": "curatore-worker",
+                        "jit": "off",
+                    }
+                },
+            )
+            self._logger.info("PostgreSQL configured with NullPool for Celery worker")
         else:
+            # API/FastAPI: Use connection pooling for efficiency
             pool_size = int(os.getenv("DB_POOL_SIZE", "20"))
             max_overflow = int(os.getenv("DB_MAX_OVERFLOW", "40"))
             pool_recycle = int(os.getenv("DB_POOL_RECYCLE", "3600"))
@@ -136,12 +154,18 @@ class DatabaseService:
                 database_url,
                 pool_size=pool_size,
                 max_overflow=max_overflow,
-                pool_pre_ping=True,
-                pool_recycle=pool_recycle,
-                echo=settings.debug,
+                pool_pre_ping=True,  # Validate connections before use
+                pool_recycle=pool_recycle,  # Recycle connections periodically
+                echo=settings.debug,  # SQL logging in debug mode
+                connect_args={
+                    "server_settings": {
+                        "application_name": "curatore",
+                        "jit": "off",  # Disable JIT for faster short queries
+                    }
+                },
             )
             self._logger.info(
-                f"Using PostgreSQL database (pool_size={pool_size}, max_overflow={max_overflow})"
+                f"PostgreSQL connection pool: size={pool_size}, max_overflow={max_overflow}, recycle={pool_recycle}s"
             )
 
         # Create async session factory
@@ -214,8 +238,8 @@ class DatabaseService:
         """
         Check database connectivity and health.
 
-        Executes a simple SELECT 1 query to verify database is accessible
-        and responsive. Also gathers table statistics and database information.
+        Executes queries to verify database is accessible and responsive.
+        Gathers table statistics, connection pool status, and database info.
 
         Returns:
             Dict with health status:
@@ -223,10 +247,12 @@ class DatabaseService:
                     "status": "healthy" | "unhealthy",
                     "connected": True | False,
                     "error": "error message" (if unhealthy),
-                    "database_type": "sqlite" | "postgresql",
+                    "database_type": "postgresql",
                     "tables": {"organizations": count, "users": count, ...},
                     "migration_version": "current_revision",
-                    "database_size_mb": size (sqlite only)
+                    "pool_size": int,
+                    "pool_checked_out": int,
+                    "database_size_mb": float
                 }
 
         Usage:
@@ -235,85 +261,68 @@ class DatabaseService:
                 print("Database is healthy")
         """
         try:
-            # Determine database type from URL
-            database_url = os.getenv(
-                "DATABASE_URL", "sqlite+aiosqlite:///./data/curatore.db"
-            )
-            db_type = "sqlite" if "sqlite" in database_url else "postgresql"
-
             async with self.get_session() as session:
-                # Test connection
+                # Test connection with a simple query
                 await session.execute(text("SELECT 1"))
 
                 # Get table counts
-                from app.database.models import Organization, User, ApiKey, Connection, SystemSetting, AuditLog
-
                 tables = {}
-                try:
-                    result = await session.execute(text("SELECT COUNT(*) FROM organizations"))
-                    tables["organizations"] = result.scalar() or 0
-                except:
-                    tables["organizations"] = 0
+                table_names = [
+                    "organizations", "users", "api_keys", "connections",
+                    "system_settings", "audit_logs", "assets", "runs"
+                ]
 
-                try:
-                    result = await session.execute(text("SELECT COUNT(*) FROM users"))
-                    tables["users"] = result.scalar() or 0
-                except:
-                    tables["users"] = 0
-
-                try:
-                    result = await session.execute(text("SELECT COUNT(*) FROM api_keys"))
-                    tables["api_keys"] = result.scalar() or 0
-                except:
-                    tables["api_keys"] = 0
-
-                try:
-                    result = await session.execute(text("SELECT COUNT(*) FROM connections"))
-                    tables["connections"] = result.scalar() or 0
-                except:
-                    tables["connections"] = 0
-
-                try:
-                    result = await session.execute(text("SELECT COUNT(*) FROM system_settings"))
-                    tables["system_settings"] = result.scalar() or 0
-                except:
-                    tables["system_settings"] = 0
-
-                try:
-                    result = await session.execute(text("SELECT COUNT(*) FROM audit_logs"))
-                    tables["audit_logs"] = result.scalar() or 0
-                except:
-                    tables["audit_logs"] = 0
+                for table_name in table_names:
+                    try:
+                        result = await session.execute(
+                            text(f"SELECT COUNT(*) FROM {table_name}")
+                        )
+                        tables[table_name] = result.scalar() or 0
+                    except Exception:
+                        tables[table_name] = 0
 
                 # Get migration version
                 migration_version = "unknown"
                 try:
-                    result = await session.execute(text("SELECT version_num FROM alembic_version LIMIT 1"))
+                    result = await session.execute(
+                        text("SELECT version_num FROM alembic_version LIMIT 1")
+                    )
                     version = result.scalar()
                     if version:
-                        migration_version = version[:12]  # Show first 12 chars of revision
-                except:
+                        migration_version = version[:12]  # Show first 12 chars
+                except Exception:
                     pass
 
-            # Get database file size (SQLite only)
-            database_size_mb = None
-            if db_type == "sqlite":
+                # Get database size
+                database_size_mb = None
                 try:
-                    if ":///" in database_url:
-                        db_path = database_url.split("///")[1].split("?")[0]
-                        if os.path.exists(db_path):
-                            size_bytes = os.path.getsize(db_path)
-                            database_size_mb = round(size_bytes / (1024 * 1024), 2)
-                except:
+                    result = await session.execute(
+                        text("SELECT pg_database_size(current_database())")
+                    )
+                    size_bytes = result.scalar()
+                    if size_bytes:
+                        database_size_mb = round(size_bytes / (1024 * 1024), 2)
+                except Exception:
                     pass
+
+            # Get pool statistics
+            pool_size = None
+            pool_checked_out = None
+            if self._engine and hasattr(self._engine.pool, 'size'):
+                pool_size = self._engine.pool.size()
+                pool_checked_out = self._engine.pool.checkedout()
 
             result = {
                 "status": "healthy",
                 "connected": True,
-                "database_type": db_type,
+                "database_type": "postgresql",
                 "tables": tables,
                 "migration_version": migration_version,
             }
+
+            if pool_size is not None:
+                result["pool_size"] = pool_size
+                result["pool_checked_out"] = pool_checked_out
 
             if database_size_mb is not None:
                 result["database_size_mb"] = database_size_mb
@@ -325,6 +334,7 @@ class DatabaseService:
             return {
                 "status": "unhealthy",
                 "connected": False,
+                "database_type": "postgresql",
                 "error": str(e),
             }
 
@@ -344,9 +354,7 @@ class DatabaseService:
 
     def __repr__(self) -> str:
         """String representation of DatabaseService."""
-        db_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./data/curatore.db")
-        db_type = "SQLite" if "sqlite" in db_url else "PostgreSQL"
-        return f"<DatabaseService(type={db_type})>"
+        return "<DatabaseService(type=PostgreSQL)>"
 
 
 # Global singleton instance (following Curatore service pattern)

@@ -565,14 +565,34 @@ function SearchCard({
             )}
           </div>
 
-          {/* Dropdown menu */}
-          <div className="relative" onClick={(e) => e.stopPropagation()}>
+          {/* Action buttons */}
+          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+            {/* Sync/Refresh button */}
             <button
-              onClick={() => setShowMenu(!showMenu)}
-              className="p-2 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
+              onClick={() => {
+                if (!search.is_pulling) {
+                  onTriggerPull()
+                }
+              }}
+              disabled={search.is_pulling}
+              title={search.is_pulling ? 'Sync in progress...' : 'Sync now'}
+              className={`p-2 rounded-lg transition-all ${
+                search.is_pulling
+                  ? 'text-indigo-500 cursor-not-allowed'
+                  : 'text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20'
+              }`}
             >
-              <MoreHorizontal className="w-4 h-4" />
+              <RefreshCw className={`w-4 h-4 ${search.is_pulling ? 'animate-spin' : ''}`} />
             </button>
+
+            {/* Dropdown menu */}
+            <div className="relative">
+              <button
+                onClick={() => setShowMenu(!showMenu)}
+                className="p-2 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
+              >
+                <MoreHorizontal className="w-4 h-4" />
+              </button>
 
             {showMenu && (
               <div className="absolute right-0 bottom-full mb-1 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 py-1 z-50">
@@ -639,6 +659,7 @@ function SearchCard({
                 </button>
               </div>
             )}
+            </div>
           </div>
         </div>
       </div>

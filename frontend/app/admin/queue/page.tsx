@@ -220,20 +220,33 @@ function JobManagerContent() {
     setSelectedIds(new Set())
   }
 
-  // Filter jobs by search query (client-side)
+  // Filter and sort jobs (client-side)
   const filteredJobs = useMemo(() => {
-    if (!searchQuery.trim()) return jobs
+    let result = [...jobs]
 
-    const query = searchQuery.toLowerCase()
-    return jobs.filter(job => {
-      return (
-        job.display_name.toLowerCase().includes(query) ||
-        job.run_type.toLowerCase().includes(query) ||
-        job.status.toLowerCase().includes(query) ||
-        (job.display_context && job.display_context.toLowerCase().includes(query)) ||
-        (job.filename && job.filename.toLowerCase().includes(query))
-      )
+    // Filter by search query
+    if (searchQuery.trim()) {
+      const query = searchQuery.toLowerCase()
+      result = result.filter(job => {
+        return (
+          job.display_name.toLowerCase().includes(query) ||
+          job.run_type.toLowerCase().includes(query) ||
+          job.status.toLowerCase().includes(query) ||
+          (job.display_context && job.display_context.toLowerCase().includes(query)) ||
+          (job.filename && job.filename.toLowerCase().includes(query))
+        )
+      })
+    }
+
+    // Sort by started_at descending (most recent first)
+    // Use created_at as fallback for jobs that haven't started yet
+    result.sort((a, b) => {
+      const aTime = a.started_at || a.created_at || ''
+      const bTime = b.started_at || b.created_at || ''
+      return bTime.localeCompare(aTime)
     })
+
+    return result
   }, [jobs, searchQuery])
 
   // Selection handlers

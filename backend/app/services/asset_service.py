@@ -67,6 +67,7 @@ class AssetService:
         file_hash: Optional[str] = None,
         status: str = "pending",
         created_by: Optional[UUID] = None,
+        auto_extract: bool = True,
     ) -> Asset:
         """
         Create a new asset record with initial version (Phase 1).
@@ -88,6 +89,7 @@ class AssetService:
             file_hash: SHA-256 hash for deduplication
             status: Initial status (default: pending)
             created_by: User UUID who created the asset
+            auto_extract: Automatically queue extraction (default: True)
 
         Returns:
             Created Asset instance (with initial version created)
@@ -132,6 +134,25 @@ class AssetService:
             f"Created asset {asset.id} with version 1 (org: {organization_id}, "
             f"source: {source_type}, file: {original_filename})"
         )
+
+        # Auto-queue extraction if requested and asset needs it
+        if auto_extract and status == "pending":
+            try:
+                from .extraction_queue_service import extraction_queue_service
+                run, extraction, extract_status = await extraction_queue_service.queue_extraction_for_asset(
+                    session=session,
+                    asset_id=asset.id,
+                    user_id=created_by,
+                )
+                if extract_status == "queued":
+                    logger.debug(f"Auto-queued extraction for asset {asset.id}")
+                elif extract_status == "skipped_content_type":
+                    logger.debug(f"Skipped extraction for asset {asset.id} (content type)")
+                elif extract_status == "already_pending":
+                    logger.debug(f"Extraction already pending for asset {asset.id}")
+            except Exception as e:
+                # Log but don't fail asset creation - safety net will catch it
+                logger.warning(f"Failed to auto-queue extraction for asset {asset.id}: {e}")
 
         return asset
 
@@ -232,10 +253,22 @@ class AssetService:
             f"(file: {asset.original_filename}, trigger_extraction={trigger_extraction})"
         )
 
-        # Note: If trigger_extraction=True, the caller is responsible for
-        # calling upload_integration_service.trigger_extraction() to enqueue
-        # the extraction task. The Asset status is already set to "pending"
-        # to indicate extraction is needed.
+        # Auto-queue extraction if requested
+        if trigger_extraction:
+            try:
+                from .extraction_queue_service import extraction_queue_service
+                run, extraction, extract_status = await extraction_queue_service.queue_extraction_for_asset(
+                    session=session,
+                    asset_id=asset_id,
+                    user_id=created_by,
+                )
+                if extract_status == "queued":
+                    logger.debug(f"Auto-queued extraction for asset {asset_id} version {next_version}")
+                elif extract_status == "skipped_content_type":
+                    logger.debug(f"Skipped extraction for asset {asset_id} (content type)")
+            except Exception as e:
+                # Log but don't fail version creation - safety net will catch it
+                logger.warning(f"Failed to auto-queue extraction for asset {asset_id}: {e}")
 
         return version
 

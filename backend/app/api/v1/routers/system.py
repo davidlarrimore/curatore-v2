@@ -252,7 +252,7 @@ async def queue_health() -> Dict[str, Any]:
     enabled = os.getenv("USE_CELERY", "true").lower() in {"1", "true", "yes"}
     broker = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
     backend = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
-    queue = os.getenv("CELERY_DEFAULT_QUEUE", "processing")
+    queue = os.getenv("CELERY_DEFAULT_QUEUE", "extraction")
 
     info: Dict[str, Any] = {
         "enabled": enabled,
@@ -492,7 +492,7 @@ async def health_check_celery() -> Dict[str, Any]:
             "message": f"{worker_count} worker(s) active" if worker_count > 0 else "No workers responding",
             "worker_count": worker_count,
             "active_tasks": active_tasks,
-            "queue": os.getenv("CELERY_DEFAULT_QUEUE", "processing")
+            "queue": os.getenv("CELERY_DEFAULT_QUEUE", "extraction")
         }
     except Exception as e:
         return {
@@ -921,7 +921,7 @@ async def comprehensive_health() -> Dict[str, Any]:
             "message": f"{worker_count} worker(s) active" if worker_count > 0 else "No workers responding",
             "worker_count": worker_count,
             "active_tasks": active_tasks,
-            "queue": os.getenv("CELERY_DEFAULT_QUEUE", "processing")
+            "queue": os.getenv("CELERY_DEFAULT_QUEUE", "extraction")
         }
 
         if worker_count == 0:

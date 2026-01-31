@@ -241,14 +241,16 @@ async def seed_scheduled_tasks() -> list:
         {
             "name": "stale_run_cleanup",
             "display_name": "Stale Run Cleanup",
-            "description": "Clean up runs stuck in pending/running state. Prevents stale 'running' status in the UI.",
+            "description": "Clean up runs stuck in pending/submitted/running state. Retries before failing.",
             "task_type": "stale_run.cleanup",
             "scope_type": "global",
-            "schedule_expression": "0 */4 * * *",  # Every 4 hours
+            "schedule_expression": "0 * * * *",  # Every hour (was every 4 hours)
             "enabled": True,
             "config": {
-                "stale_running_hours": 2,  # Cancel runs stuck in 'running' for >2 hours
-                "stale_pending_hours": 1,  # Cancel runs stuck in 'pending' for >1 hour
+                "stale_submitted_minutes": 30,  # Reset runs stuck in 'submitted' for >30 min
+                "stale_running_hours": 2,       # Reset runs stuck in 'running' for >2 hours
+                "stale_pending_hours": 1,       # Reset runs stuck in 'pending' for >1 hour
+                "max_retries": 3,               # Fail after 3 retry attempts
                 "dry_run": False,
             },
         },
@@ -271,6 +273,16 @@ async def seed_scheduled_tasks() -> list:
             "schedule_expression": "0 1 * * *",  # Daily at 1 AM UTC
             "enabled": True,
             "config": {"frequency": "daily"},
+        },
+        {
+            "name": "queue_pending_assets",
+            "display_name": "Queue Pending Assets (Safety Net)",
+            "description": "Safety net: Queue extractions for any pending assets that don't have active extraction runs. Catches edge cases missed by auto-queueing.",
+            "task_type": "extraction.queue_pending",
+            "scope_type": "global",
+            "schedule_expression": "*/5 * * * *",  # Every 5 minutes
+            "enabled": True,
+            "config": {"limit": 100, "min_age_seconds": 60},
         },
     ]
 

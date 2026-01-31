@@ -10,7 +10,7 @@ import logging
 from typing import Optional, List
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, Response
 from pydantic import BaseModel
 
 from ....database.models import User
@@ -136,11 +136,21 @@ async def get_run_stats(
             r = redis.Redis(host='redis', port=6379, db=0)
             queue_lengths = {
                 "processing_priority": r.llen("processing_priority"),
-                "processing": r.llen("processing"),
+                "extraction": r.llen("extraction"),
+                "sam": r.llen("sam"),
+                "scrape": r.llen("scrape"),
+                "sharepoint": r.llen("sharepoint"),
                 "maintenance": r.llen("maintenance"),
             }
         except Exception:
-            queue_lengths = {"processing_priority": 0, "processing": 0, "maintenance": 0}
+            queue_lengths = {
+                "processing_priority": 0,
+                "extraction": 0,
+                "sam": 0,
+                "scrape": 0,
+                "sharepoint": 0,
+                "maintenance": 0,
+            }
 
         return {
             "runs": {
@@ -179,28 +189,40 @@ class BoostAssetsRequest(BaseModel):
 
 @router.get(
     "/queues",
-    summary="Get queue statistics",
-    description="Get current queue lengths and processing status.",
+    summary="Get queue statistics (Deprecated)",
+    description="Get current queue lengths and processing status. "
+                "DEPRECATED: Use GET /api/v1/queue/unified instead.",
+    deprecated=True,
 )
 async def get_queue_stats(
+    response: Response,
     current_user: User = Depends(get_current_user),
 ):
     """
     Get queue statistics for monitoring.
 
     Returns lengths of priority, normal, and maintenance queues.
+
+    DEPRECATED: Use GET /api/v1/queue/unified for comprehensive stats.
     """
+    # Add deprecation headers
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "2026-06-01"
+    response.headers["Link"] = '</api/v1/queue/unified>; rel="successor-version"'
+
     return await priority_queue_service.get_queue_stats()
 
 
 @router.post(
     "/boost/asset",
-    summary="Boost extraction priority",
+    summary="Boost extraction priority (Deprecated)",
     description="Boost the extraction priority for a single asset. "
-                "Moves pending extraction to high-priority queue.",
+                "DEPRECATED: Use POST /api/v1/assets/{asset_id}/boost instead.",
+    deprecated=True,
 )
 async def boost_asset_extraction_endpoint(
     request: BoostAssetRequest,
+    response: Response,
     current_user: User = Depends(get_current_user),
 ):
     """
@@ -208,7 +230,14 @@ async def boost_asset_extraction_endpoint(
 
     Use this when a user is waiting for a specific document to be processed.
     The extraction will be moved to the high-priority queue.
+
+    DEPRECATED: Use POST /api/v1/assets/{asset_id}/boost instead.
     """
+    # Add deprecation headers
+    response.headers["Deprecation"] = "true"
+    response.headers["Sunset"] = "2026-06-01"
+    response.headers["Link"] = '</api/v1/assets/{asset_id}/boost>; rel="successor-version"'
+
     # Map string reason to enum
     try:
         reason = BoostReason(request.reason) if request.reason else BoostReason.USER_REQUESTED

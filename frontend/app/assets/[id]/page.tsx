@@ -4,7 +4,9 @@ import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
-import { assetsApi, type Run, type AssetMetadata, type AssetMetadataList, type AssetQueueInfo } from '@/lib/api'
+import { assetsApi, type Run, type AssetMetadataList, type AssetQueueInfo } from '@/lib/api'
+import { ExtractionStatus, isActiveStatus } from '@/components/ui/ExtractionStatus'
+import { POLLING } from '@/lib/polling-config'
 import { formatDateTime } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import {
@@ -130,6 +132,14 @@ function AssetDetailContent() {
   // Queue info for pending assets
   const [queueInfo, setQueueInfo] = useState<AssetQueueInfo | null>(null)
 
+  // Track extraction ID to detect when extraction result changes
+  const [lastExtractionId, setLastExtractionId] = useState<string | null>(null)
+
+  // Check if any run is actively processing (extraction or enhancement)
+  const hasActiveRuns = runs.some((run) =>
+    ['pending', 'submitted', 'running', 'queued', 'processing'].includes(run.status)
+  )
+
   // Load asset data
   useEffect(() => {
     if (token && assetId) {
@@ -137,42 +147,46 @@ function AssetDetailContent() {
     }
   }, [token, assetId])
 
-  // Auto-poll when asset is processing
+  // Auto-poll when asset is processing OR when there are active runs
+  // This ensures we keep polling during secondary extraction (enhancement)
   useEffect(() => {
-    if (asset?.status === 'pending') {
+    const shouldPoll = asset?.status === 'pending' || hasActiveRuns
+    if (shouldPoll) {
       const intervalId = setInterval(() => {
         loadAssetData(true) // Silent polling - don't show loading spinner
-      }, 5000) // Poll every 5 seconds (reduced from 3)
+      }, POLLING.ASSET_DETAIL_MS)
 
       return () => clearInterval(intervalId)
     }
-  }, [asset?.status])
+  }, [asset?.status, hasActiveRuns])
 
-  // Fetch queue info when asset is pending
+  // Fetch queue info when asset is pending or has active runs
   useEffect(() => {
-    if (asset?.status === 'pending' && token && assetId) {
+    const shouldFetchQueueInfo = (asset?.status === 'pending' || hasActiveRuns) && token && assetId
+    if (shouldFetchQueueInfo) {
       // Initial fetch
       loadQueueInfo()
 
-      // Poll queue info every 3 seconds for faster updates
+      // Poll queue info using the same interval as asset detail
       const queuePollInterval = setInterval(() => {
         loadQueueInfo()
-      }, 3000)
+      }, POLLING.ASSET_DETAIL_MS)
 
       return () => clearInterval(queuePollInterval)
-    } else {
+    } else if (!hasActiveRuns) {
       setQueueInfo(null)
     }
-  }, [asset?.status, token, assetId])
+  }, [asset?.status, hasActiveRuns, token, assetId])
 
   const loadQueueInfo = async () => {
     if (!token || !assetId) return
     try {
       const info = await assetsApi.getAssetQueueInfo(token, assetId)
       setQueueInfo(info)
-    } catch (err) {
+    } catch {
       // Silently fail - queue info is supplementary
-      console.error('Failed to load queue info:', err)
+      // Don't log to avoid console spam during polling
+      setQueueInfo(null)
     }
   }
 
@@ -208,12 +222,25 @@ function AssetDetailContent() {
     }
   }
 
-  // Load extracted content when tab is activated
+  // Load extracted content when tab is activated or extraction result changes
   useEffect(() => {
-    if (activeTab === 'extracted' && extraction && !extractedContent && !isLoadingContent) {
-      loadExtractedContent()
+    if (activeTab === 'extracted' && extraction && !isLoadingContent) {
+      // Reload content if extraction ID changed (new extraction completed)
+      // or if we don't have content yet
+      const extractionChanged = extraction.id !== lastExtractionId
+      const extractionCompleted = extraction.status === 'completed'
+      const needsContent = !extractedContent || extractionChanged
+
+      if (needsContent && extractionCompleted) {
+        setLastExtractionId(extraction.id)
+        loadExtractedContent()
+      } else if (needsContent && !extractionCompleted && extraction.extracted_object_key) {
+        // Extraction has content available even if status isn't 'completed' yet
+        setLastExtractionId(extraction.id)
+        loadExtractedContent()
+      }
     }
-  }, [activeTab, extraction])
+  }, [activeTab, extraction?.id, extraction?.status, extraction?.extracted_object_key])
 
   const loadExtractedContent = async () => {
     if (!extraction?.extracted_object_key || !extraction?.extracted_bucket || !token) return
@@ -345,15 +372,20 @@ function AssetDetailContent() {
     setIsReextracting(true)
     setError('')
     setSuccessMessage('')
+    // Clear old extracted content so it doesn't show stale data
+    setExtractedContent('')
+    setLastExtractionId(null)
     try {
       const run = await assetsApi.reextractAsset(token, assetId)
 
       // Show success message
       setSuccessMessage(`Re-extraction started successfully (Run ID: ${run.id.substring(0, 8)}...)`)
 
-      // Reload asset data to show new run
+      // Reload asset data immediately to show new run and start polling
+      await loadAssetData()
+
+      // Clear success message after a few seconds
       setTimeout(() => {
-        loadAssetData()
         setSuccessMessage('')
       }, 3000)
     } catch (err: any) {
@@ -367,41 +399,13 @@ function AssetDetailContent() {
     router.push('/')
   }
 
-  const getStatusConfig = (status: string) => {
-    switch (status) {
-      case 'ready':
-        return {
-          label: 'Ready',
-          icon: <CheckCircle className="w-4 h-4" />,
-          gradient: 'from-emerald-500 to-emerald-600',
-          bgColor: 'bg-emerald-50 dark:bg-emerald-900/20',
-          textColor: 'text-emerald-700 dark:text-emerald-400',
-        }
-      case 'pending':
-        return {
-          label: 'Processing',
-          icon: <Loader2 className="w-4 h-4 animate-spin" />,
-          gradient: 'from-blue-500 to-blue-600',
-          bgColor: 'bg-blue-50 dark:bg-blue-900/20',
-          textColor: 'text-blue-700 dark:text-blue-400',
-        }
-      case 'failed':
-        return {
-          label: 'Failed',
-          icon: <XCircle className="w-4 h-4" />,
-          gradient: 'from-red-500 to-red-600',
-          bgColor: 'bg-red-50 dark:bg-red-900/20',
-          textColor: 'text-red-700 dark:text-red-400',
-        }
-      default:
-        return {
-          label: status,
-          icon: <AlertTriangle className="w-4 h-4" />,
-          gradient: 'from-gray-500 to-gray-600',
-          bgColor: 'bg-gray-50 dark:bg-gray-900/20',
-          textColor: 'text-gray-700 dark:text-gray-400',
-        }
+  // Get unified status for display - prefer queueInfo.unified_status if available
+  const getDisplayStatus = (): string => {
+    if (queueInfo?.unified_status) {
+      return queueInfo.unified_status
     }
+    // Fall back to asset status
+    return asset?.status === 'ready' ? 'completed' : (asset?.status || 'queued')
   }
 
   const formatBytes = (bytes: number | null) => {
@@ -445,7 +449,7 @@ function AssetDetailContent() {
     )
   }
 
-  const statusConfig = getStatusConfig(asset.status)
+  const displayStatus = getDisplayStatus()
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
@@ -469,28 +473,15 @@ function AssetDetailContent() {
                   {asset.original_filename}
                 </h1>
                 <div className="flex flex-wrap items-center gap-3 mt-2">
-                  <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${statusConfig.bgColor} ${statusConfig.textColor}`}>
-                    {statusConfig.icon}
-                    <span>{statusConfig.label}</span>
-                  </div>
-                  {asset.status === 'pending' && (
-                    <div className="inline-flex items-center gap-2 text-xs text-blue-600 dark:text-blue-400">
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      <span className="font-medium">
-                        {queueInfo?.status === 'processing' ? 'Extracting...' : 'Queued'}
-                      </span>
-                      {queueInfo?.queue_position && queueInfo?.total_pending && (
-                        <span className="px-1.5 py-0.5 bg-blue-100 dark:bg-blue-900/40 rounded text-blue-700 dark:text-blue-300">
-                          {queueInfo.queue_position}/{queueInfo.total_pending}
-                        </span>
-                      )}
-                      {queueInfo?.extractor_version && (
-                        <span className="px-1.5 py-0.5 bg-gray-100 dark:bg-gray-800 rounded text-gray-600 dark:text-gray-400 font-mono">
-                          {queueInfo.extractor_version}
-                        </span>
-                      )}
-                    </div>
-                  )}
+                  <ExtractionStatus
+                    status={displayStatus}
+                    queuePosition={queueInfo?.queue_position}
+                    totalPending={queueInfo?.total_pending}
+                    estimatedWaitSeconds={queueInfo?.estimated_wait_seconds}
+                    extractorVersion={queueInfo?.extractor_version}
+                    showPosition={displayStatus === 'queued'}
+                    showTooltip
+                  />
                   {asset.current_version_number && (
                     <span className="text-xs text-gray-500 dark:text-gray-400">
                       Version {asset.current_version_number}
@@ -503,17 +494,50 @@ function AssetDetailContent() {
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <Button
-                variant="secondary"
-                onClick={handleReextract}
-                disabled={isReextracting || asset.status === 'pending'}
-                className="gap-2 whitespace-nowrap opacity-100 disabled:opacity-50 disabled:cursor-not-allowed"
-              >
-                <RefreshCw className={`w-4 h-4 ${isReextracting || asset.status === 'pending' ? 'animate-spin' : ''}`} />
-                <span className="whitespace-nowrap">
-                  {isReextracting ? 'Starting...' : asset.status === 'pending' ? 'Processing...' : 'Re-extract'}
-                </span>
-              </Button>
+              {/* Re-extract button disabled when extraction is pending/submitted/running */}
+              {(() => {
+                // Check queueInfo for unified status
+                const isQueueActive = queueInfo && ['queued', 'submitted', 'processing'].includes(queueInfo.unified_status)
+                // Also check if any runs are actively processing (catches enhancement runs)
+                const hasActiveExtractionRuns = runs.some((run) =>
+                  (run.run_type === 'extraction' || run.run_type === 'extraction_enhancement') &&
+                  ['pending', 'submitted', 'running', 'queued', 'processing'].includes(run.status)
+                )
+                const isExtractionActive = isQueueActive || hasActiveExtractionRuns
+                const canReextract = !isReextracting && !isExtractionActive && asset.status !== 'pending'
+
+                let buttonText = 'Re-extract'
+                if (isReextracting) {
+                  buttonText = 'Starting...'
+                } else if (queueInfo?.unified_status === 'queued') {
+                  buttonText = queueInfo.queue_position ? `Queued (#${queueInfo.queue_position})` : 'Queued'
+                } else if (queueInfo?.unified_status === 'submitted') {
+                  buttonText = 'Starting...'
+                } else if (queueInfo?.unified_status === 'processing') {
+                  buttonText = 'Processing...'
+                } else if (hasActiveExtractionRuns) {
+                  // Show enhancement status if that's what's running
+                  const enhancementRun = runs.find((run) =>
+                    run.run_type === 'extraction_enhancement' &&
+                    ['pending', 'submitted', 'running', 'queued', 'processing'].includes(run.status)
+                  )
+                  buttonText = enhancementRun ? 'Enhancing...' : 'Processing...'
+                } else if (asset.status === 'pending') {
+                  buttonText = 'Queued'
+                }
+
+                return (
+                  <Button
+                    variant="secondary"
+                    onClick={handleReextract}
+                    disabled={!canReextract}
+                    className="gap-2 whitespace-nowrap opacity-100 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <RefreshCw className={`w-4 h-4 ${!canReextract ? 'animate-spin' : ''}`} />
+                    <span className="whitespace-nowrap">{buttonText}</span>
+                  </Button>
+                )
+              })()}
             </div>
           </div>
 
@@ -525,6 +549,23 @@ function AssetDetailContent() {
                   <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                 </div>
                 <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">{successMessage}</p>
+              </div>
+            </div>
+          )}
+
+          {/* Timeout Warning */}
+          {queueInfo?.unified_status === 'timed_out' && (
+            <div className="mt-6 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/50 p-4">
+              <div className="flex items-center gap-3">
+                <div className="flex-shrink-0 w-10 h-10 rounded-lg bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center">
+                  <Clock className="w-5 h-5 text-amber-600 dark:text-amber-400" />
+                </div>
+                <div>
+                  <p className="text-sm font-medium text-amber-800 dark:text-amber-200">Extraction timed out</p>
+                  <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
+                    The file may be too large or complex. Try re-extracting or contact support if the issue persists.
+                  </p>
+                </div>
               </div>
             </div>
           )}
@@ -856,43 +897,62 @@ function AssetDetailContent() {
               <div className="flex items-center justify-between mb-4">
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Extracted Content</h3>
                 {extraction && (
-                  <div className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${getStatusConfig(extraction.status).bgColor} ${getStatusConfig(extraction.status).textColor}`}>
-                    {getStatusConfig(extraction.status).icon}
-                    <span>{getStatusConfig(extraction.status).label}</span>
-                  </div>
+                  <ExtractionStatus status={extraction.status} />
                 )}
               </div>
               {extraction ? (
                 <div>
+                  {/* Show loading/processing state */}
                   {isLoadingContent ? (
                     <div className="flex items-center justify-center py-8">
                       <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
+                      <span className="ml-2 text-sm text-gray-500 dark:text-gray-400">Loading content...</span>
+                    </div>
+                  ) : extraction.status === 'pending' || extraction.status === 'running' ? (
+                    <div className="flex flex-col items-center justify-center py-8 text-gray-500 dark:text-gray-400">
+                      <Loader2 className="w-8 h-8 animate-spin text-indigo-500 mb-3" />
+                      <p className="text-sm font-medium">Extraction in progress</p>
+                      <p className="text-xs mt-1">Content will appear automatically when ready</p>
+                    </div>
+                  ) : !extraction.extracted_object_key ? (
+                    <div className="text-center py-8 text-gray-500 dark:text-gray-400">
+                      <FileText className="w-12 h-12 mx-auto mb-3 opacity-50" />
+                      <p>No extracted content available yet</p>
                     </div>
                   ) : (
                     <div className="prose dark:prose-invert max-w-none">
-                      <pre className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg overflow-x-auto text-sm">
+                      <pre className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg overflow-x-auto text-sm text-gray-900 dark:text-gray-100 whitespace-pre-wrap">
                         {extractedContent || 'No content available'}
                       </pre>
                     </div>
                   )}
-                  <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-                    <div className="grid grid-cols-2 gap-4 text-sm">
-                      <div>
-                        <span className="text-gray-500 dark:text-gray-400">Extractor Version</span>
-                        <p className="font-mono text-xs text-gray-700 dark:text-gray-300 mt-1">
-                          {extraction.extractor_version}
-                        </p>
-                      </div>
-                      {extraction.extraction_time_seconds && (
+                  {/* Show extraction metadata when available */}
+                  {extraction.extraction_time_seconds !== null && (
+                    <div className="mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
+                      <div className="grid grid-cols-2 gap-4 text-sm">
                         <div>
-                          <span className="text-gray-500 dark:text-gray-400">Processing Time</span>
+                          <span className="text-gray-500 dark:text-gray-400">Extractor Version</span>
                           <p className="font-mono text-xs text-gray-700 dark:text-gray-300 mt-1">
-                            {extraction.extraction_time_seconds.toFixed(2)}s
+                            {extraction.extractor_version}
                           </p>
                         </div>
-                      )}
+                        {extraction.extraction_time_seconds && (
+                          <div>
+                            <span className="text-gray-500 dark:text-gray-400">Processing Time</span>
+                            <p className="font-mono text-xs text-gray-700 dark:text-gray-300 mt-1">
+                              {extraction.extraction_time_seconds.toFixed(2)}s
+                            </p>
+                          </div>
+                        )}
+                      </div>
                     </div>
-                  </div>
+                  )}
+                </div>
+              ) : asset.status === 'pending' || hasActiveRuns ? (
+                <div className="flex flex-col items-center justify-center py-8 text-gray-500 dark:text-gray-400">
+                  <Loader2 className="w-8 h-8 animate-spin text-indigo-500 mb-3" />
+                  <p className="text-sm font-medium">Extraction in progress</p>
+                  <p className="text-xs mt-1">Content will appear automatically when ready</p>
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-500 dark:text-gray-400">

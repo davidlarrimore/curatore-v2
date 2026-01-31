@@ -151,10 +151,22 @@ class ScrapeService:
         )
 
         session.add(collection)
+        await session.flush()  # Get the collection ID
+
+        # Auto-create a seed source from root_url
+        # This eliminates the need for manual source management
+        source = ScrapeSource(
+            collection_id=collection.id,
+            url=root_url,
+            source_type="seed",
+            crawl_config=None,
+        )
+        session.add(source)
+
         await session.commit()
         await session.refresh(collection)
 
-        logger.info(f"Created scrape collection {collection.id}: {name}")
+        logger.info(f"Created scrape collection {collection.id}: {name} (auto-added root_url as seed source)")
 
         return collection
 
@@ -293,7 +305,7 @@ class ScrapeService:
         if not collection:
             return None
 
-        # Count pages and records
+        # Count pages, records, and documents
         page_count = await session.execute(
             select(func.count(ScrapedAsset.id)).where(
                 and_(
@@ -310,6 +322,14 @@ class ScrapeService:
                 )
             )
         )
+        document_count = await session.execute(
+            select(func.count(ScrapedAsset.id)).where(
+                and_(
+                    ScrapedAsset.collection_id == collection_id,
+                    ScrapedAsset.asset_subtype == "document",
+                )
+            )
+        )
         promoted_count = await session.execute(
             select(func.count(ScrapedAsset.id)).where(
                 and_(
@@ -322,6 +342,7 @@ class ScrapeService:
         collection.stats = {
             "page_count": page_count.scalar_one(),
             "record_count": record_count.scalar_one(),
+            "document_count": document_count.scalar_one(),
             "promoted_count": promoted_count.scalar_one(),
             "last_updated": datetime.utcnow().isoformat(),
         }
