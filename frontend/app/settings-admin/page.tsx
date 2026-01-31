@@ -4,6 +4,7 @@ import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { settingsApi, systemApi, usersApi } from '@/lib/api'
+import { formatDate } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
@@ -634,7 +635,7 @@ function SettingsAdminContent() {
                             </Badge>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                            {userItem.last_login ? new Date(userItem.last_login).toLocaleDateString() : 'Never'}
+                            {userItem.last_login ? formatDate(userItem.last_login) : 'Never'}
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                             <div className="flex justify-end gap-2">

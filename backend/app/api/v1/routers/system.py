@@ -131,10 +131,41 @@ async def reset_system():
 
 @router.get("/config/supported-formats", tags=["Configuration"])
 async def get_supported_formats():
-    """Get list of supported file formats."""
+    """Get list of supported file formats.
+
+    Returns the supported file formats from the default extraction engine,
+    along with a breakdown by engine type for reference.
+    """
+    from ....services.extraction import file_type_registry
+
     return {
         "supported_extensions": document_service.get_supported_extensions(),
-        "max_file_size": settings.max_file_size
+        "max_file_size": settings.max_file_size,
+        "engines": file_type_registry.get_all_engines(),
+        "format_matrix": file_type_registry.get_format_matrix(),
+    }
+
+
+@router.get("/config/file-type-registry", tags=["Configuration"])
+async def get_file_type_registry():
+    """Get detailed file type support information by extraction engine.
+
+    Returns a registry showing:
+    - All supported file formats across all engines
+    - Which engines support which formats
+    - Engine descriptions and metadata
+
+    This is useful for:
+    - Pre-flight validation before uploading files
+    - Displaying supported formats in the UI
+    - Choosing the best engine for a specific file type
+    """
+    from ....services.extraction import file_type_registry
+
+    return {
+        "all_supported_formats": sorted(file_type_registry.get_all_supported_formats()),
+        "engines": file_type_registry.get_all_engines(),
+        "format_matrix": file_type_registry.get_format_matrix(),
     }
 
 @router.get("/config/defaults", tags=["Configuration"])

@@ -34,6 +34,7 @@ from .extraction_service import ExtractionServiceEngine
 from .docling import DoclingEngine
 from .tika import TikaEngine
 from .factory import ExtractionEngineFactory
+from .file_type_registry import FileTypeRegistry, file_type_registry
 
 __all__ = [
     # Base classes
@@ -45,6 +46,9 @@ __all__ = [
     "TikaEngine",
     # Factory
     "ExtractionEngineFactory",
+    # File type registry
+    "FileTypeRegistry",
+    "file_type_registry",
 ]
 
 __version__ = "1.0.0"

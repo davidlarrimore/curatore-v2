@@ -62,7 +62,7 @@ class DocumentService:
 
     DEFAULT_EXTS: Set[str] = {
         ".pdf", ".doc", ".docx", ".ppt", ".pptx",
-        ".xls", ".xlsx", ".csv", ".txt", ".md",
+        ".xls", ".xlsx", ".xlsb", ".csv", ".txt", ".md",
         ".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".bmp",
         ".msg", ".eml"  # Email formats
     }

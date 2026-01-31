@@ -3,6 +3,7 @@
 import React, { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { objectStorageApi, utils } from '@/lib/api'
+import { formatDateTime } from '@/lib/date-utils'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import FilePreview from '@/components/storage/FilePreview'
 import StorageFolderBrowser from '@/components/storage/StorageFolderBrowser'
@@ -47,10 +48,9 @@ function formatBytes(bytes: number | null): string {
   return Math.round(bytes / Math.pow(k, i) * 100) / 100 + ' ' + sizes[i]
 }
 
+// Use formatDateTime from date-utils for consistent EST display
 function formatDate(dateString: string | null): string {
-  if (!dateString) return 'N/A'
-  const date = new Date(dateString)
-  return date.toLocaleString()
+  return formatDateTime(dateString)
 }
 
 interface Artifact {

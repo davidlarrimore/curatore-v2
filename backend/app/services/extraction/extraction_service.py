@@ -40,13 +40,30 @@ class ExtractionServiceEngine(BaseExtractionEngine):
         """
         Get supported file formats for extraction-service.
 
+        The extraction-service uses MarkItDown, LibreOffice conversion,
+        and Tesseract OCR to support a wide range of document types.
+
+        Supported categories:
+        - PDFs (native text + OCR fallback)
+        - Office documents (doc/docx, ppt/pptx, xls/xlsx, xlsb)
+        - Plain text and markdown
+        - Images (via Tesseract OCR)
+        - Email files (msg, eml)
+
         Returns:
             List of supported file extensions
         """
         return [
+            # Documents
             ".pdf", ".doc", ".docx", ".ppt", ".pptx",
-            ".xls", ".xlsx", ".csv", ".txt", ".md",
-            ".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".bmp"
+            # Spreadsheets (including xlsb via LibreOffice conversion)
+            ".xls", ".xlsx", ".xlsb", ".csv",
+            # Plain text
+            ".txt", ".md",
+            # Images (OCR)
+            ".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".bmp",
+            # Email formats
+            ".msg", ".eml",
         ]
 
     async def extract(

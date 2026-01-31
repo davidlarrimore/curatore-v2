@@ -5,6 +5,7 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { sharepointSyncApi, SharePointSyncConfig, SharePointSyncedDocument } from '@/lib/api'
+import { formatDateTime, formatDuration } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import { ConfirmDeleteDialog } from '@/components/ui/ConfirmDeleteDialog'
 import { useDeletionJobs } from '@/lib/deletion-jobs-context'
@@ -1390,16 +1391,8 @@ function SharePointSyncConfigContent() {
     }
   }
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  }
+  // Use formatDateTime from date-utils for consistent EST display
+  const formatDate = (dateStr: string | null) => formatDateTime(dateStr)
 
   const getStatusBadge = () => {
     if (!config) return null
@@ -2217,7 +2210,7 @@ function SharePointSyncConfigContent() {
                           </p>
                           <p className="text-xs text-gray-500 dark:text-gray-400">
                             {formatDate(run.created_at)}
-                            {run.completed_at && ` • ${Math.round((new Date(run.completed_at).getTime() - new Date(run.started_at || run.created_at).getTime()) / 1000)}s`}
+                            {run.completed_at && ` • ${formatDuration(run.started_at || run.created_at, run.completed_at)}`}
                           </p>
                         </div>
                       </div>

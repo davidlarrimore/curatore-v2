@@ -86,8 +86,8 @@ class TikaEngine(BaseExtractionEngine):
         return [
             # Documents
             ".pdf", ".doc", ".docx", ".odt", ".rtf", ".txt", ".md",
-            # Spreadsheets
-            ".xls", ".xlsx", ".ods", ".csv",
+            # Spreadsheets (including xlsb - Excel Binary Workbook)
+            ".xls", ".xlsx", ".xlsb", ".ods", ".csv",
             # Presentations
             ".ppt", ".pptx", ".odp",
             # Images (with OCR support)

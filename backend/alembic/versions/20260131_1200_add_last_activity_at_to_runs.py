@@ -1,7 +1,7 @@
 """Add last_activity_at to runs for activity-based timeouts
 
 Revision ID: 20260131_1200
-Revises: 20260130_1000_add_extraction_queue_fields
+Revises: add_extraction_queue
 Create Date: 2026-01-31 12:00:00.000000
 
 """
@@ -13,7 +13,7 @@ import sqlalchemy as sa
 
 # revision identifiers, used by Alembic.
 revision: str = '20260131_1200'
-down_revision: Union[str, None] = '20260130_1000_add_extraction_queue_fields'
+down_revision: Union[str, None] = 'add_extraction_queue'
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 

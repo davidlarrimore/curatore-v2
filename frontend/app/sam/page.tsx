@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { samApi, SamDashboardStats, SamNoticeWithSolicitation } from '@/lib/api'
+import { formatDate as formatDateUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamNavigation from '@/components/sam/SamNavigation'
 import { NoticeTypeBadge } from '@/components/sam/SamStatusBadge'
@@ -70,14 +71,8 @@ function SamDashboardContent() {
     }
   }, [token, loadData])
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })
-  }
+  // Use formatDate from date-utils for consistent EST display
+  const formatDate = (dateStr: string | null) => formatDateUtil(dateStr)
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">

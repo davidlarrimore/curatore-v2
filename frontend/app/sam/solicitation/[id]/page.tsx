@@ -4,6 +4,7 @@ import { useState, useEffect, use, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { samApi, SamSolicitation, SamNotice, SamAttachment, SamSummary } from '@/lib/api'
+import { formatDate as formatDateUtil, formatDateTime as formatDateTimeUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import Link from 'next/link'
 import {
@@ -92,25 +93,9 @@ function SolicitationDetailContent({ params }: PageProps) {
     if (token) loadData()
   }, [token, loadData])
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return 'N/A'
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
-  }
-
-  const formatDateTime = (dateStr: string | null) => {
-    if (!dateStr) return 'N/A'
-    return new Date(dateStr).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  }
+  // Use date utilities for consistent EST display
+  const formatDate = (dateStr: string | null) => dateStr ? formatDateUtil(dateStr) : 'N/A'
+  const formatDateTime = (dateStr: string | null) => dateStr ? formatDateTimeUtil(dateStr) : 'N/A'
 
   const getNoticeTypeBadge = (noticeType: string) => {
     const colors: Record<string, string> = {

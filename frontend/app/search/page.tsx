@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { searchApi, SearchHit, SearchResponse, SearchFacets } from '@/lib/api'
+import { formatDate } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import {
   Search,
@@ -495,7 +496,7 @@ function SearchContent() {
                     <div className="mt-3 flex items-center justify-between text-xs text-gray-400 dark:text-gray-500">
                       <span>
                         {hit.content_type && `${hit.content_type} • `}
-                        {hit.created_at && new Date(hit.created_at).toLocaleDateString()}
+                        {hit.created_at && formatDate(hit.created_at)}
                       </span>
                       <span className="text-indigo-500 dark:text-indigo-400 font-medium">
                         {(hit.score * 100).toFixed(0)}% match

@@ -2737,30 +2737,7 @@ async def _sharepoint_sync_async(
                 message=f"Triggered extraction for {extraction_count} assets",
             )
 
-            # Complete the run
-            await run_service.complete_run(
-                session=session,
-                run_id=run_id,
-                results_summary=result,
-            )
-
-            await run_log_service.log_summary(
-                session=session,
-                run_id=run_id,
-                message=(
-                    f"Sync completed: {result.get('new_files', 0)} new, "
-                    f"{result.get('updated_files', 0)} updated, "
-                    f"{result.get('unchanged_files', 0)} unchanged, "
-                    f"{result.get('deleted_detected', 0)} deleted"
-                ),
-                context={
-                    "new_files": result.get("new_files", 0),
-                    "updated_files": result.get("updated_files", 0),
-                    "unchanged_files": result.get("unchanged_files", 0),
-                    "deleted_detected": result.get("deleted_detected", 0),
-                },
-            )
-
+            # Note: run is already completed by sharepoint_sync_service.execute_sync()
             await session.commit()
 
             return result
@@ -3455,11 +3432,11 @@ async def _async_delete_sync_config(
         await session.commit()
 
         try:
-            cancelled_count = await sharepoint_sync_service._cancel_pending_extractions_for_sync_config(
+            cancelled_count = await sharepoint_sync_service._cancel_pending_jobs_for_sync_config(
                 session, sync_config_id, organization_id
             )
             stats["extractions_cancelled"] = cancelled_count
-            logger.info(f"Cancelled {cancelled_count} pending extractions")
+            logger.info(f"Cancelled {cancelled_count} pending jobs")
         except Exception as e:
             stats["errors"].append(f"Failed to cancel extractions: {e}")
             logger.warning(f"Failed to cancel extractions: {e}")
@@ -3592,6 +3569,41 @@ async def _async_delete_sync_config(
                         },
                     )
                     await session.commit()
+
+        # =================================================================
+        # PHASE 3.5: CLEANUP FILES BY STORAGE PATH PREFIX
+        # =================================================================
+        # This ensures all files are deleted even if extraction results
+        # didn't track them properly
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 3.5: Cleaning up files by storage path",
+            context={"phase": "cleanup_storage_paths"},
+        )
+        await session.commit()
+
+        if minio and config and config.slug:
+            path_prefix = f"{organization_id}/sharepoint/{config.slug}/"
+            buckets_to_clean = [
+                settings.minio_bucket_uploads,
+                settings.minio_bucket_processed,
+            ]
+            for bucket in buckets_to_clean:
+                try:
+                    objects = list(minio.list_objects(bucket, prefix=path_prefix, recursive=True))
+                    for obj in objects:
+                        try:
+                            minio.delete_object(bucket, obj.object_name)
+                            stats["files_deleted"] += 1
+                        except Exception:
+                            pass
+                    if objects:
+                        logger.info(f"Cleaned up {len(objects)} files from {bucket}/{path_prefix}")
+                except Exception as e:
+                    logger.warning(f"Failed to cleanup {bucket}/{path_prefix}: {e}")
 
         # =================================================================
         # PHASE 4: DELETE SYNCED DOCUMENT RECORDS

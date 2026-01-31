@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { samApi, SamNoticeWithSolicitation, SamNoticeListParams } from '@/lib/api'
+import { formatDate as formatDateUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamNavigation from '@/components/sam/SamNavigation'
 import { NoticeTypeBadge } from '@/components/sam/SamStatusBadge'
@@ -87,14 +88,8 @@ function SamNoticesContent() {
 
   const hasFilters = agencyFilter || noticeTypeFilter
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })
-  }
+  // Use formatDate from date-utils for consistent EST display
+  const formatDate = (dateStr: string | null) => formatDateUtil(dateStr)
 
   const totalPages = Math.ceil(total / pageSize)
 

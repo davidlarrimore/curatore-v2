@@ -682,7 +682,7 @@ class Asset(Base):
 
     # Source provenance
     source_type = Column(String(50), nullable=False, index=True)  # upload, sharepoint, web_scrape, sam_gov
-    source_metadata = Column(JSON, nullable=False, default=dict, server_default="{}")
+    source_metadata = Column(JSONB, nullable=False, default=dict, server_default="{}")
 
     # File metadata
     original_filename = Column(String(500), nullable=False)
@@ -900,7 +900,7 @@ class Run(Base):
 
     # Input and configuration (JSONB for proper PostgreSQL containment queries)
     input_asset_ids = Column(JSONB, nullable=False, default=list, server_default="[]")
-    config = Column(JSON, nullable=False, default=dict, server_default="{}")
+    config = Column(JSONB, nullable=False, default=dict, server_default="{}")
 
     # Progress tracking
     progress = Column(JSON, nullable=True)  # {current, total, unit, percent}

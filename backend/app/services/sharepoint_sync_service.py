@@ -31,10 +31,24 @@ import hashlib
 import logging
 import re
 import tempfile
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
+
+
+def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
+    """Convert a datetime to naive UTC (strip timezone info).
+
+    PostgreSQL TIMESTAMP WITHOUT TIME ZONE columns expect naive datetimes.
+    This ensures SharePoint's timezone-aware datetimes are stored correctly.
+    """
+    if dt is None:
+        return None
+    if dt.tzinfo is not None:
+        # Convert to UTC then strip timezone
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
 
 from sqlalchemy import select, and_, func
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -791,8 +805,8 @@ class SharePointSyncService:
             sharepoint_web_url=sharepoint_web_url,
             sharepoint_etag=sharepoint_etag,
             content_hash=content_hash,
-            sharepoint_created_at=sharepoint_created_at,
-            sharepoint_modified_at=sharepoint_modified_at,
+            sharepoint_created_at=_to_naive_utc(sharepoint_created_at),
+            sharepoint_modified_at=_to_naive_utc(sharepoint_modified_at),
             sharepoint_created_by=sharepoint_created_by,
             sharepoint_modified_by=sharepoint_modified_by,
             file_size=file_size,
@@ -831,8 +845,14 @@ class SharePointSyncService:
             "sync_metadata",
         }
 
+        # Fields that need timezone conversion
+        datetime_fields = {"sharepoint_modified_at", "last_synced_at", "deleted_detected_at"}
+
         for field, value in updates.items():
             if field in allowed_fields:
+                # Convert timezone-aware datetimes to naive UTC
+                if field in datetime_fields and value is not None:
+                    value = _to_naive_utc(value)
                 setattr(doc, field, value)
 
         doc.updated_at = datetime.utcnow()

@@ -6,6 +6,7 @@ import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { useDeletionJobs } from '@/lib/deletion-jobs-context'
 import { sharepointSyncApi, SharePointSyncConfig } from '@/lib/api'
+import { formatDateTime } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import {
@@ -175,16 +176,8 @@ function SharePointSyncContent() {
     }
   }
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  }
+  // Use formatDateTime from date-utils for consistent EST display
+  const formatDate = (dateStr: string | null) => formatDateTime(dateStr)
 
   const getStatusBadge = (config: SharePointSyncConfig) => {
     // Check if this config is being deleted (from context or DB status)

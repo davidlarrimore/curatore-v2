@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { samApi, SamSolicitation } from '@/lib/api'
+import { formatDate as formatDateUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamNavigation from '@/components/sam/SamNavigation'
 import { NoticeTypeBadge, SolicitationBadge, SamSummaryStatusBadge } from '@/components/sam/SamStatusBadge'
@@ -90,14 +91,8 @@ function SamSolicitationsContent() {
 
   const hasFilters = statusFilter || noticeTypeFilter || naicsFilter
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-    })
-  }
+  // Use formatDate from date-utils for consistent EST display
+  const formatDate = (dateStr: string | null) => formatDateUtil(dateStr)
 
   // Check if solicitation is new (created within last 7 days)
   const isNew = (sol: SamSolicitation) => {

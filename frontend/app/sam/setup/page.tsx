@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { samApi, SamSearch, SamApiUsage, SamQueueStats } from '@/lib/api'
+import { formatCompact } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamNavigation from '@/components/sam/SamNavigation'
 import SamSearchForm from '@/components/sam/SamSearchForm'
@@ -170,15 +171,8 @@ function SamSetupContent() {
     }
   }
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return 'Never'
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  }
+  // Use formatCompact from date-utils for consistent EST display
+  const formatDate = (dateStr: string | null) => dateStr ? formatCompact(dateStr) : 'Never'
 
   const getStatusColor = (status: string) => {
     switch (status) {

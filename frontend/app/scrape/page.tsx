@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { useDeletionJobs } from '@/lib/deletion-jobs-context'
 import { scrapeApi, ScrapeCollection, CrawlStatus } from '@/lib/api'
+import { formatCompact } from '@/lib/date-utils'
 import Link from 'next/link'
 import toast from 'react-hot-toast'
 import {
@@ -231,15 +232,8 @@ export default function ScrapeCollectionsPage() {
     }
   }
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return 'Never'
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  }
+  // Use formatCompact from date-utils for consistent EST display
+  const formatDate = (dateStr: string | null) => dateStr ? formatCompact(dateStr) : 'Never'
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">

@@ -3,6 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { usersApi } from '@/lib/api'
+import { formatDate } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
@@ -222,7 +223,7 @@ function UsersContent() {
                       </Badge>
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                      {user.last_login ? new Date(user.last_login).toLocaleDateString() : 'Never'}
+                      {user.last_login ? formatDate(user.last_login) : 'Never'}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                       <div className="flex justify-end gap-2">

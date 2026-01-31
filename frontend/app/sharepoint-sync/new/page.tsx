@@ -478,17 +478,32 @@ function NewSharePointSyncContent() {
                 Choose to sync everything in the folder or select specific files and folders.
               </p>
 
-              {folderInfo && (
-                <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
-                  <div className="flex items-center gap-2 text-sm">
-                    <Folder className="w-4 h-4 text-indigo-500" />
-                    <span className="font-medium text-gray-900 dark:text-white">{folderInfo.name}</span>
+              {/* Loading indicator while fetching folder contents */}
+              {isLoading && !folderInfo && (
+                <div className="flex items-center justify-center py-12">
+                  <div className="text-center">
+                    <Loader2 className="w-8 h-8 animate-spin text-indigo-600 mx-auto mb-3" />
+                    <p className="text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Reading SharePoint folder...
+                    </p>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                      This may take a moment for large folders
+                    </p>
                   </div>
                 </div>
               )}
 
-              {/* Sync Mode Toggle */}
-              <div className="mb-6 space-y-3">
+              {folderInfo && (
+                <>
+                  <div className="mb-4 p-3 bg-gray-50 dark:bg-gray-900/50 rounded-lg">
+                    <div className="flex items-center gap-2 text-sm">
+                      <Folder className="w-4 h-4 text-indigo-500" />
+                      <span className="font-medium text-gray-900 dark:text-white">{folderInfo.name}</span>
+                    </div>
+                  </div>
+
+                  {/* Sync Mode Toggle */}
+                  <div className="mb-6 space-y-3">
                 <button
                   onClick={() => {
                     setSyncMode('all')
@@ -550,8 +565,8 @@ function NewSharePointSyncContent() {
                 </button>
               </div>
 
-              {/* File Browser - Only shown when "selected" mode */}
-              {syncMode === 'selected' && (
+                  {/* File Browser - Only shown when "selected" mode */}
+                  {syncMode === 'selected' && (
                 <>
                   <div className="flex items-center justify-between mb-4">
                     <div className="flex items-center gap-3">
@@ -620,6 +635,8 @@ function NewSharePointSyncContent() {
                       ))}
                     </div>
                   )}
+                  </>
+                )}
                 </>
               )}
             </div>

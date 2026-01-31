@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { samApi, SamSolicitation, SamNotice, SamAttachment } from '@/lib/api'
+import { formatDate as formatDateUtil, formatDateTime as formatDateTimeUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamBreadcrumbs from '@/components/sam/SamBreadcrumbs'
 import { NoticeTypeBadge, SamSummaryStatusBadge } from '@/components/sam/SamStatusBadge'
@@ -144,25 +145,9 @@ function SolicitationDetailContent({ params }: PageProps) {
     }
   }
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return 'N/A'
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
-  }
-
-  const formatDateTime = (dateStr: string | null) => {
-    if (!dateStr) return 'N/A'
-    return new Date(dateStr).toLocaleString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  }
+  // Use date utilities for consistent EST display
+  const formatDate = (dateStr: string | null) => dateStr ? formatDateUtil(dateStr) : 'N/A'
+  const formatDateTime = (dateStr: string | null) => dateStr ? formatDateTimeUtil(dateStr) : 'N/A'
 
   const getDownloadStatusBadge = (status: string) => {
     switch (status) {

@@ -4,6 +4,7 @@ import { useState, useEffect, use, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { samApi, SamSearch, SamPullHistoryItem } from '@/lib/api'
+import { formatDate as formatDateUtil, formatCompact, formatDuration as formatDurationUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import toast from 'react-hot-toast'
 import Link from 'next/link'
@@ -144,36 +145,10 @@ function SamSearchDetailContent({ params }: PageProps) {
     loadSearch()
   }
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return 'N/A'
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      year: 'numeric',
-      month: 'short',
-      day: 'numeric',
-    })
-  }
-
-  const formatDateTime = (dateStr: string | null) => {
-    if (!dateStr) return 'Never'
-    return new Date(dateStr).toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  }
-
-  const formatDuration = (start: string | null, end: string | null) => {
-    if (!start || !end) return '-'
-    const startDate = new Date(start)
-    const endDate = new Date(end)
-    const durationMs = endDate.getTime() - startDate.getTime()
-    const seconds = Math.floor(durationMs / 1000)
-    if (seconds < 60) return `${seconds}s`
-    const minutes = Math.floor(seconds / 60)
-    const remainingSeconds = seconds % 60
-    return `${minutes}m ${remainingSeconds}s`
-  }
+  // Use date utilities for consistent EST display
+  const formatDate = (dateStr: string | null) => dateStr ? formatDateUtil(dateStr) : 'N/A'
+  const formatDateTime = (dateStr: string | null) => dateStr ? formatCompact(dateStr) : 'Never'
+  const formatDuration = (start: string | null, end: string | null) => formatDurationUtil(start, end)
 
   const getStatusBadge = (status: string) => {
     switch (status) {

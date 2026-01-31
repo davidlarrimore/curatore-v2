@@ -15,6 +15,8 @@ services:
     volumes:
       # Hot-reload app code without stomping other layers
       - ./backend/app:/app/app
+      # Hot-reload alembic migrations
+      - ./backend/alembic:/app/alembic
       # Application data directory (logs, temp files)
       - ./backend/data:/app/data
       # YAML configuration (optional, falls back to env vars if not present)

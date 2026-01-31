@@ -24,7 +24,7 @@ __all__ = [
 # Supported file extensions we advertise via /system/supported-formats.
 # NOTE: PDFs are handled by pdfminer/ocr (not MarkItDown) to match backend behavior.
 SUPPORTED_EXTS = {
-    ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".csv",
+    ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".xlsb", ".csv",
     ".txt", ".md",
     ".png", ".jpg", ".jpeg", ".bmp", ".tif", ".tiff",
     ".msg", ".eml",  # Email formats
@@ -417,9 +417,10 @@ def extract_markdown(
             # Return whatever markitdown yielded (may be empty) as last resort
             return _tuple(md_text, "markitdown", False, page_count)
 
-        # -------- Legacy Office via LibreOffice -> modern -> MarkItDown --------
-        if ext in {".doc", ".xls", ".ppt"}:
-            target = {".doc": "docx", ".xls": "xlsx", ".ppt": "pptx"}[ext]
+        # -------- Legacy/Binary Office via LibreOffice -> modern -> MarkItDown --------
+        # .xlsb is Excel Binary Workbook format - needs LibreOffice to convert
+        if ext in {".doc", ".xls", ".ppt", ".xlsb"}:
+            target = {".doc": "docx", ".xls": "xlsx", ".ppt": "pptx", ".xlsb": "xlsx"}[ext]
             conv_path = libreoffice_convert(path, target)
             if conv_path:
                 md_text = markitdown_convert(conv_path)

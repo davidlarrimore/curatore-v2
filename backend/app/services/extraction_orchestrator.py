@@ -39,6 +39,12 @@ from ..services.document_service import document_service
 from ..services.config_loader import config_loader
 from ..models import OCRSettings, ProcessingOptions
 from ..config import settings
+from .extraction import ExtractionEngineFactory
+
+
+class UnsupportedFileTypeError(Exception):
+    """Exception raised when a file type is not supported by the configured extraction engine."""
+    pass
 
 
 def _is_opensearch_enabled() -> bool:
@@ -153,6 +159,42 @@ class ExtractionOrchestrator:
             logger.error(error)
             await self._fail_extraction(session, run_id, extraction_id, asset_id, error)
             raise RuntimeError(error)
+
+        # =====================================================================
+        # FILE TYPE VALIDATION: Check if file type is supported before extraction
+        # =====================================================================
+        file_ext = Path(asset.original_filename).suffix.lower()
+        is_supported, supported_formats, engine_name = await self._check_file_type_support(file_ext)
+
+        if not is_supported:
+            error_message = (
+                f"Unsupported file type: '{file_ext}'. "
+                f"The configured extraction engine ({engine_name}) supports: "
+                f"{', '.join(sorted(supported_formats)[:10])}"
+                f"{'...' if len(supported_formats) > 10 else ''}"
+            )
+            logger.warning(
+                f"[Run {run_id}] Skipping extraction for unsupported file type: "
+                f"{asset.original_filename} ({file_ext})"
+            )
+            await self._fail_extraction(
+                session=session,
+                run_id=run_id,
+                extraction_id=extraction_id,
+                asset_id=asset_id,
+                error_message=error_message,
+            )
+            return {
+                "status": "unsupported_file_type",
+                "asset_id": str(asset_id),
+                "run_id": str(run_id),
+                "extraction_id": str(extraction_id),
+                "file_extension": file_ext,
+                "supported_formats": list(supported_formats),
+                "engine_name": engine_name,
+                "error": error_message,
+            }
+        # =====================================================================
 
         temp_dir = None
 
@@ -407,11 +449,33 @@ class ExtractionOrchestrator:
             return storage_paths.scrape_document(org_id, collection_slug, filename, extracted=True)
 
         elif asset.source_type == "sharepoint":
-            # SharePoint files preserve folder structure
+            # SharePoint Sync files use sync config slug
+            # Try to extract the slug from the raw_object_key for consistency
+            # Format: {org_id}/sharepoint/{sync_slug}/{relative_path}/{filename}
             source_meta = asset.source_metadata or {}
-            site_name = source_meta.get("site_name", "unknown")
-            folder_path = source_meta.get("folder_path", "")
-            return storage_paths.sharepoint(org_id, site_name, folder_path, filename, extracted=True)
+
+            # Extract sync slug from raw_object_key if available
+            sync_slug = None
+            if asset.raw_object_key:
+                parts = asset.raw_object_key.split("/")
+                # Expected: [org_id, "sharepoint", sync_slug, ...]
+                if len(parts) >= 3 and parts[1] == "sharepoint":
+                    sync_slug = parts[2]
+
+            # Fall back to sync_config_name from metadata
+            if not sync_slug:
+                sync_config_name = source_meta.get("sync_config_name")
+                if sync_config_name:
+                    sync_slug = sync_config_name.lower().replace(" ", "-")
+
+            # Fall back to legacy site_name for old SharePoint imports
+            if not sync_slug:
+                sync_slug = source_meta.get("site_name", "unknown")
+
+            # Get relative path within the synced folder
+            folder_path = source_meta.get("sharepoint_path") or source_meta.get("folder_path", "")
+
+            return storage_paths.sharepoint_sync(org_id, sync_slug, folder_path, filename, extracted=True)
 
         else:
             # Uploads and other sources use UUID-based paths
@@ -498,6 +562,59 @@ class ExtractionOrchestrator:
 
         except Exception as e:
             logger.error(f"Failed to record extraction failure: {e}", exc_info=True)
+
+    async def _check_file_type_support(
+        self,
+        file_extension: str,
+    ) -> tuple[bool, set[str], str]:
+        """
+        Check if a file type is supported by the configured extraction engine.
+
+        This method retrieves the default extraction engine from config and checks
+        if the file extension is in its supported formats list.
+
+        Args:
+            file_extension: File extension including the dot (e.g., '.pdf', '.xlsb')
+
+        Returns:
+            Tuple of (is_supported, supported_formats, engine_name)
+            - is_supported: True if the file type is supported
+            - supported_formats: Set of supported file extensions for the engine
+            - engine_name: Name of the configured extraction engine
+        """
+        # Normalize extension
+        ext = file_extension.lower()
+        if not ext.startswith('.'):
+            ext = f'.{ext}'
+
+        # Get default extraction engine from config
+        default_engine_config = config_loader.get_default_extraction_engine()
+
+        if default_engine_config:
+            try:
+                # Create engine instance to get supported formats
+                engine = ExtractionEngineFactory.from_config({
+                    "engine_type": default_engine_config.engine_type,
+                    "name": default_engine_config.name,
+                    "service_url": default_engine_config.service_url,
+                    "timeout": default_engine_config.timeout,
+                    "verify_ssl": default_engine_config.verify_ssl,
+                    "api_key": default_engine_config.api_key,
+                    "options": default_engine_config.options
+                })
+                supported_formats = set(engine.get_supported_formats())
+                engine_name = f"{engine.display_name} ({engine.engine_type})"
+                is_supported = ext in supported_formats
+                return (is_supported, supported_formats, engine_name)
+            except Exception as e:
+                logger.warning(f"Failed to check file type support via engine factory: {e}")
+
+        # Fallback: use document_service's supported extensions
+        supported_formats = document_service._supported_extensions
+        engine_name = "default"
+        is_supported = ext in supported_formats
+
+        return (is_supported, supported_formats, engine_name)
 
     def _is_enhancement_eligible(self, filename: str) -> bool:
         """

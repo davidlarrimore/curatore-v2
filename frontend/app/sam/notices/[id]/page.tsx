@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { samApi, SamNotice, SamSolicitation, SamAttachment } from '@/lib/api'
+import { formatDate as formatDateUtil, formatDateTime as formatDateTimeUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamBreadcrumbs from '@/components/sam/SamBreadcrumbs'
 import { NoticeTypeBadge, SamSummaryStatusBadge } from '@/components/sam/SamStatusBadge'
@@ -155,25 +156,9 @@ function SamNoticeDetailContent({ params }: PageProps) {
     }
   }
 
-  const formatDate = (dateStr: string | null) => {
-    if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleDateString('en-US', {
-      month: 'long',
-      day: 'numeric',
-      year: 'numeric',
-    })
-  }
-
-  const formatDateTime = (dateStr: string | null) => {
-    if (!dateStr) return '-'
-    return new Date(dateStr).toLocaleString('en-US', {
-      month: 'short',
-      day: 'numeric',
-      year: 'numeric',
-      hour: '2-digit',
-      minute: '2-digit',
-    })
-  }
+  // Use date utilities for consistent EST display
+  const formatDate = (dateStr: string | null) => formatDateUtil(dateStr)
+  const formatDateTime = (dateStr: string | null) => formatDateTimeUtil(dateStr)
 
   // Render summary content for all notices
   const renderSummaryContent = () => {
