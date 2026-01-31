@@ -1041,8 +1041,14 @@ class SharePointSyncService:
                     results["skipped_files"] += 1
                     continue
 
+                # Skip if we've already processed this item (deduplication)
+                item_id = item.get("id")
+                if item_id in current_item_ids:
+                    logger.debug(f"Skipping duplicate item: {item.get('name')} (id: {item_id})")
+                    continue
+
                 results["total_files"] += 1
-                current_item_ids.add(item.get("id"))
+                current_item_ids.add(item_id)
 
                 # Process this file immediately
                 current_file = item.get("name", "unknown")
@@ -1773,19 +1779,53 @@ class SharePointSyncService:
         # Remove None values for cleaner storage
         source_metadata = {k: v for k, v in source_metadata.items() if v is not None}
 
-        asset = await asset_service.create_asset(
-            session=session,
-            organization_id=config.organization_id,
-            source_type="sharepoint",
-            source_metadata=source_metadata,
-            original_filename=name,
-            raw_bucket=uploads_bucket,
-            raw_object_key=storage_key,
-            content_type=mime_type or "application/octet-stream",
-            file_size=actual_size,
-            file_hash=content_hash,
-            status="pending",  # Will trigger extraction
-        )
+        try:
+            asset = await asset_service.create_asset(
+                session=session,
+                organization_id=config.organization_id,
+                source_type="sharepoint",
+                source_metadata=source_metadata,
+                original_filename=name,
+                raw_bucket=uploads_bucket,
+                raw_object_key=storage_key,
+                content_type=mime_type or "application/octet-stream",
+                file_size=actual_size,
+                file_hash=content_hash,
+                status="pending",  # Will trigger extraction
+            )
+        except Exception as e:
+            # Handle duplicate asset (UNIQUE constraint on storage key)
+            if "UNIQUE constraint" in str(e) or "IntegrityError" in str(type(e).__name__):
+                await session.rollback()
+                logger.warning(
+                    f"Asset already exists for {name} at {storage_key}, recovering..."
+                )
+                # Find the existing asset and create sync document for it
+                existing_asset = await self._find_asset_by_storage_key(
+                    session=session,
+                    raw_bucket=uploads_bucket,
+                    raw_object_key=storage_key,
+                )
+                if existing_asset:
+                    await self.create_synced_document(
+                        session=session,
+                        sync_config_id=config.id,
+                        asset_id=existing_asset.id,
+                        sharepoint_item_id=item_id,
+                        sharepoint_drive_id=drive_id,
+                        sharepoint_path=folder_path,
+                        sharepoint_web_url=web_url,
+                        sharepoint_etag=etag,
+                        content_hash=existing_asset.file_hash,
+                        run_id=run_id,
+                    )
+                    await session.flush()
+                    return "unchanged_files"
+                else:
+                    # Couldn't find existing asset, re-raise
+                    raise
+            else:
+                raise
 
         # Create synced document record with extended metadata
         sync_metadata = {

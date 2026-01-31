@@ -104,14 +104,27 @@ class DatabaseService:
                     os.makedirs(db_dir, exist_ok=True)
                     self._logger.info(f"Created database directory: {db_dir}")
 
-            connect_args = {"check_same_thread": False}
+            connect_args = {"check_same_thread": False, "timeout": 30}
             self._engine = create_async_engine(
                 database_url,
                 connect_args=connect_args,
                 pool_pre_ping=True,
                 echo=settings.debug,
             )
-            self._logger.info("Using SQLite database (development mode)")
+
+            # Enable WAL mode for better concurrency with SQLite
+            # WAL allows concurrent reads during writes and reduces lock contention
+            from sqlalchemy import event
+
+            @event.listens_for(self._engine.sync_engine, "connect")
+            def set_sqlite_pragma(dbapi_connection, connection_record):
+                cursor = dbapi_connection.cursor()
+                cursor.execute("PRAGMA journal_mode=WAL")
+                cursor.execute("PRAGMA synchronous=NORMAL")
+                cursor.execute("PRAGMA busy_timeout=30000")
+                cursor.close()
+
+            self._logger.info("Using SQLite database with WAL mode (development mode)")
 
         # PostgreSQL configuration
         else:

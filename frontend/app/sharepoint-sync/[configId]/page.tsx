@@ -1679,6 +1679,12 @@ function SharePointSyncConfigContent() {
                   </p>
                 )}
               </div>
+              <Link
+                href={`/admin/queue/${currentRun.id}`}
+                className="flex-shrink-0 text-xs font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200 underline"
+              >
+                View Job →
+              </Link>
             </div>
           </div>
         )}
@@ -1723,12 +1729,20 @@ function SharePointSyncConfigContent() {
                     </p>
                   </div>
                 </div>
-                <div className="text-right">
+                <div className="text-right flex flex-col items-end gap-1">
                   <p className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">
                     {config.stats?.total_files > 0
                       ? Math.round(((config.stats?.processed_files || 0) / config.stats?.total_files) * 100)
                       : 0}%
                   </p>
+                  {currentRun && (
+                    <Link
+                      href={`/admin/queue/${currentRun.id}`}
+                      className="text-xs font-medium text-indigo-600 hover:text-indigo-800 dark:text-indigo-400 dark:hover:text-indigo-200 underline"
+                    >
+                      View Job →
+                    </Link>
+                  )}
                 </div>
               </div>
 
