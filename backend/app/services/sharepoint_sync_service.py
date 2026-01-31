@@ -884,6 +884,14 @@ class SharePointSyncService:
         exclude_patterns = sync_settings.get("exclude_patterns", [])
         max_file_size_mb = sync_settings.get("max_file_size_mb", 100)
 
+        # Folder/file selection filters
+        # selected_folders: List of folder paths - sync all contents recursively
+        # selected_files: List of {item_id, path, name} - sync only these specific files
+        selected_folders = sync_settings.get("selected_folders", [])
+        selected_files = sync_settings.get("selected_files", [])
+        selected_file_ids = {f.get("item_id") for f in selected_files if f.get("item_id")}
+        has_selection_filter = bool(selected_folders or selected_files)
+
         await run_log_service.log_event(
             session=session,
             run_id=run_id,
@@ -894,6 +902,8 @@ class SharePointSyncService:
                 "folder_url": config.folder_url,
                 "recursive": recursive,
                 "exclude_patterns": exclude_patterns,
+                "selected_folders": len(selected_folders),
+                "selected_files": len(selected_files),
             },
         )
         await session.commit()
@@ -1046,6 +1056,14 @@ class SharePointSyncService:
                 if item_id in current_item_ids:
                     logger.debug(f"Skipping duplicate item: {item.get('name')} (id: {item_id})")
                     continue
+
+                # Skip if item doesn't match folder/file selection (if any)
+                if has_selection_filter:
+                    if not self._item_matches_selection(
+                        item, selected_folders, selected_file_ids
+                    ):
+                        results["skipped_files"] += 1
+                        continue
 
                 results["total_files"] += 1
                 current_item_ids.add(item_id)
@@ -1400,6 +1418,52 @@ class SharePointSyncService:
                 return False
 
         return True
+
+    def _item_matches_selection(
+        self,
+        item: Dict[str, Any],
+        selected_folders: List[str],
+        selected_file_ids: set,
+    ) -> bool:
+        """
+        Check if an item matches the folder/file selection criteria.
+
+        An item matches if:
+        1. Its item_id is in selected_file_ids (explicitly selected file), OR
+        2. Its full path starts with any of the selected_folders (within a selected folder)
+
+        If no selections are provided, all items match (no filtering).
+
+        Args:
+            item: File item with 'id', 'name', 'folder' fields
+            selected_folders: List of folder paths to sync (all contents recursively)
+            selected_file_ids: Set of item IDs for individually selected files
+
+        Returns:
+            True if item should be synced, False otherwise
+        """
+        # Check if this specific file was selected
+        item_id = item.get("id")
+        if item_id and item_id in selected_file_ids:
+            return True
+
+        # Check if item is within any selected folder
+        if selected_folders:
+            item_folder = item.get("folder", "").strip("/")
+            item_name = item.get("name", "")
+            item_full_path = f"{item_folder}/{item_name}".strip("/") if item_folder else item_name
+
+            for folder in selected_folders:
+                folder = folder.strip("/")
+                # Item is within the folder if its path starts with the folder path
+                # e.g., folder="Documents/HR" matches "Documents/HR/file.pdf" and "Documents/HR/Subfolder/file.pdf"
+                if item_folder == folder or item_folder.startswith(f"{folder}/"):
+                    return True
+                # Also check if the folder itself matches (for items directly in the folder)
+                if item_full_path.startswith(f"{folder}/"):
+                    return True
+
+        return False
 
     async def _sync_single_file(
         self,

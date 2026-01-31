@@ -961,11 +961,45 @@ async def import_sharepoint_files(
 
         # Create new sync config if requested (and no existing config specified)
         elif request.create_sync_config and request.sync_config_name:
-            # Default to recursive=True for future syncs, with standard exclude patterns
+            # Extract folder and file selections from selected_items
+            # Folders: sync all contents recursively
+            # Files: sync only these specific files (even if parent folder not selected)
+            selected_folders = []
+            selected_files = []
+
+            for item in request.selected_items:
+                item_type = item.get("type", "file")
+                item_path = item.get("folder", "").strip("/")
+                item_name = item.get("name", "")
+
+                if item_type == "folder":
+                    # For folders, store the full path to match against during sync
+                    folder_path = f"{item_path}/{item_name}".strip("/") if item_path else item_name
+                    selected_folders.append(folder_path)
+                else:
+                    # For individual files, store item_id and path for precise matching
+                    selected_files.append({
+                        "item_id": item.get("id"),
+                        "path": f"{item_path}/{item_name}".strip("/") if item_path else item_name,
+                        "name": item_name,
+                    })
+
+            # Build sync config with selections
+            # If nothing selected, sync everything (recursive=True with no filters)
+            # If folders selected, only sync within those folders
+            # If files selected, also sync those specific files
             default_sync_config = {
                 "recursive": True,
                 "exclude_patterns": ["~$*", "*.tmp"],
             }
+
+            # Only add selection filters if something was explicitly selected
+            if selected_folders or selected_files:
+                if selected_folders:
+                    default_sync_config["selected_folders"] = selected_folders
+                if selected_files:
+                    default_sync_config["selected_files"] = selected_files
+
             try:
                 config = await sharepoint_sync_service.create_sync_config(
                     session=session,
