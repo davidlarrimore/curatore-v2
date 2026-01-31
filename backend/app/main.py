@@ -280,6 +280,16 @@ async def startup_event() -> None:
             else:
                 print("   ℹ️  Continuing without database (authentication disabled)")
 
+        # Initialize queue registry
+        try:
+            print("📋 Initializing queue registry...")
+            from .services.queue_registry import initialize_queue_registry
+            initialize_queue_registry()
+            print("   ✅ Queue registry initialized")
+        except Exception as e:
+            print(f"   ⚠️  Queue registry initialization warning: {e}")
+            # Non-fatal - registry will use defaults
+
         # Sync default connections from environment variables
         try:
             print("🔗 Syncing default connections from environment variables...")

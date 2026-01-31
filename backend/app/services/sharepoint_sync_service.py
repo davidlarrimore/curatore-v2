@@ -292,6 +292,9 @@ class SharePointSyncService:
         """
         Update sync config fields.
 
+        When is_active is set to False, this will also cancel any pending
+        extraction jobs for assets belonging to this sync config.
+
         Args:
             session: Database session
             sync_config_id: Sync config UUID
@@ -303,6 +306,13 @@ class SharePointSyncService:
         config = await self.get_sync_config(session, sync_config_id)
         if not config:
             return None
+
+        # Check if we're disabling the sync (is_active changing from True to False)
+        is_disabling = (
+            "is_active" in updates
+            and updates["is_active"] is False
+            and config.is_active is True
+        )
 
         # Allowed update fields
         allowed_fields = {
@@ -317,12 +327,88 @@ class SharePointSyncService:
 
         config.updated_at = datetime.utcnow()
 
+        # If disabling, cancel pending extractions for this sync config's assets
+        if is_disabling:
+            cancelled_count = await self._cancel_pending_extractions_for_sync_config(
+                session, sync_config_id, config.organization_id
+            )
+            if cancelled_count > 0:
+                logger.info(
+                    f"Cancelled {cancelled_count} pending extraction(s) for disabled sync config {sync_config_id}"
+                )
+
         await session.commit()
         await session.refresh(config)
 
         logger.info(f"Updated sync config {sync_config_id}: {list(updates.keys())}")
 
         return config
+
+    async def _cancel_pending_extractions_for_sync_config(
+        self,
+        session: AsyncSession,
+        sync_config_id: UUID,
+        organization_id: UUID,
+    ) -> int:
+        """
+        Cancel all pending/submitted/running extraction jobs for assets in a sync config.
+
+        This is called when a sync config is disabled to prevent wasted processing.
+
+        Args:
+            session: Database session
+            sync_config_id: Sync config UUID
+            organization_id: Organization UUID
+
+        Returns:
+            Number of extraction runs cancelled
+        """
+        from ..celery_app import app as celery_app
+
+        # Find all asset IDs linked to this sync config
+        asset_query = select(SharePointSyncedDocument.asset_id).where(
+            SharePointSyncedDocument.sync_config_id == sync_config_id
+        )
+        asset_result = await session.execute(asset_query)
+        asset_ids = [str(row[0]) for row in asset_result.fetchall()]
+
+        if not asset_ids:
+            return 0
+
+        # Find all pending/submitted/running extraction runs for these assets
+        # Run.input_asset_ids is a JSON array, so we need to check if asset_id is in it
+        runs_query = select(Run).where(
+            and_(
+                Run.organization_id == organization_id,
+                Run.run_type == "extraction",
+                Run.status.in_(["pending", "submitted", "running"]),
+            )
+        )
+        runs_result = await session.execute(runs_query)
+        runs = runs_result.scalars().all()
+
+        cancelled_count = 0
+        for run in runs:
+            # Check if any of the run's input assets belong to this sync config
+            run_asset_ids = run.input_asset_ids or []
+            if any(asset_id in asset_ids for asset_id in run_asset_ids):
+                # Revoke Celery task if submitted
+                if run.celery_task_id and run.status in ("submitted", "running"):
+                    try:
+                        celery_app.control.revoke(run.celery_task_id, terminate=True)
+                        logger.info(f"Revoked Celery task {run.celery_task_id} for run {run.id}")
+                    except Exception as e:
+                        logger.warning(f"Failed to revoke Celery task {run.celery_task_id}: {e}")
+
+                # Update run status
+                run.status = "cancelled"
+                run.completed_at = datetime.utcnow()
+                run.error_message = "Cancelled: SharePoint sync disabled"
+                cancelled_count += 1
+
+                logger.info(f"Cancelled extraction run {run.id} (sync config disabled)")
+
+        return cancelled_count
 
     async def archive_sync_config_with_opensearch_cleanup(
         self,
@@ -353,8 +439,16 @@ class SharePointSyncService:
 
         stats = {
             "opensearch_removed": 0,
+            "extractions_cancelled": 0,
             "errors": [],
         }
+
+        # Cancel any pending extraction jobs for this sync config's assets
+        if config.is_active:
+            cancelled_count = await self._cancel_pending_extractions_for_sync_config(
+                session, sync_config_id, organization_id
+            )
+            stats["extractions_cancelled"] = cancelled_count
 
         # Get all synced documents
         docs_result = await session.execute(
@@ -382,7 +476,8 @@ class SharePointSyncService:
 
         logger.info(
             f"Archived sync config {sync_config_id}: "
-            f"opensearch_removed={stats['opensearch_removed']}"
+            f"opensearch_removed={stats['opensearch_removed']}, "
+            f"extractions_cancelled={stats['extractions_cancelled']}"
         )
 
         return stats
@@ -429,10 +524,17 @@ class SharePointSyncService:
             "files_deleted": 0,
             "documents_deleted": 0,
             "runs_deleted": 0,
+            "extractions_cancelled": 0,
             "opensearch_removed": 0,
             "storage_freed_bytes": 0,
             "errors": [],
         }
+
+        # 0. Cancel any pending extraction jobs before deleting
+        cancelled_count = await self._cancel_pending_extractions_for_sync_config(
+            session, sync_config_id, organization_id
+        )
+        stats["extractions_cancelled"] = cancelled_count
 
         # 1. Get all synced documents
         docs_result = await session.execute(
@@ -867,6 +969,26 @@ class SharePointSyncService:
             now = datetime.utcnow()
             if (now - last_log_time).total_seconds() >= log_interval_seconds:
                 last_log_time = now
+
+                # Update Run.progress with current state
+                await run_service.update_run_progress(
+                    session=session,
+                    run_id=run_id,
+                    current=processed_files,
+                    total=None,  # Unknown total until scan completes
+                    unit="files",
+                    phase="scanning_and_syncing",
+                    details={
+                        "folders_scanned": folders_scanned,
+                        "folders_pending": folders_pending,
+                        "new_files": results["new_files"],
+                        "updated_files": results["updated_files"],
+                        "unchanged_files": results["unchanged_files"],
+                        "skipped_files": results["skipped_files"],
+                        "failed_files": results["failed_files"],
+                    },
+                )
+
                 await run_log_service.log_event(
                     session=session,
                     run_id=run_id,
@@ -1016,6 +1138,24 @@ class SharePointSyncService:
                 "failed": results["failed_files"],
             },
         )
+
+        # Update Run.progress with scan completion
+        await run_service.update_run_progress(
+            session=session,
+            run_id=run_id,
+            current=processed_files,
+            total=results["total_files"],
+            unit="files",
+            phase="scan_complete",
+            details={
+                "folders_scanned": folders_scanned,
+                "new_files": results["new_files"],
+                "updated_files": results["updated_files"],
+                "unchanged_files": results["unchanged_files"],
+                "skipped_files": results["skipped_files"],
+                "failed_files": results["failed_files"],
+            },
+        )
         await session.commit()
 
         # =================================================================
@@ -1028,6 +1168,23 @@ class SharePointSyncService:
             event_type="phase",
             message="Phase 3: Detecting deleted files",
             context={"phase": "detecting_deletions"},
+        )
+
+        # Update Run.progress for deletion detection phase
+        await run_service.update_run_progress(
+            session=session,
+            run_id=run_id,
+            current=processed_files,
+            total=results["total_files"],
+            unit="files",
+            phase="detecting_deletions",
+            details={
+                "folders_scanned": folders_scanned,
+                "new_files": results["new_files"],
+                "updated_files": results["updated_files"],
+                "unchanged_files": results["unchanged_files"],
+                "failed_files": results["failed_files"],
+            },
         )
         await session.commit()
 
@@ -1075,6 +1232,25 @@ class SharePointSyncService:
             message="Phase 4: Finalizing sync",
             context={"phase": "completing"},
         )
+
+        # Update Run.progress with final state
+        await run_service.update_run_progress(
+            session=session,
+            run_id=run_id,
+            current=processed_files,
+            total=results["total_files"],
+            unit="files",
+            phase="completing",
+            details={
+                "folders_scanned": folders_scanned,
+                "new_files": results["new_files"],
+                "updated_files": results["updated_files"],
+                "unchanged_files": results["unchanged_files"],
+                "skipped_files": results["skipped_files"],
+                "failed_files": results["failed_files"],
+                "deleted_detected": deleted_count,
+            },
+        )
         await session.commit()
 
         # Update final sync config stats and tracking
@@ -1097,6 +1273,25 @@ class SharePointSyncService:
         }
 
         await session.commit()
+
+        # Complete the run with results summary
+        results_summary = {
+            "total_files": results["total_files"],
+            "new_files": results["new_files"],
+            "updated_files": results["updated_files"],
+            "unchanged_files": results["unchanged_files"],
+            "skipped_files": results["skipped_files"],
+            "failed_files": results["failed_files"],
+            "deleted_detected": deleted_count,
+            "folders_scanned": folders_scanned,
+            "sync_status": "success" if results["failed_files"] == 0 else "partial",
+            "errors": results.get("errors", []),
+        }
+        await run_service.complete_run(
+            session=session,
+            run_id=run_id,
+            results_summary=results_summary,
+        )
 
         # Log final summary
         status_msg = "completed successfully" if results["failed_files"] == 0 else "completed with errors"
@@ -1225,7 +1420,7 @@ class SharePointSyncService:
         created_by = item.get("created_by")
         modified_by = item.get("last_modified_by")
 
-        # Check if we already have this file
+        # Check if we already have this file via SharePointSyncedDocument
         existing_doc = await self.get_synced_document(
             session, config.id, item_id
         )
@@ -1250,14 +1445,77 @@ class SharePointSyncService:
                 existing_doc=existing_doc,
                 run_id=run_id,
             )
-        else:
-            # New file - download and create asset
-            return await self._download_and_create_asset(
+
+        # No SharePointSyncedDocument found - check for orphan asset by sharepoint_item_id
+        # This handles cases where asset was created but sync tracking record wasn't
+        orphan_asset = await self._find_asset_by_sharepoint_item_id(
+            session=session,
+            organization_id=config.organization_id,
+            sharepoint_item_id=item_id,
+        )
+
+        if orphan_asset:
+            # Found orphan asset - create missing sync tracking record
+            logger.info(
+                f"Found orphan asset {orphan_asset.id} for SharePoint item {item_id}, "
+                f"creating sync tracking record"
+            )
+            drive_id = item.get("drive_id") or config.folder_drive_id
+            await self.create_synced_document(
                 session=session,
-                config=config,
-                item=item,
+                sync_config_id=config.id,
+                asset_id=orphan_asset.id,
+                sharepoint_item_id=item_id,
+                sharepoint_drive_id=drive_id,
+                sharepoint_path=folder_path,
+                sharepoint_web_url=web_url,
+                sharepoint_etag=etag,
+                content_hash=orphan_asset.file_hash,
                 run_id=run_id,
             )
+            await session.flush()
+            return "unchanged_files"
+
+        # Truly new file - download and create asset
+        return await self._download_and_create_asset(
+            session=session,
+            config=config,
+            item=item,
+            run_id=run_id,
+        )
+
+    async def _find_asset_by_sharepoint_item_id(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        sharepoint_item_id: str,
+    ) -> Optional[Asset]:
+        """
+        Find an existing asset by SharePoint item ID in source_metadata.
+
+        This is a fallback lookup for cases where the SharePointSyncedDocument
+        record is missing but an asset with this SharePoint item exists.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            sharepoint_item_id: Microsoft Graph item ID
+
+        Returns:
+            Asset if found, None otherwise
+        """
+        # Query assets by source_metadata JSON field
+        # Use json_extract for SQLite compatibility
+        result = await session.execute(
+            select(Asset).where(
+                and_(
+                    Asset.organization_id == organization_id,
+                    Asset.source_type == "sharepoint",
+                    func.json_extract(Asset.source_metadata, "$.sharepoint_item_id") == sharepoint_item_id,
+                )
+            ).limit(1)
+        )
+        return result.scalar_one_or_none()
 
     async def _download_and_create_asset(
         self,
@@ -1514,6 +1772,8 @@ class SharePointSyncService:
 
         logger.info(f"Created asset {asset.id} from SharePoint file: {name}")
 
+        # Note: Extraction is automatically queued by asset_service.create_asset()
+
         return "new_files"
 
     async def _update_existing_file(
@@ -1709,6 +1969,18 @@ class SharePointSyncService:
         await session.flush()
 
         logger.info(f"Updated asset {asset.id} from SharePoint file: {name}")
+
+        # Queue extraction for the updated asset (centralized via extraction_queue_service)
+        try:
+            from .extraction_queue_service import extraction_queue_service
+            await extraction_queue_service.queue_extraction_for_asset(
+                session=session,
+                asset_id=asset.id,
+            )
+            logger.debug(f"Queued extraction for updated asset {asset.id}")
+        except Exception as e:
+            # Safety net task will catch this if queueing fails
+            logger.warning(f"Failed to queue extraction for updated asset {asset.id}: {e}")
 
         return "updated_files"
 

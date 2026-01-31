@@ -32,11 +32,21 @@ app = Celery(
     include=["app.tasks"],
 )
 
-# Define task queues with priority support
-# Workers will consume queues in order: priority first, then normal, then maintenance
+# Define task queues - each job type has its own queue for isolation
+#
+# Queue Architecture:
+# - processing_priority: High priority tasks (user-boosted extractions)
+# - extraction: Document extraction tasks
+# - sam: SAM.gov API operations
+# - scrape: Web scraping and crawling
+# - sharepoint: SharePoint sync operations
+# - maintenance: Scheduled tasks, cleanup, recovery
 app.conf.task_queues = (
     Queue("processing_priority", routing_key="processing_priority"),
-    Queue("processing", routing_key="processing"),
+    Queue("extraction", routing_key="extraction"),
+    Queue("sam", routing_key="sam"),
+    Queue("scrape", routing_key="scrape"),
+    Queue("sharepoint", routing_key="sharepoint"),
     Queue("maintenance", routing_key="maintenance"),
 )
 
@@ -48,24 +58,54 @@ app.conf.update(
     task_soft_time_limit=int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT", "600")),
     task_time_limit=int(os.getenv("CELERY_TASK_TIME_LIMIT", "900")),
     result_expires=int(os.getenv("CELERY_RESULT_EXPIRES", "259200")),  # 3 days
-    task_default_queue=os.getenv("CELERY_DEFAULT_QUEUE", "processing"),
-    # Route maintenance/scheduled tasks to separate 'maintenance' queue
-    # This prevents them from being blocked by slow extraction tasks
+    task_default_queue=os.getenv("CELERY_DEFAULT_QUEUE", "extraction"),
+    # Route tasks to dedicated queues for job-type isolation
+    # This prevents one job type from blocking others
     task_routes={
+        # =================================================================
+        # EXTRACTION QUEUE - Document conversion tasks
+        # =================================================================
+        "app.tasks.execute_extraction_task": {"queue": "extraction"},
+        "app.tasks.enhance_extraction_task": {"queue": "extraction"},
+
+        # =================================================================
+        # SAM QUEUE - SAM.gov API operations
+        # =================================================================
+        "app.tasks.sam_pull_task": {"queue": "sam"},
+        "app.tasks.sam_auto_summarize_task": {"queue": "sam"},
+
+        # =================================================================
+        # SCRAPE QUEUE - Web scraping tasks
+        # =================================================================
+        "app.tasks.execute_scrape_task": {"queue": "scrape"},
+
+        # =================================================================
+        # SHAREPOINT QUEUE - SharePoint sync tasks
+        # =================================================================
+        "app.tasks.sharepoint_sync_task": {"queue": "sharepoint"},
+        "app.tasks.sharepoint_import_task": {"queue": "sharepoint"},
+        "app.tasks.async_delete_sync_config_task": {"queue": "maintenance"},
+
+        # =================================================================
+        # MAINTENANCE QUEUE - System tasks, queue management, cleanup
+        # =================================================================
         # Scheduled task system
         "app.tasks.check_scheduled_tasks": {"queue": "maintenance"},
         "app.tasks.execute_scheduled_task_async": {"queue": "maintenance"},
         # Recovery and maintenance
         "app.tasks.recover_orphaned_extractions": {"queue": "maintenance"},
-        # SAM.gov queue processing (lightweight, shouldn't block on extractions)
+        # Queue processors (lightweight, run frequently)
+        "app.tasks.process_extraction_queue_task": {"queue": "maintenance"},
+        "app.tasks.check_extraction_timeouts_task": {"queue": "maintenance"},
         "app.tasks.sam_process_queued_requests_task": {"queue": "maintenance"},
-        # SAM summarization uses priority queue
-        "app.tasks.sam_auto_summarize_task": {"queue": "processing_priority"},
-        # Phase 2: Tiered Extraction - enhancement runs in background at lower priority
-        # Basic extractions go to default 'processing' queue
-        # Enhancements go to 'maintenance' queue (background, non-blocking)
-        "app.tasks.enhance_extraction_task": {"queue": "maintenance"},
-        # All other extraction/indexing tasks stay on default 'processing' queue
+        # Cleanup tasks
+        "app.tasks.cleanup_expired_files_task": {"queue": "maintenance"},
+
+        # =================================================================
+        # PRIORITY QUEUE - User-boosted tasks get priority processing
+        # =================================================================
+        # Priority extractions are routed here via queue_priority field
+        # (handled by extraction_queue_service.submit_to_celery)
     },
 )
 
@@ -100,7 +140,7 @@ beat_schedule = {
     "cleanup-expired-files": {
         "task": "app.tasks.cleanup_expired_files_task",
         "schedule": cleanup_schedule,
-        "options": {"queue": "processing"},
+        "options": {"queue": "maintenance"},
     },
 }
 
@@ -142,6 +182,30 @@ if extraction_recovery_enabled:
         "options": {"queue": "maintenance"},
     }
 
+# Add extraction queue processing task
+# This task submits pending extractions to Celery based on available capacity
+extraction_queue_enabled = _bool(os.getenv("EXTRACTION_QUEUE_ENABLED", "true"), True)
+extraction_queue_interval = int(os.getenv("EXTRACTION_SUBMISSION_INTERVAL", "5"))  # 5 seconds
+
+if extraction_queue_enabled:
+    beat_schedule["process-extraction-queue"] = {
+        "task": "app.tasks.process_extraction_queue_task",
+        "schedule": extraction_queue_interval,  # Every N seconds (default: 5)
+        "options": {"queue": "maintenance"},
+    }
+
+# Add extraction timeout checker task
+# This task marks extractions that have exceeded their timeout as 'timed_out'
+extraction_timeout_check_enabled = _bool(os.getenv("EXTRACTION_TIMEOUT_CHECK_ENABLED", "true"), True)
+extraction_timeout_check_interval = int(os.getenv("EXTRACTION_TIMEOUT_CHECK_INTERVAL", "60"))  # 1 minute
+
+if extraction_timeout_check_enabled:
+    beat_schedule["check-extraction-timeouts"] = {
+        "task": "app.tasks.check_extraction_timeouts_task",
+        "schedule": extraction_timeout_check_interval,  # Every N seconds (default: 60)
+        "options": {"queue": "maintenance"},
+    }
+
 app.conf.beat_schedule = beat_schedule
 
 app.conf.timezone = "UTC"
@@ -163,12 +227,22 @@ _recovery_logger = logging.getLogger("curatore.celery.recovery")
 @worker_ready.connect
 def on_worker_ready(sender, **kwargs):
     """
-    Handle worker startup - trigger recovery of orphaned extractions.
+    Handle worker startup - initialize services and trigger recovery.
 
     This runs when a Celery worker finishes initialization and is ready
-    to process tasks. We delay the recovery task slightly to ensure
-    all services are fully initialized.
+    to process tasks. We:
+    1. Initialize the queue registry
+    2. Schedule orphaned extraction recovery
     """
+    # Initialize queue registry
+    try:
+        from .services.queue_registry import initialize_queue_registry
+        initialize_queue_registry()
+        _recovery_logger.info("Queue registry initialized")
+    except Exception as e:
+        _recovery_logger.warning(f"Failed to initialize queue registry: {e}")
+
+    # Schedule orphaned extraction recovery
     recovery_enabled = _bool(os.getenv("CELERY_STARTUP_RECOVERY_ENABLED", "true"), True)
 
     if not recovery_enabled:

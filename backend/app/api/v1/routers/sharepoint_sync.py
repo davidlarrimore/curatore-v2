@@ -29,7 +29,7 @@ from app.dependencies import get_current_user, require_org_admin
 from app.services.database_service import database_service
 from app.services.sharepoint_sync_service import sharepoint_sync_service
 from app.services.run_service import run_service
-from app.tasks import sharepoint_sync_task, sharepoint_import_task
+from app.tasks import sharepoint_sync_task, sharepoint_import_task, async_delete_sync_config_task
 from ..models import (
     SharePointSyncConfigResponse,
     SharePointSyncConfigCreateRequest,
@@ -486,20 +486,25 @@ async def delete_sync_config(
     current_user: User = Depends(require_org_admin),
 ):
     """
-    Permanently delete a SharePoint sync config with full cleanup.
+    Initiate async deletion of a SharePoint sync config.
 
-    This performs a complete removal including:
-    - Soft deletes all associated assets
-    - Removes documents from OpenSearch index
-    - Deletes synced document records
-    - Deletes related worker runs
-    - Deletes the sync config itself
+    This endpoint returns immediately with a run_id that tracks the deletion progress.
+    The actual cleanup happens asynchronously in a background task, performing:
+    - Cancel pending extraction jobs
+    - Delete files from MinIO storage
+    - Hard delete asset records
+    - Remove documents from OpenSearch
+    - Delete synced document records
+    - Delete related runs
+    - Delete the sync config itself
 
     The sync config must be archived before it can be deleted.
     Use POST /configs/{id}/archive first.
 
     Returns:
-        Cleanup statistics including counts of deleted items
+        message: Status message
+        run_id: UUID of the run tracking the deletion
+        status: "deleting"
     """
     async with database_service.get_session() as session:
         config = await sharepoint_sync_service.get_sync_config(session, config_id)
@@ -509,6 +514,13 @@ async def delete_sync_config(
 
         if config.organization_id != current_user.organization_id:
             raise HTTPException(status_code=403, detail="Access denied")
+
+        # Check if deletion is already in progress
+        if config.status == "deleting":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Deletion already in progress for this sync config"
+            )
 
         # Must be archived before deleting
         if config.status != "archived":
@@ -525,20 +537,41 @@ async def delete_sync_config(
                 detail="Cannot delete while sync is in progress. Wait for sync to complete."
             )
 
-        stats = await sharepoint_sync_service.delete_sync_config_with_cleanup(
+        # Set status to deleting
+        config.status = "deleting"
+
+        # Create Run record for tracking
+        run = await run_service.create_run(
             session=session,
-            sync_config_id=config_id,
             organization_id=current_user.organization_id,
+            run_type="sharepoint_delete",
+            origin="user",
+            config={
+                "sync_config_id": str(config_id),
+                "config_name": config.name,
+            },
+            created_by=current_user.id,
+        )
+
+        await session.commit()
+
+        # Queue Celery task
+        async_delete_sync_config_task.delay(
+            sync_config_id=str(config_id),
+            organization_id=str(current_user.organization_id),
+            run_id=str(run.id),
+            config_name=config.name,
         )
 
         logger.info(
-            f"Deleted SharePoint sync config {config_id} by user {current_user.id}: "
-            f"assets={stats.get('assets_deleted', 0)}, docs={stats.get('documents_deleted', 0)}"
+            f"Queued async deletion for SharePoint sync config {config_id} by user {current_user.id}, "
+            f"run_id={run.id}"
         )
 
         return {
-            "message": "Sync configuration deleted successfully",
-            "cleanup_stats": stats,
+            "message": "Deletion initiated",
+            "run_id": str(run.id),
+            "status": "deleting",
         }
 
 

@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
+import { useDeletionJobs } from '@/lib/deletion-jobs-context'
 import { sharepointSyncApi, SharePointSyncConfig } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
@@ -25,6 +26,7 @@ import {
   Loader2,
   X,
   Info,
+  Trash2,
 } from 'lucide-react'
 
 // Toast notification type
@@ -46,6 +48,7 @@ export default function SharePointSyncPage() {
 function SharePointSyncContent() {
   const router = useRouter()
   const { token } = useAuth()
+  const { isDeleting } = useDeletionJobs()
 
   const [configs, setConfigs] = useState<SharePointSyncConfig[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -184,6 +187,16 @@ function SharePointSyncContent() {
   }
 
   const getStatusBadge = (config: SharePointSyncConfig) => {
+    // Check if this config is being deleted (from context or DB status)
+    if (config.status === 'deleting' || isDeleting(config.id)) {
+      return (
+        <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/30 dark:text-red-400">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          Deleting...
+        </span>
+      )
+    }
+
     if (config.is_syncing || syncingConfigs.has(config.id)) {
       return (
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
@@ -406,7 +419,7 @@ function SharePointSyncContent() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
-                      {config.status === 'active' && config.is_active && (
+                      {config.status === 'active' && config.is_active && !isDeleting(config.id) && (
                         <Button
                           variant="secondary"
                           size="sm"
@@ -422,12 +435,14 @@ function SharePointSyncContent() {
                           {config.is_syncing || syncingConfigs.has(config.id) ? 'Syncing...' : 'Sync Now'}
                         </Button>
                       )}
-                      <Link href={`/sharepoint-sync/${config.id}`}>
-                        <Button variant="ghost" size="sm" className="gap-1.5">
-                          View
-                          <ArrowRight className="w-3.5 h-3.5" />
-                        </Button>
-                      </Link>
+                      {config.status !== 'deleting' && !isDeleting(config.id) && (
+                        <Link href={`/sharepoint-sync/${config.id}`}>
+                          <Button variant="ghost" size="sm" className="gap-1.5">
+                            View
+                            <ArrowRight className="w-3.5 h-3.5" />
+                          </Button>
+                        </Link>
+                      )}
                     </div>
                   </div>
 

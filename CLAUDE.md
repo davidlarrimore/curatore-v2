@@ -17,6 +17,14 @@ Curatore v2 is a document processing and curation platform that converts documen
 2. **Assets are first-class** - Documents tracked with version history and provenance
 3. **Run-based execution** - All processing tracked via Run records with structured logs
 4. **Database is source of truth** - Object store contains only bytes
+5. **Queue isolation** - Each job type has its own Celery queue to prevent blocking
+
+### Queue Architecture
+All background jobs are managed through the Queue Registry system:
+- **Queue types defined in code** - See `backend/app/services/queue_registry.py`
+- **Celery queues per job type** - Extraction, SAM, Scrape, SharePoint, Maintenance
+- **Job Manager UI** - Unified view at `/admin/queue`
+- **Configurable throttling** - Set `max_concurrent` per queue in `config.yml`
 
 ### Key Data Models
 | Model | Purpose |
@@ -105,6 +113,8 @@ playwright-service/         # Browser rendering microservice
 | `asset_service.py` | Asset CRUD and version management |
 | `run_service.py` | Run execution tracking |
 | `extraction_orchestrator.py` | Extraction coordination |
+| `extraction_queue_service.py` | Extraction queue throttling and management |
+| `queue_registry.py` | Queue type definitions and capabilities |
 | `opensearch_service.py` | Full-text search with facets |
 | `minio_service.py` | Object storage operations |
 | `sam_service.py` | SAM.gov API integration |
@@ -119,6 +129,7 @@ playwright-service/         # Browser rendering microservice
 |--------|-----------|
 | `assets.py` | Asset CRUD, versions, re-extraction |
 | `runs.py` | Run status, logs, retry |
+| `queue_admin.py` | Job Manager: queue registry, active jobs, cancel/boost |
 | `search.py` | Full-text search with facets |
 | `sam.py` | SAM.gov searches, solicitations, notices |
 | `scrape.py` | Web scraping collections |
@@ -179,6 +190,163 @@ curatore-temp/{org_id}/                  # Temporary files
 1. Add handler to `backend/app/services/maintenance_handlers.py`
 2. Register in `MAINTENANCE_HANDLERS` dict
 3. Seed task via `python -m app.commands.seed --seed-scheduled-tasks`
+
+### New Queue Type (for background job processing)
+
+The Queue Registry (`backend/app/services/queue_registry.py`) defines all job queue types programmatically. Each queue type has its own Celery queue for isolation and configurable capabilities.
+
+**Existing Queue Types:**
+| Queue | Run Type | Celery Queue | Capabilities |
+|-------|----------|--------------|--------------|
+| Extraction | `extraction` | `extraction` | cancel, boost, retry |
+| SAM.gov | `sam_pull` | `sam` | - |
+| Web Scrape | `scrape` | `scrape` | - |
+| SharePoint | `sharepoint_sync` | `sharepoint` | cancel |
+| Maintenance | `system_maintenance` | `maintenance` | - |
+
+**To add a new queue type (e.g., Google Drive sync):**
+
+1. **Define the queue class** in `backend/app/services/queue_registry.py`:
+```python
+class GoogleDriveQueue(QueueDefinition):
+    """Google Drive document synchronization queue."""
+
+    def __init__(self):
+        super().__init__(
+            queue_type="google_drive",           # Unique identifier
+            celery_queue="google_drive",         # Celery queue name
+            run_type_aliases=["gdrive_sync"],    # Alternative run_type values
+            can_cancel=True,                     # Allow job cancellation
+            can_boost=False,                     # No priority boosting
+            can_retry=False,                     # No automatic retry
+            label="Google Drive",                # UI display name
+            description="Google Drive sync",     # UI description
+            icon="cloud",                        # Lucide icon name
+            color="blue",                        # Tailwind color
+            default_max_concurrent=None,         # None = unlimited
+            default_timeout_seconds=1800,        # 30 minutes
+        )
+```
+
+2. **Register the queue** in `_register_defaults()`:
+```python
+def _register_defaults(self):
+    self.register(ExtractionQueue())
+    self.register(SamQueue())
+    # ... existing queues ...
+    self.register(GoogleDriveQueue())  # Add here
+```
+
+3. **Add Celery queue** in `backend/app/celery_app.py`:
+```python
+app.conf.task_queues = (
+    # ... existing queues ...
+    Queue("google_drive", routing_key="google_drive"),
+)
+```
+
+4. **Route tasks** in `celery_app.py`:
+```python
+task_routes = {
+    # ... existing routes ...
+    "app.tasks.google_drive_sync_task": {"queue": "google_drive"},
+}
+```
+
+5. **Update docker-compose.yml** worker command to consume the new queue:
+```yaml
+celery -A app.celery_app worker -Q processing_priority,extraction,sam,scrape,sharepoint,google_drive,maintenance
+```
+
+6. **Create the task** in `backend/app/tasks.py`:
+```python
+@celery_app.task(name="app.tasks.google_drive_sync_task")
+def google_drive_sync_task(run_id: str, ...):
+    # Task implementation
+    pass
+```
+
+The Job Manager UI (`/admin/queue`) will automatically display the new queue type with its configured capabilities.
+
+**Runtime Configuration (optional):**
+Override queue parameters in `config.yml`:
+```yaml
+queues:
+  google_drive:
+    max_concurrent: 2        # Limit concurrent syncs
+    timeout_seconds: 3600    # Override timeout
+```
+
+### Async Deletion Pattern
+
+For resource-intensive deletion operations that may take time (e.g., deleting SharePoint sync configs with many files), use the async deletion pattern:
+
+**Architecture:**
+```
+User clicks Delete → Confirmation Dialog → POST /delete
+                                                ↓
+                                    ┌─────────────────────┐
+                                    │ Set status=deleting │
+                                    │ Create Run record   │
+                                    │ Queue Celery task   │
+                                    │ Return run_id       │
+                                    └─────────────────────┘
+                                                ↓
+                                    ┌─────────────────────┐
+                                    │ Redirect to list    │
+                                    │ Show "Deleting..."  │
+                                    └─────────────────────┘
+                                                ↓
+                                    ┌─────────────────────┐
+                                    │ DeletionJobsProvider│
+                                    │ polls Run status    │
+                                    │ Shows toast on done │
+                                    └─────────────────────┘
+```
+
+**Backend Implementation:**
+1. **Endpoint** returns immediately with `run_id`:
+```python
+@router.delete("/configs/{config_id}")
+async def delete_config(...):
+    config.status = "deleting"
+    run = await run_service.create_run(run_type="xxx_delete", ...)
+    my_delete_task.delay(config_id, run_id)
+    return {"run_id": str(run.id), "status": "deleting"}
+```
+
+2. **Celery task** performs cleanup with progress tracking:
+```python
+@shared_task
+def my_delete_task(config_id, run_id):
+    # Update run status, log progress, perform cleanup
+    # Mark run completed/failed when done
+```
+
+**Frontend Implementation:**
+1. Add `DeletionJobsProvider` to app layout (already done)
+2. Use `useDeletionJobs()` hook in components:
+```tsx
+const { addJob, isDeleting } = useDeletionJobs()
+
+const handleDelete = async () => {
+  const { run_id } = await api.deleteConfig(id)
+  addJob({ runId: run_id, configId: id, configName: name, configType: 'sharepoint' })
+  router.push('/list')  // Redirect immediately
+}
+```
+
+3. Show "Deleting..." state in list views:
+```tsx
+{config.status === 'deleting' || isDeleting(config.id) ? (
+  <Badge>Deleting...</Badge>
+) : ...}
+```
+
+**Key Files:**
+- `backend/app/tasks.py` - `async_delete_sync_config_task`
+- `frontend/lib/deletion-jobs-context.tsx` - Global job tracking
+- `frontend/components/ui/ConfirmDeleteDialog.tsx` - Reusable dialog
 
 ---
 
@@ -262,6 +430,13 @@ SAM.gov:
 Web Scraping:
   POST   /api/v1/scrape/collections        # Create collection
   POST   /api/v1/scrape/collections/{id}/crawl  # Start crawl
+
+Job Manager (Queue Admin):
+  GET    /api/v1/queue/registry               # Get queue type definitions
+  GET    /api/v1/queue/jobs                   # List all active jobs
+  GET    /api/v1/queue/jobs?run_type=X        # Filter by job type
+  POST   /api/v1/queue/jobs/{run_id}/cancel   # Cancel a job
+  GET    /api/v1/queue/unified                # Unified queue statistics
 
 System:
   GET    /api/v1/system/health/comprehensive    # Full health check

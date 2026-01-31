@@ -6,7 +6,10 @@ import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { sharepointSyncApi, SharePointSyncConfig, SharePointSyncedDocument } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
+import { ConfirmDeleteDialog } from '@/components/ui/ConfirmDeleteDialog'
+import { useDeletionJobs } from '@/lib/deletion-jobs-context'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
+import toast from 'react-hot-toast'
 import {
   FolderSync,
   ArrowLeft,
@@ -869,6 +872,7 @@ function SharePointSyncConfigContent() {
   const params = useParams()
   const configId = params.configId as string
   const { token } = useAuth()
+  const { addJob } = useDeletionJobs()
 
   const [config, setConfig] = useState<SharePointSyncConfig | null>(null)
   const [documents, setDocuments] = useState<SharePointSyncedDocument[]>([])
@@ -881,6 +885,7 @@ function SharePointSyncConfigContent() {
   const [toasts, setToasts] = useState<Toast[]>([])
   const [currentRun, setCurrentRun] = useState<SyncRun | null>(null)
   const [showEditModal, setShowEditModal] = useState(false)
+  const [showDeleteDialog, setShowDeleteDialog] = useState(false)
 
   const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -1071,6 +1076,13 @@ function SharePointSyncConfigContent() {
     }
   }, [config?.is_syncing, startPolling])
 
+  // Redirect if config is being deleted
+  useEffect(() => {
+    if (config?.status === 'deleting') {
+      router.push('/sharepoint-sync')
+    }
+  }, [config?.status, router])
+
   const handleSync = async (fullSync: boolean = false) => {
     if (!token || !configId || isSyncing) return
 
@@ -1183,29 +1195,40 @@ function SharePointSyncConfigContent() {
       return
     }
 
-    const syncedCount = config.stats?.synced_files || config.stats?.storage?.synced_count || 0
-    const storageBytes = config.stats?.storage?.total_bytes || 0
-    const storageMB = (storageBytes / (1024 * 1024)).toFixed(1)
+    // Show confirmation dialog
+    setShowDeleteDialog(true)
+  }
 
-    const message = `This will PERMANENTLY DELETE this sync configuration and perform the following cleanup:
-
-- Delete ${syncedCount} synced assets
-- Remove ${storageMB} MB from storage
-- Remove documents from search index
-- Delete all sync history/runs
-
-This action cannot be undone. Are you sure?`
-
-    if (!confirm(message)) {
-      return
-    }
+  const confirmDelete = async () => {
+    if (!token || !configId || !config) return
 
     try {
-      await sharepointSyncApi.deleteConfig(token, configId)
-      addToast('success', 'Sync configuration deleted successfully')
+      const response = await sharepointSyncApi.deleteConfig(token, configId)
+
+      // Add to global deletion tracking
+      addJob({
+        runId: response.run_id,
+        configId: configId,
+        configName: config.name,
+        configType: 'sharepoint',
+      })
+
+      // Close dialog
+      setShowDeleteDialog(false)
+
+      // Show immediate feedback
+      toast.success('Deletion started...')
+
+      // Redirect to list page
       router.push('/sharepoint-sync')
     } catch (err: any) {
-      addToast('error', `Failed to delete: ${err.message}`)
+      if (err?.status === 409) {
+        addToast('warning', 'Deletion is already in progress')
+        setShowDeleteDialog(false)
+        router.push('/sharepoint-sync')
+      } else {
+        addToast('error', `Failed to delete: ${err.message}`)
+      }
     }
   }
 
@@ -2162,6 +2185,25 @@ This action cannot be undone. Are you sure?`
           onSave={handleSaveConfig}
           onImportFiles={handleImportFiles}
           onRemoveItems={handleRemoveItems}
+        />
+      )}
+
+      {/* Delete Confirmation Dialog */}
+      {config && (
+        <ConfirmDeleteDialog
+          isOpen={showDeleteDialog}
+          onClose={() => setShowDeleteDialog(false)}
+          onConfirm={confirmDelete}
+          title="Delete Sync Configuration"
+          itemName={config.name}
+          description="This will permanently remove all synced files and their extracted content."
+          warningItems={[
+            `Delete ${config.stats?.synced_files || config.stats?.storage?.synced_count || 0} synced assets`,
+            `Remove ${((config.stats?.storage?.total_bytes || 0) / (1024 * 1024)).toFixed(1)} MB from storage`,
+            'Remove documents from search index',
+            'Delete all sync history and runs',
+          ]}
+          confirmButtonText="Delete Forever"
         />
       )}
 

@@ -692,14 +692,53 @@ function NewSharePointSyncContent() {
                       {recursive ? 'Yes' : 'No'}
                     </span>
                   </div>
-                  {selectedItems.size > 0 && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-sm text-gray-500 dark:text-gray-400">Initial Import</span>
-                      <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400">
-                        {selectedItems.size} {selectedItems.size === 1 ? 'item' : 'items'}
-                      </span>
-                    </div>
-                  )}
+                  {selectedItems.size > 0 && (() => {
+                    const selectedList = browseItems.filter(i => selectedItems.has(i.id))
+                    const folderCount = selectedList.filter(i => i.type === 'folder').length
+                    const fileCount = selectedList.filter(i => i.type === 'file').length
+                    const totalSize = selectedList
+                      .filter(i => i.type === 'file')
+                      .reduce((sum, i) => sum + (i.size || 0), 0)
+
+                    const formatSize = (bytes: number) => {
+                      if (bytes === 0) return ''
+                      if (bytes < 1024) return `${bytes} B`
+                      if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+                      if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+                      return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`
+                    }
+
+                    return (
+                      <div className="flex items-center justify-between">
+                        <span className="text-sm text-gray-500 dark:text-gray-400">Initial Import</span>
+                        <div className="text-right">
+                          {folderCount > 0 && recursive ? (
+                            <>
+                              <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400">
+                                {folderCount} {folderCount === 1 ? 'folder' : 'folders'}
+                                {fileCount > 0 && `, ${fileCount} ${fileCount === 1 ? 'file' : 'files'}`}
+                              </span>
+                              <p className="text-xs text-gray-500 dark:text-gray-400">
+                                All files & subfolders will be synced
+                              </p>
+                            </>
+                          ) : (
+                            <>
+                              <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400">
+                                {fileCount} {fileCount === 1 ? 'file' : 'files'}
+                                {folderCount > 0 && ` + ${folderCount} ${folderCount === 1 ? 'folder' : 'folders'}`}
+                              </span>
+                              {totalSize > 0 && (
+                                <p className="text-xs text-gray-500 dark:text-gray-400">
+                                  {formatSize(totalSize)}
+                                </p>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </div>
               </div>
             </div>

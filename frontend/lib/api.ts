@@ -686,6 +686,372 @@ export const runsApi = {
     })
     return handleJson(res)
   },
+
+  /**
+   * Get a single run by ID
+   */
+  async getRun(runId: string, token?: string): Promise<Run> {
+    const res = await fetch(apiUrl(`/runs/${runId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get a run with all its log events
+   */
+  async getRunWithLogs(runId: string, token?: string, params?: {
+    level?: string
+    event_type?: string
+    limit?: number
+  }): Promise<{ run: Run; logs: RunLogEvent[] }> {
+    const query = new URLSearchParams()
+    if (params?.level) query.set('level', params.level)
+    if (params?.event_type) query.set('event_type', params.event_type)
+    if (params?.limit) query.set('limit', String(params.limit))
+
+    const queryStr = query.toString()
+    const url = queryStr ? `/runs/${runId}/logs?${queryStr}` : `/runs/${runId}/logs`
+
+    const res = await fetch(apiUrl(url), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Retry a failed extraction run
+   */
+  async retryRun(runId: string, token?: string): Promise<Run> {
+    const res = await fetch(apiUrl(`/runs/${runId}/retry`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+}
+
+// -------------------- Queue Admin API --------------------
+export interface ExtractionQueueStats {
+  pending_count: number
+  submitted_count: number
+  running_count: number
+  completed_count: number
+  failed_count: number
+  timed_out_count: number
+  max_concurrent: number
+  avg_extraction_time_seconds: number | null
+  throughput_per_minute: number
+  recent_24h: {
+    completed: number
+    failed: number
+    timed_out: number
+  }
+}
+
+/**
+ * Unified queue statistics matching backend UnifiedQueueStatsResponse.
+ */
+export interface UnifiedQueueStats {
+  extraction_queue: {
+    pending: number
+    submitted: number
+    running: number
+    max_concurrent: number
+  }
+  celery_queues: {
+    processing_priority: number
+    extraction: number
+    sam: number
+    scrape: number
+    sharepoint: number
+    maintenance: number
+  }
+  throughput: {
+    per_minute: number
+    avg_extraction_seconds: number | null
+  }
+  recent_24h: {
+    completed: number
+    failed: number
+    timed_out: number
+  }
+  workers: {
+    active: number
+    tasks_running: number
+  }
+}
+
+export interface ActiveExtraction {
+  run_id: string
+  asset_id: string
+  filename: string
+  source_type: string
+  status: string
+  queue_position: number | null
+  queue_priority: number
+  created_at: string
+  submitted_at: string | null
+  timeout_at: string | null
+  extractor_version: string | null
+}
+
+export interface ActiveExtractionsResponse {
+  items: ActiveExtraction[]
+  total: number
+}
+
+export interface QueueConfig {
+  max_concurrent: number
+  submission_interval_seconds: number
+  duplicate_cooldown_seconds: number
+  timeout_buffer_seconds: number
+  queue_enabled: boolean
+}
+
+// -------------------- Unified Job Manager Types --------------------
+
+/**
+ * Run types supported by the Job Manager
+ */
+export type RunType = 'extraction' | 'sam_pull' | 'scrape' | 'sharepoint_sync' | 'system_maintenance'
+
+/**
+ * Run status values
+ */
+export type RunStatus = 'pending' | 'submitted' | 'running' | 'completed' | 'failed' | 'timed_out' | 'cancelled'
+
+/**
+ * Queue definition from the registry
+ */
+export interface QueueDefinition {
+  queue_type: string
+  celery_queue: string
+  label: string
+  description: string
+  icon: string
+  color: string
+  can_cancel: boolean
+  can_boost: boolean
+  can_retry: boolean
+  max_concurrent: number | null
+  timeout_seconds: number
+  is_throttled: boolean
+  enabled: boolean
+}
+
+/**
+ * Queue registry response
+ */
+export interface QueueRegistryResponse {
+  queues: Record<string, QueueDefinition>
+  run_type_mapping: Record<string, string>
+}
+
+/**
+ * Active job item for unified Job Manager
+ */
+export interface ActiveJob {
+  run_id: string
+  run_type: string
+  status: string
+  queue_priority: number
+  created_at: string
+  started_at: string | null
+  submitted_at: string | null
+  completed_at: string | null
+  timeout_at: string | null
+
+  // Display fields
+  display_name: string
+  display_context: string | null
+
+  // For extractions
+  asset_id: string | null
+  filename: string | null
+  source_type: string | null
+  extractor_version: string | null
+  queue_position: number | null
+
+  // For other job types
+  config: Record<string, any> | null
+
+  // Capabilities (computed from queue_registry)
+  can_cancel: boolean
+  can_boost: boolean
+  can_retry: boolean
+}
+
+/**
+ * Active jobs response
+ */
+export interface ActiveJobsResponse {
+  items: ActiveJob[]
+  total: number
+  run_types: string[]
+}
+
+export const queueAdminApi = {
+  /**
+   * Get extraction queue statistics (legacy endpoint)
+   * @deprecated Use getUnifiedStats() instead
+   */
+  async getStats(token?: string): Promise<ExtractionQueueStats> {
+    const res = await fetch(apiUrl('/queue/stats'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get unified queue statistics (canonical endpoint).
+   * This is the preferred method for fetching queue stats.
+   */
+  async getUnifiedStats(token?: string): Promise<UnifiedQueueStats> {
+    const res = await fetch(apiUrl('/queue/unified'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * List active extractions
+   */
+  async listActive(token?: string, params?: {
+    limit?: number
+    include_completed?: boolean
+    status_filter?: string
+  }): Promise<ActiveExtractionsResponse> {
+    const query = new URLSearchParams()
+    if (params?.limit) query.set('limit', String(params.limit))
+    if (params?.include_completed) query.set('include_completed', 'true')
+    if (params?.status_filter) query.set('status_filter', params.status_filter)
+
+    const queryStr = query.toString()
+    const url = queryStr ? `/queue/active?${queryStr}` : '/queue/active'
+
+    const res = await fetch(apiUrl(url), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Cancel an extraction
+   */
+  async cancelExtraction(token: string | undefined, runId: string): Promise<{
+    status: string
+    run_id: string
+    reason?: string
+  }> {
+    const res = await fetch(apiUrl(`/queue/${runId}/cancel`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Cancel multiple extractions at once
+   */
+  async cancelExtractionsBulk(token: string | undefined, runIds: string[]): Promise<{
+    cancelled: string[]
+    failed: Array<{ run_id: string; error: string }>
+    total_requested: number
+    total_cancelled: number
+  }> {
+    const res = await fetch(apiUrl('/queue/cancel-bulk'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify({ run_ids: runIds }),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Boost an extraction priority
+   */
+  async boostExtraction(token: string | undefined, runId: string): Promise<{
+    status: string
+    run_id: string
+    old_priority?: number
+    new_priority?: number
+  }> {
+    const res = await fetch(apiUrl(`/queue/${runId}/boost`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get queue configuration
+   */
+  async getConfig(token?: string): Promise<QueueConfig> {
+    const res = await fetch(apiUrl('/queue/config'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  // -------------------- Unified Job Manager Methods --------------------
+
+  /**
+   * Get queue registry with all queue definitions and capabilities
+   */
+  async getRegistry(token?: string): Promise<QueueRegistryResponse> {
+    const res = await fetch(apiUrl('/queue/registry'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * List all active jobs across all queue types
+   */
+  async listJobs(token?: string, params?: {
+    run_type?: string
+    status_filter?: string
+    include_completed?: boolean
+    limit?: number
+  }): Promise<ActiveJobsResponse> {
+    const query = new URLSearchParams()
+    if (params?.run_type) query.set('run_type', params.run_type)
+    if (params?.status_filter) query.set('status_filter', params.status_filter)
+    if (params?.include_completed) query.set('include_completed', 'true')
+    if (params?.limit) query.set('limit', String(params.limit))
+
+    const queryStr = query.toString()
+    const url = queryStr ? `/queue/jobs?${queryStr}` : '/queue/jobs'
+
+    const res = await fetch(apiUrl(url), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Cancel any job (checks queue_registry for cancellation support)
+   */
+  async cancelJob(token: string | undefined, runId: string): Promise<{
+    status: string
+    run_id: string
+    reason?: string
+  }> {
+    const res = await fetch(apiUrl(`/queue/jobs/${runId}/cancel`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
 }
 
 // -------------------- Auth API --------------------
@@ -1752,13 +2118,21 @@ export interface AssetVersionHistory {
 }
 
 export interface AssetQueueInfo {
-  status: 'not_found' | 'ready' | 'failed' | 'pending' | 'processing' | 'queued'
+  // Unified status from the backend status mapper
+  unified_status: 'queued' | 'submitted' | 'processing' | 'completed' | 'failed' | 'timed_out' | 'cancelled'
+  // Legacy status field (for backward compat)
+  status?: 'not_found' | 'ready' | 'failed' | 'pending' | 'submitted' | 'running' | 'completed' | 'timed_out' | 'cancelled' | 'processing' | 'queued'
   asset_id: string
   run_id?: string
   run_status?: string
   in_queue: boolean
   queue_position?: number
   total_pending?: number
+  estimated_wait_seconds?: number
+  submitted_to_celery?: boolean
+  timeout_at?: string
+  submitted_at?: string
+  celery_task_id?: string
   extractor_version?: string
   queue_stats?: {
     processing_priority: number
@@ -3696,13 +4070,8 @@ export const sharepointSyncApi = {
 
   async deleteConfig(token: string | undefined, configId: string): Promise<{
     message: string
-    cleanup_stats: {
-      assets_deleted: number
-      documents_deleted: number
-      runs_deleted: number
-      opensearch_removed: number
-      errors: string[]
-    }
+    run_id: string
+    status: string
   }> {
     const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}`), {
       method: 'DELETE',

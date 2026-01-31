@@ -155,31 +155,121 @@ async def _recover_orphaned_extractions_async(
 ) -> Dict[str, Any]:
     """
     Async implementation of orphaned extraction recovery.
+
+    Enhanced to handle:
+    1. Runs stuck in "submitted" where Celery task may be lost
+    2. Runs stuck in "running" that exceeded timeout
+    3. ExtractionResults stuck in pending/running
+
+    Uses queue service for proper capacity management instead of direct Celery submission.
     """
     from .database.models import Run, ExtractionResult, Asset
-    from .services.upload_integration_service import upload_integration_service
+    from .services.extraction_queue_service import extraction_queue_service
     from sqlalchemy import or_
 
     logger = logging.getLogger("curatore.tasks.recovery")
-    cutoff = datetime.utcnow() - timedelta(hours=max_age_hours)
+    now = datetime.utcnow()
+    cutoff = now - timedelta(hours=max_age_hours)
 
-    recovered = 0
+    # Different timeouts for different statuses
+    submitted_stale_cutoff = now - timedelta(minutes=15)  # Submitted should move to running quickly
+    running_stale_cutoff = now - timedelta(minutes=30)    # Running shouldn't take >30 min usually
+    pending_stale_cutoff = now - timedelta(minutes=10)    # Pending should be picked up quickly
+
+    recovered_runs = 0
+    recovered_extractions = 0
     skipped = 0
     errors = []
 
     async with database_service.get_session() as session:
-        # Find orphaned extractions (pending/running but old enough to be stuck)
-        # We check extractions older than 10 minutes to avoid recovering tasks
-        # that are legitimately still processing
-        stale_cutoff = datetime.utcnow() - timedelta(minutes=10)
+        # =========================================================================
+        # Phase 1: Recover stuck RUNS (submitted/running status)
+        # =========================================================================
+
+        # Find runs stuck in "submitted" status (Celery task may be lost)
+        submitted_runs = await session.execute(
+            select(Run)
+            .where(
+                and_(
+                    Run.run_type == "extraction",
+                    Run.status == "submitted",
+                    Run.submitted_to_celery_at < submitted_stale_cutoff,
+                    Run.created_at >= cutoff,
+                )
+            )
+            .limit(limit // 2)
+        )
+        stuck_submitted = list(submitted_runs.scalars().all())
+
+        # Find runs stuck in "running" status (worker may have crashed)
+        running_runs = await session.execute(
+            select(Run)
+            .where(
+                and_(
+                    Run.run_type == "extraction",
+                    Run.status == "running",
+                    Run.started_at < running_stale_cutoff,
+                    Run.created_at >= cutoff,
+                )
+            )
+            .limit(limit // 2)
+        )
+        stuck_running = list(running_runs.scalars().all())
+
+        logger.info(
+            f"Found {len(stuck_submitted)} stuck submitted runs, "
+            f"{len(stuck_running)} stuck running runs"
+        )
+
+        # Reset stuck runs to "pending" so queue service will re-process them
+        for run in stuck_submitted + stuck_running:
+            try:
+                old_status = run.status
+                retry_count = (run.config or {}).get("recovery_retry_count", 0) + 1
+
+                if retry_count > 3:
+                    # Too many retries, mark as failed
+                    run.status = "failed"
+                    run.completed_at = now
+                    run.error_message = f"Failed after {retry_count} recovery attempts (stuck in {old_status})"
+                    logger.warning(f"Run {run.id} exceeded max recovery retries, marking as failed")
+
+                    # Update associated asset
+                    if run.input_asset_ids:
+                        asset = await session.get(Asset, UUID(run.input_asset_ids[0]))
+                        if asset and asset.status == "pending":
+                            asset.status = "failed"
+                else:
+                    # Reset to pending for retry
+                    run.status = "pending"
+                    run.celery_task_id = None
+                    run.submitted_to_celery_at = None
+                    run.started_at = None
+                    run.timeout_at = None
+                    run.config = {
+                        **(run.config or {}),
+                        "recovery_retry_count": retry_count,
+                        "last_recovery_at": now.isoformat(),
+                        "recovery_reason": f"Stuck in {old_status} status",
+                    }
+                    logger.info(f"Reset run {run.id} from {old_status} to pending (retry #{retry_count})")
+                    recovered_runs += 1
+
+            except Exception as e:
+                logger.error(f"Failed to recover run {run.id}: {e}")
+                errors.append({"run_id": str(run.id), "error": str(e)})
+
+        # =========================================================================
+        # Phase 2: Recover orphaned EXTRACTION RESULTS (no active run)
+        # =========================================================================
 
         result = await session.execute(
             select(ExtractionResult)
             .where(
                 and_(
                     ExtractionResult.status.in_(["pending", "running"]),
-                    ExtractionResult.created_at >= cutoff,  # Within recovery window
-                    ExtractionResult.created_at < stale_cutoff,  # But old enough to be stuck
+                    ExtractionResult.created_at >= cutoff,
+                    ExtractionResult.created_at < pending_stale_cutoff,
                 )
             )
             .limit(limit)
@@ -191,10 +281,7 @@ async def _recover_orphaned_extractions_async(
         for extraction in orphaned_extractions:
             try:
                 # Get the associated asset
-                asset = await session.execute(
-                    select(Asset).where(Asset.id == extraction.asset_id)
-                )
-                asset = asset.scalar_one_or_none()
+                asset = await session.get(Asset, extraction.asset_id)
 
                 if not asset:
                     logger.warning(f"Asset not found for extraction {extraction.id}, skipping")
@@ -203,22 +290,35 @@ async def _recover_orphaned_extractions_async(
 
                 # Check if asset already has a completed extraction
                 if asset.status == "ready":
-                    logger.info(f"Asset {asset.id} already ready, marking extraction as completed")
+                    logger.debug(f"Asset {asset.id} already ready, marking extraction as completed")
                     extraction.status = "completed"
                     skipped += 1
                     continue
 
-                # Re-queue the extraction task
-                logger.info(f"Re-queuing extraction for asset {asset.id} (extraction={extraction.id})")
+                # Check if the associated run is still active
+                if extraction.run_id:
+                    run = await session.get(Run, extraction.run_id)
+                    if run and run.status in ("pending", "submitted", "running"):
+                        # Run is still being processed, skip
+                        skipped += 1
+                        continue
 
-                # Import here to avoid circular imports
-                execute_extraction_task.delay(
-                    asset_id=str(asset.id),
-                    run_id=str(extraction.run_id),
-                    extraction_id=str(extraction.id),
+                # Re-queue through queue service for proper capacity management
+                logger.info(f"Re-queueing extraction for asset {asset.id} via queue service")
+
+                run_result, ext_result, status = await extraction_queue_service.queue_extraction_for_asset(
+                    session=session,
+                    asset_id=asset.id,
+                    skip_content_type_check=True,  # Already know this needs extraction
                 )
 
-                recovered += 1
+                if status == "queued":
+                    recovered_extractions += 1
+                    # Mark old extraction as superseded
+                    extraction.status = "failed"
+                    extraction.error_message = "Superseded by recovery - original run was stuck"
+                else:
+                    skipped += 1
 
             except Exception as e:
                 logger.error(f"Failed to recover extraction {extraction.id}: {e}")
@@ -228,11 +328,89 @@ async def _recover_orphaned_extractions_async(
 
     return {
         "status": "success",
-        "recovered": recovered,
+        "recovered_runs": recovered_runs,
+        "recovered_extractions": recovered_extractions,
         "skipped": skipped,
         "errors": len(errors),
-        "error_details": errors[:10],  # Limit error details
+        "error_details": errors[:10],
     }
+
+
+# ============================================================================
+# EXTRACTION QUEUE TASKS
+# ============================================================================
+# These tasks manage the database-backed extraction queue:
+# - process_extraction_queue_task: Submit pending extractions to Celery
+# - check_extraction_timeouts_task: Mark timed-out extractions
+
+
+@shared_task(bind=True)
+def process_extraction_queue_task(self) -> Dict[str, Any]:
+    """
+    Submit queued extractions to Celery based on available capacity.
+
+    This task runs every N seconds (default: 5) and:
+    1. Counts currently active extractions (submitted + running)
+    2. Calculates available slots (MAX_CONCURRENT - active)
+    3. Submits pending runs ordered by priority, then created_at
+
+    Returns:
+        Dict with queue processing statistics
+    """
+    logger = logging.getLogger("curatore.tasks.queue")
+    logger.debug("Processing extraction queue...")
+
+    try:
+        result = asyncio.run(_process_extraction_queue_async())
+        if result.get("submitted", 0) > 0:
+            logger.info(f"Submitted {result['submitted']} extractions to Celery")
+        return result
+    except Exception as e:
+        logger.error(f"Error processing extraction queue: {e}", exc_info=True)
+        return {"status": "error", "error": str(e)}
+
+
+async def _process_extraction_queue_async() -> Dict[str, Any]:
+    """Async wrapper for extraction queue processing."""
+    from .services.extraction_queue_service import extraction_queue_service
+
+    async with database_service.get_session() as session:
+        return await extraction_queue_service.process_queue(session)
+
+
+@shared_task(bind=True)
+def check_extraction_timeouts_task(self) -> Dict[str, Any]:
+    """
+    Mark timed-out extractions with explicit 'timed_out' status.
+
+    This task runs every minute and finds runs where:
+    - status IN ('submitted', 'running')
+    - timeout_at < now()
+
+    These runs are marked as 'timed_out' (distinct from 'failed').
+
+    Returns:
+        Dict with timeout check statistics
+    """
+    logger = logging.getLogger("curatore.tasks.queue")
+    logger.debug("Checking extraction timeouts...")
+
+    try:
+        result = asyncio.run(_check_extraction_timeouts_async())
+        if result.get("count", 0) > 0:
+            logger.warning(f"Marked {result['count']} extractions as timed_out")
+        return result
+    except Exception as e:
+        logger.error(f"Error checking extraction timeouts: {e}", exc_info=True)
+        return {"status": "error", "error": str(e)}
+
+
+async def _check_extraction_timeouts_async() -> Dict[str, Any]:
+    """Async wrapper for extraction timeout checking."""
+    from .services.extraction_queue_service import extraction_queue_service
+
+    async with database_service.get_session() as session:
+        return await extraction_queue_service.check_timeouts(session)
 
 
 # ============================================================================
@@ -2988,12 +3166,15 @@ async def _sharepoint_import_async(
 
                     # Upload to MinIO
                     uploads_bucket = minio.bucket_uploads
-                    minio.upload_file(
-                        bucket=uploads_bucket,
-                        object_key=storage_key,
-                        file_path=tmp_path,
-                        content_type=mime_type,
-                    )
+                    file_size = Path(tmp_path).stat().st_size
+                    with open(tmp_path, "rb") as f:
+                        minio.put_object(
+                            bucket=uploads_bucket,
+                            key=storage_key,
+                            data=f,
+                            length=file_size,
+                            content_type=mime_type or "application/octet-stream",
+                        )
 
                     # Cleanup temp file
                     try:
@@ -3142,3 +3323,391 @@ async def _sharepoint_import_async(
         await session.commit()
 
         return results
+
+
+# ============================================================================
+# SHAREPOINT ASYNC DELETION TASK
+# ============================================================================
+
+@shared_task(bind=True, soft_time_limit=1800, time_limit=1900)  # 30 minute soft limit, 32 minute hard limit
+def async_delete_sync_config_task(
+    self,
+    sync_config_id: str,
+    organization_id: str,
+    run_id: str,
+    config_name: str,
+) -> Dict[str, Any]:
+    """
+    Asynchronously delete a SharePoint sync config with full cleanup.
+
+    This task performs a complete removal including:
+    1. Cancel pending extraction jobs
+    2. Delete files from MinIO storage (raw and extracted)
+    3. Hard delete Asset records from database
+    4. Remove documents from OpenSearch index
+    5. Delete SharePointSyncedDocument records
+    6. Delete related Run records (except the deletion tracking run)
+    7. Delete the sync config itself
+    8. Complete the tracking run with results summary
+
+    Args:
+        sync_config_id: SharePointSyncConfig UUID string
+        organization_id: Organization UUID string
+        run_id: Run UUID string (for tracking this deletion)
+        config_name: Name of the config being deleted (for logging)
+
+    Returns:
+        Dict with deletion results
+    """
+    logger = logging.getLogger("curatore.tasks.sharepoint_delete")
+    logger.info(f"Starting async deletion for SharePoint sync config {sync_config_id} ({config_name})")
+
+    try:
+        result = asyncio.run(
+            _async_delete_sync_config(
+                sync_config_id=uuid.UUID(sync_config_id),
+                organization_id=uuid.UUID(organization_id),
+                run_id=uuid.UUID(run_id),
+                config_name=config_name,
+            )
+        )
+
+        logger.info(f"Async deletion completed for config {sync_config_id}: {result}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Async deletion failed for config {sync_config_id}: {e}", exc_info=True)
+        # Mark run as failed
+        asyncio.run(_fail_deletion_run(uuid.UUID(run_id), str(e)))
+        raise
+
+
+async def _async_delete_sync_config(
+    sync_config_id,
+    organization_id,
+    run_id,
+    config_name: str,
+) -> Dict[str, Any]:
+    """
+    Async implementation of SharePoint sync config deletion.
+    """
+    from .services.sharepoint_sync_service import sharepoint_sync_service
+    from .services.run_service import run_service
+    from .services.run_log_service import run_log_service
+    from .services.asset_service import asset_service
+    from .services.index_service import index_service
+    from .services.minio_service import get_minio_service
+    from sqlalchemy import delete as sql_delete, func
+    from .database.models import (
+        Asset, AssetVersion, ExtractionResult, Run, RunLogEvent,
+        SharePointSyncConfig, SharePointSyncedDocument
+    )
+
+    logger = logging.getLogger("curatore.tasks.sharepoint_delete")
+
+    async with database_service.get_session() as session:
+        # Start the run
+        await run_service.start_run(session, run_id)
+        await session.commit()
+
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message=f"Starting deletion of SharePoint sync config: {config_name}",
+            context={"phase": "starting", "config_id": str(sync_config_id)},
+        )
+        await session.commit()
+
+        # Get the sync config
+        config = await sharepoint_sync_service.get_sync_config(session, sync_config_id)
+        if not config:
+            await run_service.fail_run(session, run_id, "Sync config not found")
+            await session.commit()
+            return {"error": "Sync config not found"}
+
+        minio = get_minio_service()
+
+        stats = {
+            "config_name": config_name,
+            "assets_deleted": 0,
+            "files_deleted": 0,
+            "documents_deleted": 0,
+            "runs_deleted": 0,
+            "extractions_cancelled": 0,
+            "opensearch_removed": 0,
+            "storage_freed_bytes": 0,
+            "errors": [],
+        }
+
+        # =================================================================
+        # PHASE 1: CANCEL PENDING EXTRACTIONS
+        # =================================================================
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 1: Cancelling pending extraction jobs",
+            context={"phase": "cancel_extractions"},
+        )
+        await session.commit()
+
+        try:
+            cancelled_count = await sharepoint_sync_service._cancel_pending_extractions_for_sync_config(
+                session, sync_config_id, organization_id
+            )
+            stats["extractions_cancelled"] = cancelled_count
+            logger.info(f"Cancelled {cancelled_count} pending extractions")
+        except Exception as e:
+            stats["errors"].append(f"Failed to cancel extractions: {e}")
+            logger.warning(f"Failed to cancel extractions: {e}")
+
+        # =================================================================
+        # PHASE 2: GET SYNCED DOCUMENTS
+        # =================================================================
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 2: Gathering synced documents",
+            context={"phase": "gather_documents"},
+        )
+        await session.commit()
+
+        docs_result = await session.execute(
+            select(SharePointSyncedDocument).where(
+                SharePointSyncedDocument.sync_config_id == sync_config_id
+            )
+        )
+        synced_docs = list(docs_result.scalars().all())
+        total_docs = len(synced_docs)
+
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="info",
+            message=f"Found {total_docs} synced documents to delete",
+            context={"total_documents": total_docs},
+        )
+        await session.commit()
+
+        # =================================================================
+        # PHASE 3: DELETE ASSETS AND FILES
+        # =================================================================
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 3: Deleting assets and files",
+            context={"phase": "delete_assets", "total": total_docs},
+        )
+        await session.commit()
+
+        processed = 0
+        last_progress = 0
+
+        for doc in synced_docs:
+            if doc.asset_id:
+                try:
+                    # Remove from OpenSearch
+                    try:
+                        await index_service.delete_asset_index(organization_id, doc.asset_id)
+                        stats["opensearch_removed"] += 1
+                    except Exception as e:
+                        stats["errors"].append(f"OpenSearch removal failed for {doc.asset_id}: {e}")
+
+                    # Get asset to find file locations
+                    asset = await asset_service.get_asset(session, doc.asset_id)
+                    if asset:
+                        # Track storage freed
+                        if asset.file_size:
+                            stats["storage_freed_bytes"] += asset.file_size
+
+                        # Delete raw file from MinIO
+                        if minio and asset.raw_bucket and asset.raw_object_key:
+                            try:
+                                minio.delete_object(asset.raw_bucket, asset.raw_object_key)
+                                stats["files_deleted"] += 1
+                            except Exception as e:
+                                stats["errors"].append(f"Failed to delete raw file for {doc.asset_id}: {e}")
+
+                        # Delete extracted files from MinIO (via extraction results)
+                        extraction_result = await session.execute(
+                            select(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                        )
+                        extractions = list(extraction_result.scalars().all())
+                        for extraction in extractions:
+                            if minio and extraction.extracted_bucket and extraction.extracted_object_key:
+                                try:
+                                    minio.delete_object(extraction.extracted_bucket, extraction.extracted_object_key)
+                                    stats["files_deleted"] += 1
+                                except Exception:
+                                    pass  # Don't fail on extraction cleanup
+
+                        # Delete extraction results
+                        await session.execute(
+                            sql_delete(ExtractionResult).where(ExtractionResult.asset_id == asset.id)
+                        )
+
+                        # Delete asset versions if any
+                        await session.execute(
+                            sql_delete(AssetVersion).where(AssetVersion.asset_id == asset.id)
+                        )
+
+                        # Hard delete the asset record
+                        await session.execute(
+                            sql_delete(Asset).where(Asset.id == asset.id)
+                        )
+                        stats["assets_deleted"] += 1
+
+                except Exception as e:
+                    stats["errors"].append(f"Asset deletion failed for {doc.asset_id}: {e}")
+
+            processed += 1
+
+            # Update progress every 10%
+            if total_docs > 0:
+                current_percent = int((processed / total_docs) * 100)
+                if current_percent >= last_progress + 10:
+                    last_progress = current_percent
+                    run = await session.get(Run, run_id)
+                    if run:
+                        run.progress = current_percent
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_id,
+                        level="INFO",
+                        event_type="progress",
+                        message=f"Deletion progress: {processed}/{total_docs} assets ({current_percent}%)",
+                        context={
+                            "phase": "delete_assets",
+                            "processed": processed,
+                            "total": total_docs,
+                            "percent": current_percent,
+                        },
+                    )
+                    await session.commit()
+
+        # =================================================================
+        # PHASE 4: DELETE SYNCED DOCUMENT RECORDS
+        # =================================================================
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 4: Deleting synced document records",
+            context={"phase": "delete_documents"},
+        )
+        await session.commit()
+
+        await session.execute(
+            sql_delete(SharePointSyncedDocument).where(
+                SharePointSyncedDocument.sync_config_id == sync_config_id
+            )
+        )
+        stats["documents_deleted"] = total_docs
+
+        # =================================================================
+        # PHASE 5: DELETE RELATED RUNS (EXCEPT THIS ONE)
+        # =================================================================
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 5: Deleting related sync runs",
+            context={"phase": "delete_runs"},
+        )
+        await session.commit()
+
+        # Find all runs related to this config (sync and import runs)
+        runs_result = await session.execute(
+            select(Run).where(
+                func.json_extract(Run.config, "$.sync_config_id") == str(sync_config_id),
+                Run.id != run_id,  # Don't delete this deletion tracking run yet
+            )
+        )
+        runs = list(runs_result.scalars().all())
+
+        for related_run in runs:
+            # Delete run log events first
+            await session.execute(
+                sql_delete(RunLogEvent).where(RunLogEvent.run_id == related_run.id)
+            )
+            await session.execute(
+                sql_delete(Run).where(Run.id == related_run.id)
+            )
+            stats["runs_deleted"] += 1
+
+        # =================================================================
+        # PHASE 6: DELETE SYNC CONFIG
+        # =================================================================
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 6: Deleting sync configuration",
+            context={"phase": "delete_config"},
+        )
+        await session.commit()
+
+        await session.execute(
+            sql_delete(SharePointSyncConfig).where(
+                SharePointSyncConfig.id == sync_config_id
+            )
+        )
+
+        await session.commit()
+
+        # =================================================================
+        # PHASE 7: COMPLETE THE RUN
+        # =================================================================
+        status_msg = "completed successfully" if len(stats["errors"]) == 0 else "completed with errors"
+
+        await run_service.complete_run(
+            session=session,
+            run_id=run_id,
+            results_summary=stats,
+        )
+
+        await run_log_service.log_summary(
+            session=session,
+            run_id=run_id,
+            message=f"SharePoint sync config deletion {status_msg}: {config_name}",
+            context={
+                "assets_deleted": stats["assets_deleted"],
+                "files_deleted": stats["files_deleted"],
+                "documents_deleted": stats["documents_deleted"],
+                "runs_deleted": stats["runs_deleted"],
+                "opensearch_removed": stats["opensearch_removed"],
+                "storage_freed_mb": round(stats["storage_freed_bytes"] / (1024 * 1024), 2),
+                "errors": stats["errors"][:5] if stats["errors"] else [],
+                "status": "success" if len(stats["errors"]) == 0 else "partial",
+            },
+        )
+
+        await session.commit()
+
+        logger.info(
+            f"Deleted sync config {sync_config_id} ({config_name}) with cleanup: "
+            f"assets={stats['assets_deleted']}, docs={stats['documents_deleted']}, "
+            f"runs={stats['runs_deleted']}, opensearch={stats['opensearch_removed']}"
+        )
+
+        return stats
+
+
+async def _fail_deletion_run(run_id, error_message: str):
+    """Mark a deletion run as failed."""
+    from .services.run_service import run_service
+
+    async with database_service.get_session() as session:
+        await run_service.fail_run(session, run_id, error_message)
+        await session.commit()

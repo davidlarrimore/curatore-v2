@@ -144,8 +144,8 @@ export function AppLayout({ children }: AppLayoutProps) {
             break
           case 'p':
             e.preventDefault()
-            // Navigate to process page
-            window.location.href = '/process'
+            // Navigate to queue admin page
+            window.location.href = '/admin/queue'
             break
           case 'k':
             e.preventDefault()
@@ -328,7 +328,7 @@ export function AppLayout({ children }: AppLayoutProps) {
 export const keyboardShortcuts = [
   { key: 'Cmd/Ctrl + B', description: 'Toggle sidebar' },
   { key: 'Cmd/Ctrl + J', description: 'Navigate to Assets page' },
-  { key: 'Cmd/Ctrl + P', description: 'Navigate to Process page' },
+  { key: 'Cmd/Ctrl + P', description: 'Navigate to Queue Admin' },
   { key: 'Cmd/Ctrl + ,', description: 'Open settings' },
   { key: 'Cmd/Ctrl + K', description: 'Command palette (coming soon)' },
   { key: 'Escape', description: 'Close mobile sidebar' }
