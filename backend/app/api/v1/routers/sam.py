@@ -1081,7 +1081,12 @@ async def pull_search(
 
     The pull is executed asynchronously via a Celery task to avoid blocking
     the API. The returned task_id can be used to monitor progress.
+
+    Rate limited to one pull per minute per search to prevent duplicate jobs.
     """
+    from datetime import timedelta
+    from sqlalchemy import and_
+
     async with database_service.get_session() as session:
         search = await sam_service.get_search(session, search_id)
 
@@ -1097,16 +1102,76 @@ async def pull_search(
                 detail="Access denied",
             )
 
-        # Queue the pull task asynchronously via Celery
+        # Check if there's already a pending/running pull for this search
+        one_minute_ago = datetime.utcnow() - timedelta(minutes=1)
+        existing_run_result = await session.execute(
+            select(Run).where(
+                and_(
+                    Run.run_type == "sam_pull",
+                    Run.config["search_id"].astext == str(search_id),
+                    Run.status.in_(["pending", "running"]),
+                )
+            ).limit(1)
+        )
+        existing_run = existing_run_result.scalar_one_or_none()
+
+        if existing_run:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="A pull is already in progress for this search. Please wait for it to complete.",
+            )
+
+        # Check if a pull was triggered within the last minute (rate limiting)
+        recent_run_result = await session.execute(
+            select(Run).where(
+                and_(
+                    Run.run_type == "sam_pull",
+                    Run.config["search_id"].astext == str(search_id),
+                    Run.created_at > one_minute_ago,
+                )
+            ).limit(1)
+        )
+        recent_run = recent_run_result.scalar_one_or_none()
+
+        if recent_run:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="A pull was recently triggered for this search. Please wait at least 1 minute between pulls.",
+            )
+
+        # Create the Run record BEFORE dispatching the task
+        # This ensures the frontend can see the "pulling" indicator immediately
+        run = Run(
+            organization_id=current_user.organization_id,
+            run_type="sam_pull",
+            origin="user",
+            status="pending",
+            config={
+                "search_id": str(search_id),
+                "max_pages": request.max_pages,
+                "page_size": request.page_size,
+                "auto_download_attachments": request.download_attachments,
+            },
+            created_by=current_user.id,
+        )
+        session.add(run)
+        await session.flush()
+
+        # Update the search with the new run_id so is_pulling shows correctly
+        search.last_pull_run_id = run.id
+        await session.commit()
+
+        # Now dispatch the Celery task with the pre-created run_id
         task = sam_pull_task.delay(
             search_id=str(search_id),
             organization_id=str(current_user.organization_id),
             max_pages=request.max_pages,
             page_size=request.page_size,
             auto_download_attachments=request.download_attachments,
+            run_id=str(run.id),
         )
 
-        logger.info(f"Queued SAM pull task {task.id} for search {search_id}")
+        logger.info(f"Queued SAM pull task {task.id} for search {search_id} (run_id={run.id})")
 
         return PullResponse(
             search_id=str(search_id),

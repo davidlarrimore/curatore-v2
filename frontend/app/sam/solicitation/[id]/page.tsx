@@ -109,14 +109,16 @@ function SolicitationDetailContent({ params }: PageProps) {
     return colors[noticeType] || 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
   }
 
+  // SAM.gov ptype values - see: https://open.gsa.gov/api/opportunities-api/
   const getNoticeTypeLabel = (noticeType: string) => {
     const labels: Record<string, string> = {
+      k: 'Combined Synopsis',  // Combined Synopsis/Solicitation
       o: 'Solicitation',
       p: 'Presolicitation',
-      k: 'Combined Synopsis',
       r: 'Sources Sought',
       s: 'Special Notice',
       a: 'Award',
+      u: 'J&A',                // Justification (J&A)
       i: 'Intent to Bundle',
       g: 'Sale of Surplus',
     }

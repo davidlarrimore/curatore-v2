@@ -85,7 +85,7 @@ class ExtractionResultService:
         )
 
         session.add(extraction)
-        await session.commit()
+        await session.flush()  # Flush to get ID without committing - let caller control transaction
         await session.refresh(extraction)
 
         version_info = f", version_id: {asset_version_id}" if asset_version_id else ""

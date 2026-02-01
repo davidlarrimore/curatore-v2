@@ -98,7 +98,7 @@ class RunService:
         )
 
         session.add(run)
-        await session.commit()
+        await session.flush()  # Flush to get ID without committing - let caller control transaction
         await session.refresh(run)
 
         logger.info(

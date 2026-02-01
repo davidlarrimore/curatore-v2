@@ -11,7 +11,7 @@ import {
   type QueueDefinition,
   type QueueRegistryResponse,
 } from '@/lib/api'
-import { formatDateTime, formatTimeAgo } from '@/lib/date-utils'
+import { formatDateTime, formatTimeAgo, formatShortDateTime } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import { ExtractionStatus } from '@/components/ui/ExtractionStatus'
 import {
@@ -40,6 +40,7 @@ import {
   RotateCcw,
   Eye,
   Search,
+  History,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
@@ -70,9 +71,10 @@ function getQueueType(runType: string): string {
 }
 
 // Status filter options
-type StatusFilterOption = 'all' | 'pending' | 'submitted' | 'running' | 'completed' | 'failed'
+type StatusFilterOption = 'recent' | 'all' | 'pending' | 'submitted' | 'running' | 'completed' | 'failed'
 
 const STATUS_FILTER_OPTIONS: { value: StatusFilterOption; label: string; icon: React.ReactNode }[] = [
+  { value: 'recent', label: 'Recent Jobs', icon: <History className="w-4 h-4" /> },
   { value: 'all', label: 'All Active', icon: <Activity className="w-4 h-4" /> },
   { value: 'pending', label: 'Pending', icon: <Clock className="w-4 h-4" /> },
   { value: 'submitted', label: 'Submitted', icon: <Zap className="w-4 h-4" /> },
@@ -137,7 +139,7 @@ function JobManagerContent() {
 
   // Filters
   const [activeTab, setActiveTab] = useState('all')
-  const [statusFilter, setStatusFilter] = useState<StatusFilterOption>('all')
+  const [statusFilter, setStatusFilter] = useState<StatusFilterOption>('recent')
   const [searchQuery, setSearchQuery] = useState('')
 
   // Selection for bulk operations
@@ -169,9 +171,9 @@ function JobManagerContent() {
         queueAdminApi.getRegistry(token),
         queueAdminApi.listJobs(token, {
           run_type: activeTab === 'all' ? undefined : activeTab,
-          status_filter: statusFilter === 'all' ? undefined : statusFilter,
-          include_completed: statusFilter === 'completed' || statusFilter === 'failed',
-          limit: 200,
+          status_filter: statusFilter === 'all' || statusFilter === 'recent' ? undefined : statusFilter,
+          include_completed: statusFilter === 'completed' || statusFilter === 'failed' || statusFilter === 'recent',
+          limit: statusFilter === 'recent' ? 20 : 200,
         }),
       ])
 
@@ -756,7 +758,7 @@ function JobManagerContent() {
                         </td>
                         <td className="px-4 py-4">
                           <span className="text-xs text-gray-500 dark:text-gray-400">
-                            {formatTimeAgo(job.created_at)}
+                            {formatShortDateTime(job.created_at)}
                           </span>
                         </td>
                         <td className="px-4 py-4 text-right" onClick={(e) => e.stopPropagation()}>

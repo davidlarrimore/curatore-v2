@@ -275,6 +275,26 @@ async def seed_scheduled_tasks() -> list:
             "config": {"frequency": "daily"},
         },
         {
+            "name": "sam_pull_hourly",
+            "display_name": "SAM.gov Pull (Hourly)",
+            "description": "Trigger SAM.gov pulls for all searches with 'hourly' frequency.",
+            "task_type": "sam.scheduled_pull",
+            "scope_type": "global",
+            "schedule_expression": "0 * * * *",  # Every hour at minute 0
+            "enabled": True,
+            "config": {"frequency": "hourly"},
+        },
+        {
+            "name": "sam_pull_daily",
+            "display_name": "SAM.gov Pull (Daily)",
+            "description": "Trigger SAM.gov pulls for all searches with 'daily' frequency.",
+            "task_type": "sam.scheduled_pull",
+            "scope_type": "global",
+            "schedule_expression": "0 2 * * *",  # Daily at 2 AM UTC
+            "enabled": True,
+            "config": {"frequency": "daily"},
+        },
+        {
             "name": "queue_pending_assets",
             "display_name": "Queue Pending Assets (Safety Net)",
             "description": "Safety net: Queue extractions for any pending assets that don't have active extraction runs. Catches edge cases missed by auto-queueing.",

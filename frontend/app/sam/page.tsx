@@ -4,10 +4,11 @@ import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
-import { samApi, SamDashboardStats, SamNoticeWithSolicitation } from '@/lib/api'
+import { samApi, connectionsApi, SamDashboardStats, SamNoticeWithSolicitation } from '@/lib/api'
 import { formatDate as formatDateUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamNavigation from '@/components/sam/SamNavigation'
+import SamConnectionRequired from '@/components/sam/SamConnectionRequired'
 import { NoticeTypeBadge } from '@/components/sam/SamStatusBadge'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import {
@@ -43,6 +44,23 @@ function SamDashboardContent() {
   const [recentNotices, setRecentNotices] = useState<SamNoticeWithSolicitation[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
+  const [hasConnection, setHasConnection] = useState<boolean | null>(null)
+
+  // Check for SAM.gov connection
+  const checkConnection = useCallback(async () => {
+    if (!token) return
+
+    try {
+      const response = await connectionsApi.listConnections(token)
+      const samConnection = response.connections.find(
+        c => c.connection_type === 'sam_gov' && c.is_active
+      )
+      setHasConnection(!!samConnection)
+    } catch (err) {
+      // If we can't check connections, assume no connection
+      setHasConnection(false)
+    }
+  }, [token])
 
   // Load data
   const loadData = useCallback(async () => {
@@ -67,9 +85,22 @@ function SamDashboardContent() {
 
   useEffect(() => {
     if (token) {
-      loadData()
+      checkConnection()
     }
-  }, [token, loadData])
+  }, [token, checkConnection])
+
+  useEffect(() => {
+    if (token && hasConnection === true) {
+      loadData()
+    } else if (hasConnection === false) {
+      setIsLoading(false)
+    }
+  }, [token, hasConnection, loadData])
+
+  // Show connection required screen if no SAM.gov connection
+  if (hasConnection === false) {
+    return <SamConnectionRequired />
+  }
 
   // Use formatDate from date-utils for consistent EST display
   const formatDate = (dateStr: string | null) => formatDateUtil(dateStr)

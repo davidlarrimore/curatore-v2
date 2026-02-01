@@ -242,6 +242,10 @@ class UploadIntegrationService:
             },
         )
 
+        # Commit before dispatching Celery task to ensure Run and ExtractionResult
+        # are visible to the worker
+        await session.commit()
+
         # Enqueue extraction task (async execution via Celery)
         from ..tasks import execute_extraction_task
 
@@ -455,6 +459,10 @@ class UploadIntegrationService:
                 "requested_by": str(user_id) if user_id else "anonymous",
             },
         )
+
+        # Commit before dispatching Celery task to ensure Run and ExtractionResult
+        # are visible to the worker
+        await session.commit()
 
         # Enqueue extraction task (async execution via Celery)
         from ..tasks import execute_extraction_task

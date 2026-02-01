@@ -35,7 +35,7 @@ Usage:
 import asyncio
 import json
 import logging
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
 # Note: We don't use urljoin because it strips path for absolute endpoints
 from uuid import UUID
@@ -54,6 +54,7 @@ from ..database.models import (
 )
 from .sam_api_usage_service import sam_api_usage_service
 from .sam_service import sam_service
+from .run_log_service import run_log_service
 
 logger = logging.getLogger("curatore.api.sam_pull_service")
 
@@ -74,6 +75,43 @@ NOTICE_TYPE_MAP = {
     "i": "Intent to Bundle",
     "m": "Modification",
 }
+
+
+def _parse_sam_date(date_str: Optional[str]) -> Optional[datetime]:
+    """
+    Parse a SAM.gov date string and return a naive UTC datetime.
+
+    SAM.gov returns dates in various formats:
+    - ISO format with Z suffix: "2026-01-29T00:00:00Z"
+    - ISO format with offset: "2026-02-06T16:00:00-05:00"
+    - Date only: "2026-01-29"
+
+    This function normalizes all dates to naive UTC datetimes for storage
+    in PostgreSQL TIMESTAMP WITHOUT TIME ZONE columns.
+
+    Args:
+        date_str: Date string from SAM.gov API
+
+    Returns:
+        Naive datetime in UTC, or None if parsing fails
+    """
+    if not date_str:
+        return None
+
+    try:
+        # Replace Z suffix with +00:00 for consistent parsing
+        normalized = date_str.replace("Z", "+00:00")
+
+        # Try parsing as ISO format (handles both datetime and date-only)
+        dt = datetime.fromisoformat(normalized)
+
+        # If timezone-aware, convert to UTC and make naive
+        if dt.tzinfo is not None:
+            dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+
+        return dt
+    except (ValueError, AttributeError):
+        return None
 
 
 class SamPullService:
@@ -379,29 +417,10 @@ class SamPullService:
         Returns:
             Parsed opportunity dict with normalized fields
         """
-        # Extract dates
-        posted_date = None
-        if data.get("postedDate"):
-            try:
-                posted_date = datetime.fromisoformat(data["postedDate"].replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
-                pass
-
-        response_deadline = None
-        if data.get("responseDeadLine"):
-            try:
-                response_deadline = datetime.fromisoformat(
-                    data["responseDeadLine"].replace("Z", "+00:00")
-                )
-            except (ValueError, AttributeError):
-                pass
-
-        archive_date = None
-        if data.get("archiveDate"):
-            try:
-                archive_date = datetime.fromisoformat(data["archiveDate"].replace("Z", "+00:00"))
-            except (ValueError, AttributeError):
-                pass
+        # Extract dates - convert to naive UTC for database storage
+        posted_date = _parse_sam_date(data.get("postedDate"))
+        response_deadline = _parse_sam_date(data.get("responseDeadLine"))
+        archive_date = _parse_sam_date(data.get("archiveDate"))
 
         # Extract contact info
         contact_info = None
@@ -439,7 +458,7 @@ class SamPullService:
             "solicitation_number": data.get("solicitationNumber"),
             "title": data.get("title", "Untitled"),
             "description": data.get("description"),
-            "notice_type": data.get("type", "o"),
+            "notice_type": data.get("type", "Solicitation"),
             "naics_code": data.get("naicsCode"),
             "psc_code": data.get("classificationCode"),
             "set_aside_code": data.get("typeOfSetAsideDescription"),
@@ -454,7 +473,7 @@ class SamPullService:
             "bureau_name": bureau_name,
             "office_name": office_name,
             "full_parent_path": full_parent_path,
-            "attachments": data.get("resourceLinks", []),
+            "attachments": data.get("resourceLinks") or [],
             "raw_data": data,
         }
 
@@ -603,6 +622,7 @@ class SamPullService:
         page_size: int = 100,
         check_rate_limit: bool = True,
         auto_download_attachments: bool = True,
+        run_id: Optional[UUID] = None,
     ) -> Dict[str, Any]:
         """
         Pull opportunities for a search and update database.
@@ -617,6 +637,7 @@ class SamPullService:
             page_size: Results per page
             check_rate_limit: Whether to check/record API rate limits
             auto_download_attachments: Whether to download attachments after pull
+            run_id: Optional Run UUID for activity logging
 
         Returns:
             Pull results summary
@@ -626,6 +647,23 @@ class SamPullService:
             raise ValueError(f"Search not found: {search_id}")
 
         search_config = search.search_config or {}
+
+        # Log start of pull
+        if run_id:
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="phase",
+                message=f"Starting SAM.gov pull for search: {search.name}",
+                context={
+                    "phase": "init",
+                    "search_name": search.name,
+                    "max_pages": max_pages,
+                    "page_size": page_size,
+                },
+            )
+            await session.commit()
 
         # Log NAICS filtering strategy
         configured_naics = search_config.get("naics_codes", [])
@@ -664,6 +702,16 @@ class SamPullService:
                     f"Rate limit exceeded for org {organization_id}. "
                     f"Remaining: {remaining}, needed: {max_pages}"
                 )
+                if run_id:
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_id,
+                        level="WARN",
+                        event_type="rate_limit",
+                        message=f"API rate limit exceeded. Remaining calls: {remaining}",
+                        context={"remaining": remaining, "needed": max_pages},
+                    )
+                    await session.commit()
                 results["status"] = "rate_limited"
                 results["error"] = f"API rate limit exceeded. Remaining calls: {remaining}"
                 results["rate_limit_remaining"] = remaining
@@ -702,9 +750,36 @@ class SamPullService:
                     results["api_calls_made"] += 1
 
                 if not opportunities:
+                    if run_id and pages_fetched == 0:
+                        await run_log_service.log_event(
+                            session=session,
+                            run_id=run_id,
+                            level="INFO",
+                            event_type="progress",
+                            message="No opportunities found matching search criteria",
+                            context={"pages_fetched": pages_fetched},
+                        )
+                        await session.commit()
                     break
 
                 results["total_fetched"] += len(opportunities)
+
+                # Log page fetch progress
+                if run_id:
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_id,
+                        level="INFO",
+                        event_type="progress",
+                        message=f"Fetched page {pages_fetched + 1}: {len(opportunities)} opportunities (total: {results['total_fetched']})",
+                        context={
+                            "page": pages_fetched + 1,
+                            "page_count": len(opportunities),
+                            "total_fetched": results["total_fetched"],
+                            "total_available": total,
+                        },
+                    )
+                    await session.commit()
 
                 # Local NAICS filtering - always applied when NAICS codes are configured
                 # This serves as a safety check even when API filter is used (single NAICS),
@@ -761,6 +836,27 @@ class SamPullService:
             results["completed_at"] = datetime.utcnow().isoformat()
             results["status"] = "success" if not results["errors"] else "partial"
 
+            # Log fetch completion
+            if run_id:
+                await run_log_service.log_event(
+                    session=session,
+                    run_id=run_id,
+                    level="INFO",
+                    event_type="phase",
+                    message=f"Fetch complete: {results['total_fetched']} fetched, {results['new_solicitations']} new, {results['updated_solicitations']} updated",
+                    context={
+                        "phase": "fetch_complete",
+                        "total_fetched": results["total_fetched"],
+                        "processed": results["processed"],
+                        "new_solicitations": results["new_solicitations"],
+                        "updated_solicitations": results["updated_solicitations"],
+                        "new_notices": results["new_notices"],
+                        "new_attachments": results["new_attachments"],
+                        "errors": len(results["errors"]),
+                    },
+                )
+                await session.commit()
+
             # Auto-download attachments if enabled
             # Check search_config for override, default to parameter value
             # Download attachments for solicitations processed in this pull
@@ -778,6 +874,18 @@ class SamPullService:
 
                 # Download attachments for solicitations processed in this pull
                 solicitation_ids = results.get("processed_solicitation_ids", [])
+
+                if run_id and len(solicitation_ids) > 0:
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_id,
+                        level="INFO",
+                        event_type="phase",
+                        message=f"Downloading attachments for {len(solicitation_ids)} solicitations",
+                        context={"phase": "attachments", "solicitation_count": len(solicitation_ids)},
+                    )
+                    await session.commit()
+
                 print(f"[SAM_DEBUG] Found {len(solicitation_ids)} solicitations processed in this pull")
                 for sol_id in solicitation_ids:
                     print(f"[SAM_DEBUG] Processing solicitation: {sol_id}...")
@@ -797,6 +905,21 @@ class SamPullService:
                         f"Attachment download complete: {results['attachment_downloads']['downloaded']} downloaded, "
                         f"{results['attachment_downloads']['failed']} failed out of {results['attachment_downloads']['total']} pending"
                     )
+                    if run_id:
+                        await run_log_service.log_event(
+                            session=session,
+                            run_id=run_id,
+                            level="INFO",
+                            event_type="progress",
+                            message=f"Attachments: {results['attachment_downloads']['downloaded']} downloaded, {results['attachment_downloads']['failed']} failed",
+                            context={
+                                "phase": "attachments",
+                                "total": results["attachment_downloads"]["total"],
+                                "downloaded": results["attachment_downloads"]["downloaded"],
+                                "failed": results["attachment_downloads"]["failed"],
+                            },
+                        )
+                        await session.commit()
                 else:
                     logger.debug("No pending attachments to download")
 
@@ -808,6 +931,17 @@ class SamPullService:
             await sam_service.update_search_pull_status(session, search_id, "failed")
             results["status"] = "failed"
             results["error"] = str(e)
+
+            if run_id:
+                await run_log_service.log_event(
+                    session=session,
+                    run_id=run_id,
+                    level="ERROR",
+                    event_type="error",
+                    message=f"Pull failed: {str(e)}",
+                    context={"error": str(e), "traceback": traceback.format_exc()[:1000]},
+                )
+                await session.commit()
 
         return results
 
@@ -853,16 +987,22 @@ class SamPullService:
                 # Add rate limiting delay after description fetch
                 await asyncio.sleep(self.rate_limit_delay)
 
-        # Special Notices (type='s') are standalone - no solicitation record
-        if notice_type == "s":
+        # Special Notices are standalone - no solicitation record
+        if notice_type == "Special Notice":
             await self._process_standalone_notice(
                 session, organization_id, opportunity, description, results
             )
             return
 
         # For other notice types, create/update solicitation
-        # Check if solicitation already exists
-        existing = await sam_service.get_solicitation_by_notice_id(session, notice_id)
+        # Check if solicitation already exists by solicitation_number (not notice_id)
+        # Multiple notices (amendments) can belong to the same solicitation
+        solicitation_number = opportunity.get("solicitation_number")
+        existing = None
+        if solicitation_number:
+            existing = await sam_service.get_solicitation_by_number(
+                session, organization_id, solicitation_number
+            )
 
         if existing:
             # Update existing solicitation
@@ -909,18 +1049,26 @@ class SamPullService:
             results["processed_solicitation_ids"].append(str(solicitation.id))
 
         # Check for new notices (amendments)
-        # For simplicity, we create a notice for each pull if it's new
-        latest_notice = await sam_service.get_latest_notice(session, solicitation.id)
+        # Each notice_id from SAM.gov represents a unique notice/amendment
+        # Check if this specific notice already exists
+        existing_notice = await sam_service.get_notice_by_sam_notice_id(session, notice_id)
 
         is_new_notice = False
-        if not latest_notice:
-            # Create initial notice
+        if existing_notice:
+            # This notice already exists, use it
+            notice = existing_notice
+        else:
+            # New notice - determine version number
+            latest_notice = await sam_service.get_latest_notice(session, solicitation.id)
+            version_number = (latest_notice.version_number + 1) if latest_notice else 1
+
+            # Create new notice record
             notice = await sam_service.create_notice(
                 session=session,
                 solicitation_id=solicitation.id,
                 sam_notice_id=notice_id,
                 notice_type=notice_type,
-                version_number=1,
+                version_number=version_number,
                 title=opportunity.get("title"),
                 description=description,  # Use fetched HTML description
                 posted_date=opportunity.get("posted_date"),
@@ -928,8 +1076,6 @@ class SamPullService:
             )
             results["new_notices"] += 1
             is_new_notice = True
-        else:
-            notice = latest_notice
 
         # Process attachments - only if enabled in search config
         # The download_attachments setting controls whether we track attachments for download
@@ -938,7 +1084,7 @@ class SamPullService:
             download_attachments = search_config.get("download_attachments", True)
 
         if download_attachments:
-            attachments = opportunity.get("attachments", [])
+            attachments = opportunity.get("attachments") or []
             for att_data in attachments:
                 await self._process_attachment(
                     session=session,
@@ -1060,7 +1206,7 @@ class SamPullService:
                 logger.warning(f"Could not trigger auto-summary for notice: {e}")
 
         # Process attachments for standalone notices
-        attachments = opportunity.get("attachments", [])
+        attachments = opportunity.get("attachments") or []
         for att_data in attachments:
             await self._process_standalone_notice_attachment(
                 session=session,
@@ -1081,6 +1227,10 @@ class SamPullService:
 
         Similar to _process_attachment but without solicitation_id requirement.
         """
+        # Skip None or empty attachment data
+        if not attachment_data:
+            return
+
         # Handle both dict format and simple URL string format
         if isinstance(attachment_data, str):
             download_url = attachment_data
@@ -1152,6 +1302,10 @@ class SamPullService:
             attachment_data: Attachment data from API (dict or URL string)
             results: Results dict to update
         """
+        # Skip None or empty attachment data
+        if not attachment_data:
+            return
+
         # Handle both dict format and simple URL string format
         if isinstance(attachment_data, str):
             # SAM.gov resourceLinks is a list of URL strings
@@ -1774,7 +1928,7 @@ class SamPullService:
                 set_aside=solicitation.set_aside_code,
                 posted_date=solicitation.posted_date,
                 response_deadline=solicitation.response_deadline,
-                url=solicitation.sam_url,
+                url=solicitation.ui_link,
             )
 
             # Index the notice
@@ -1790,7 +1944,7 @@ class SamPullService:
                 agency=solicitation.agency_name,
                 posted_date=notice.posted_date,
                 response_deadline=notice.response_deadline,
-                url=notice.sam_url,
+                url=notice.ui_link,
             )
 
             logger.debug(

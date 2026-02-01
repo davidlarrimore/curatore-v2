@@ -491,6 +491,10 @@ async def retry_extraction(
             },
         )
 
+        # Commit before dispatching Celery task to ensure Run and ExtractionResult
+        # are visible to the worker
+        await session.commit()
+
         # Enqueue extraction task on priority queue (user-initiated retry)
         from ....tasks import execute_extraction_task
 
@@ -507,7 +511,5 @@ async def retry_extraction(
             f"Retry extraction triggered for asset {asset_id}: "
             f"new_run={new_run.id}, task={task.id}"
         )
-
-        await session.commit()
 
         return RunResponse.model_validate(new_run)

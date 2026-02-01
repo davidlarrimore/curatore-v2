@@ -429,6 +429,29 @@ class SamService:
         )
         return result.scalar_one_or_none()
 
+    async def get_solicitation_by_number(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        solicitation_number: str,
+    ) -> Optional[SamSolicitation]:
+        """
+        Get solicitation by solicitation number within an organization.
+
+        This is the primary deduplication method - solicitation_number
+        is the unique identifier for a solicitation in SAM.gov.
+        Multiple notices (amendments) can belong to the same solicitation.
+        """
+        result = await session.execute(
+            select(SamSolicitation).where(
+                and_(
+                    SamSolicitation.organization_id == organization_id,
+                    SamSolicitation.solicitation_number == solicitation_number,
+                )
+            )
+        )
+        return result.scalar_one_or_none()
+
     async def list_solicitations(
         self,
         session: AsyncSession,
@@ -885,6 +908,36 @@ class SamService:
             )
         )
         return result.scalar_one_or_none()
+
+    async def get_attachment_by_resource_or_url(
+        self,
+        session: AsyncSession,
+        resource_id: Optional[str] = None,
+        download_url: Optional[str] = None,
+    ) -> Optional[SamAttachment]:
+        """
+        Get attachment by resource ID or download URL.
+
+        Checks resource_id first (if provided), then falls back to download_url.
+        Used for deduplication to avoid creating duplicate attachment records.
+        """
+        # Try resource_id first
+        if resource_id:
+            result = await session.execute(
+                select(SamAttachment).where(SamAttachment.resource_id == resource_id)
+            )
+            attachment = result.scalar_one_or_none()
+            if attachment:
+                return attachment
+
+        # Fall back to download_url
+        if download_url:
+            result = await session.execute(
+                select(SamAttachment).where(SamAttachment.download_url == download_url)
+            )
+            return result.scalar_one_or_none()
+
+        return None
 
     async def list_attachments(
         self,

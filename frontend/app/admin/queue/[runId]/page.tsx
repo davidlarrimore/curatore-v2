@@ -43,7 +43,7 @@ import type {
   QueueDefinition,
   Asset,
 } from '@/lib/api';
-import { formatTimeAgo, formatDateTime, formatDuration } from '@/lib/date-utils';
+import { formatTimeAgo, formatDateTime, formatDuration, formatShortDateTime } from '@/lib/date-utils';
 
 // Status configuration
 const STATUS_CONFIG: Record<string, { color: string; bgColor: string; icon: React.ElementType; label: string }> = {
@@ -234,6 +234,40 @@ export default function JobDetailPage() {
   const JobTypeIcon = jobTypeConfig.icon;
   const isActive = ['pending', 'submitted', 'running'].includes(run.status);
 
+  // Get specific job label for maintenance jobs
+  const getJobLabel = () => {
+    if (run.run_type === 'system_maintenance' && run.config) {
+      const taskName = run.config.scheduled_task_name || run.config.task_name;
+      if (taskName) {
+        // Map task names to human-readable labels
+        const taskLabels: Record<string, string> = {
+          'queue_pending_assets': 'Queue Pending Extractions',
+          'cleanup_temp_files': 'Cleanup Temp Files',
+          'cleanup_expired_jobs': 'Cleanup Expired Jobs',
+          'detect_orphaned_objects': 'Detect Orphaned Objects',
+          'enforce_retention': 'Enforce Retention Policies',
+          'system_health_report': 'System Health Report',
+          'search_reindex': 'Search Index Rebuild',
+          'stale_run_cleanup': 'Stale Run Cleanup',
+          'reindex_search': 'Reindex Search',
+          'sharepoint_sync_hourly': 'SharePoint Sync (Hourly)',
+          'sharepoint_sync_daily': 'SharePoint Sync (Daily)',
+          'sam_pull_hourly': 'SAM.gov Pull (Hourly)',
+          'sam_pull_daily': 'SAM.gov Pull (Daily)',
+          'sync_sharepoint': 'SharePoint Sync',
+          'sam_scheduled_pull': 'SAM.gov Scheduled Pull',
+          'cleanup_old_runs': 'Cleanup Old Runs',
+          'vacuum_database': 'Vacuum Database',
+          'refresh_materialized_views': 'Refresh Views',
+          'check_stale_extractions': 'Check Stale Extractions',
+          'expire_old_tokens': 'Expire Old Tokens',
+        };
+        return taskLabels[taskName] || taskName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+      }
+    }
+    return jobTypeConfig.label;
+  };
+
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
@@ -253,7 +287,7 @@ export default function JobDetailPage() {
                 </div>
                 <div>
                   <h1 className="text-2xl font-bold text-gray-900 dark:text-white">
-                    {jobTypeConfig.label} Job
+                    {getJobLabel()} Job
                   </h1>
                   <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
                     <span className="font-mono">{run.id}</span>
@@ -292,16 +326,16 @@ export default function JobDetailPage() {
               {statusConfig.label}
             </span>
             <span className="text-sm text-gray-500 dark:text-gray-400">
-              Created {formatTimeAgo(run.created_at)}
+              Created {formatShortDateTime(run.created_at)}
             </span>
             {run.started_at && (
               <span className="text-sm text-gray-500 dark:text-gray-400">
-                Started {formatTimeAgo(run.started_at)}
+                Started {formatShortDateTime(run.started_at)}
               </span>
             )}
             {run.completed_at && (
               <span className="text-sm text-gray-500 dark:text-gray-400">
-                Completed {formatTimeAgo(run.completed_at)}
+                Completed {formatShortDateTime(run.completed_at)}
               </span>
             )}
           </div>
@@ -483,6 +517,79 @@ export default function JobDetailPage() {
                   <CapabilityBadge label="Retry" enabled={queueDefinition.can_retry} />
                   <CapabilityBadge label="Throttled" enabled={queueDefinition.is_throttled} />
                 </div>
+              </div>
+            )}
+
+            {/* Source Configuration Link */}
+            {run.run_type === 'sam_pull' && run.config?.search_id && (
+              <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                  <Building2 className="h-4 w-4 text-amber-500" />
+                  Source Configuration
+                </h3>
+                <Link
+                  href={`/sam/${run.config.search_id}`}
+                  className="flex items-center gap-3 p-3 rounded-lg border border-amber-200 dark:border-amber-800 bg-amber-50 dark:bg-amber-900/20 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors"
+                >
+                  <Building2 className="h-5 w-5 text-amber-600 dark:text-amber-400" />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                      View SAM.gov Search Config
+                    </span>
+                    <div className="text-xs text-amber-600 dark:text-amber-400 font-mono truncate">
+                      {run.config.search_id}
+                    </div>
+                  </div>
+                  <ExternalLink className="h-4 w-4 text-amber-500 flex-shrink-0" />
+                </Link>
+              </div>
+            )}
+
+            {run.run_type === 'scrape' && run.config?.collection_id && (
+              <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                  <Globe className="h-4 w-4 text-emerald-500" />
+                  Source Configuration
+                </h3>
+                <Link
+                  href={`/scrape/${run.config.collection_id}`}
+                  className="flex items-center gap-3 p-3 rounded-lg border border-emerald-200 dark:border-emerald-800 bg-emerald-50 dark:bg-emerald-900/20 hover:bg-emerald-100 dark:hover:bg-emerald-900/30 transition-colors"
+                >
+                  <Globe className="h-5 w-5 text-emerald-600 dark:text-emerald-400" />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm font-medium text-emerald-800 dark:text-emerald-200">
+                      View Scrape Collection
+                    </span>
+                    <div className="text-xs text-emerald-600 dark:text-emerald-400 font-mono truncate">
+                      {run.config.collection_id}
+                    </div>
+                  </div>
+                  <ExternalLink className="h-4 w-4 text-emerald-500 flex-shrink-0" />
+                </Link>
+              </div>
+            )}
+
+            {run.run_type === 'sharepoint_sync' && run.config?.config_id && (
+              <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                  <FolderSync className="h-4 w-4 text-purple-500" />
+                  Source Configuration
+                </h3>
+                <Link
+                  href={`/sharepoint-sync/${run.config.config_id}`}
+                  className="flex items-center gap-3 p-3 rounded-lg border border-purple-200 dark:border-purple-800 bg-purple-50 dark:bg-purple-900/20 hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors"
+                >
+                  <FolderSync className="h-5 w-5 text-purple-600 dark:text-purple-400" />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm font-medium text-purple-800 dark:text-purple-200">
+                      View SharePoint Config
+                    </span>
+                    <div className="text-xs text-purple-600 dark:text-purple-400 font-mono truncate">
+                      {run.config.config_id}
+                    </div>
+                  </div>
+                  <ExternalLink className="h-4 w-4 text-purple-500 flex-shrink-0" />
+                </Link>
               </div>
             )}
 

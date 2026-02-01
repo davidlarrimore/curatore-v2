@@ -47,7 +47,7 @@ export default function SamSearchForm({
     search?.search_config?.set_aside_codes || []
   )
   const [noticeTypes, setNoticeTypes] = useState<string[]>(
-    search?.search_config?.notice_types || ['o', 'p', 'k']
+    search?.search_config?.notice_types || ['k', 'o', 'p']
   )
   const [activeOnly, setActiveOnly] = useState(
     search?.search_config?.active_only !== false
@@ -123,16 +123,18 @@ export default function SamSearchForm({
     department,
   ])
 
-  // Notice type options (SAM.gov API v2 ptype values)
+  // Notice type options (SAM.gov API ptype values)
   // See: https://open.gsa.gov/api/opportunities-api/
+  // Note: 'f' (Foreign Government Standard) and 'l' (Fair Opportunity) are retired
   const noticeTypeOptions = [
-    { value: 'o', label: 'Combined Synopsis/Solicitation' },
+    { value: 'k', label: 'Combined Synopsis/Solicitation' },
+    { value: 'o', label: 'Solicitation' },
     { value: 'p', label: 'Presolicitation' },
-    { value: 'r', label: 'Solicitation' },
+    { value: 'r', label: 'Sources Sought' },
     { value: 's', label: 'Special Notice' },
-    { value: 'k', label: 'Sources Sought' },
-    { value: 'i', label: 'Intent to Bundle' },
     { value: 'a', label: 'Award Notice' },
+    { value: 'u', label: 'Justification (J&A)' },
+    { value: 'i', label: 'Intent to Bundle (DoD)' },
     { value: 'g', label: 'Sale of Surplus Property' },
   ]
 
@@ -288,17 +290,17 @@ export default function SamSearchForm({
   }
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto">
+    <div className="fixed inset-0 z-50">
       {/* Backdrop */}
       <div
         className="fixed inset-0 bg-black/50 backdrop-blur-sm transition-opacity"
         onClick={onCancel}
       />
 
-      {/* Modal container */}
-      <div className="flex min-h-full items-start justify-center pt-8 pb-4 px-4">
+      {/* Modal container - centers the modal */}
+      <div className="fixed inset-0 flex items-start justify-center pt-8 pb-4 px-4 pointer-events-none">
         <div
-          className="relative bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-2xl overflow-hidden w-full max-w-2xl max-h-[85vh] flex flex-col animate-in fade-in zoom-in-95 duration-200"
+          className="relative bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-2xl shadow-2xl overflow-hidden w-full max-w-2xl max-h-[85vh] flex flex-col animate-in fade-in zoom-in-95 duration-200 pointer-events-auto"
           onClick={(e) => e.stopPropagation()}
         >
           {/* Gradient header */}
@@ -524,58 +526,50 @@ export default function SamSearchForm({
 
               {/* Notice Types */}
               <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                <span className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                   Notice Types
-                </label>
+                </span>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                   {noticeTypeOptions.map((option) => (
-                    <label
+                    <button
                       key={option.value}
-                      className={`flex items-center p-2.5 border rounded-lg cursor-pointer transition-all ${
+                      type="button"
+                      onClick={() => toggleNoticeType(option.value)}
+                      className={`flex items-center p-2.5 border rounded-lg cursor-pointer transition-all text-left ${
                         noticeTypes.includes(option.value)
                           ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20'
                           : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
                       }`}
                     >
-                      <input
-                        type="checkbox"
-                        checked={noticeTypes.includes(option.value)}
-                        onChange={() => toggleNoticeType(option.value)}
-                        className="sr-only"
-                      />
                       <span className="text-xs text-gray-700 dark:text-gray-300">
                         {option.label}
                       </span>
-                    </label>
+                    </button>
                   ))}
                 </div>
               </div>
 
               {/* Set-Aside */}
               <div className="space-y-2">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                <span className="block text-sm font-medium text-gray-700 dark:text-gray-300">
                   Set-Aside Types
-                </label>
+                </span>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-2">
                   {setAsideOptions.map((option) => (
-                    <label
+                    <button
                       key={option.value}
-                      className={`flex items-center p-2.5 border rounded-lg cursor-pointer transition-all ${
+                      type="button"
+                      onClick={() => toggleSetAside(option.value)}
+                      className={`flex items-center p-2.5 border rounded-lg cursor-pointer transition-all text-left ${
                         setAsideCodes.includes(option.value)
                           ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/20'
                           : 'border-gray-200 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800'
                       }`}
                     >
-                      <input
-                        type="checkbox"
-                        checked={setAsideCodes.includes(option.value)}
-                        onChange={() => toggleSetAside(option.value)}
-                        className="sr-only"
-                      />
                       <span className="text-xs text-gray-700 dark:text-gray-300">
                         {option.label}
                       </span>
-                    </label>
+                    </button>
                   ))}
                 </div>
               </div>

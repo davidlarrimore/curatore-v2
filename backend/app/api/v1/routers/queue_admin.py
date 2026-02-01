@@ -864,10 +864,38 @@ async def list_active_jobs(
                     display_context = config.get("site_name") or ("Full sync" if config.get("full_sync") else "Incremental")
 
             elif run.run_type == "system_maintenance":
-                # Maintenance task - display task name
+                # Maintenance task - display task name with human-readable label
                 config = run.config or {}
-                display_name = config.get("task_name", "Maintenance Task")
-                display_context = config.get("handler")
+                task_name = config.get("scheduled_task_name") or config.get("task_name") or "Maintenance Task"
+
+                # Map task names to human-readable labels
+                task_labels = {
+                    "queue_pending_assets": "Queue Pending Extractions",
+                    "cleanup_temp_files": "Cleanup Temp Files",
+                    "cleanup_expired_jobs": "Cleanup Expired Jobs",
+                    "detect_orphaned_objects": "Detect Orphaned Objects",
+                    "enforce_retention": "Enforce Retention Policies",
+                    "system_health_report": "System Health Report",
+                    "search_reindex": "Search Index Rebuild",
+                    "stale_run_cleanup": "Stale Run Cleanup",
+                    "reindex_search": "Reindex Search",
+                    "sharepoint_sync_hourly": "SharePoint Sync (Hourly)",
+                    "sharepoint_sync_daily": "SharePoint Sync (Daily)",
+                    "sam_pull_hourly": "SAM.gov Pull (Hourly)",
+                    "sam_pull_daily": "SAM.gov Pull (Daily)",
+                    "sync_sharepoint": "SharePoint Sync",
+                    "sam_scheduled_pull": "SAM.gov Scheduled Pull",
+                    "cleanup_old_runs": "Cleanup Old Runs",
+                    "vacuum_database": "Vacuum Database",
+                    "refresh_materialized_views": "Refresh Views",
+                    "check_stale_extractions": "Check Stale Extractions",
+                    "expire_old_tokens": "Expire Old Tokens",
+                }
+                display_name = task_labels.get(task_name, task_name.replace("_", " ").title())
+
+                # Show task type as context if available
+                task_type = config.get("task_type")
+                display_context = task_type if task_type else None
 
             else:
                 # Unknown type - use run_type as display name

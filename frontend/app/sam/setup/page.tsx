@@ -1,13 +1,14 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { samApi, SamSearch, SamApiUsage, SamQueueStats } from '@/lib/api'
+import { samApi, connectionsApi, SamSearch, SamApiUsage, SamQueueStats } from '@/lib/api'
 import { formatCompact } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamNavigation from '@/components/sam/SamNavigation'
 import SamSearchForm from '@/components/sam/SamSearchForm'
+import SamConnectionRequired from '@/components/sam/SamConnectionRequired'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import toast from 'react-hot-toast'
 import {
@@ -27,7 +28,14 @@ import {
   AlertCircle,
   Settings,
   Copy,
+  ChevronUp,
+  ChevronDown,
+  ArrowUpDown,
 } from 'lucide-react'
+
+// Sort column type
+type SortColumn = 'name' | 'status' | 'criteria' | 'frequency' | 'lastPull'
+type SortDirection = 'asc' | 'desc'
 
 export default function SamSetupPage() {
   return (
@@ -49,12 +57,78 @@ function SamSetupContent() {
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editingSearch, setEditingSearch] = useState<SamSearch | null>(null)
+  const [hasConnection, setHasConnection] = useState<boolean | null>(null)
+  const [sortColumn, setSortColumn] = useState<SortColumn>('name')
+  const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
-  // Load data
-  const loadData = useCallback(async () => {
+  // Sort handler
+  const handleSort = (column: SortColumn) => {
+    if (sortColumn === column) {
+      // Toggle direction if same column
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc')
+    } else {
+      // New column, default to ascending
+      setSortColumn(column)
+      setSortDirection('asc')
+    }
+  }
+
+  // Sorted searches
+  const sortedSearches = useMemo(() => {
+    return [...searches].sort((a, b) => {
+      let comparison = 0
+
+      switch (sortColumn) {
+        case 'name':
+          comparison = a.name.localeCompare(b.name)
+          break
+        case 'status':
+          comparison = a.status.localeCompare(b.status)
+          break
+        case 'criteria': {
+          const aCriteria = a.search_config?.naics_codes?.join(',') || a.search_config?.keyword || ''
+          const bCriteria = b.search_config?.naics_codes?.join(',') || b.search_config?.keyword || ''
+          comparison = aCriteria.localeCompare(bCriteria)
+          break
+        }
+        case 'frequency':
+          comparison = a.pull_frequency.localeCompare(b.pull_frequency)
+          break
+        case 'lastPull': {
+          const aDate = a.last_pull_at ? new Date(a.last_pull_at).getTime() : 0
+          const bDate = b.last_pull_at ? new Date(b.last_pull_at).getTime() : 0
+          comparison = aDate - bDate
+          break
+        }
+      }
+
+      return sortDirection === 'asc' ? comparison : -comparison
+    })
+  }, [searches, sortColumn, sortDirection])
+
+  // Check for SAM.gov connection
+  const checkConnection = useCallback(async () => {
     if (!token) return
 
-    setIsLoading(true)
+    try {
+      const response = await connectionsApi.listConnections(token)
+      const samConnection = response.connections.find(
+        c => c.connection_type === 'sam_gov' && c.is_active
+      )
+      setHasConnection(!!samConnection)
+    } catch (err) {
+      // If we can't check connections, assume no connection
+      setHasConnection(false)
+    }
+  }, [token])
+
+  // Load data - silent parameter skips the loading spinner (for polling refreshes)
+  const loadData = useCallback(async (silent = false) => {
+    if (!token) return
+
+    if (!silent) {
+      setIsLoading(true)
+    }
     setError('')
 
     try {
@@ -69,22 +143,37 @@ function SamSetupContent() {
     } catch (err: any) {
       setError(err.message || 'Failed to load SAM data')
     } finally {
-      setIsLoading(false)
+      if (!silent) {
+        setIsLoading(false)
+      }
     }
   }, [token])
 
   useEffect(() => {
     if (token) {
-      loadData()
+      checkConnection()
     }
-  }, [token, loadData])
+  }, [token, checkConnection])
+
+  useEffect(() => {
+    if (token && hasConnection === true) {
+      loadData()
+    } else if (hasConnection === false) {
+      setIsLoading(false)
+    }
+  }, [token, hasConnection, loadData])
+
+  // Show connection required screen if no SAM.gov connection
+  if (hasConnection === false) {
+    return <SamConnectionRequired />
+  }
 
   // Poll when any search is pulling
   useEffect(() => {
     const hasPulling = searches.some(s => s.is_pulling)
     if (hasPulling) {
       const interval = setInterval(() => {
-        loadData()
+        loadData(true) // Silent refresh - don't show spinner
       }, 3000) // Poll every 3 seconds while pulling
       return () => clearInterval(interval)
     }
@@ -161,13 +250,23 @@ function SamSetupContent() {
       } else {
         toast.success(`Pull completed: ${result.new_solicitations || 0} new solicitations`)
       }
-      // Refresh data periodically to show results as they come in
-      loadData()
-      setTimeout(() => loadData(), 5000)
-      setTimeout(() => loadData(), 15000)
+      // Refresh data silently to show the pulling indicator
+      // The polling effect will take over once is_pulling is detected
+      loadData(true)
     } catch (err: any) {
-      setError(err.message || 'Failed to trigger pull')
-      toast.error(err.message || 'Failed to trigger pull')
+      // Check if this is a rate limit error (429)
+      const isRateLimit = err.status === 429
+      if (isRateLimit) {
+        // Show a warning toast for rate limiting (not an error)
+        toast(err.message || 'Please wait before triggering another pull.', {
+          icon: '⏳',
+          duration: 4000,
+        })
+      } else {
+        // Show error for actual failures
+        setError(err.message || 'Failed to trigger pull')
+        toast.error(err.message || 'Failed to trigger pull')
+      }
     }
   }
 
@@ -416,22 +515,70 @@ function SamSetupContent() {
             </div>
           </div>
         ) : (
-          /* Grid of Cards */
-          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
-            {searches.map((search) => (
-              <SearchCard
-                key={search.id}
-                search={search}
-                onEdit={() => handleEdit(search)}
-                onClone={() => handleClone(search)}
-                onDelete={() => handleDelete(search)}
-                onTriggerPull={() => handleTriggerPull(search)}
-                onClick={() => router.push(`/sam/${search.id}`)}
-                formatDate={formatDate}
-                getStatusColor={getStatusColor}
-                getPullStatusColor={getPullStatusColor}
-              />
-            ))}
+          /* Table View */
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="bg-gray-50 dark:bg-gray-900/50 border-b border-gray-200 dark:border-gray-700">
+                    <SortableHeader
+                      label="Name"
+                      column="name"
+                      currentColumn={sortColumn}
+                      direction={sortDirection}
+                      onSort={handleSort}
+                    />
+                    <SortableHeader
+                      label="Status"
+                      column="status"
+                      currentColumn={sortColumn}
+                      direction={sortDirection}
+                      onSort={handleSort}
+                    />
+                    <SortableHeader
+                      label="Search Criteria"
+                      column="criteria"
+                      currentColumn={sortColumn}
+                      direction={sortDirection}
+                      onSort={handleSort}
+                    />
+                    <SortableHeader
+                      label="Frequency"
+                      column="frequency"
+                      currentColumn={sortColumn}
+                      direction={sortDirection}
+                      onSort={handleSort}
+                    />
+                    <SortableHeader
+                      label="Last Pull"
+                      column="lastPull"
+                      currentColumn={sortColumn}
+                      direction={sortDirection}
+                      onSort={handleSort}
+                    />
+                    <th className="px-4 py-3 text-right text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {sortedSearches.map((search) => (
+                    <SearchTableRow
+                      key={search.id}
+                      search={search}
+                      onEdit={() => handleEdit(search)}
+                      onClone={() => handleClone(search)}
+                      onDelete={() => handleDelete(search)}
+                      onTriggerPull={() => handleTriggerPull(search)}
+                      onClick={() => router.push(`/sam/${search.id}`)}
+                      formatDate={formatDate}
+                      getStatusColor={getStatusColor}
+                      getPullStatusColor={getPullStatusColor}
+                    />
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
       </div>
@@ -439,8 +586,44 @@ function SamSetupContent() {
   )
 }
 
-// Search Card Component
-interface SearchCardProps {
+// Search Table Row Component
+// Sortable Header Component
+interface SortableHeaderProps {
+  label: string
+  column: SortColumn
+  currentColumn: SortColumn
+  direction: SortDirection
+  onSort: (column: SortColumn) => void
+}
+
+function SortableHeader({ label, column, currentColumn, direction, onSort }: SortableHeaderProps) {
+  const isActive = currentColumn === column
+
+  return (
+    <th
+      className="px-4 py-3 text-left text-xs font-semibold text-gray-600 dark:text-gray-400 uppercase tracking-wider cursor-pointer hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors select-none"
+      onClick={() => onSort(column)}
+    >
+      <div className="flex items-center gap-1.5">
+        <span>{label}</span>
+        <span className="flex flex-col">
+          {isActive ? (
+            direction === 'asc' ? (
+              <ChevronUp className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+            ) : (
+              <ChevronDown className="w-3.5 h-3.5 text-indigo-600 dark:text-indigo-400" />
+            )
+          ) : (
+            <ArrowUpDown className="w-3.5 h-3.5 text-gray-400" />
+          )}
+        </span>
+      </div>
+    </th>
+  )
+}
+
+// Search Table Row Component
+interface SearchTableRowProps {
   search: SamSearch
   onEdit: () => void
   onClone: () => void
@@ -452,7 +635,7 @@ interface SearchCardProps {
   getPullStatusColor: (status: string | null) => string
 }
 
-function SearchCard({
+function SearchTableRow({
   search,
   onEdit,
   onClone,
@@ -462,172 +645,129 @@ function SearchCard({
   formatDate,
   getStatusColor,
   getPullStatusColor,
-}: SearchCardProps) {
+}: SearchTableRowProps) {
   const [showMenu, setShowMenu] = useState(false)
 
-  return (
-    <div
-      onClick={onClick}
-      className="group relative bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600 hover:shadow-lg hover:shadow-gray-200/50 dark:hover:shadow-gray-900/50 transition-all duration-200 cursor-pointer"
-    >
-      {/* Status bar at top */}
-      <div className={`absolute top-0 left-0 right-0 h-1 rounded-t-xl bg-gradient-to-r ${
-        search.is_pulling
-          ? 'from-indigo-500 to-purple-500 animate-pulse'
-          : search.status === 'active'
-          ? 'from-emerald-500 to-teal-500'
-          : search.status === 'paused'
-          ? 'from-amber-500 to-orange-500'
-          : 'from-gray-400 to-gray-500'
-      }`} />
+  // Build search criteria summary
+  const getCriteriaSummary = () => {
+    const parts: string[] = []
+    if (search.search_config?.naics_codes?.length > 0) {
+      const naics = search.search_config.naics_codes.slice(0, 2).join(', ')
+      const more = search.search_config.naics_codes.length > 2
+        ? ` +${search.search_config.naics_codes.length - 2}`
+        : ''
+      parts.push(`NAICS: ${naics}${more}`)
+    }
+    if (search.search_config?.keyword) {
+      parts.push(`"${search.search_config.keyword}"`)
+    }
+    return parts.length > 0 ? parts.join(' · ') : '-'
+  }
 
-      <div className="p-5">
-        {/* Header */}
-        <div className="flex items-start justify-between mb-3">
-          <div className="flex-1 min-w-0">
-            <h3 className="font-semibold text-gray-900 dark:text-white truncate">
+  return (
+    <tr
+      onClick={onClick}
+      className="hover:bg-gray-50 dark:hover:bg-gray-900/50 cursor-pointer transition-colors"
+    >
+      {/* Name */}
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-3">
+          {/* Pulling indicator */}
+          {search.is_pulling && (
+            <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
+          )}
+          <div className="min-w-0">
+            <div className="font-medium text-gray-900 dark:text-white truncate max-w-[200px]">
               {search.name}
-            </h3>
+            </div>
             {search.description && (
-              <p className="text-xs text-gray-500 dark:text-gray-400 truncate mt-0.5">
+              <div className="text-xs text-gray-500 dark:text-gray-400 truncate max-w-[200px]">
                 {search.description}
-              </p>
+              </div>
             )}
           </div>
-          <span className={`ml-2 inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium ${getStatusColor(search.status)}`}>
-            {search.status}
+        </div>
+      </td>
+
+      {/* Status */}
+      <td className="px-4 py-3">
+        <span className={`inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium ${getStatusColor(search.status)}`}>
+          {search.status}
+        </span>
+      </td>
+
+      {/* Search Criteria */}
+      <td className="px-4 py-3">
+        <div className="text-sm text-gray-600 dark:text-gray-300 truncate max-w-[250px]" title={getCriteriaSummary()}>
+          {getCriteriaSummary()}
+        </div>
+      </td>
+
+      {/* Frequency */}
+      <td className="px-4 py-3">
+        <div className="flex items-center gap-1.5 text-sm text-gray-600 dark:text-gray-300">
+          <Clock className="w-3.5 h-3.5 text-gray-400" />
+          <span className="capitalize">
+            {search.pull_frequency === 'manual' ? 'Manual' : search.pull_frequency}
           </span>
         </div>
+      </td>
 
-        {/* Config Summary */}
-        <div className="mb-4 space-y-1">
-          {search.search_config?.naics_codes?.length > 0 && (
-            <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-              <span className="font-medium">NAICS:</span>
-              <span className="truncate">{search.search_config.naics_codes.slice(0, 3).join(', ')}</span>
-              {search.search_config.naics_codes.length > 3 && (
-                <span className="text-gray-400">+{search.search_config.naics_codes.length - 3}</span>
-              )}
-            </div>
-          )}
-          {search.search_config?.keyword && (
-            <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-              <span className="font-medium">Keywords:</span>
-              <span className="truncate">{search.search_config.keyword}</span>
-            </div>
-          )}
-        </div>
-
-        {/* Search Settings */}
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <div className="flex items-center gap-2 text-sm">
-            <Clock className="w-4 h-4 text-blue-500" />
-            <span className="text-gray-600 dark:text-gray-300 capitalize">
-              {search.pull_frequency === 'manual' ? 'Manual pull' : `${search.pull_frequency} pull`}
-            </span>
+      {/* Last Pull */}
+      <td className="px-4 py-3">
+        {search.is_pulling ? (
+          <div className="flex items-center gap-1.5 text-sm text-indigo-600 dark:text-indigo-400">
+            <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+            <span className="font-medium">Pulling...</span>
           </div>
-          <div className="flex items-center gap-2 text-sm">
-            <Search className="w-4 h-4 text-purple-500" />
-            <span className="text-gray-600 dark:text-gray-300">
-              {search.search_config?.posted_from
-                ? `From ${search.search_config.posted_from}`
-                : search.search_config?.active_only
-                ? 'Active only'
-                : 'All dates'}
-            </span>
+        ) : (
+          <div className={`text-sm ${getPullStatusColor(search.last_pull_status)}`}>
+            {formatDate(search.last_pull_at)}
           </div>
-        </div>
+        )}
+      </td>
 
-        {/* Footer */}
-        <div className="flex items-center justify-between pt-4 border-t border-gray-100 dark:border-gray-700">
-          <div className="flex items-center gap-2 text-xs text-gray-500 dark:text-gray-400">
-            {search.is_pulling ? (
-              <>
-                <RefreshCw className="w-3 h-3 animate-spin text-indigo-500" />
-                <span className="text-indigo-600 dark:text-indigo-400 font-medium">
-                  Pulling data...
-                </span>
-              </>
-            ) : (
-              <>
-                <Clock className="w-3 h-3" />
-                <span>Last pull: </span>
-                <span className={getPullStatusColor(search.last_pull_status)}>
-                  {formatDate(search.last_pull_at)}
-                </span>
-              </>
-            )}
-          </div>
+      {/* Actions */}
+      <td className="px-4 py-3">
+        <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+          {/* Sync button */}
+          <button
+            onClick={() => {
+              if (!search.is_pulling) {
+                onTriggerPull()
+              }
+            }}
+            disabled={search.is_pulling}
+            title={search.is_pulling ? 'Sync in progress...' : 'Sync now'}
+            className={`p-1.5 rounded-lg transition-all ${
+              search.is_pulling
+                ? 'text-indigo-500 cursor-not-allowed'
+                : 'text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20'
+            }`}
+          >
+            <RefreshCw className={`w-4 h-4 ${search.is_pulling ? 'animate-spin' : ''}`} />
+          </button>
 
-          {/* Action buttons */}
-          <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-            {/* Sync/Refresh button */}
+          {/* Edit button */}
+          <button
+            onClick={onEdit}
+            title="Edit"
+            className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
+          >
+            <Pencil className="w-4 h-4" />
+          </button>
+
+          {/* More menu */}
+          <div className="relative">
             <button
-              onClick={() => {
-                if (!search.is_pulling) {
-                  onTriggerPull()
-                }
-              }}
-              disabled={search.is_pulling}
-              title={search.is_pulling ? 'Sync in progress...' : 'Sync now'}
-              className={`p-2 rounded-lg transition-all ${
-                search.is_pulling
-                  ? 'text-indigo-500 cursor-not-allowed'
-                  : 'text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20'
-              }`}
+              onClick={() => setShowMenu(!showMenu)}
+              className="p-1.5 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
             >
-              <RefreshCw className={`w-4 h-4 ${search.is_pulling ? 'animate-spin' : ''}`} />
+              <MoreHorizontal className="w-4 h-4" />
             </button>
 
-            {/* Dropdown menu */}
-            <div className="relative">
-              <button
-                onClick={() => setShowMenu(!showMenu)}
-                className="p-2 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-all"
-              >
-                <MoreHorizontal className="w-4 h-4" />
-              </button>
-
             {showMenu && (
-              <div className="absolute right-0 bottom-full mb-1 w-48 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 py-1 z-50">
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    if (!search.is_pulling) {
-                      onTriggerPull()
-                      setShowMenu(false)
-                    }
-                  }}
-                  disabled={search.is_pulling}
-                  className={`w-full flex items-center gap-2 px-3 py-2 text-sm transition-colors ${
-                    search.is_pulling
-                      ? 'text-gray-400 dark:text-gray-500 cursor-not-allowed'
-                      : 'text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700'
-                  }`}
-                >
-                  {search.is_pulling ? (
-                    <>
-                      <RefreshCw className="w-4 h-4 animate-spin" />
-                      Pulling...
-                    </>
-                  ) : (
-                    <>
-                      <Play className="w-4 h-4" />
-                      Pull Now
-                    </>
-                  )}
-                </button>
-                <button
-                  onClick={(e) => {
-                    e.stopPropagation()
-                    onEdit()
-                    setShowMenu(false)
-                  }}
-                  className="w-full flex items-center gap-2 px-3 py-2 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-                >
-                  <Pencil className="w-4 h-4" />
-                  Edit
-                </button>
+              <div className="absolute right-0 top-full mt-1 w-36 bg-white dark:bg-gray-800 rounded-lg shadow-xl border border-gray-200 dark:border-gray-700 py-1 z-50">
                 <button
                   onClick={(e) => {
                     e.stopPropagation()
@@ -653,10 +793,9 @@ function SearchCard({
                 </button>
               </div>
             )}
-            </div>
           </div>
         </div>
-      </div>
-    </div>
+      </td>
+    </tr>
   )
 }

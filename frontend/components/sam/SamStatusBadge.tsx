@@ -104,22 +104,29 @@ interface NoticeTypeBadgeProps {
   className?: string
 }
 
+// SAM.gov ptype values - see: https://open.gsa.gov/api/opportunities-api/
 const noticeTypeLabels: Record<string, string> = {
-  o: 'Combined',
+  k: 'Combined',      // Combined Synopsis/Solicitation
+  o: 'Solicitation',  // Solicitation
   p: 'Presolicitation',
-  k: 'Sources Sought',
-  r: 'Special Notice',
-  s: 'Award',
-  a: 'Amendment',
+  r: 'Sources Sought',
+  s: 'Special Notice',
+  a: 'Award',         // Award Notice
+  u: 'J&A',           // Justification (J&A)
+  i: 'Bundle (DoD)',  // Intent to Bundle Requirements
+  g: 'Surplus Sale',  // Sale of Surplus Property
 }
 
 const noticeTypeColors: Record<string, string> = {
-  o: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
+  k: 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300',
+  o: 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300',
   p: 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300',
-  k: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300',
-  r: 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400',
-  s: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300',
-  a: 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300',
+  r: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300',
+  s: 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400',
+  a: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300',
+  u: 'bg-rose-100 dark:bg-rose-900/30 text-rose-700 dark:text-rose-300',
+  i: 'bg-cyan-100 dark:bg-cyan-900/30 text-cyan-700 dark:text-cyan-300',
+  g: 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300',
 }
 
 export function NoticeTypeBadge({ type, className }: NoticeTypeBadgeProps) {

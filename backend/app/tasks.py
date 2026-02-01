@@ -989,7 +989,9 @@ async def _check_scheduled_tasks() -> Dict[str, Any]:
                 )
                 session.add(log_event)
 
-                await session.flush()
+                # Commit before dispatching Celery task to ensure Run is visible to worker
+                # (Same fix as extraction queue race condition)
+                await session.commit()
 
                 # Enqueue the task for execution
                 execute_scheduled_task_async.delay(
@@ -1250,6 +1252,7 @@ def sam_pull_task(
     max_pages: int = 10,
     page_size: int = 100,
     auto_download_attachments: bool = True,
+    run_id: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Celery task to pull opportunities from SAM.gov API.
@@ -1263,6 +1266,7 @@ def sam_pull_task(
         max_pages: Maximum pages to fetch (default 10)
         page_size: Results per page (default 100)
         auto_download_attachments: Whether to download attachments after pull (default True)
+        run_id: Optional pre-created Run UUID string. If provided, uses this Run instead of creating a new one.
 
     Returns:
         Dict containing:
@@ -1279,39 +1283,56 @@ def sam_pull_task(
     from .services.sam_pull_service import sam_pull_service
     from .services.sam_service import sam_service
     from .database.models import Run
+    from sqlalchemy import select
 
     logger = logging.getLogger("curatore.sam")
-    logger.info(f"Starting SAM pull task for search {search_id}")
+    logger.info(f"Starting SAM pull task for search {search_id}" + (f" (run_id={run_id})" if run_id else ""))
 
-    run_id = None
+    # Convert run_id to UUID if provided
+    run_uuid = uuid.UUID(run_id) if run_id else None
 
     try:
-        async def _create_run_and_pull():
-            nonlocal run_id
+        async def _execute_pull():
+            nonlocal run_uuid
             async with database_service.get_session() as session:
-                # Create a Run record for this pull
-                run = Run(
-                    organization_id=uuid.UUID(organization_id),
-                    run_type="sam_pull",
-                    origin="system",
-                    status="running",
-                    config={
-                        "search_id": search_id,
-                        "max_pages": max_pages,
-                        "page_size": page_size,
-                        "auto_download_attachments": auto_download_attachments,
-                    },
-                    started_at=datetime.utcnow(),
-                )
-                session.add(run)
-                await session.flush()
-                run_id = run.id
-
-                # Update the search with the run_id
-                search = await sam_service.get_search(session, uuid.UUID(search_id))
-                if search:
-                    search.last_pull_run_id = run.id
+                # If run_id was provided, use the existing Run; otherwise create a new one
+                if run_uuid:
+                    # Fetch the existing Run
+                    run_result = await session.execute(
+                        select(Run).where(Run.id == run_uuid)
+                    )
+                    run = run_result.scalar_one_or_none()
+                    if not run:
+                        logger.error(f"Run not found: {run_uuid}")
+                        raise ValueError(f"Run not found: {run_uuid}")
+                    # Update to running status
+                    run.status = "running"
+                    run.started_at = datetime.utcnow()
                     await session.commit()
+                else:
+                    # Create a new Run record (for backward compatibility / scheduled pulls)
+                    run = Run(
+                        organization_id=uuid.UUID(organization_id),
+                        run_type="sam_pull",
+                        origin="system",
+                        status="running",
+                        config={
+                            "search_id": search_id,
+                            "max_pages": max_pages,
+                            "page_size": page_size,
+                            "auto_download_attachments": auto_download_attachments,
+                        },
+                        started_at=datetime.utcnow(),
+                    )
+                    session.add(run)
+                    await session.flush()
+                    run_uuid = run.id
+
+                    # Update the search with the run_id
+                    search = await sam_service.get_search(session, uuid.UUID(search_id))
+                    if search:
+                        search.last_pull_run_id = run.id
+                        await session.commit()
 
                 # Perform the pull
                 result = await sam_pull_service.pull_opportunities(
@@ -1321,10 +1342,36 @@ def sam_pull_task(
                     max_pages=max_pages,
                     page_size=page_size,
                     auto_download_attachments=auto_download_attachments,
+                    run_id=run_uuid,
+                )
+
+                # Log completion summary
+                from .services.run_log_service import run_log_service
+                status = "completed" if result.get("status") == "success" else "failed"
+                total_fetched = result.get("total_fetched", 0)
+                new_solicitations = result.get("new_solicitations", 0)
+                updated_solicitations = result.get("updated_solicitations", 0)
+                new_notices = result.get("new_notices", 0)
+                new_attachments = result.get("new_attachments", 0)
+                error_count = len(result.get("errors", []))
+
+                await run_log_service.log_summary(
+                    session=session,
+                    run_id=run_uuid,
+                    message=f"SAM.gov pull {status}: {total_fetched} fetched, {new_solicitations} new, {updated_solicitations} updated",
+                    context={
+                        "status": status,
+                        "total_fetched": total_fetched,
+                        "new_solicitations": new_solicitations,
+                        "updated_solicitations": updated_solicitations,
+                        "new_notices": new_notices,
+                        "new_attachments": new_attachments,
+                        "errors": error_count,
+                    },
                 )
 
                 # Update Run with results
-                run.status = "completed" if result.get("status") == "success" else "completed"
+                run.status = status
                 run.completed_at = datetime.utcnow()
                 run.results_summary = {
                     "total_fetched": result.get("total_fetched", 0),
@@ -1334,13 +1381,16 @@ def sam_pull_task(
                     "new_attachments": result.get("new_attachments", 0),
                     "status": result.get("status"),
                 }
-                if result.get("errors"):
+                # Capture error message from either 'error' (single) or 'errors' (list)
+                if result.get("error"):
+                    run.error_message = result.get("error")
+                elif result.get("errors"):
                     run.error_message = "; ".join(str(e) for e in result["errors"][:5])
                 await session.commit()
 
                 return result
 
-        result = asyncio.run(_create_run_and_pull())
+        result = asyncio.run(_execute_pull())
 
         logger.info(
             f"SAM pull completed: {result.get('new_solicitations', 0)} new, "
@@ -1359,14 +1409,14 @@ def sam_pull_task(
     except Exception as e:
         logger.error(f"SAM pull task failed: {e}")
 
-        # Update Run status to failed if we have a run_id
-        if run_id:
+        # Update Run status to failed if we have a run_uuid
+        if run_uuid:
             try:
                 async def _mark_failed():
                     async with database_service.get_session() as session:
                         from sqlalchemy import select
                         result = await session.execute(
-                            select(Run).where(Run.id == run_id)
+                            select(Run).where(Run.id == run_uuid)
                         )
                         run = result.scalar_one_or_none()
                         if run:

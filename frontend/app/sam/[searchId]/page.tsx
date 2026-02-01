@@ -26,6 +26,7 @@ import {
   AlertCircle,
   Pencil,
   History,
+  ExternalLink,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import SamSearchForm from '@/components/sam/SamSearchForm'
@@ -193,14 +194,16 @@ function SamSearchDetailContent({ params }: PageProps) {
     }
   }
 
+  // SAM.gov ptype values - see: https://open.gsa.gov/api/opportunities-api/
   const getNoticeTypeLabel = (noticeType: string) => {
     const labels: Record<string, string> = {
+      k: 'Combined Synopsis',  // Combined Synopsis/Solicitation
       o: 'Solicitation',
       p: 'Presolicitation',
-      k: 'Combined Synopsis',
       r: 'Sources Sought',
       s: 'Special Notice',
       a: 'Award',
+      u: 'J&A',                // Justification (J&A)
       i: 'Intent to Bundle',
       g: 'Sale of Surplus',
     }
@@ -518,6 +521,9 @@ function SamSearchDetailContent({ params }: PageProps) {
                       <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
                         Attachments
                       </th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                        Actions
+                      </th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
@@ -583,6 +589,15 @@ function SamSearchDetailContent({ params }: PageProps) {
                             <span className="text-sm text-gray-600 dark:text-gray-400">
                               {pull.results_summary?.new_attachments ?? '-'}
                             </span>
+                          </td>
+                          <td className="px-4 py-4 text-right">
+                            <Link
+                              href={`/admin/queue/${pull.id}`}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium text-blue-600 dark:text-blue-400 hover:text-blue-700 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/20 rounded-lg transition-colors"
+                            >
+                              View Job
+                              <ExternalLink className="w-3 h-3" />
+                            </Link>
                           </td>
                         </tr>
                       )

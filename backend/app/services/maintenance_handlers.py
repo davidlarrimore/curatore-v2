@@ -42,6 +42,7 @@ from ..database.models import (
     SharePointSyncConfig,
     SharePointSyncedDocument,
     AssetVersion,
+    SamSearch,
 )
 
 logger = logging.getLogger("curatore.services.maintenance")
@@ -1250,7 +1251,9 @@ async def handle_sharepoint_scheduled_sync(
                 },
             )
             session.add(sync_run)
-            await session.flush()
+
+            # Commit before dispatching Celery task to ensure Run is visible to worker
+            await session.commit()
 
             # Trigger the sync task
             from ..tasks import sharepoint_sync_task
@@ -1287,6 +1290,159 @@ async def handle_sharepoint_scheduled_sync(
     await _log_event(
         session, run.id, "INFO", "summary",
         f"Scheduled SharePoint sync complete: {syncs_triggered}/{configs_found} syncs triggered, {syncs_skipped} skipped",
+        summary
+    )
+
+    return summary
+
+
+# =============================================================================
+# Handler: SAM.gov Scheduled Pull
+# =============================================================================
+
+async def handle_sam_scheduled_pull(
+    session: AsyncSession,
+    run: Run,
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Execute scheduled SAM.gov pulls for all searches with matching frequency.
+
+    This handler:
+    1. Finds all SamSearch records with the specified frequency
+    2. Skips searches that already have a running pull
+    3. Triggers sam_pull_task for each eligible search
+
+    Args:
+        session: Database session
+        run: Run context for tracking
+        config: Task configuration:
+            - frequency: "hourly" or "daily" (required)
+
+    Returns:
+        Dict with pull statistics:
+        {
+            "frequency": str,
+            "searches_found": int,
+            "pulls_triggered": int,
+            "pulls_skipped": int,
+            "errors": list
+        }
+    """
+    from uuid import uuid4
+
+    frequency = config.get("frequency")
+    if not frequency:
+        await _log_event(
+            session, run.id, "ERROR", "error",
+            "Missing 'frequency' in config (expected 'hourly' or 'daily')"
+        )
+        return {
+            "status": "failed",
+            "error": "Missing frequency configuration",
+        }
+
+    await _log_event(
+        session, run.id, "INFO", "start",
+        f"Starting scheduled SAM.gov pull for frequency: {frequency}"
+    )
+
+    # Find all active SAM searches with matching frequency
+    searches_result = await session.execute(
+        select(SamSearch).where(
+            and_(
+                SamSearch.pull_frequency == frequency,
+                SamSearch.is_active == True,
+                SamSearch.status == "active",
+            )
+        )
+    )
+    sam_searches = list(searches_result.scalars().all())
+
+    searches_found = len(sam_searches)
+    pulls_triggered = 0
+    pulls_skipped = 0
+    errors: List[str] = []
+
+    await _log_event(
+        session, run.id, "INFO", "progress",
+        f"Found {searches_found} SAM searches with frequency '{frequency}'"
+    )
+
+    for search in sam_searches:
+        try:
+            # Check if there's already a running pull for this search
+            active_run_result = await session.execute(
+                select(Run).where(
+                    and_(
+                        Run.run_type == "sam_pull",
+                        Run.status.in_(["pending", "running"]),
+                        Run.config["search_id"].astext == str(search.id),
+                    )
+                ).limit(1)
+            )
+            active_run = active_run_result.scalar_one_or_none()
+
+            if active_run:
+                await _log_event(
+                    session, run.id, "INFO", "progress",
+                    f"Skipping '{search.name}' - pull already in progress (run_id={active_run.id})"
+                )
+                pulls_skipped += 1
+                continue
+
+            # Create a new run for this pull
+            pull_run = Run(
+                id=uuid4(),
+                organization_id=search.organization_id,
+                run_type="sam_pull",
+                origin="scheduled",
+                status="pending",
+                config={
+                    "search_id": str(search.id),
+                    "search_name": search.name,
+                    "triggered_by_task": str(run.id),
+                },
+            )
+            session.add(pull_run)
+
+            # Commit before dispatching Celery task to ensure Run is visible to worker
+            await session.commit()
+
+            # Trigger the pull task
+            from ..tasks import sam_pull_task
+            sam_pull_task.delay(
+                search_id=str(search.id),
+                organization_id=str(search.organization_id),
+                run_id=str(pull_run.id),
+            )
+
+            pulls_triggered += 1
+            await _log_event(
+                session, run.id, "INFO", "progress",
+                f"Triggered pull for '{search.name}' (run_id={pull_run.id})"
+            )
+
+        except Exception as e:
+            error_msg = f"Failed to trigger pull for '{search.name}': {str(e)}"
+            logger.error(error_msg)
+            errors.append(error_msg)
+            await _log_event(
+                session, run.id, "ERROR", "error",
+                error_msg
+            )
+
+    summary = {
+        "frequency": frequency,
+        "searches_found": searches_found,
+        "pulls_triggered": pulls_triggered,
+        "pulls_skipped": pulls_skipped,
+        "errors": errors,
+    }
+
+    await _log_event(
+        session, run.id, "INFO", "summary",
+        f"Scheduled SAM.gov pull complete: {pulls_triggered}/{searches_found} pulls triggered, {pulls_skipped} skipped",
         summary
     )
 
@@ -1425,6 +1581,7 @@ MAINTENANCE_HANDLERS = {
     "search.reindex": handle_search_reindex,
     "stale_run.cleanup": handle_stale_run_cleanup,
     "sharepoint.scheduled_sync": handle_sharepoint_scheduled_sync,
+    "sam.scheduled_pull": handle_sam_scheduled_pull,
     "extraction.queue_pending": handle_queue_pending_assets,
 }
 

@@ -441,6 +441,10 @@ class ScheduledTaskService:
         await session.flush()
         await session.refresh(run)
 
+        # Commit before dispatching Celery task to ensure Run is visible to worker
+        # (Same fix as extraction queue race condition)
+        await session.commit()
+
         logger.info(f"Triggered scheduled task: {task.name} (run_id={run.id})")
 
         # Enqueue the task for execution

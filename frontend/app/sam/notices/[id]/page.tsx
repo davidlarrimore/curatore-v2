@@ -4,7 +4,7 @@ import { useState, useEffect, use, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
-import { samApi, SamNotice, SamSolicitation, SamAttachment } from '@/lib/api'
+import { samApi, assetsApi, SamNotice, SamSolicitation, SamAttachment } from '@/lib/api'
 import { formatDate as formatDateUtil, formatDateTime as formatDateTimeUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamBreadcrumbs from '@/components/sam/SamBreadcrumbs'
@@ -24,6 +24,9 @@ import {
   Sparkles,
   Download,
   Tag,
+  Eye,
+  CheckCircle,
+  XCircle,
 } from 'lucide-react'
 
 interface PageProps {
@@ -142,23 +145,65 @@ function SamNoticeDetailContent({ params }: PageProps) {
     }
   }
 
-  // Handle download attachment
-  const handleDownloadAttachment = async (attachmentId: string) => {
-    if (!token) return
-
-    try {
-      await samApi.downloadAttachment(token, attachmentId)
-      // Reload attachments to get updated status
-      const attachmentsData = await samApi.getNoticeAttachments(token, noticeId)
-      setAttachments(attachmentsData)
-    } catch (err: any) {
-      setError(err.message || 'Failed to download attachment')
-    }
-  }
 
   // Use date utilities for consistent EST display
   const formatDate = (dateStr: string | null) => formatDateUtil(dateStr)
   const formatDateTime = (dateStr: string | null) => formatDateTimeUtil(dateStr)
+
+  // Format file size
+  const formatFileSize = (bytes: number) => {
+    if (bytes < 1024) return `${bytes} B`
+    if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+    return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+  }
+
+  // Get download status badge class
+  const getDownloadStatusBadge = (status: string) => {
+    switch (status) {
+      case 'downloaded':
+        return 'bg-emerald-100 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400'
+      case 'downloading':
+        return 'bg-blue-100 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400'
+      case 'failed':
+        return 'bg-red-100 dark:bg-red-900/20 text-red-700 dark:text-red-400'
+      default:
+        return 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
+    }
+  }
+
+  // Handle view asset
+  const handleViewAsset = (assetId: string) => {
+    router.push(`/assets/${assetId}`)
+  }
+
+  // Handle download attachment file
+  const handleDownloadFile = async (attachment: SamAttachment) => {
+    if (!token || !attachment.asset_id) return
+
+    try {
+      const asset = await assetsApi.getAsset(token, attachment.asset_id)
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+      const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
+
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+
+      if (!response.ok) throw new Error('Download failed')
+
+      const blob = await response.blob()
+      const downloadUrl = window.URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = downloadUrl
+      a.download = attachment.filename || 'download'
+      document.body.appendChild(a)
+      a.click()
+      window.URL.revokeObjectURL(downloadUrl)
+      document.body.removeChild(a)
+    } catch (err: any) {
+      setError(err.message || 'Failed to download file')
+    }
+  }
 
   // Render summary content for all notices
   const renderSummaryContent = () => {
@@ -368,48 +413,110 @@ function SamNoticeDetailContent({ params }: PageProps) {
       }
 
       return (
-        <div className="space-y-3">
-          {attachments.map((attachment) => (
-            <div
-              key={attachment.id}
-              className="flex items-center justify-between p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg border border-gray-100 dark:border-gray-800"
-            >
-              <div className="flex items-center gap-3">
-                <FileText className="w-5 h-5 text-gray-400" />
-                <div>
-                  <p className="text-sm font-medium text-gray-900 dark:text-white">
-                    {attachment.filename}
-                  </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    {attachment.file_type?.toUpperCase() || 'File'}
-                    {attachment.file_size && ` - ${(attachment.file_size / 1024).toFixed(1)} KB`}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-3">
-                <span className={`text-xs px-2 py-1 rounded-full ${
-                  attachment.download_status === 'downloaded'
-                    ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300'
-                    : attachment.download_status === 'downloading'
-                    ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
-                    : 'bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400'
-                }`}>
-                  {attachment.download_status}
-                </span>
-                {attachment.download_status !== 'downloaded' && (
-                  <Button
-                    variant="secondary"
-                    size="sm"
-                    onClick={() => handleDownloadAttachment(attachment.id)}
-                    className="gap-1"
-                  >
-                    <Download className="w-3 h-3" />
-                    Download
-                  </Button>
-                )}
-              </div>
-            </div>
-          ))}
+        <div className="overflow-x-auto">
+          <table className="w-full">
+            <thead>
+              <tr className="bg-gray-50 dark:bg-gray-900/50">
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                  Filename
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                  Type
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                  Size
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                  Status
+                </th>
+                <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                  Downloaded
+                </th>
+                <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 dark:text-gray-400 uppercase">
+                  Actions
+                </th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-200 dark:divide-gray-700">
+              {attachments.map((attachment) => {
+                const isPendingFilename = attachment.filename?.startsWith('pending_')
+                const displayFilename = isPendingFilename
+                  ? 'Awaiting download...'
+                  : attachment.filename
+
+                return (
+                  <tr key={attachment.id} className="hover:bg-gray-50 dark:hover:bg-gray-900/50">
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        <FileText className="w-4 h-4 text-gray-400" />
+                        <span className={`text-sm truncate max-w-xs ${isPendingFilename ? 'text-gray-400 dark:text-gray-500 italic' : 'text-gray-900 dark:text-white'}`}>
+                          {displayFilename}
+                        </span>
+                      </div>
+                      {isPendingFilename && attachment.resource_id && (
+                        <p className="text-xs text-gray-400 dark:text-gray-500 mt-0.5 truncate max-w-xs font-mono">
+                          Resource: {attachment.resource_id.substring(0, 12)}...
+                        </p>
+                      )}
+                      {attachment.description && !isPendingFilename && (
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 truncate max-w-xs">
+                          {attachment.description}
+                        </p>
+                      )}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className="text-xs font-mono text-gray-600 dark:text-gray-400 uppercase">
+                        {attachment.file_type || (isPendingFilename ? '...' : 'unknown')}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">
+                      {attachment.file_size ? formatFileSize(attachment.file_size) : (isPendingFilename ? '...' : 'Unknown')}
+                    </td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded ${getDownloadStatusBadge(attachment.download_status)}`}>
+                        {attachment.download_status === 'downloaded' && <CheckCircle className="w-3 h-3" />}
+                        {attachment.download_status === 'pending' && <Clock className="w-3 h-3" />}
+                        {attachment.download_status === 'downloading' && <Loader2 className="w-3 h-3 animate-spin" />}
+                        {attachment.download_status === 'failed' && <XCircle className="w-3 h-3" />}
+                        {attachment.download_status}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-xs text-gray-500 dark:text-gray-400">
+                      {attachment.downloaded_at ? formatDateTime(attachment.downloaded_at) : '-'}
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <div className="flex items-center justify-end gap-1">
+                        {attachment.asset_id && (
+                          <>
+                            <button
+                              onClick={() => handleViewAsset(attachment.asset_id!)}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+                              title="View Asset"
+                            >
+                              <Eye className="w-4 h-4" />
+                            </button>
+                            <button
+                              onClick={() => handleDownloadFile(attachment)}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 rounded transition-colors"
+                              title="Download File"
+                            >
+                              <Download className="w-4 h-4" />
+                            </button>
+                          </>
+                        )}
+                        {!attachment.asset_id && attachment.download_status === 'pending' && (
+                          <span className="text-xs text-gray-400 italic">Pending</span>
+                        )}
+                        {!attachment.asset_id && attachment.download_status === 'failed' && (
+                          <span className="text-xs text-red-400 italic">Failed</span>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
         </div>
       )
     }
