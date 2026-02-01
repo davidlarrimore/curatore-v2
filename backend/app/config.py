@@ -297,34 +297,32 @@ class Settings(BaseSettings):
     )
 
     # =========================================================================
-    # OPENSEARCH CONFIGURATION (Native Full-Text Search)
+    # SEARCH CONFIGURATION (PostgreSQL + pgvector)
     # =========================================================================
-    opensearch_enabled: bool = Field(
-        default=False, description="Enable native full-text search with OpenSearch"
+    search_enabled: bool = Field(
+        default=True, description="Enable full-text and semantic search with PostgreSQL + pgvector"
     )
-    opensearch_endpoint: str = Field(
-        default="opensearch:9200", description="OpenSearch endpoint (host:port)"
+    embedding_model: str = Field(
+        default="sentence-transformers/all-mpnet-base-v2",
+        description="HuggingFace model for generating embeddings"
     )
-    opensearch_username: str = Field(
-        default="", description="OpenSearch username (empty for no auth)"
+    embedding_device: str = Field(
+        default="cpu", description="Device for embedding model (cpu, cuda, mps)"
     )
-    opensearch_password: str = Field(
-        default="", description="OpenSearch password (empty for no auth)"
+    search_batch_size: int = Field(
+        default=50, description="Batch size for bulk indexing operations"
     )
-    opensearch_verify_ssl: bool = Field(
-        default=False, description="Verify SSL for OpenSearch connections"
-    )
-    opensearch_index_prefix: str = Field(
-        default="curatore", description="Prefix for all Curatore indices"
-    )
-    opensearch_batch_size: int = Field(
-        default=100, description="Batch size for bulk indexing operations"
-    )
-    opensearch_search_timeout: float = Field(
+    search_timeout: float = Field(
         default=30.0, description="Timeout (s) for search requests"
     )
-    opensearch_max_content_length: int = Field(
+    search_max_content_length: int = Field(
         default=100000, description="Maximum content length to index (characters)"
+    )
+    search_default_mode: str = Field(
+        default="hybrid", description="Default search mode: keyword, semantic, or hybrid"
+    )
+    search_semantic_weight: float = Field(
+        default=0.5, description="Weight for semantic scores in hybrid search (0-1)"
     )
 
     # =========================================================================

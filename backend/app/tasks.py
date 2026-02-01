@@ -25,12 +25,12 @@ from .config import settings
 logger = logging.getLogger("curatore.tasks")
 
 
-def _is_opensearch_enabled() -> bool:
-    """Check if OpenSearch is enabled via config.yml or environment variables."""
-    opensearch_config = config_loader.get_opensearch_config()
-    if opensearch_config:
-        return opensearch_config.enabled
-    return False
+def _is_search_enabled() -> bool:
+    """Check if search is enabled via config.yml or environment variables."""
+    search_config = config_loader.get_search_config()
+    if search_config:
+        return search_config.enabled
+    return getattr(settings, "search_enabled", True)
 
 
 # ============================================================================
@@ -424,11 +424,11 @@ def index_asset_task(
     asset_id: str,
 ) -> Dict[str, Any]:
     """
-    Index an asset to OpenSearch after extraction (Phase 6).
+    Index an asset to PostgreSQL search_chunks after extraction.
 
     This task is triggered when an asset's extraction completes successfully.
-    It downloads the extracted markdown from MinIO and indexes it to OpenSearch
-    for full-text search.
+    It downloads the extracted markdown from MinIO, chunks it, generates
+    embeddings, and indexes to PostgreSQL for hybrid full-text + semantic search.
 
     Args:
         asset_id: Asset UUID string
@@ -445,13 +445,13 @@ def index_asset_task(
 
     logger = logging.getLogger("curatore.tasks.indexing")
 
-    # Check if OpenSearch is enabled
-    if not _is_opensearch_enabled():
-        logger.debug(f"OpenSearch disabled, skipping index for asset {asset_id}")
+    # Check if search is enabled
+    if not _is_search_enabled():
+        logger.debug(f"Search disabled, skipping index for asset {asset_id}")
         return {
             "asset_id": asset_id,
             "status": "skipped",
-            "message": "OpenSearch is disabled",
+            "message": "Search is disabled",
         }
 
     logger.info(f"Starting index task for asset {asset_id}")
@@ -460,11 +460,11 @@ def index_asset_task(
         result = asyncio.run(_index_asset_async(UUID(asset_id)))
 
         if result:
-            logger.info(f"Indexed asset {asset_id} to OpenSearch")
+            logger.info(f"Indexed asset {asset_id} to search")
             return {
                 "asset_id": asset_id,
                 "status": "indexed",
-                "message": "Successfully indexed to OpenSearch",
+                "message": "Successfully indexed to search",
             }
         else:
             logger.warning(f"Failed to index asset {asset_id}")
@@ -489,10 +489,10 @@ async def _index_asset_async(asset_id) -> bool:
     Returns:
         True if indexed successfully
     """
-    from .services.index_service import index_service
+    from .services.pg_index_service import pg_index_service
 
     async with database_service.get_session() as session:
-        return await index_service.index_asset(session, asset_id)
+        return await pg_index_service.index_asset(session, asset_id)
 
 
 @shared_task(bind=True, autoretry_for=(), retry_kwargs={"max_retries": 0})
@@ -502,7 +502,7 @@ def reindex_organization_task(
     batch_size: Optional[int] = None,
 ) -> Dict[str, Any]:
     """
-    Reindex all assets for an organization (Phase 6).
+    Reindex all assets for an organization.
 
     This task is triggered manually by admins to rebuild the search index
     for an organization. Useful for migrations and recovery.
@@ -525,12 +525,12 @@ def reindex_organization_task(
 
     logger = logging.getLogger("curatore.tasks.indexing")
 
-    # Check if OpenSearch is enabled
-    if not _is_opensearch_enabled():
-        logger.info("OpenSearch disabled, skipping reindex")
+    # Check if search is enabled
+    if not _is_search_enabled():
+        logger.info("Search disabled, skipping reindex")
         return {
             "status": "disabled",
-            "message": "OpenSearch is disabled",
+            "message": "Search is disabled",
             "total": 0,
             "indexed": 0,
             "failed": 0,
@@ -574,11 +574,11 @@ async def _reindex_organization_async(
     Returns:
         Dict with reindex results
     """
-    from .services.index_service import index_service
+    from .services.pg_index_service import pg_index_service
 
     async with database_service.get_session() as session:
-        return await index_service.reindex_organization(
-            session, organization_id, batch_size
+        return await pg_index_service.reindex_organization(
+            session, organization_id, batch_size or 50
         )
 
 
@@ -588,10 +588,10 @@ def reindex_sam_organization_task(
     organization_id: str,
 ) -> Dict[str, Any]:
     """
-    Reindex all SAM.gov data for an organization (Phase 7.6).
+    Reindex all SAM.gov data for an organization.
 
-    This task indexes all existing SAM notices and solicitations to OpenSearch
-    for unified search. Useful for initial setup or recovery.
+    This task indexes all existing SAM notices and solicitations to the
+    search index for unified search. Useful for initial setup or recovery.
 
     Args:
         organization_id: Organization UUID string
@@ -603,12 +603,12 @@ def reindex_sam_organization_task(
 
     logger = logging.getLogger("curatore.tasks.sam_indexing")
 
-    # Check if OpenSearch is enabled
-    if not _is_opensearch_enabled():
-        logger.info("OpenSearch disabled, skipping SAM reindex")
+    # Check if search is enabled
+    if not _is_search_enabled():
+        logger.info("Search disabled, skipping SAM reindex")
         return {
             "status": "disabled",
-            "message": "OpenSearch is disabled",
+            "message": "Search is disabled",
             "solicitations_indexed": 0,
             "notices_indexed": 0,
         }
@@ -649,7 +649,7 @@ async def _reindex_sam_organization_async(
     Returns:
         Dict with reindex results
     """
-    from .services.opensearch_service import opensearch_service
+    from .services.pg_index_service import pg_index_service
     from .services.sam_service import sam_service
 
     logger = logging.getLogger("curatore.tasks.sam_indexing")
@@ -671,27 +671,20 @@ async def _reindex_sam_organization_async(
         for solicitation in solicitations:
             try:
                 # Index solicitation
-                success = await opensearch_service.index_sam_solicitation(
+                success = await pg_index_service.index_sam_solicitation(
+                    session=session,
                     organization_id=organization_id,
                     solicitation_id=solicitation.id,
                     solicitation_number=solicitation.solicitation_number,
                     title=solicitation.title,
-                    description=solicitation.description,
-                    notice_type=solicitation.notice_type,
+                    description=solicitation.description or "",
                     agency=solicitation.agency_name,
-                    sub_agency=solicitation.bureau_name,
                     office=solicitation.office_name,
+                    naics_code=solicitation.naics_code,
+                    set_aside=solicitation.set_aside_code,
                     posted_date=solicitation.posted_date,
                     response_deadline=solicitation.response_deadline,
-                    naics_codes=[solicitation.naics_code] if solicitation.naics_code else None,
-                    psc_codes=[solicitation.psc_code] if solicitation.psc_code else None,
-                    set_aside=solicitation.set_aside_code,
-                    place_of_performance=_extract_place_of_performance(solicitation.place_of_performance),
-                    notice_count=solicitation.notice_count or 0,
-                    attachment_count=solicitation.attachment_count or 0,
-                    summary_status=solicitation.summary_status,
-                    is_active=(solicitation.status == "active"),
-                    created_at=solicitation.created_at,
+                    url=solicitation.sam_url,
                 )
                 if success:
                     solicitations_indexed += 1
@@ -704,26 +697,19 @@ async def _reindex_sam_organization_async(
 
                 for notice in notices:
                     try:
-                        success = await opensearch_service.index_sam_notice(
+                        success = await pg_index_service.index_sam_notice(
+                            session=session,
                             organization_id=organization_id,
                             notice_id=notice.id,
                             sam_notice_id=notice.sam_notice_id,
                             solicitation_id=solicitation.id,
-                            solicitation_number=solicitation.solicitation_number,
                             title=notice.title,
-                            description=notice.description,
+                            description=notice.description or "",
                             notice_type=notice.notice_type,
                             agency=solicitation.agency_name,
-                            sub_agency=solicitation.bureau_name,
-                            office=solicitation.office_name,
                             posted_date=notice.posted_date,
                             response_deadline=notice.response_deadline,
-                            naics_codes=[solicitation.naics_code] if solicitation.naics_code else None,
-                            psc_codes=[solicitation.psc_code] if solicitation.psc_code else None,
-                            set_aside=solicitation.set_aside_code,
-                            place_of_performance=_extract_place_of_performance(solicitation.place_of_performance),
-                            version_number=notice.version_number,
-                            created_at=notice.created_at,
+                            url=notice.sam_url,
                         )
                         if success:
                             notices_indexed += 1
@@ -3321,7 +3307,7 @@ def async_delete_sync_config_task(
     1. Cancel pending extraction jobs
     2. Delete files from MinIO storage (raw and extracted)
     3. Hard delete Asset records from database
-    4. Remove documents from OpenSearch index
+    4. Remove documents from search index
     5. Delete SharePointSyncedDocument records
     6. Delete related Run records (except the deletion tracking run)
     7. Delete the sync config itself
@@ -3372,7 +3358,7 @@ async def _async_delete_sync_config(
     from .services.run_service import run_service
     from .services.run_log_service import run_log_service
     from .services.asset_service import asset_service
-    from .services.index_service import index_service
+    from .services.pg_index_service import pg_index_service
     from .services.minio_service import get_minio_service
     from sqlalchemy import delete as sql_delete, func
     from .database.models import (
@@ -3413,7 +3399,7 @@ async def _async_delete_sync_config(
             "documents_deleted": 0,
             "runs_deleted": 0,
             "extractions_cancelled": 0,
-            "opensearch_removed": 0,
+            "search_removed": 0,
             "storage_freed_bytes": 0,
             "errors": [],
         }
@@ -3491,12 +3477,12 @@ async def _async_delete_sync_config(
         for doc in synced_docs:
             if doc.asset_id:
                 try:
-                    # Remove from OpenSearch
+                    # Remove from search index
                     try:
-                        await index_service.delete_asset_index(organization_id, doc.asset_id)
-                        stats["opensearch_removed"] += 1
+                        await pg_index_service.delete_asset_index(session, organization_id, doc.asset_id)
+                        stats["search_removed"] += 1
                     except Exception as e:
-                        stats["errors"].append(f"OpenSearch removal failed for {doc.asset_id}: {e}")
+                        stats["errors"].append(f"Search index removal failed for {doc.asset_id}: {e}")
 
                     # Get asset to find file locations
                     asset = await asset_service.get_asset(session, doc.asset_id)
@@ -3698,7 +3684,7 @@ async def _async_delete_sync_config(
                 "files_deleted": stats["files_deleted"],
                 "documents_deleted": stats["documents_deleted"],
                 "runs_deleted": stats["runs_deleted"],
-                "opensearch_removed": stats["opensearch_removed"],
+                "search_removed": stats["search_removed"],
                 "storage_freed_mb": round(stats["storage_freed_bytes"] / (1024 * 1024), 2),
                 "errors": stats["errors"][:5] if stats["errors"] else [],
                 "status": "success" if len(stats["errors"]) == 0 else "partial",
@@ -3710,7 +3696,7 @@ async def _async_delete_sync_config(
         logger.info(
             f"Deleted sync config {sync_config_id} ({config_name}) with cleanup: "
             f"assets={stats['assets_deleted']}, docs={stats['documents_deleted']}, "
-            f"runs={stats['runs_deleted']}, opensearch={stats['opensearch_removed']}"
+            f"runs={stats['runs_deleted']}, search={stats['search_removed']}"
         )
 
         return stats
@@ -3889,7 +3875,7 @@ def async_delete_scrape_collection_task(
     1. Cancel pending extraction jobs
     2. Delete files from MinIO storage (raw and extracted)
     3. Hard delete Asset records from database
-    4. Remove documents from OpenSearch index
+    4. Remove documents from search index
     5. Delete ScrapedAsset records
     6. Delete ScrapeSource records
     7. Delete related Run records (except the deletion tracking run)
@@ -3941,7 +3927,7 @@ async def _async_delete_scrape_collection(
     from .services.run_service import run_service
     from .services.run_log_service import run_log_service
     from .services.asset_service import asset_service
-    from .services.index_service import index_service
+    from .services.pg_index_service import pg_index_service
     from .services.minio_service import get_minio_service
     from sqlalchemy import delete as sql_delete
     from .database.models import (
@@ -3983,7 +3969,7 @@ async def _async_delete_scrape_collection(
             "sources_deleted": 0,
             "runs_deleted": 0,
             "extractions_cancelled": 0,
-            "opensearch_removed": 0,
+            "search_removed": 0,
             "storage_freed_bytes": 0,
             "errors": [],
         }
@@ -4091,12 +4077,12 @@ async def _async_delete_scrape_collection(
         for scraped in scraped_assets:
             if scraped.asset_id:
                 try:
-                    # Remove from OpenSearch
+                    # Remove from search index
                     try:
-                        await index_service.delete_asset_index(organization_id, scraped.asset_id)
-                        stats["opensearch_removed"] += 1
+                        await pg_index_service.delete_asset_index(session, organization_id, scraped.asset_id)
+                        stats["search_removed"] += 1
                     except Exception as e:
-                        stats["errors"].append(f"OpenSearch removal failed for {scraped.asset_id}: {e}")
+                        stats["errors"].append(f"Search index removal failed for {scraped.asset_id}: {e}")
 
                     # Get asset to find file locations
                     asset = await asset_service.get_asset(session, scraped.asset_id)
@@ -4275,7 +4261,7 @@ async def _async_delete_scrape_collection(
                 "scraped_assets_deleted": stats["scraped_assets_deleted"],
                 "sources_deleted": stats["sources_deleted"],
                 "runs_deleted": stats["runs_deleted"],
-                "opensearch_removed": stats["opensearch_removed"],
+                "search_removed": stats["search_removed"],
                 "storage_freed_mb": round(stats["storage_freed_bytes"] / (1024 * 1024), 2),
                 "errors": stats["errors"][:5] if stats["errors"] else [],
                 "status": "success" if len(stats["errors"]) == 0 else "partial",

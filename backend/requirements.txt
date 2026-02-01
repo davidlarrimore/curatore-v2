@@ -51,8 +51,9 @@ boto3>=1.34.0  # Optional: AWS SES backend
 # Object Storage (MinIO / S3)
 minio>=7.2.0  # MinIO Python SDK for S3-compatible storage
 
-# Search (OpenSearch)
-opensearch-py>=2.4.0  # OpenSearch Python client for full-text search
+# Search (PostgreSQL + pgvector)
+pgvector>=0.3.0  # PostgreSQL vector similarity extension
+# Embeddings generated via OpenAI API (text-embedding-3-small) - no local models needed
 
 # PDF Generation (for SAM.gov summaries)
 markdown>=3.5.0  # Markdown to HTML conversion

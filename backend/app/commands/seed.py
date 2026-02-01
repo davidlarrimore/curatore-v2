@@ -231,11 +231,11 @@ async def seed_scheduled_tasks() -> list:
         {
             "name": "search_reindex",
             "display_name": "Search Index Rebuild",
-            "description": "Rebuild the OpenSearch full-text search index for all assets. Useful after enabling search or recovering from index issues.",
+            "description": "Rebuild the PostgreSQL search index (full-text + semantic) for all assets. Useful after enabling search or recovering from index issues.",
             "task_type": "search.reindex",
             "scope_type": "global",
             "schedule_expression": "0 2 * * 0",  # Weekly on Sunday at 2 AM UTC
-            "enabled": False,  # Disabled by default - enable when OpenSearch is configured
+            "enabled": False,  # Disabled by default - enable when search is configured
             "config": {"batch_size": 100},
         },
         {

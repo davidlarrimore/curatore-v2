@@ -2999,9 +2999,12 @@ export interface SearchFacets {
  */
 export interface SearchRequest {
   query: string
+  search_mode?: 'keyword' | 'semantic' | 'hybrid'
+  semantic_weight?: number
   source_types?: string[]
   content_types?: string[]
   collection_ids?: string[]
+  sync_config_ids?: string[]
   date_from?: string
   date_to?: string
   limit?: number
@@ -3022,6 +3025,8 @@ export interface SearchHit {
   url?: string
   created_at?: string
   highlights: Record<string, string[]>
+  keyword_score?: number
+  semantic_score?: number
 }
 
 /**
@@ -3044,6 +3049,7 @@ export interface IndexStatsResponse {
   status: string
   index_name?: string
   document_count?: number
+  chunk_count?: number
   size_bytes?: number
   message?: string
 }
@@ -3063,8 +3069,9 @@ export interface ReindexResponse {
 export interface SearchHealthResponse {
   enabled: boolean
   status: string
-  index_prefix?: string
-  endpoint?: string
+  backend?: string
+  embedding_model?: string
+  default_mode?: string
   message?: string
 }
 
@@ -4089,7 +4096,7 @@ export const sharepointSyncApi = {
   async archiveConfig(token: string | undefined, configId: string): Promise<{
     message: string
     archive_stats: {
-      opensearch_removed: number
+      search_removed: number
       errors: string[]
     }
   }> {

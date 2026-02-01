@@ -442,14 +442,14 @@ async def handle_orphan_detection(
                 # Auto-fix: Delete orphan SharePoint assets and their files
                 if auto_fix:
                     from .minio_service import get_minio_service
-                    from .index_service import index_service
+                    from .pg_index_service import pg_index_service
                     minio = get_minio_service()
 
                     for asset in orphan_sp_list:
                         try:
-                            # Remove from OpenSearch
+                            # Remove from search index
                             try:
-                                await index_service.delete_asset_index(asset.organization_id, asset.id)
+                                await pg_index_service.delete_asset_index(session, asset.organization_id, asset.id)
                             except:
                                 pass
 
@@ -795,10 +795,10 @@ async def handle_search_reindex(
     config: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Reindex all assets to OpenSearch for full-text search.
+    Reindex all assets to PostgreSQL + pgvector for full-text and semantic search.
 
     This handler:
-    1. Checks if OpenSearch is enabled
+    1. Checks if search is enabled
     2. Iterates over all organizations (or specific org if configured)
     3. Reindexes all assets with completed extractions
     4. Reports indexing statistics
@@ -822,7 +822,7 @@ async def handle_search_reindex(
         }
     """
     from .config_loader import config_loader
-    from .index_service import index_service
+    from .pg_index_service import pg_index_service
     from ..config import settings
 
     run_id = run.id
@@ -832,21 +832,21 @@ async def handle_search_reindex(
         "Starting search reindex maintenance task"
     )
 
-    # Check if OpenSearch is enabled
-    opensearch_config = config_loader.get_opensearch_config()
-    if opensearch_config:
-        enabled = opensearch_config.enabled
+    # Check if search is enabled
+    search_config = config_loader.get_search_config()
+    if search_config:
+        enabled = search_config.enabled
     else:
-        enabled = settings.opensearch_enabled
+        enabled = getattr(settings, "search_enabled", True)
 
     if not enabled:
         await _log_event(
             session, run_id, "INFO", "progress",
-            "OpenSearch is disabled, skipping reindex"
+            "Search is disabled, skipping reindex"
         )
         return {
             "status": "disabled",
-            "message": "OpenSearch is not enabled",
+            "message": "Search is not enabled",
             "organizations_processed": 0,
             "total_assets": 0,
             "indexed": 0,
@@ -884,7 +884,7 @@ async def handle_search_reindex(
         )
 
         try:
-            result = await index_service.reindex_organization(
+            result = await pg_index_service.reindex_organization(
                 session=session,
                 organization_id=org.id,
                 batch_size=batch_size,

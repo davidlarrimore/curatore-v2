@@ -58,6 +58,8 @@ export default function SearchPage() {
   )
 }
 
+type SearchMode = 'keyword' | 'semantic' | 'hybrid'
+
 function SearchContent() {
   const router = useRouter()
   const { token } = useAuth()
@@ -73,6 +75,8 @@ function SearchContent() {
   const [limit] = useState(20)
   const [offset, setOffset] = useState(0)
   const searchInputRef = useRef<HTMLInputElement>(null)
+  const [searchMode, setSearchMode] = useState<SearchMode>('hybrid')
+  const [semanticWeight, setSemanticWeight] = useState(0.5)
 
   // Number of content types to show before "Show more"
   const CONTENT_TYPE_INITIAL_COUNT = 5
@@ -101,6 +105,8 @@ function SearchContent() {
     try {
       const response = await searchApi.search(token, {
         query: debouncedQuery.trim(),
+        search_mode: searchMode,
+        semantic_weight: searchMode === 'hybrid' ? semanticWeight : undefined,
         source_types: selectedSourceTypes.length > 0 ? selectedSourceTypes : undefined,
         content_types: selectedContentTypes.length > 0 ? selectedContentTypes : undefined,
         include_facets: true,
@@ -111,7 +117,7 @@ function SearchContent() {
       setFacets(response.facets || null)
     } catch (err: any) {
       if (err.status === 503) {
-        setError('Search is not enabled. Enable OpenSearch to use this feature.')
+        setError('Search is not enabled. Enable SEARCH_ENABLED to use this feature.')
       } else {
         setError(err.message || 'Search failed')
       }
@@ -120,7 +126,7 @@ function SearchContent() {
     } finally {
       setIsLoading(false)
     }
-  }, [token, debouncedQuery, selectedSourceTypes, selectedContentTypes, limit, offset])
+  }, [token, debouncedQuery, searchMode, semanticWeight, selectedSourceTypes, selectedContentTypes, limit, offset])
 
   useEffect(() => {
     executeSearch()
@@ -260,6 +266,38 @@ function SearchContent() {
                 <X className="w-5 h-5" />
               </button>
             )}
+          </div>
+        </div>
+
+        {/* Search Mode Toggle */}
+        <div className="mb-6">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-sm text-gray-500 dark:text-gray-400">Mode:</span>
+            <div className="inline-flex rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 p-1">
+              {(['keyword', 'hybrid', 'semantic'] as const).map((mode) => (
+                <button
+                  key={mode}
+                  onClick={() => {
+                    setSearchMode(mode)
+                    setOffset(0)
+                  }}
+                  className={`px-3 py-1.5 text-sm font-medium rounded-md transition-all ${
+                    searchMode === mode
+                      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300'
+                      : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
+                  }`}
+                >
+                  {mode === 'keyword' && 'Keyword'}
+                  {mode === 'semantic' && 'Semantic'}
+                  {mode === 'hybrid' && 'Hybrid'}
+                </button>
+              ))}
+            </div>
+            <span className="text-xs text-gray-400 dark:text-gray-500">
+              {searchMode === 'keyword' && '(exact text matching)'}
+              {searchMode === 'semantic' && '(finds related content)'}
+              {searchMode === 'hybrid' && '(keyword + semantic combined)'}
+            </span>
           </div>
         </div>
 
@@ -499,7 +537,7 @@ function SearchContent() {
                         {hit.created_at && formatDate(hit.created_at)}
                       </span>
                       <span className="text-indigo-500 dark:text-indigo-400 font-medium">
-                        {(hit.score * 100).toFixed(0)}% match
+                        {Math.min(100, hit.score).toFixed(0)}% match
                       </span>
                     </div>
                   </div>

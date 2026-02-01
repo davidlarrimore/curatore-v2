@@ -14,11 +14,92 @@ from pydantic import BaseModel, Field, validator, ConfigDict
 import os
 
 
+class EmbeddingModelConfig(BaseModel):
+    """
+    Configuration for embedding model used in semantic search.
+
+    Supports OpenAI embedding models (text-embedding-3-small, text-embedding-3-large).
+    Uses the parent LLM connection settings (api_key, base_url).
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    model: str = Field(
+        default="text-embedding-3-small",
+        description="Embedding model identifier (e.g., text-embedding-3-small, text-embedding-3-large)"
+    )
+
+
+class TaskModelConfig(BaseModel):
+    """
+    Configuration for a task-specific LLM model.
+
+    Used for summarization, evaluation, and general tasks.
+    Uses the parent LLM connection settings (api_key, base_url, provider).
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    model: str = Field(
+        description="Model identifier (e.g., gpt-4o-mini, gpt-4o)"
+    )
+    temperature: Optional[float] = Field(
+        default=None,
+        ge=0.0,
+        le=2.0,
+        description="Generation temperature (inherits from llm.temperature if not set)"
+    )
+    max_tokens: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=128000,
+        description="Maximum tokens to generate"
+    )
+
+
+class ModelsConfig(BaseModel):
+    """
+    Use-case-specific model configuration.
+
+    Allows configuring different models for different tasks:
+    - embedding: Semantic search vector generation
+    - summarization: Document and SAM.gov summaries
+    - evaluation: Document quality assessment
+    - general: Default model for other tasks
+
+    Each model can override the parent LLM connection settings or inherit them.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    embedding: Optional[EmbeddingModelConfig] = Field(
+        default=None,
+        description="Model for generating semantic search embeddings"
+    )
+    summarization: Optional[TaskModelConfig] = Field(
+        default=None,
+        description="Model for document and SAM.gov summarization"
+    )
+    evaluation: Optional[TaskModelConfig] = Field(
+        default=None,
+        description="Model for document quality evaluation"
+    )
+    general: Optional[TaskModelConfig] = Field(
+        default=None,
+        description="Default model for general LLM tasks"
+    )
+
+
 class LLMConfig(BaseModel):
     """
     LLM service configuration.
 
     Supports OpenAI, Ollama, OpenWebUI, LM Studio, and compatible endpoints.
+
+    The 'models' section allows configuring different models for different use cases:
+    - embedding: For semantic search (default: text-embedding-3-small)
+    - summarization: For SAM.gov and document summaries
+    - evaluation: For document quality assessment
+    - general: For other LLM tasks
+
+    If models are not configured, the default 'model' is used for all tasks.
     """
     model_config = ConfigDict(extra='forbid')
 
@@ -33,7 +114,7 @@ class LLMConfig(BaseModel):
         description="API endpoint URL"
     )
     model: str = Field(
-        description="Model identifier (e.g., gpt-4o-mini, llama2)"
+        description="Default model identifier (e.g., gpt-4o-mini, llama2)"
     )
     timeout: int = Field(
         default=60,
@@ -51,7 +132,7 @@ class LLMConfig(BaseModel):
         default=0.7,
         ge=0.0,
         le=2.0,
-        description="Generation temperature"
+        description="Default generation temperature"
     )
     verify_ssl: bool = Field(
         default=True,
@@ -60,6 +141,10 @@ class LLMConfig(BaseModel):
     options: Optional[Dict[str, Any]] = Field(
         default=None,
         description="Provider-specific options"
+    )
+    models: Optional[ModelsConfig] = Field(
+        default=None,
+        description="Use-case-specific model configuration"
     )
 
 
@@ -477,38 +562,37 @@ class SamConfig(BaseModel):
     )
 
 
-class OpenSearchConfig(BaseModel):
+class SearchConfig(BaseModel):
     """
-    OpenSearch full-text search service configuration.
+    Search configuration for PostgreSQL + pgvector hybrid search.
 
-    Provides native full-text search across all indexed content (uploads,
-    SharePoint, web scrapes). Documents are automatically indexed after extraction.
+    Provides full-text search combined with semantic vector search across all
+    indexed content (uploads, SharePoint, web scrapes, SAM.gov). Documents are
+    automatically indexed after extraction.
+
+    Note: The embedding model is configured in llm.models.embedding, not here.
     """
     model_config = ConfigDict(extra='forbid')
 
     enabled: bool = Field(
-        default=False,
-        description="Enable OpenSearch full-text search"
+        default=True,
+        description="Enable full-text and semantic search"
     )
-    service_url: str = Field(
-        default="http://opensearch:9200",
-        description="OpenSearch service URL (e.g., http://opensearch:9200)"
+    default_mode: str = Field(
+        default="hybrid",
+        description="Default search mode: keyword, semantic, or hybrid"
     )
-    username: Optional[str] = Field(
-        default=None,
-        description="OpenSearch username (optional, empty for no auth)"
+    semantic_weight: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Weight for semantic scores in hybrid search (0=keyword only, 1=semantic only)"
     )
-    password: Optional[str] = Field(
-        default=None,
-        description="OpenSearch password (optional, empty for no auth)"
-    )
-    verify_ssl: bool = Field(
-        default=False,
-        description="Verify SSL certificates for OpenSearch connections"
-    )
-    index_prefix: str = Field(
-        default="curatore",
-        description="Prefix for all Curatore indices (indices named: {prefix}-assets-{org_id})"
+    batch_size: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description="Batch size for bulk indexing operations"
     )
     timeout: int = Field(
         default=30,
@@ -516,17 +600,23 @@ class OpenSearchConfig(BaseModel):
         le=300,
         description="Request timeout in seconds"
     )
-    batch_size: int = Field(
-        default=100,
-        ge=1,
-        le=1000,
-        description="Batch size for bulk indexing operations"
-    )
     max_content_length: int = Field(
         default=100000,
         ge=1000,
         le=1000000,
         description="Maximum content length to index (characters, longer content is truncated)"
+    )
+    chunk_size: int = Field(
+        default=1500,
+        ge=500,
+        le=5000,
+        description="Maximum characters per chunk for indexing"
+    )
+    chunk_overlap: int = Field(
+        default=200,
+        ge=0,
+        le=500,
+        description="Character overlap between consecutive chunks"
     )
 
 
@@ -630,9 +720,9 @@ class AppConfig(BaseModel):
         default=None,
         description="MinIO/S3 object storage configuration"
     )
-    opensearch: Optional[OpenSearchConfig] = Field(
+    search: Optional[SearchConfig] = Field(
         default=None,
-        description="OpenSearch full-text search configuration"
+        description="PostgreSQL + pgvector search configuration"
     )
     sam: Optional[SamConfig] = Field(
         default=None,

@@ -435,35 +435,35 @@ class SharePointSyncService:
         logger.info(f"Cancelled {cancelled_count} jobs for sync config {sync_config_id}")
         return cancelled_count
 
-    async def archive_sync_config_with_opensearch_cleanup(
+    async def archive_sync_config_with_search_cleanup(
         self,
         session: AsyncSession,
         sync_config_id: UUID,
         organization_id: UUID,
     ) -> Dict[str, Any]:
         """
-        Archive a sync config and remove documents from OpenSearch.
+        Archive a sync config and remove documents from search index.
 
         This removes documents from search but keeps assets intact:
-        1. Remove documents from OpenSearch index
+        1. Remove documents from search index
         2. Set config status to "archived"
 
         Args:
             session: Database session
             sync_config_id: Sync config UUID
-            organization_id: Organization UUID for OpenSearch
+            organization_id: Organization UUID for search index
 
         Returns:
             Dict with cleanup statistics
         """
-        from .index_service import index_service
+        from .pg_index_service import pg_index_service
 
         config = await self.get_sync_config(session, sync_config_id)
         if not config:
             return {"error": "Sync config not found"}
 
         stats = {
-            "opensearch_removed": 0,
+            "search_removed": 0,
             "jobs_cancelled": 0,
             "errors": [],
         }
@@ -482,14 +482,14 @@ class SharePointSyncService:
         )
         synced_docs = list(docs_result.scalars().all())
 
-        # Remove from OpenSearch only
+        # Remove from search index only
         for doc in synced_docs:
             if doc.asset_id:
                 try:
-                    await index_service.delete_asset_index(organization_id, doc.asset_id)
-                    stats["opensearch_removed"] += 1
+                    await pg_index_service.delete_asset_index(session, organization_id, doc.asset_id)
+                    stats["search_removed"] += 1
                 except Exception as e:
-                    stats["errors"].append(f"OpenSearch removal failed for {doc.asset_id}: {e}")
+                    stats["errors"].append(f"Search index removal failed for {doc.asset_id}: {e}")
 
         # Set config to archived status
         config.status = "archived"
@@ -500,7 +500,7 @@ class SharePointSyncService:
 
         logger.info(
             f"Archived sync config {sync_config_id}: "
-            f"opensearch_removed={stats['opensearch_removed']}, "
+            f"search_removed={stats['search_removed']}, "
             f"jobs_cancelled={stats['jobs_cancelled']}"
         )
 
@@ -518,7 +518,7 @@ class SharePointSyncService:
         This performs a complete removal including:
         1. Delete files from MinIO storage (raw and extracted)
         2. Hard delete Asset records from database
-        3. Remove documents from OpenSearch index
+        3. Remove documents from search index
         4. Delete SharePointSyncedDocument records
         5. Delete related Run records
         6. Delete the sync config itself
@@ -526,13 +526,13 @@ class SharePointSyncService:
         Args:
             session: Database session
             sync_config_id: Sync config UUID
-            organization_id: Organization UUID for OpenSearch
+            organization_id: Organization UUID for search index
 
         Returns:
             Dict with cleanup statistics
         """
         from .asset_service import asset_service
-        from .index_service import index_service
+        from .pg_index_service import pg_index_service
         from .minio_service import get_minio_service
         from sqlalchemy import delete as sql_delete, func
         from ..database.models import ExtractionResult, AssetVersion
@@ -549,7 +549,7 @@ class SharePointSyncService:
             "documents_deleted": 0,
             "runs_deleted": 0,
             "jobs_cancelled": 0,
-            "opensearch_removed": 0,
+            "search_removed": 0,
             "storage_freed_bytes": 0,
             "errors": [],
         }
@@ -574,14 +574,14 @@ class SharePointSyncService:
         assets = list(assets_result.scalars().all())
         logger.info(f"Found {len(assets)} assets with path prefix {path_prefix}")
 
-        # 2. Delete assets, files from MinIO, and remove from OpenSearch
+        # 2. Delete assets, files from MinIO, and remove from search index
         for asset in assets:
             try:
-                # Remove from OpenSearch
-                await index_service.delete_asset_index(organization_id, asset.id)
-                stats["opensearch_removed"] += 1
+                # Remove from search index
+                await pg_index_service.delete_asset_index(session, organization_id, asset.id)
+                stats["search_removed"] += 1
             except Exception as e:
-                stats["errors"].append(f"OpenSearch removal failed for {asset.id}: {e}")
+                stats["errors"].append(f"Search index removal failed for {asset.id}: {e}")
 
             try:
                 # Track storage freed
@@ -672,7 +672,7 @@ class SharePointSyncService:
             f"Deleted sync config {sync_config_id} with cleanup: "
             f"assets={stats['assets_deleted']}, files={stats['files_deleted']}, "
             f"docs={stats['documents_deleted']}, runs={stats['runs_deleted']}, "
-            f"jobs_cancelled={stats['jobs_cancelled']}, opensearch={stats['opensearch_removed']}"
+            f"jobs_cancelled={stats['jobs_cancelled']}, search={stats['search_removed']}"
         )
 
         return stats
@@ -2269,7 +2269,7 @@ class SharePointSyncService:
         """
         from .asset_service import asset_service
         from .minio_service import get_minio_service
-        from .index_service import index_service
+        from .pg_index_service import pg_index_service
         from sqlalchemy import delete as sql_delete
         from ..database.models import ExtractionResult, AssetVersion
 
@@ -2297,10 +2297,10 @@ class SharePointSyncService:
                     if asset.file_size:
                         results["storage_freed_bytes"] += asset.file_size
 
-                    # Remove from OpenSearch
+                    # Remove from search index
                     if organization_id:
                         try:
-                            await index_service.delete_asset_index(organization_id, doc.asset_id)
+                            await pg_index_service.delete_asset_index(session, organization_id, doc.asset_id)
                         except:
                             pass
 
@@ -2382,7 +2382,7 @@ class SharePointSyncService:
         """
         from .asset_service import asset_service
         from .minio_service import get_minio_service
-        from .index_service import index_service
+        from .pg_index_service import pg_index_service
         from sqlalchemy import delete as sql_delete
         from ..database.models import ExtractionResult, AssetVersion
 
@@ -2417,10 +2417,10 @@ class SharePointSyncService:
                     if asset.file_size:
                         results["storage_freed_bytes"] += asset.file_size
 
-                    # Remove from OpenSearch
+                    # Remove from search index
                     if organization_id:
                         try:
-                            await index_service.delete_asset_index(organization_id, doc.asset_id)
+                            await pg_index_service.delete_asset_index(session, organization_id, doc.asset_id)
                         except:
                             pass
 
@@ -2513,7 +2513,7 @@ class SharePointSyncService:
         """
         from .asset_service import asset_service
         from .minio_service import get_minio_service
-        from .index_service import index_service
+        from .pg_index_service import pg_index_service
         from sqlalchemy import delete as sql_delete
         from ..database.models import ExtractionResult, AssetVersion
 
@@ -2549,10 +2549,10 @@ class SharePointSyncService:
             if delete_assets and doc.asset_id:
                 asset = await asset_service.get_asset(session, doc.asset_id)
                 if asset:
-                    # Remove from OpenSearch
+                    # Remove from search index
                     if organization_id:
                         try:
-                            await index_service.delete_asset_index(organization_id, doc.asset_id)
+                            await pg_index_service.delete_asset_index(session, organization_id, doc.asset_id)
                         except:
                             pass
 
@@ -2631,7 +2631,7 @@ class SharePointSyncService:
         """
         from .asset_service import asset_service
         from .minio_service import get_minio_service
-        from .index_service import index_service
+        from .pg_index_service import pg_index_service
         from sqlalchemy import delete as sql_delete
         from sqlalchemy.orm import load_only
         from ..database.models import Asset, ExtractionResult, AssetVersion
@@ -2643,7 +2643,7 @@ class SharePointSyncService:
             "assets_deleted": 0,
             "files_deleted": 0,
             "storage_freed_bytes": 0,
-            "opensearch_removed": 0,
+            "search_removed": 0,
             "errors": [],
         }
 
@@ -2697,12 +2697,12 @@ class SharePointSyncService:
                 if asset.file_size:
                     results["storage_freed_bytes"] += asset.file_size
 
-                # Remove from OpenSearch
+                # Remove from search index
                 try:
-                    await index_service.delete_asset_index(organization_id, asset.id)
-                    results["opensearch_removed"] += 1
+                    await pg_index_service.delete_asset_index(session, organization_id, asset.id)
+                    results["search_removed"] += 1
                 except Exception as e:
-                    results["errors"].append(f"OpenSearch removal failed for {asset.id}: {e}")
+                    results["errors"].append(f"Search index removal failed for {asset.id}: {e}")
 
                 # Delete raw file from MinIO
                 if minio and asset.raw_bucket and asset.raw_object_key:

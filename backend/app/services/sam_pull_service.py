@@ -951,8 +951,8 @@ class SamPullService:
         # Update solicitation counts
         await sam_service.update_solicitation_counts(session, solicitation.id)
 
-        # Index to OpenSearch for unified search (Phase 7.6)
-        await self._index_to_opensearch(
+        # Index to search for unified search (Phase 7.6)
+        await self._index_to_search(
             session=session,
             solicitation=solicitation,
             notice=notice,
@@ -1726,7 +1726,7 @@ class SamPullService:
                 "message": str(e) or f"Unknown error: {type(e).__name__}",
             }
 
-    async def _index_to_opensearch(
+    async def _index_to_search(
         self,
         session,  # AsyncSession
         solicitation,  # SamSolicitation
@@ -1734,7 +1734,7 @@ class SamPullService:
         opportunity: Dict[str, Any],
     ):
         """
-        Index solicitation and notice to OpenSearch for unified search.
+        Index solicitation and notice to search for unified search.
 
         This enables SAM.gov data to appear in the platform's unified search
         results alongside assets and other content.
@@ -1746,72 +1746,60 @@ class SamPullService:
             opportunity: Raw opportunity data from API
         """
         from .config_loader import config_loader
-        from .opensearch_service import opensearch_service
+        from .pg_index_service import pg_index_service
+        from ..config import settings
 
-        # Check if OpenSearch is enabled
-        opensearch_config = config_loader.get_opensearch_config()
-        if not opensearch_config or not opensearch_config.enabled:
-            return
+        # Check if search is enabled
+        search_config = config_loader.get_search_config()
+        if search_config:
+            enabled = search_config.enabled
+        else:
+            enabled = getattr(settings, "search_enabled", True)
 
-        if not opensearch_service.is_available:
-            logger.debug("OpenSearch not available, skipping SAM indexing")
+        if not enabled:
             return
 
         try:
             # Index the solicitation
-            await opensearch_service.index_sam_solicitation(
+            await pg_index_service.index_sam_solicitation(
+                session=session,
                 organization_id=solicitation.organization_id,
                 solicitation_id=solicitation.id,
                 solicitation_number=solicitation.solicitation_number,
                 title=solicitation.title,
-                description=solicitation.description,
-                notice_type=solicitation.notice_type,
+                description=solicitation.description or "",
                 agency=solicitation.agency_name,
-                sub_agency=solicitation.bureau_name,
                 office=solicitation.office_name,
+                naics_code=solicitation.naics_code,
+                set_aside=solicitation.set_aside_code,
                 posted_date=solicitation.posted_date,
                 response_deadline=solicitation.response_deadline,
-                naics_codes=[solicitation.naics_code] if solicitation.naics_code else None,
-                psc_codes=[solicitation.psc_code] if solicitation.psc_code else None,
-                set_aside=solicitation.set_aside_code,
-                place_of_performance=solicitation.place_of_performance.get("city") if solicitation.place_of_performance else None,
-                notice_count=solicitation.notice_count or 0,
-                attachment_count=solicitation.attachment_count or 0,
-                summary_status=solicitation.summary_status,
-                is_active=solicitation.is_active,
-                created_at=solicitation.created_at,
+                url=solicitation.sam_url,
             )
 
             # Index the notice
-            await opensearch_service.index_sam_notice(
+            await pg_index_service.index_sam_notice(
+                session=session,
                 organization_id=solicitation.organization_id,
                 notice_id=notice.id,
                 sam_notice_id=notice.sam_notice_id,
                 solicitation_id=solicitation.id,
-                solicitation_number=solicitation.solicitation_number,
                 title=notice.title,
-                description=notice.description,
+                description=notice.description or "",
                 notice_type=notice.notice_type,
                 agency=solicitation.agency_name,
-                sub_agency=solicitation.bureau_name,
-                office=solicitation.office_name,
                 posted_date=notice.posted_date,
                 response_deadline=notice.response_deadline,
-                naics_codes=[solicitation.naics_code] if solicitation.naics_code else None,
-                psc_codes=[solicitation.psc_code] if solicitation.psc_code else None,
-                set_aside=solicitation.set_aside_code,
-                place_of_performance=solicitation.place_of_performance.get("city") if solicitation.place_of_performance else None,
-                version_number=notice.version_number,
-                created_at=notice.created_at,
+                url=notice.sam_url,
             )
 
             logger.debug(
-                f"Indexed SAM solicitation {solicitation.id} and notice {notice.id} to OpenSearch"
+                f"Indexed SAM solicitation {solicitation.id} and notice {notice.id} to search"
             )
 
         except Exception as e:
             # Don't fail the pull if indexing fails
-            logger.warning(f"Failed to index SAM data to OpenSearch: {e}")
+            logger.warning(f"Failed to index SAM data to search: {e}")
 
     async def refresh_solicitation(
         self,

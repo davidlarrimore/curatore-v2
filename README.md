@@ -20,12 +20,12 @@ Curatore v2 is a multi-tenant document processing system that converts documents
 - **Asset Versioning**: Immutable version history with re-extraction support
 - **Quality Metadata**: LLM-powered document analysis and tagging
 
-### Full-Text Search (OpenSearch)
-- **Native Search**: Full-text search across all indexed content
-- **Multi-match Queries**: Search titles, filenames, content, and URLs
+### Hybrid Search (PostgreSQL + pgvector)
+- **Full-text Search**: PostgreSQL tsvector with GIN indexes for keyword matching
+- **Semantic Search**: Vector similarity using OpenAI embeddings (text-embedding-3-small)
+- **Hybrid Mode**: Combines keyword and semantic scores with configurable weighting
 - **Faceted Filtering**: Filter by source type and content type with live counts
-- **Highlighted Results**: Search snippets with match highlighting
-- **Cross-source Search**: Unified search across uploads, web scrapes, SharePoint, and SAM.gov
+- **No External Service**: Uses same PostgreSQL database (no OpenSearch needed)
 
 ### Web Scraping (Playwright)
 - **JavaScript Rendering**: Full Chromium-based rendering for SPAs and dynamic sites
@@ -58,7 +58,7 @@ Curatore v2 is a multi-tenant document processing system that converts documents
 ### Integrations
 - **SharePoint**: Microsoft Graph API integration for document retrieval
 - **LLM Providers**: OpenAI, Ollama, OpenWebUI, LM Studio support
-- **OpenSearch**: Native full-text search with faceted filtering
+- **OpenAI Embeddings**: Semantic search via text-embedding-3-small
 - **Custom Endpoints**: Extensible connection system for any service
 
 ---
@@ -73,14 +73,11 @@ Curatore v2 is a multi-tenant document processing system that converts documents
 ### Start All Services
 
 ```bash
-# Start all services (backend, worker, frontend, redis, extraction, minio)
+# Start all services (backend, worker, frontend, redis, extraction, minio, postgres)
 ./scripts/dev-up.sh
 
 # Or using Make
 make up
-
-# Start with OpenSearch for full-text search
-docker-compose --profile search up -d
 ```
 
 ### Access the Application
@@ -121,9 +118,9 @@ See [ADMIN_SETUP.md](./ADMIN_SETUP.md) for default admin credentials and initial
 - **React 19**: Latest React features
 
 ### Services
+- **PostgreSQL + pgvector**: Database with vector search extension
 - **Redis**: Message broker and distributed locking
 - **MinIO/S3**: Object storage for all files
-- **OpenSearch**: Full-text search engine (optional)
 - **Extraction Service**: Standalone document conversion service
 - **Playwright Service**: Browser-based web rendering
 - **Docling** (optional): Advanced document converter
@@ -142,8 +139,8 @@ See [ADMIN_SETUP.md](./ADMIN_SETUP.md) for default admin credentials and initial
                     │               │     ┌──────────────┐
                     ▼               ▼     │    Worker    │
             ┌──────────────┐ ┌──────────┐ │   (Celery)   │
-            │   MinIO/S3   │ │OpenSearch│ └──────────────┘
-            │   Storage    │ │ (Search) │         │
+            │   MinIO/S3   │ │PostgreSQL│ └──────────────┘
+            │   Storage    │ │+ pgvector│         │
             └──────────────┘ └──────────┘         │
                                           ┌───────┴───────┐
                                           │               │
@@ -280,9 +277,9 @@ See `.env.example` for complete list. Key variables:
 - `MINIO_ACCESS_KEY`: Access key (default: `minioadmin`)
 - `MINIO_SECRET_KEY`: Secret key (default: `minioadmin`)
 
-#### OpenSearch (Optional)
-- `OPENSEARCH_ENABLED`: Enable search (default: `false`)
-- `OPENSEARCH_ENDPOINT`: OpenSearch endpoint (default: `opensearch:9200`)
+#### Search (PostgreSQL + pgvector)
+- `SEARCH_ENABLED`: Enable hybrid search (default: `true`)
+- Embedding model configured in `config.yml` under `llm.models.embedding`
 
 #### SAM.gov (Optional)
 - `SAM_API_KEY`: API key from api.sam.gov
@@ -320,7 +317,7 @@ Base URL: `http://localhost:8000/api/v1`
 - `GET /search` - Simple search via query params
 - `GET /search/stats` - Index statistics
 - `POST /search/reindex` - Trigger reindex (admin)
-- `GET /search/health` - OpenSearch health
+- `GET /search/health` - Search service health
 
 ### Web Scraping
 - `GET /scrape/collections` - List collections
@@ -423,13 +420,13 @@ curl -X POST http://localhost:8000/api/v1/search/reindex \
 | Port | Service |
 |------|---------|
 | 3000 | Frontend (Next.js) |
+| 5432 | PostgreSQL + pgvector |
 | 8000 | Backend API (FastAPI) |
 | 8010 | Extraction Service |
 | 8011 | Playwright Service |
 | 6379 | Redis |
 | 9000 | MinIO S3 API |
 | 9001 | MinIO Console |
-| 9200 | OpenSearch (when enabled) |
 | 5151 | Docling (when enabled) |
 
 ---

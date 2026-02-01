@@ -1250,7 +1250,7 @@ function SharePointSyncConfigContent() {
 
     try {
       const result = await sharepointSyncApi.archiveConfig(token, configId)
-      addToast('success', `Archived: ${result.archive_stats.opensearch_removed} documents removed from search`)
+      addToast('success', `Archived: ${result.archive_stats.search_removed} documents removed from search`)
       loadConfig()
     } catch (err: any) {
       addToast('error', `Failed to archive: ${err.message}`)

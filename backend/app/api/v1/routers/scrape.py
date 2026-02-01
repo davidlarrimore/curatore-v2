@@ -349,7 +349,7 @@ async def delete_collection(
     - Cancel pending extraction jobs
     - Delete files from MinIO storage (raw and extracted)
     - Hard delete Asset records from database
-    - Remove documents from OpenSearch index
+    - Remove documents from search index
     - Delete ScrapedAsset records
     - Delete ScrapeSource records
     - Delete related Run records (except the deletion tracking run)

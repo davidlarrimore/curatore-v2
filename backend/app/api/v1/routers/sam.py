@@ -707,15 +707,15 @@ async def get_dashboard_stats(
 
 @router.post(
     "/reindex",
-    summary="Reindex SAM data to OpenSearch",
-    description="Trigger reindexing of all SAM.gov data to OpenSearch for unified search. Admin only.",
+    summary="Reindex SAM data to search",
+    description="Trigger reindexing of all SAM.gov data to search index for unified search. Admin only.",
     status_code=202,
 )
 async def reindex_sam_data(
     current_user: User = Depends(require_org_admin),
 ):
     """
-    Trigger reindexing of all SAM.gov data to OpenSearch.
+    Trigger reindexing of all SAM.gov data to search index.
 
     This queues a background task to index all existing SAM notices and
     solicitations for the organization. Useful for initial setup or after
@@ -726,12 +726,12 @@ async def reindex_sam_data(
     from ....tasks import reindex_sam_organization_task
     from ....services.config_loader import config_loader
 
-    # Check if OpenSearch is enabled
-    opensearch_config = config_loader.get_opensearch_config()
-    if not opensearch_config or not opensearch_config.enabled:
+    # Check if search is enabled
+    search_config = config_loader.get_search_config()
+    if not search_config or not search_config.enabled:
         raise HTTPException(
             status_code=503,
-            detail="OpenSearch is not enabled. Enable OpenSearch to use SAM search.",
+            detail="Search is not enabled. Enable search to use SAM search.",
         )
 
     # Queue background task

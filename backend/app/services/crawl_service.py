@@ -14,7 +14,7 @@ Key Features:
 - HTTP conditional requests (ETag/If-None-Match, Last-Modified/If-Modified-Since)
   for efficient re-crawling - skips unchanged pages without re-downloading
 - Content hash-based change detection for pages that don't support conditional requests
-- Automatic OpenSearch indexing for inline-extracted content
+- Automatic search indexing for inline-extracted content
 - Locale/language variant URL filtering to avoid duplicate content
 
 Efficiency Optimizations:
@@ -1233,15 +1233,15 @@ class CrawlService:
             },
         )
 
-        # Trigger OpenSearch indexing if enabled
-        from .extraction_orchestrator import _is_opensearch_enabled
-        if _is_opensearch_enabled():
+        # Trigger search indexing if enabled
+        from .extraction_orchestrator import _is_search_enabled
+        if _is_search_enabled():
             try:
                 from ..tasks import index_asset_task
                 index_asset_task.delay(asset_id=str(asset_id))
-                logger.debug(f"Queued asset {asset_id} for OpenSearch indexing")
+                logger.debug(f"Queued asset {asset_id} for search indexing")
             except Exception as e:
-                logger.warning(f"Failed to queue OpenSearch indexing for {asset_id}: {e}")
+                logger.warning(f"Failed to queue search indexing for {asset_id}: {e}")
 
         logger.debug(f"Stored inline extraction for asset {asset_id}")
 

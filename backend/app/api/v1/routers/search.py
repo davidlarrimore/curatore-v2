@@ -1,8 +1,9 @@
 # backend/app/api/v1/routers/search.py
 """
-Search API Router for Native Full-Text Search (Phase 6).
+Search API Router for Hybrid Full-Text + Semantic Search.
 
-Provides endpoints for searching assets across all sources using OpenSearch.
+Provides endpoints for searching assets across all sources using PostgreSQL
+with pgvector for hybrid keyword + semantic search.
 """
 
 import logging
@@ -15,8 +16,9 @@ from pydantic import BaseModel, Field
 
 from ....database.models import User
 from ....dependencies import get_current_user, require_org_admin
-from ....services.opensearch_service import opensearch_service
-from ....services.index_service import index_service
+from ....services.pg_search_service import pg_search_service
+from ....services.pg_index_service import pg_index_service
+from ....services.database_service import database_service
 from ....services.config_loader import config_loader
 from ....config import settings
 from ....tasks import reindex_organization_task
@@ -24,12 +26,12 @@ from ....tasks import reindex_organization_task
 logger = logging.getLogger("curatore.api.search")
 
 
-def _is_opensearch_enabled() -> bool:
-    """Check if OpenSearch is enabled via config.yml or environment variables."""
-    opensearch_config = config_loader.get_opensearch_config()
-    if opensearch_config:
-        return opensearch_config.enabled
-    return settings.opensearch_enabled
+def _is_search_enabled() -> bool:
+    """Check if search is enabled via config.yml or environment variables."""
+    search_config = config_loader.get_search_config()
+    if search_config:
+        return search_config.enabled
+    return getattr(settings, "search_enabled", True)
 
 router = APIRouter(prefix="/search", tags=["search"])
 
@@ -43,6 +45,12 @@ class SearchRequest(BaseModel):
     """Search request with query and optional filters."""
 
     query: str = Field(..., min_length=1, max_length=500, description="Search query")
+    search_mode: Optional[str] = Field(
+        "hybrid", description="Search mode: keyword, semantic, or hybrid"
+    )
+    semantic_weight: Optional[float] = Field(
+        0.5, ge=0.0, le=1.0, description="Weight for semantic scores in hybrid mode (0-1)"
+    )
     source_types: Optional[List[str]] = Field(
         None, description="Filter by source types (upload, sharepoint, web_scrape, sam_gov)"
     )
@@ -80,6 +88,8 @@ class SearchHitResponse(BaseModel):
     highlights: Dict[str, List[str]] = Field(
         default_factory=dict, description="Highlighted text snippets"
     )
+    keyword_score: Optional[float] = Field(None, description="Keyword/full-text match score")
+    semantic_score: Optional[float] = Field(None, description="Semantic similarity score")
 
 
 class FacetBucketResponse(BaseModel):
@@ -113,10 +123,11 @@ class SearchResponse(BaseModel):
 class IndexStatsResponse(BaseModel):
     """Index statistics."""
 
-    enabled: bool = Field(..., description="Whether OpenSearch is enabled")
+    enabled: bool = Field(..., description="Whether search is enabled")
     status: str = Field(..., description="Index status")
-    index_name: Optional[str] = Field(None, description="OpenSearch index name")
+    index_name: Optional[str] = Field(None, description="Index name/description")
     document_count: Optional[int] = Field(None, description="Number of indexed documents")
+    chunk_count: Optional[int] = Field(None, description="Number of indexed chunks")
     size_bytes: Optional[int] = Field(None, description="Index size in bytes")
     message: Optional[str] = Field(None, description="Additional status message")
 
@@ -138,18 +149,23 @@ class ReindexResponse(BaseModel):
     "",
     response_model=SearchResponse,
     summary="Search assets",
-    description="Full-text search across all indexed assets.",
+    description="Hybrid full-text and semantic search across all indexed assets.",
 )
 async def search_assets(
     request: SearchRequest,
     current_user: User = Depends(get_current_user),
 ) -> SearchResponse:
     """
-    Execute a full-text search query.
+    Execute a hybrid search query combining keyword and semantic search.
 
     Searches across all indexed content including document text, titles,
     filenames, and URLs. Returns results with relevance scoring and
     highlighted text snippets.
+
+    Search modes:
+    - keyword: Full-text search only (fast, exact matches)
+    - semantic: Vector similarity search only (finds related content)
+    - hybrid: Combines both with configurable weighting (default, best quality)
 
     Filters can be applied by:
     - Source type (upload, sharepoint, web_scrape)
@@ -157,10 +173,10 @@ async def search_assets(
     - Collection ID (for web scrapes)
     - Date range
     """
-    if not _is_opensearch_enabled():
+    if not _is_search_enabled():
         raise HTTPException(
             status_code=503,
-            detail="Search is not enabled. Enable OPENSEARCH_ENABLED to use search.",
+            detail="Search is not enabled. Enable SEARCH_ENABLED to use search.",
         )
 
     try:
@@ -186,33 +202,40 @@ async def search_assets(
                     detail="Invalid sync config ID format",
                 )
 
-        # Use search_with_facets if facets are requested
-        if request.include_facets:
-            results = await opensearch_service.search_with_facets(
-                organization_id=current_user.organization_id,
-                query=request.query,
-                source_types=request.source_types,
-                content_types=request.content_types,
-                collection_ids=collection_uuids,
-                sync_config_ids=sync_config_uuids,
-                date_from=request.date_from,
-                date_to=request.date_to,
-                limit=request.limit,
-                offset=request.offset,
-            )
-        else:
-            results = await opensearch_service.search(
-                organization_id=current_user.organization_id,
-                query=request.query,
-                source_types=request.source_types,
-                content_types=request.content_types,
-                collection_ids=collection_uuids,
-                sync_config_ids=sync_config_uuids,
-                date_from=request.date_from,
-                date_to=request.date_to,
-                limit=request.limit,
-                offset=request.offset,
-            )
+        async with database_service.get_session() as session:
+            # Use search_with_facets if facets are requested
+            if request.include_facets:
+                results = await pg_search_service.search_with_facets(
+                    session=session,
+                    organization_id=current_user.organization_id,
+                    query=request.query,
+                    search_mode=request.search_mode or "hybrid",
+                    semantic_weight=request.semantic_weight or 0.5,
+                    source_types=request.source_types,
+                    content_types=request.content_types,
+                    collection_ids=collection_uuids,
+                    sync_config_ids=sync_config_uuids,
+                    date_from=request.date_from,
+                    date_to=request.date_to,
+                    limit=request.limit,
+                    offset=request.offset,
+                )
+            else:
+                results = await pg_search_service.search(
+                    session=session,
+                    organization_id=current_user.organization_id,
+                    query=request.query,
+                    search_mode=request.search_mode or "hybrid",
+                    semantic_weight=request.semantic_weight or 0.5,
+                    source_types=request.source_types,
+                    content_types=request.content_types,
+                    collection_ids=collection_uuids,
+                    sync_config_ids=sync_config_uuids,
+                    date_from=request.date_from,
+                    date_to=request.date_to,
+                    limit=request.limit,
+                    offset=request.offset,
+                )
 
         # Build facets response if available
         facets_response = None
@@ -244,6 +267,8 @@ async def search_assets(
                     url=hit.url,
                     created_at=hit.created_at,
                     highlights=hit.highlights,
+                    keyword_score=hit.keyword_score,
+                    semantic_score=hit.semantic_score,
                 )
                 for hit in results.hits
             ],
@@ -264,10 +289,11 @@ async def search_assets(
     "",
     response_model=SearchResponse,
     summary="Search assets (GET)",
-    description="Full-text search across all indexed assets using query parameters.",
+    description="Hybrid search across all indexed assets using query parameters.",
 )
 async def search_assets_get(
     q: str = Query(..., min_length=1, max_length=500, description="Search query"),
+    mode: Optional[str] = Query("hybrid", description="Search mode: keyword, semantic, hybrid"),
     source_types: Optional[str] = Query(
         None, description="Comma-separated source types (upload,sharepoint,web_scrape,sam_gov)"
     ),
@@ -279,15 +305,15 @@ async def search_assets_get(
     current_user: User = Depends(get_current_user),
 ) -> SearchResponse:
     """
-    Execute a full-text search query using GET parameters.
+    Execute a hybrid search query using GET parameters.
 
     Simpler alternative to POST /search for basic queries.
     For advanced filtering, use POST /search with JSON body.
     """
-    if not _is_opensearch_enabled():
+    if not _is_search_enabled():
         raise HTTPException(
             status_code=503,
-            detail="Search is not enabled. Enable OPENSEARCH_ENABLED to use search.",
+            detail="Search is not enabled. Enable SEARCH_ENABLED to use search.",
         )
 
     # Parse comma-separated filters
@@ -295,14 +321,17 @@ async def search_assets_get(
     content_type_list = content_types.split(",") if content_types else None
 
     try:
-        results = await opensearch_service.search(
-            organization_id=current_user.organization_id,
-            query=q,
-            source_types=source_type_list,
-            content_types=content_type_list,
-            limit=limit,
-            offset=offset,
-        )
+        async with database_service.get_session() as session:
+            results = await pg_search_service.search(
+                session=session,
+                organization_id=current_user.organization_id,
+                query=q,
+                search_mode=mode or "hybrid",
+                source_types=source_type_list,
+                content_types=content_type_list,
+                limit=limit,
+                offset=offset,
+            )
 
         return SearchResponse(
             total=results.total,
@@ -320,6 +349,8 @@ async def search_assets_get(
                     url=hit.url,
                     created_at=hit.created_at,
                     highlights=hit.highlights,
+                    keyword_score=hit.keyword_score,
+                    semantic_score=hit.semantic_score,
                 )
                 for hit in results.hits
             ],
@@ -347,16 +378,18 @@ async def get_search_stats(
     """
     Get search index statistics.
 
-    Returns information about the index including document count
-    and storage size.
+    Returns information about the index including document count,
+    chunk count, and storage size.
     """
-    health = await index_service.get_index_health(current_user.organization_id)
+    async with database_service.get_session() as session:
+        health = await pg_index_service.get_index_health(session, current_user.organization_id)
 
     return IndexStatsResponse(
         enabled=health.get("enabled", False),
         status=health.get("status", "unknown"),
         index_name=health.get("index_name"),
         document_count=health.get("document_count"),
+        chunk_count=health.get("chunk_count"),
         size_bytes=health.get("size_bytes"),
         message=health.get("message"),
     )
@@ -381,10 +414,10 @@ async def reindex_all_assets(
 
     Requires org_admin role.
     """
-    if not _is_opensearch_enabled():
+    if not _is_search_enabled():
         raise HTTPException(
             status_code=503,
-            detail="Search is not enabled. Enable OPENSEARCH_ENABLED to use search.",
+            detail="Search is not enabled. Enable SEARCH_ENABLED to use search.",
         )
 
     try:
@@ -414,7 +447,7 @@ async def reindex_all_assets(
 @router.get(
     "/health",
     summary="Check search health",
-    description="Check OpenSearch cluster health and connectivity.",
+    description="Check PostgreSQL + pgvector search health and connectivity.",
 )
 async def check_search_health(
     current_user: User = Depends(get_current_user),
@@ -422,31 +455,33 @@ async def check_search_health(
     """
     Check search service health.
 
-    Returns OpenSearch cluster health status and connectivity information.
+    Returns search system health status including pgvector availability.
     """
-    if not _is_opensearch_enabled():
+    if not _is_search_enabled():
         return {
             "enabled": False,
             "status": "disabled",
-            "message": "OpenSearch is not enabled",
+            "message": "Search is not enabled",
         }
 
-    is_healthy = await opensearch_service.health_check()
+    async with database_service.get_session() as session:
+        is_healthy = await pg_search_service.health_check(session)
 
     # Get config from config.yml or fall back to settings
-    opensearch_config = config_loader.get_opensearch_config()
-    if opensearch_config:
-        index_prefix = opensearch_config.index_prefix
-        endpoint = opensearch_config.service_url
+    search_config = config_loader.get_search_config()
+    if search_config:
+        embedding_model = search_config.embedding_model
+        default_mode = search_config.default_mode
     else:
-        index_prefix = settings.opensearch_index_prefix
-        endpoint = settings.opensearch_endpoint
+        embedding_model = getattr(settings, "embedding_model", "sentence-transformers/all-mpnet-base-v2")
+        default_mode = getattr(settings, "search_default_mode", "hybrid")
 
     return {
         "enabled": True,
         "status": "healthy" if is_healthy else "unhealthy",
-        "index_prefix": index_prefix,
-        "endpoint": endpoint,
+        "backend": "postgresql+pgvector",
+        "embedding_model": embedding_model,
+        "default_mode": default_mode,
     }
 
 
@@ -501,24 +536,26 @@ async def search_sam(
     - Agency name
     - Date range
     """
-    if not _is_opensearch_enabled():
+    if not _is_search_enabled():
         raise HTTPException(
             status_code=503,
-            detail="Search is not enabled. Enable OPENSEARCH_ENABLED to use search.",
+            detail="Search is not enabled. Enable SEARCH_ENABLED to use search.",
         )
 
     try:
-        results = await opensearch_service.search_sam(
-            organization_id=current_user.organization_id,
-            query=request.query,
-            source_types=request.source_types,
-            notice_types=request.notice_types,
-            agencies=request.agencies,
-            date_from=request.date_from,
-            date_to=request.date_to,
-            limit=request.limit,
-            offset=request.offset,
-        )
+        async with database_service.get_session() as session:
+            results = await pg_search_service.search_sam(
+                session=session,
+                organization_id=current_user.organization_id,
+                query=request.query,
+                source_types=request.source_types,
+                notice_types=request.notice_types,
+                agencies=request.agencies,
+                date_from=request.date_from,
+                date_to=request.date_to,
+                limit=request.limit,
+                offset=request.offset,
+            )
 
         return SearchResponse(
             total=results.total,
@@ -536,6 +573,7 @@ async def search_sam(
                     url=hit.url,
                     created_at=hit.created_at,
                     highlights=hit.highlights,
+                    keyword_score=hit.keyword_score,
                 )
                 for hit in results.hits
             ],
@@ -577,10 +615,10 @@ async def search_sam_get(
 
     Simpler alternative to POST /search/sam for basic queries.
     """
-    if not _is_opensearch_enabled():
+    if not _is_search_enabled():
         raise HTTPException(
             status_code=503,
-            detail="Search is not enabled. Enable OPENSEARCH_ENABLED to use search.",
+            detail="Search is not enabled. Enable SEARCH_ENABLED to use search.",
         )
 
     # Parse comma-separated filters
@@ -589,15 +627,17 @@ async def search_sam_get(
     agency_list = agencies.split(",") if agencies else None
 
     try:
-        results = await opensearch_service.search_sam(
-            organization_id=current_user.organization_id,
-            query=q,
-            source_types=source_type_list,
-            notice_types=notice_type_list,
-            agencies=agency_list,
-            limit=limit,
-            offset=offset,
-        )
+        async with database_service.get_session() as session:
+            results = await pg_search_service.search_sam(
+                session=session,
+                organization_id=current_user.organization_id,
+                query=q,
+                source_types=source_type_list,
+                notice_types=notice_type_list,
+                agencies=agency_list,
+                limit=limit,
+                offset=offset,
+            )
 
         return SearchResponse(
             total=results.total,
@@ -615,6 +655,7 @@ async def search_sam_get(
                     url=hit.url,
                     created_at=hit.created_at,
                     highlights=hit.highlights,
+                    keyword_score=hit.keyword_score,
                 )
                 for hit in results.hits
             ],

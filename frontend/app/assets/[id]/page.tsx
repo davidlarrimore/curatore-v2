@@ -135,6 +135,11 @@ function AssetDetailContent() {
   // Track extraction ID to detect when extraction result changes
   const [lastExtractionId, setLastExtractionId] = useState<string | null>(null)
 
+  // State for rendering .docx files
+  const [docxHtml, setDocxHtml] = useState<string>('')
+  const [isLoadingDocx, setIsLoadingDocx] = useState(false)
+  const [docxError, setDocxError] = useState<string>('')
+
   // Check if any run is actively processing (extraction or enhancement)
   const hasActiveRuns = runs.some((run) =>
     ['pending', 'submitted', 'running', 'queued', 'processing'].includes(run.status)
@@ -241,6 +246,50 @@ function AssetDetailContent() {
       }
     }
   }, [activeTab, extraction?.id, extraction?.status, extraction?.extracted_object_key])
+
+  // Load and convert .docx file when Original tab is active
+  useEffect(() => {
+    const isDocx = asset?.content_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+                   asset?.content_type === 'application/msword'
+
+    if (activeTab === 'original' && asset && isDocx && !docxHtml && !isLoadingDocx) {
+      loadDocxContent()
+    }
+  }, [activeTab, asset?.id, asset?.content_type])
+
+  const loadDocxContent = async () => {
+    if (!asset?.raw_bucket || !asset?.raw_object_key || !token) return
+
+    setIsLoadingDocx(true)
+    setDocxError('')
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+      const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
+
+      const response = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      })
+
+      if (!response.ok) {
+        throw new Error('Failed to download document')
+      }
+
+      const arrayBuffer = await response.arrayBuffer()
+
+      // Dynamically import mammoth to avoid SSR issues
+      const mammoth = await import('mammoth')
+      const result = await mammoth.convertToHtml({ arrayBuffer })
+
+      setDocxHtml(result.value)
+    } catch (err) {
+      console.error('Error loading docx:', err)
+      setDocxError(err instanceof Error ? err.message : 'Failed to render document')
+    } finally {
+      setIsLoadingDocx(false)
+    }
+  }
 
   const loadExtractedContent = async () => {
     if (!extraction?.extracted_object_key || !extraction?.extracted_bucket || !token) return
@@ -751,34 +800,64 @@ function AssetDetailContent() {
                     />
                   </div>
                 ) : asset.content_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || asset.content_type === 'application/msword' ? (
-                  <div className="p-8 text-center border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-gradient-to-br from-blue-50 to-indigo-50 dark:from-blue-900/10 dark:to-indigo-900/10">
-                    <div className="w-16 h-16 mx-auto mb-4 rounded-xl bg-gradient-to-br from-blue-500 to-indigo-600 flex items-center justify-center shadow-lg">
-                      <FileText className="w-8 h-8 text-white" />
-                    </div>
-                    <p className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
-                      Microsoft Word Document
-                    </p>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mb-4">
-                      {asset.original_filename}
-                    </p>
-                    <div className="flex items-center justify-center gap-3">
-                      <Button
-                        variant="primary"
-                        onClick={() => {
-                          if (!token) return
-                          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                          const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
-                          window.open(url, '_blank')
-                        }}
-                        className="gap-2"
-                      >
-                        <Download className="w-4 h-4" />
-                        Download Document
-                      </Button>
-                    </div>
-                    <p className="text-xs text-gray-400 dark:text-gray-500 mt-4">
-                      View the extracted markdown in the "Extracted Content" tab
-                    </p>
+                  <div>
+                    {isLoadingDocx ? (
+                      <div className="flex items-center justify-center p-12">
+                        <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+                        <span className="ml-3 text-gray-600 dark:text-gray-400">Loading document...</span>
+                      </div>
+                    ) : docxError ? (
+                      <div className="p-8 text-center border-2 border-dashed border-red-200 dark:border-red-700 rounded-lg bg-red-50 dark:bg-red-900/10">
+                        <AlertTriangle className="w-12 h-12 mx-auto mb-4 text-red-500" />
+                        <p className="text-red-600 dark:text-red-400 mb-4">{docxError}</p>
+                        <Button
+                          variant="secondary"
+                          onClick={() => {
+                            if (!token) return
+                            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+                            const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
+                            window.open(url, '_blank')
+                          }}
+                          className="gap-2"
+                        >
+                          <Download className="w-4 h-4" />
+                          Download Instead
+                        </Button>
+                      </div>
+                    ) : docxHtml ? (
+                      <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                        <div className="bg-gray-50 dark:bg-gray-800 px-4 py-2 border-b border-gray-200 dark:border-gray-700 flex items-center justify-between">
+                          <div className="flex items-center gap-2 text-sm text-gray-600 dark:text-gray-400">
+                            <FileText className="w-4 h-4" />
+                            <span>{asset.original_filename}</span>
+                          </div>
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => {
+                              if (!token) return
+                              const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+                              const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
+                              window.open(url, '_blank')
+                            }}
+                            className="gap-1"
+                          >
+                            <Download className="w-3 h-3" />
+                            Download
+                          </Button>
+                        </div>
+                        <div
+                          className="p-6 bg-white dark:bg-gray-900 prose dark:prose-invert max-w-none overflow-auto"
+                          style={{ maxHeight: '600px' }}
+                          dangerouslySetInnerHTML={{ __html: docxHtml }}
+                        />
+                      </div>
+                    ) : (
+                      <div className="p-8 text-center border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg">
+                        <FileText className="w-12 h-12 mx-auto mb-4 text-gray-400" />
+                        <p className="text-gray-500 dark:text-gray-400">Loading document preview...</p>
+                      </div>
+                    )}
                   </div>
                 ) : asset.content_type === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' || asset.content_type === 'application/vnd.ms-excel' ? (
                   <div className="p-8 text-center border-2 border-dashed border-gray-200 dark:border-gray-700 rounded-lg bg-gradient-to-br from-emerald-50 to-green-50 dark:from-emerald-900/10 dark:to-green-900/10">

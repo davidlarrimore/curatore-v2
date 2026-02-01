@@ -25,6 +25,9 @@ from pathlib import Path
 from app.models.config_models import (
     AppConfig,
     LLMConfig,
+    EmbeddingModelConfig,
+    TaskModelConfig,
+    ModelsConfig,
     ExtractionConfig,
     ExtractionEngineConfig,
     PlaywrightConfig,
@@ -32,7 +35,7 @@ from app.models.config_models import (
     EmailConfig,
     QueueConfig,
     MinIOConfig,
-    OpenSearchConfig,
+    SearchConfig,
     SamConfig,
 )
 
@@ -210,9 +213,6 @@ class ConfigLoader:
             if config.minio is None:
                 logger.warning("MinIO configuration not found (optional)")
 
-            if config.opensearch is None:
-                logger.warning("OpenSearch configuration not found (optional)")
-
             # Queue is required
             if config.queue is None:
                 errors.append("Queue configuration is required")
@@ -335,6 +335,86 @@ class ConfigLoader:
         """Check if LLM configuration is available."""
         return self.get_llm_config() is not None
 
+    # -------------------------------------------------------------------------
+    # Task-specific model getters
+    # -------------------------------------------------------------------------
+
+    def get_embedding_model(self) -> str:
+        """
+        Get the embedding model name from config.
+
+        Returns model from llm.models.embedding.model, or default text-embedding-3-small.
+        """
+        llm_config = self.get_llm_config()
+        if llm_config and llm_config.models and llm_config.models.embedding:
+            return llm_config.models.embedding.model
+        return "text-embedding-3-small"
+
+    def get_summarization_model(self) -> str:
+        """
+        Get the summarization model name from config.
+
+        Returns model from llm.models.summarization.model, or falls back to llm.model.
+        """
+        llm_config = self.get_llm_config()
+        if llm_config:
+            if llm_config.models and llm_config.models.summarization:
+                return llm_config.models.summarization.model
+            return llm_config.model
+        return "gpt-4o-mini"
+
+    def get_summarization_temperature(self) -> float:
+        """Get the summarization temperature, defaulting to 0.3 for consistency."""
+        llm_config = self.get_llm_config()
+        if llm_config and llm_config.models and llm_config.models.summarization:
+            if llm_config.models.summarization.temperature is not None:
+                return llm_config.models.summarization.temperature
+        return 0.3
+
+    def get_evaluation_model(self) -> str:
+        """
+        Get the evaluation model name from config.
+
+        Returns model from llm.models.evaluation.model, or falls back to llm.model.
+        """
+        llm_config = self.get_llm_config()
+        if llm_config:
+            if llm_config.models and llm_config.models.evaluation:
+                return llm_config.models.evaluation.model
+            return llm_config.model
+        return "gpt-4o-mini"
+
+    def get_evaluation_temperature(self) -> float:
+        """Get the evaluation temperature, defaulting to 0.3 for consistency."""
+        llm_config = self.get_llm_config()
+        if llm_config and llm_config.models and llm_config.models.evaluation:
+            if llm_config.models.evaluation.temperature is not None:
+                return llm_config.models.evaluation.temperature
+        return 0.3
+
+    def get_general_model(self) -> str:
+        """
+        Get the general/default model name from config.
+
+        Returns model from llm.models.general.model, or falls back to llm.model.
+        """
+        llm_config = self.get_llm_config()
+        if llm_config:
+            if llm_config.models and llm_config.models.general:
+                return llm_config.models.general.model
+            return llm_config.model
+        return "gpt-4o-mini"
+
+    def get_general_temperature(self) -> float:
+        """Get the general model temperature."""
+        llm_config = self.get_llm_config()
+        if llm_config:
+            if llm_config.models and llm_config.models.general:
+                if llm_config.models.general.temperature is not None:
+                    return llm_config.models.general.temperature
+            return llm_config.temperature
+        return 0.7
+
     def has_extraction_config(self) -> bool:
         """Check if extraction configuration is available."""
         return self.get_extraction_config() is not None
@@ -355,25 +435,22 @@ class ConfigLoader:
         """Check if Playwright configuration is available."""
         return self.get_playwright_config() is not None
 
-    def get_opensearch_config(self) -> Optional[OpenSearchConfig]:
+    def get_search_config(self) -> Optional[SearchConfig]:
         """
-        Get typed OpenSearch configuration.
+        Get typed search configuration for PostgreSQL + pgvector.
 
         Returns:
-            OpenSearchConfig instance or None if not configured
-
-        Raises:
-            ValueError: If configuration is invalid
+            SearchConfig instance or None if not configured
         """
         config = self.get_config()
         if config is None:
             return None
-        return config.opensearch
+        return config.search
 
-    def has_opensearch_config(self) -> bool:
-        """Check if OpenSearch configuration is available and enabled."""
-        opensearch_config = self.get_opensearch_config()
-        return opensearch_config is not None and opensearch_config.enabled
+    def has_search_config(self) -> bool:
+        """Check if search configuration is available and enabled."""
+        search_config = self.get_search_config()
+        return search_config is not None and search_config.enabled
 
     def get_sam_config(self) -> Optional[SamConfig]:
         """

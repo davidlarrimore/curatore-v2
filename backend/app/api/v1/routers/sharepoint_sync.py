@@ -419,10 +419,10 @@ async def archive_sync_config(
     current_user: User = Depends(require_org_admin),
 ):
     """
-    Archive a SharePoint sync config and remove documents from OpenSearch.
+    Archive a SharePoint sync config and remove documents from search index.
 
     This removes documents from search but keeps assets intact:
-    - Removes documents from OpenSearch index
+    - Removes documents from search index
     - Sets config status to "archived"
     - Disables syncing (is_active = False)
 
@@ -430,7 +430,7 @@ async def archive_sync_config(
     After archiving, you can permanently delete using DELETE endpoint.
 
     Returns:
-        Archive statistics including count of documents removed from OpenSearch
+        Archive statistics including count of documents removed from search
     """
     async with database_service.get_session() as session:
         config = await sharepoint_sync_service.get_sync_config(session, config_id)
@@ -463,7 +463,7 @@ async def archive_sync_config(
                 detail="Sync config is already archived."
             )
 
-        stats = await sharepoint_sync_service.archive_sync_config_with_opensearch_cleanup(
+        stats = await sharepoint_sync_service.archive_sync_config_with_search_cleanup(
             session=session,
             sync_config_id=config_id,
             organization_id=current_user.organization_id,
@@ -471,7 +471,7 @@ async def archive_sync_config(
 
         logger.info(
             f"Archived SharePoint sync config {config_id} by user {current_user.id}: "
-            f"opensearch_removed={stats.get('opensearch_removed', 0)}"
+            f"search_removed={stats.get('search_removed', 0)}"
         )
 
         return {
@@ -493,7 +493,7 @@ async def delete_sync_config(
     - Cancel pending extraction jobs
     - Delete files from MinIO storage
     - Hard delete asset records
-    - Remove documents from OpenSearch
+    - Remove documents from search index
     - Delete synced document records
     - Delete related runs
     - Delete the sync config itself

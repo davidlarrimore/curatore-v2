@@ -9,8 +9,8 @@ Curatore v2 is a document processing and curation platform that converts documen
 ### Tech Stack
 - **Backend**: FastAPI (Python 3.12+), Celery workers, SQLAlchemy
 - **Frontend**: Next.js 15.5, TypeScript, React 19, Tailwind CSS
-- **Services**: Redis, MinIO/S3, OpenSearch (optional), Playwright, Extraction Service
-- **Database**: PostgreSQL 16 (required)
+- **Services**: Redis, MinIO/S3, Playwright, Extraction Service
+- **Database**: PostgreSQL 16 with pgvector (required)
 
 ### Architecture Principles
 1. **Extraction is infrastructure** - Automatic on upload, not per-workflow
@@ -116,7 +116,10 @@ playwright-service/         # Browser rendering microservice
 | `extraction_orchestrator.py` | Extraction coordination |
 | `extraction_queue_service.py` | Extraction queue throttling and management |
 | `queue_registry.py` | Queue type definitions and capabilities |
-| `opensearch_service.py` | Full-text search with facets |
+| `pg_search_service.py` | Hybrid full-text + semantic search (PostgreSQL + pgvector) |
+| `pg_index_service.py` | Document chunking, embedding, and indexing |
+| `embedding_service.py` | Embedding generation via OpenAI API (text-embedding-3-small) |
+| `chunking_service.py` | Document splitting for search |
 | `minio_service.py` | Object storage operations |
 | `sam_service.py` | SAM.gov API integration |
 | `scrape_service.py` | Web scraping collections |
@@ -142,7 +145,7 @@ playwright-service/         # Browser rendering microservice
 ## Data Flow
 
 ```
-Upload → Asset Created → Automatic Extraction → ExtractionResult → OpenSearch Index
+Upload → Asset Created → Automatic Extraction → ExtractionResult → Search Index (PostgreSQL + pgvector)
                               ↓
                          Run (tracks execution)
                               ↓
@@ -152,8 +155,17 @@ Upload → Asset Created → Automatic Extraction → ExtractionResult → OpenS
 ### Processing Workflow
 1. **Upload**: `POST /api/v1/storage/upload/proxy` creates Asset, triggers extraction
 2. **Extraction**: Celery task converts to Markdown, stores in MinIO
-3. **Indexing**: Asset indexed in OpenSearch (if enabled)
+3. **Indexing**: Asset chunked, embedded, and indexed to search_chunks table
 4. **Access**: `GET /api/v1/assets/{id}` returns asset with extraction_result
+
+### Search Architecture
+Curatore uses PostgreSQL with pgvector for hybrid full-text + semantic search:
+- **Full-text search**: PostgreSQL tsvector + GIN indexes for keyword matching
+- **Semantic search**: pgvector embeddings (1536-dim via OpenAI text-embedding-3-small)
+- **Hybrid mode**: Combines keyword and semantic scores (configurable weighting)
+- Documents are split into ~1500 char chunks with 200 char overlap
+- No external search service required (uses same PostgreSQL database)
+- Embedding model configurable in `config.yml` under `llm.models.embedding`
 
 ---
 
@@ -424,7 +436,7 @@ MINIO_SECRET_KEY=minioadmin
 # Optional Services
 OPENAI_API_KEY=sk-...
 OPENAI_MODEL=gpt-4o-mini
-OPENSEARCH_ENABLED=false
+SEARCH_ENABLED=true
 SAM_API_KEY=your_key
 ENABLE_AUTH=false
 ENABLE_DOCLING_SERVICE=false
@@ -536,14 +548,13 @@ curl -X POST http://localhost:8010/api/v1/extract -F "file=@test.pdf"
 | Port | Service |
 |------|---------|
 | 3000 | Frontend |
-| 5432 | PostgreSQL |
+| 5432 | PostgreSQL (with pgvector) |
 | 8000 | Backend API |
 | 8010 | Extraction Service |
 | 8011 | Playwright Service |
 | 6379 | Redis |
 | 9000 | MinIO S3 API |
 | 9001 | MinIO Console |
-| 9200 | OpenSearch |
 
 ---
 

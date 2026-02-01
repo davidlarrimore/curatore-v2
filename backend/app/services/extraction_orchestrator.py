@@ -47,12 +47,12 @@ class UnsupportedFileTypeError(Exception):
     pass
 
 
-def _is_opensearch_enabled() -> bool:
-    """Check if OpenSearch is enabled via config.yml or environment variables."""
-    opensearch_config = config_loader.get_opensearch_config()
-    if opensearch_config:
-        return opensearch_config.enabled
-    return settings.opensearch_enabled
+def _is_search_enabled() -> bool:
+    """Check if search is enabled via config.yml or environment variables."""
+    search_config = config_loader.get_search_config()
+    if search_config:
+        return search_config.enabled
+    return getattr(settings, "search_enabled", True)
 
 logger = logging.getLogger("curatore.extraction_orchestrator")
 
@@ -337,8 +337,8 @@ class ExtractionOrchestrator:
                 f"run={run_id}, time={extraction_time:.2f}s"
             )
 
-            # Trigger OpenSearch indexing if enabled (Phase 6)
-            if _is_opensearch_enabled():
+            # Trigger search indexing if enabled
+            if _is_search_enabled():
                 try:
                     await run_log_service.log_event(
                         session=session,
@@ -351,7 +351,7 @@ class ExtractionOrchestrator:
                     from ..tasks import index_asset_task
                     index_asset_task.delay(asset_id=str(asset_id))
 
-                    logger.info(f"Queued asset {asset_id} for OpenSearch indexing")
+                    logger.info(f"Queued asset {asset_id} for search indexing")
                 except Exception as e:
                     # Don't fail extraction if indexing queue fails
                     logger.warning(f"Failed to queue asset {asset_id} for indexing: {e}")
