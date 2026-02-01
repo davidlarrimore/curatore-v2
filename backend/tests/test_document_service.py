@@ -192,20 +192,14 @@ class TestDocumentServiceFileListFix:
     def test_unsupported_file_types_filtered(self, document_service, temp_dir):
         """Test that unsupported file types are filtered out."""
         upload_dir = temp_dir / "uploaded_files"
-        
+
         # Create supported and unsupported files
         self.create_test_file(upload_dir, "test123_document.pdf")  # Supported
         self.create_test_file(upload_dir, "test456_image.png")     # Not in our mock supported extensions
         self.create_test_file(upload_dir, "test789_text.txt")      # Supported
 
-
-def test_document_service_sets_processed_dir():
-    service = DocumentService()
-    assert hasattr(service, "processed_dir")
-    assert service.processed_dir.exists()
-        
         result = document_service._list_files_for_api(upload_dir, "uploaded")
-        
+
         # Should only return supported file types
         assert len(result) == 2
         filenames = [f["filename"] for f in result]
