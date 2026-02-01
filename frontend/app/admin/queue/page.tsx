@@ -41,6 +41,7 @@ import {
   Eye,
   Search,
   History,
+  Sparkles,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
@@ -56,6 +57,7 @@ export default function JobManagerPage() {
 const JOB_TYPE_TABS = [
   { value: 'all', label: 'All', icon: Activity },
   { value: 'extraction', label: 'Extraction', icon: FileText },
+  { value: 'extraction_enhancement', label: 'Enhancement', icon: Sparkles },
   { value: 'sam_pull', label: 'SAM.gov', icon: Building2 },
   { value: 'scrape', label: 'Web Scrape', icon: Globe },
   { value: 'sharepoint', label: 'SharePoint', icon: FolderSync },
@@ -67,6 +69,7 @@ const JOB_TYPE_TABS = [
 function getQueueType(runType: string): string {
   if (runType.startsWith('sharepoint')) return 'sharepoint'
   if (runType === 'sam_pull') return 'sam_pull'
+  if (runType === 'extraction_enhancement') return 'extraction_enhancement'
   return runType
 }
 
@@ -95,6 +98,7 @@ function getJobTypeColor(runType: string): string {
   const queueType = getQueueType(runType)
   switch (queueType) {
     case 'extraction': return 'blue'
+    case 'extraction_enhancement': return 'violet'
     case 'sam_pull': return 'amber'
     case 'scrape': return 'emerald'
     case 'sharepoint': return 'purple'

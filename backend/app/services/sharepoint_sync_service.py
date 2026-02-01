@@ -871,16 +871,24 @@ class SharePointSyncService:
         organization_id: UUID,
         run_id: UUID,
         full_sync: bool = False,
+        use_delta: Optional[bool] = None,
     ) -> Dict[str, Any]:
         """
         Execute synchronization for a sync config.
 
         This is the main sync entry point, typically called from a Celery task.
-        It:
-        1. Gets the folder inventory from SharePoint
-        2. Compares with existing synced documents
-        3. Downloads new/updated files and creates Assets
-        4. Detects deleted files and marks them
+        It supports two sync modes:
+
+        1. Full Sync (default or when delta not available):
+           - Enumerates all files via folder traversal
+           - Compares etags to detect changes
+           - Downloads new/updated files
+           - Detects deleted files by missing items
+
+        2. Delta Sync (when delta_enabled and token available):
+           - Queries Microsoft Graph Delta API
+           - Only returns changed/deleted items since last sync
+           - Much faster for large sites with few changes
 
         Args:
             session: Database session
@@ -888,11 +896,12 @@ class SharePointSyncService:
             organization_id: Organization UUID
             run_id: Run UUID for tracking
             full_sync: If True, re-download all files regardless of etag
+            use_delta: Override delta_enabled setting (None = use config setting)
 
         Returns:
             Sync result dict with statistics
         """
-        from .sharepoint_service import sharepoint_inventory_stream
+        from .sharepoint_service import sharepoint_inventory_stream, sharepoint_delta_query, DeltaTokenExpiredError
         from .run_service import run_service
         from .run_log_service import run_log_service
 
@@ -963,7 +972,48 @@ class SharePointSyncService:
             connection = conn_result.scalar_one_or_none()
 
         # =================================================================
-        # PHASE 2: CONNECTING & STREAMING SYNC
+        # DELTA SYNC DECISION
+        # =================================================================
+        # Determine if we should use delta sync:
+        # 1. use_delta parameter takes precedence if specified
+        # 2. Otherwise use config.delta_enabled setting
+        # 3. Must have a valid delta token (unless doing initial capture)
+        # 4. full_sync=True forces full enumeration
+        should_use_delta = use_delta if use_delta is not None else config.delta_enabled
+
+        if should_use_delta and not full_sync and config.delta_token:
+            # Use delta sync path for incremental sync
+            try:
+                return await self._execute_delta_sync(
+                    session=session,
+                    config=config,
+                    organization_id=organization_id,
+                    run_id=run_id,
+                    include_patterns=include_patterns,
+                    exclude_patterns=exclude_patterns,
+                    max_file_size_mb=max_file_size_mb,
+                    has_selection_filter=has_selection_filter,
+                    selected_folders=selected_folders,
+                    selected_file_ids=selected_file_ids,
+                )
+            except DeltaTokenExpiredError:
+                # Delta token expired - fall through to full sync
+                logger.warning(f"Delta token expired for {config.name}, falling back to full sync")
+                await run_log_service.log_event(
+                    session=session,
+                    run_id=run_id,
+                    level="WARNING",
+                    event_type="progress",
+                    message="Delta token expired, performing full sync to refresh",
+                    context={"phase": "init", "reason": "delta_token_expired"},
+                )
+                # Clear expired token
+                config.delta_token = None
+                config.delta_token_acquired_at = None
+                await session.commit()
+
+        # =================================================================
+        # PHASE 2: CONNECTING & STREAMING SYNC (FULL ENUMERATION)
         # =================================================================
         await run_log_service.log_event(
             session=session,
@@ -1386,7 +1436,408 @@ class SharePointSyncService:
             f"unchanged={results['unchanged_files']}, deleted={deleted_count}"
         )
 
+        # =================================================================
+        # CAPTURE DELTA TOKEN (if delta enabled and successful)
+        # =================================================================
+        # After a successful full sync, capture delta token for future incremental syncs
+        if config.delta_enabled and results["failed_files"] == 0:
+            try:
+                await self._capture_initial_delta_token(
+                    session=session,
+                    config=config,
+                    organization_id=organization_id,
+                    run_id=run_id,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to capture delta token after full sync: {e}")
+                # Don't fail the sync, just log the warning
+
         return results
+
+    async def _execute_delta_sync(
+        self,
+        session: AsyncSession,
+        config: SharePointSyncConfig,
+        organization_id: UUID,
+        run_id: UUID,
+        include_patterns: List[str],
+        exclude_patterns: List[str],
+        max_file_size_mb: int,
+        has_selection_filter: bool,
+        selected_folders: List[str],
+        selected_file_ids: set,
+    ) -> Dict[str, Any]:
+        """
+        Execute sync using Microsoft Graph Delta API for incremental changes.
+
+        This method is much faster than full enumeration for large sites with
+        few changes, as it only queries for items that changed since the last sync.
+
+        Args:
+            session: Database session
+            config: SharePointSyncConfig with delta_token
+            organization_id: Organization UUID
+            run_id: Run UUID for tracking
+            include_patterns: File patterns to include
+            exclude_patterns: File patterns to exclude
+            max_file_size_mb: Maximum file size in MB
+            has_selection_filter: Whether folder/file selection is active
+            selected_folders: Selected folder paths
+            selected_file_ids: Set of selected file IDs
+
+        Returns:
+            Sync result dict with statistics
+        """
+        from .sharepoint_service import sharepoint_delta_query
+        from .run_service import run_service
+        from .run_log_service import run_log_service
+
+        # Log delta sync start
+        await run_log_service.log_event(
+            session=session,
+            run_id=run_id,
+            level="INFO",
+            event_type="phase",
+            message="Phase 2: Using delta query for incremental sync",
+            context={
+                "phase": "delta_sync",
+                "delta_enabled": True,
+                "has_token": bool(config.delta_token),
+            },
+        )
+        await session.commit()
+
+        logger.info(f"Starting delta sync for {config.folder_url}")
+
+        # Results tracking
+        results = {
+            "total_files": 0,
+            "new_files": 0,
+            "updated_files": 0,
+            "unchanged_files": 0,
+            "skipped_files": 0,
+            "failed_files": 0,
+            "deleted_detected": 0,
+            "errors": [],
+            "sync_mode": "delta",
+        }
+
+        # Initialize config stats
+        config.stats = {
+            "total_files": 0,
+            "synced_files": 0,
+            "processed_files": 0,
+            "new_files": 0,
+            "updated_files": 0,
+            "unchanged_files": 0,
+            "failed_files": 0,
+            "deleted_count": 0,
+            "current_file": None,
+            "phase": "delta_sync",
+        }
+        await session.commit()
+
+        # Query delta API
+        processed_files = 0
+        try:
+            changed_items, new_delta_token = await sharepoint_delta_query(
+                drive_id=config.folder_drive_id,
+                item_id=config.folder_item_id,
+                delta_token=config.delta_token,
+                organization_id=organization_id,
+                session=session,
+            )
+
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="progress",
+                message=f"Delta query returned {len(changed_items)} changed items",
+                context={
+                    "phase": "delta_sync",
+                    "changed_items": len(changed_items),
+                },
+            )
+            await session.commit()
+
+            # Process changed items
+            for item in changed_items:
+                change_type = item.get("_change_type")
+                item_type = item.get("type")
+
+                # Skip folders for now (only process files)
+                if item_type == "folder":
+                    if change_type == "deleted":
+                        # Folder deleted - we'll catch file deletions individually
+                        pass
+                    continue
+
+                # Apply filters
+                if not self._item_passes_filter(item, include_patterns, exclude_patterns, max_file_size_mb):
+                    results["skipped_files"] += 1
+                    continue
+
+                # Apply selection filter if active
+                if has_selection_filter:
+                    if not self._item_matches_selection(item, selected_folders, selected_file_ids):
+                        results["skipped_files"] += 1
+                        continue
+
+                results["total_files"] += 1
+                current_file = item.get("name", "unknown")
+
+                try:
+                    if change_type == "deleted":
+                        # Handle deleted file
+                        await self._handle_deleted_item(
+                            session=session,
+                            config=config,
+                            item=item,
+                            run_id=run_id,
+                        )
+                        results["deleted_detected"] += 1
+
+                        await run_log_service.log_event(
+                            session=session,
+                            run_id=run_id,
+                            level="INFO",
+                            event_type="file_delete",
+                            message=f"Marked as deleted: {current_file}",
+                            context={"phase": "delta_sync", "file": current_file, "action": "deleted"},
+                        )
+                    else:
+                        # Download/update file
+                        result = await self._sync_single_file(
+                            session=session,
+                            config=config,
+                            item=item,
+                            run_id=run_id,
+                            full_sync=False,
+                        )
+                        results[result] += 1
+                        processed_files += 1
+
+                        if result == "new_files":
+                            await run_log_service.log_event(
+                                session=session,
+                                run_id=run_id,
+                                level="INFO",
+                                event_type="file_download",
+                                message=f"Downloaded: {current_file}",
+                                context={"phase": "delta_sync", "file": current_file, "action": "new"},
+                            )
+                        elif result == "updated_files":
+                            await run_log_service.log_event(
+                                session=session,
+                                run_id=run_id,
+                                level="INFO",
+                                event_type="file_download",
+                                message=f"Updated: {current_file}",
+                                context={"phase": "delta_sync", "file": current_file, "action": "updated"},
+                            )
+
+                except Exception as e:
+                    logger.error(f"Failed to process delta item {current_file}: {e}")
+                    results["failed_files"] += 1
+                    results["errors"].append({"file": current_file, "error": str(e)})
+
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_id,
+                        level="ERROR",
+                        event_type="file_error",
+                        message=f"Failed: {current_file}",
+                        context={"phase": "delta_sync", "file": current_file, "error": str(e)},
+                    )
+
+                # Update config stats
+                config.stats = {
+                    "total_files": results["total_files"],
+                    "synced_files": results["new_files"] + results["updated_files"] + results["unchanged_files"],
+                    "processed_files": processed_files,
+                    "new_files": results["new_files"],
+                    "updated_files": results["updated_files"],
+                    "unchanged_files": results["unchanged_files"],
+                    "failed_files": results["failed_files"],
+                    "deleted_count": results["deleted_detected"],
+                    "current_file": current_file,
+                    "phase": "delta_sync",
+                }
+                await session.commit()
+
+            # Update delta token
+            config.delta_token = new_delta_token
+            config.last_delta_sync_at = datetime.utcnow()
+
+        except Exception as e:
+            logger.error(f"Delta sync failed: {e}")
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="ERROR",
+                event_type="error",
+                message=f"Delta sync failed: {e}",
+                context={"phase": "delta_sync", "error": str(e)},
+            )
+            await session.commit()
+            raise
+
+        # =================================================================
+        # COMPLETE DELTA SYNC
+        # =================================================================
+        config.last_sync_at = datetime.utcnow()
+        config.last_sync_status = "success" if results["failed_files"] == 0 else "partial"
+        config.last_sync_run_id = run_id
+        config.stats = {
+            "total_files": results["total_files"],
+            "synced_files": results["new_files"] + results["updated_files"] + results["unchanged_files"],
+            "processed_files": processed_files,
+            "new_files": results["new_files"],
+            "updated_files": results["updated_files"],
+            "unchanged_files": results["unchanged_files"],
+            "failed_files": results["failed_files"],
+            "deleted_count": results["deleted_detected"],
+            "current_file": None,
+            "phase": "completed",
+            "sync_mode": "delta",
+            "last_sync_results": results,
+        }
+        await session.commit()
+
+        # Complete the run
+        results_summary = {
+            "total_files": results["total_files"],
+            "new_files": results["new_files"],
+            "updated_files": results["updated_files"],
+            "unchanged_files": results["unchanged_files"],
+            "skipped_files": results["skipped_files"],
+            "failed_files": results["failed_files"],
+            "deleted_detected": results["deleted_detected"],
+            "sync_mode": "delta",
+            "sync_status": "success" if results["failed_files"] == 0 else "partial",
+            "errors": results.get("errors", []),
+        }
+        await run_service.complete_run(
+            session=session,
+            run_id=run_id,
+            results_summary=results_summary,
+        )
+
+        # Log final summary
+        status_msg = "completed successfully" if results["failed_files"] == 0 else "completed with errors"
+        await run_log_service.log_summary(
+            session=session,
+            run_id=run_id,
+            message=f"SharePoint delta sync {status_msg}: {results['new_files']} new, {results['updated_files']} updated, {results['unchanged_files']} unchanged, {results['failed_files']} failed, {results['deleted_detected']} deleted",
+            context={
+                "new_files": results["new_files"],
+                "updated_files": results["updated_files"],
+                "unchanged_files": results["unchanged_files"],
+                "failed_files": results["failed_files"],
+                "deleted_detected": results["deleted_detected"],
+                "sync_mode": "delta",
+                "status": "success" if results["failed_files"] == 0 else "partial",
+            },
+        )
+        await session.commit()
+
+        logger.info(
+            f"Delta sync completed for {config.name}: "
+            f"new={results['new_files']}, updated={results['updated_files']}, "
+            f"unchanged={results['unchanged_files']}, deleted={results['deleted_detected']}"
+        )
+
+        return results
+
+    async def _capture_initial_delta_token(
+        self,
+        session: AsyncSession,
+        config: SharePointSyncConfig,
+        organization_id: UUID,
+        run_id: UUID,
+    ) -> None:
+        """
+        Capture initial delta token after a full sync.
+
+        This establishes the baseline for future delta syncs by making
+        an initial delta query and storing the returned delta link.
+        """
+        from .sharepoint_service import sharepoint_delta_query
+        from .run_log_service import run_log_service
+
+        if not config.folder_drive_id or not config.folder_item_id:
+            logger.warning(f"Cannot capture delta token: missing drive_id or item_id for {config.name}")
+            return
+
+        try:
+            # Make initial delta query to get token
+            # We don't need to process items since we just did a full sync
+            _, new_delta_token = await sharepoint_delta_query(
+                drive_id=config.folder_drive_id,
+                item_id=config.folder_item_id,
+                delta_token=None,  # Initial query
+                organization_id=organization_id,
+                session=session,
+            )
+
+            if new_delta_token:
+                config.delta_token = new_delta_token
+                config.delta_token_acquired_at = datetime.utcnow()
+                await session.commit()
+
+                logger.info(f"Captured delta token for {config.name}")
+                await run_log_service.log_event(
+                    session=session,
+                    run_id=run_id,
+                    level="INFO",
+                    event_type="progress",
+                    message="Captured delta token for future incremental syncs",
+                    context={"phase": "completing", "delta_enabled": True},
+                )
+                await session.commit()
+
+        except Exception as e:
+            logger.warning(f"Failed to capture delta token for {config.name}: {e}")
+            # Don't raise - this is a non-critical operation
+
+    async def _handle_deleted_item(
+        self,
+        session: AsyncSession,
+        config: SharePointSyncConfig,
+        item: Dict[str, Any],
+        run_id: UUID,
+    ) -> None:
+        """
+        Mark a synced document as deleted based on delta query result.
+
+        Args:
+            session: Database session
+            config: SharePointSyncConfig
+            item: Delta item with _change_type='deleted'
+            run_id: Run UUID for tracking
+        """
+        item_id = item.get("id")
+        if not item_id:
+            return
+
+        # Find the synced document by SharePoint item ID
+        result = await session.execute(
+            select(SharePointSyncedDocument).where(
+                and_(
+                    SharePointSyncedDocument.sync_config_id == config.id,
+                    SharePointSyncedDocument.sharepoint_item_id == item_id,
+                    SharePointSyncedDocument.status != "deleted_in_source",
+                )
+            )
+        )
+        doc = result.scalar_one_or_none()
+
+        if doc:
+            doc.status = "deleted_in_source"
+            doc.deleted_at = datetime.utcnow()
+            doc.last_sync_run_id = run_id
+            await session.commit()
 
     def _filter_items(
         self,
@@ -1429,6 +1880,31 @@ class SharePointSyncService:
 
         return filtered
 
+    # File extensions that cannot be extracted to markdown - skip downloading
+    NON_EXTRACTABLE_EXTENSIONS = {
+        # Video
+        ".mp4", ".avi", ".mov", ".wmv", ".flv", ".mkv", ".webm", ".m4v", ".mpeg", ".mpg",
+        ".3gp", ".3g2", ".ogv", ".ts", ".mts", ".m2ts", ".vob", ".asf",
+        # Audio
+        ".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a", ".aiff", ".aif",
+        ".opus", ".mid", ".midi", ".ac3", ".amr",
+        # Images (not useful for text extraction)
+        ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
+        ".heic", ".heif",  # Apple image formats
+        ".tiff", ".tif", ".raw", ".cr2", ".nef", ".arw",  # RAW/professional formats
+        # Archives (TODO: Support zip extraction for direct uploads, not SharePoint sync)
+        ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".cab", ".lzh", ".lz4",
+        # Large binary formats
+        ".iso", ".dmg", ".exe", ".msi", ".dll", ".bin", ".dat",
+        # Font files
+        ".ttf", ".otf", ".woff", ".woff2", ".eot",
+        # Design/CAD files
+        ".psd", ".ai", ".sketch", ".fig", ".xd",
+        ".dwg", ".dxf", ".stl", ".obj", ".fbx",
+        # OneNote (proprietary binary, requires MS Graph API to extract)
+        ".one", ".onetoc2", ".onepkg",
+    }
+
     def _item_passes_filter(
         self,
         item: Dict[str, Any],
@@ -1436,8 +1912,18 @@ class SharePointSyncService:
         exclude_patterns: List[str],
         max_file_size_mb: int,
     ) -> bool:
-        """Check if a single item passes the filter criteria."""
+        """
+        Check if a single item passes the filter criteria.
+
+        Filters applied:
+        1. Skip folders
+        2. Skip files exceeding max size
+        3. Skip files matching exclude patterns
+        4. Skip files not matching include patterns (if specified)
+        5. Skip non-extractable file types (video, audio, etc.)
+        """
         import fnmatch
+        from pathlib import Path
 
         # Skip folders
         if item.get("type") == "folder":
@@ -1462,6 +1948,11 @@ class SharePointSyncService:
             included = any(fnmatch.fnmatch(name, p) for p in include_patterns)
             if not included:
                 return False
+
+        # Skip non-extractable file types (video, audio, etc.)
+        ext = Path(name).suffix.lower()
+        if ext in self.NON_EXTRACTABLE_EXTENSIONS:
+            return False
 
         return True
 
@@ -1542,18 +2033,30 @@ class SharePointSyncService:
         )
 
         if existing_doc:
-            # Check if file has changed
-            if not full_sync and existing_doc.sharepoint_etag == etag:
+            # Determine if we need to download this file
+            etag_matches = existing_doc.sharepoint_etag == etag
+            is_successfully_synced = existing_doc.sync_status == "synced"
+
+            # Skip download if:
+            # - Etag matches (file unchanged in SharePoint)
+            # - AND file was successfully synced previously
+            # This applies to BOTH regular sync AND full_sync (gap-filling behavior)
+            # full_sync will still re-download files that:
+            #   - Have different etag (changed in SharePoint)
+            #   - Have sync_status != "synced" (previously failed)
+            if etag_matches and is_successfully_synced:
                 # Update last_synced_at even if unchanged
                 await self.update_synced_document(
                     session, existing_doc,
                     last_synced_at=datetime.utcnow(),
                     last_sync_run_id=run_id,
-                    sync_status="synced",  # Reset if was marked deleted
+                    sync_status="synced",  # Confirm still synced
                 )
                 return "unchanged_files"
 
-            # File has changed - need to re-download and update asset
+            # File needs re-download because:
+            # - etag changed (file modified in SharePoint), OR
+            # - sync_status != "synced" (previous sync failed)
             return await self._update_existing_file(
                 session=session,
                 config=config,

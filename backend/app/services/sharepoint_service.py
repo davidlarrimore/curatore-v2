@@ -667,3 +667,195 @@ async def sharepoint_download(
         "skipped": skipped,
         "batch_dir": str(batch_root),
     }
+
+
+async def sharepoint_delta_query(
+    drive_id: str,
+    item_id: str,
+    delta_token: Optional[str] = None,
+    organization_id: Optional[UUID] = None,
+    session: Optional[AsyncSession] = None,
+    on_item_received: Optional[callable] = None,
+) -> Tuple[List[Dict[str, Any]], str]:
+    """
+    Query Microsoft Graph Delta API for changed items.
+
+    The Delta API provides incremental sync capability by returning only items
+    that have changed since the last query. This is much more efficient than
+    full enumeration for large sites with few changes.
+
+    Args:
+        drive_id: SharePoint drive ID
+        item_id: Root folder item ID to track changes from
+        delta_token: Previous delta token (None for initial sync)
+                    Format: Full deltaLink URL from previous response
+        organization_id: Optional organization ID for credentials lookup
+        session: Optional database session for credentials lookup
+        on_item_received: Optional async callback called for each item
+
+    Returns:
+        Tuple of (changed_items, new_delta_token)
+
+    Delta response items include:
+    - New/modified items: Full metadata with file/folder properties
+    - Deleted items: Contains {"deleted": {}} property
+
+    Token Notes:
+    - Token is an opaque string (full URL) - don't parse it
+    - Token may expire after extended inactivity (~30 days)
+    - If token invalid, API returns 410 Gone → reset and do full sync
+
+    Reference:
+        https://learn.microsoft.com/en-us/graph/delta-query-overview
+    """
+    credentials = await _get_sharepoint_credentials(organization_id, session)
+    tenant_id = credentials["tenant_id"]
+    client_id = credentials["client_id"]
+    client_secret = credentials["client_secret"]
+
+    token_payload = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "grant_type": "client_credentials",
+        "scope": _scope(),
+    }
+
+    graph_base = _graph_base_url()
+
+    changed_items: List[Dict[str, Any]] = []
+    new_delta_token: str = ""
+
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # Get access token
+        token_resp = await client.post(_token_url(tenant_id), data=token_payload)
+        token_resp.raise_for_status()
+        access_token = token_resp.json().get("access_token")
+        if not access_token:
+            raise RuntimeError("No access_token returned from Microsoft identity platform.")
+
+        headers = {"Authorization": f"Bearer {access_token}"}
+
+        # Build delta URL
+        if delta_token:
+            # Continue from previous delta - token is the full URL
+            url = delta_token
+        else:
+            # Initial delta - get all items with delta tracking
+            url = f"{graph_base}/drives/{drive_id}/items/{item_id}/delta"
+
+        # Fetch all pages of delta results
+        while url:
+            response = await client.get(url, headers=headers)
+
+            # Handle 410 Gone - token expired
+            if response.status_code == 410:
+                raise DeltaTokenExpiredError(
+                    "Delta token has expired. Perform a full sync to obtain a new token."
+                )
+
+            response.raise_for_status()
+            data = response.json()
+
+            for item in data.get("value", []):
+                # Determine change type
+                if "deleted" in item:
+                    item["_change_type"] = "deleted"
+                else:
+                    item["_change_type"] = "modified"  # Could be new or updated
+
+                # Build normalized item entry
+                is_folder = "folder" in item
+                if not is_folder:
+                    # Build file entry with metadata
+                    file_info = item.get("file", {})
+                    parent_ref = item.get("parentReference", {})
+                    created_by = item.get("createdBy", {}).get("user", {})
+                    modified_by = item.get("lastModifiedBy", {}).get("user", {})
+
+                    normalized_item = {
+                        "id": item.get("id"),
+                        "name": item.get("name", ""),
+                        "type": "file",
+                        "folder": parent_ref.get("path", "").replace("/drive/root:", "").strip("/"),
+                        "size": item.get("size"),
+                        "mime": file_info.get("mimeType"),
+                        "file_type": file_info.get("mimeType"),
+                        "web_url": item.get("webUrl"),
+                        "drive_id": parent_ref.get("driveId") or drive_id,
+                        "etag": item.get("eTag"),
+                        "created": item.get("createdDateTime"),
+                        "modified": item.get("lastModifiedDateTime"),
+                        "created_by": created_by.get("displayName"),
+                        "created_by_email": created_by.get("email"),
+                        "last_modified_by": modified_by.get("displayName"),
+                        "last_modified_by_email": modified_by.get("email"),
+                        "_change_type": item["_change_type"],
+                        "_raw": item,  # Keep raw for advanced processing
+                    }
+                else:
+                    # Folder item (for deletions or if caller wants folders)
+                    parent_ref = item.get("parentReference", {})
+                    normalized_item = {
+                        "id": item.get("id"),
+                        "name": item.get("name", ""),
+                        "type": "folder",
+                        "folder": parent_ref.get("path", "").replace("/drive/root:", "").strip("/"),
+                        "web_url": item.get("webUrl"),
+                        "drive_id": parent_ref.get("driveId") or drive_id,
+                        "_change_type": item["_change_type"],
+                        "_raw": item,
+                    }
+
+                changed_items.append(normalized_item)
+
+                # Call callback if provided
+                if on_item_received:
+                    await on_item_received(normalized_item)
+
+            # Handle pagination and delta link
+            if "@odata.nextLink" in data:
+                # More pages available
+                url = data["@odata.nextLink"]
+            elif "@odata.deltaLink" in data:
+                # Final page - capture new delta token
+                new_delta_token = data["@odata.deltaLink"]
+                url = None
+            else:
+                url = None
+
+    return changed_items, new_delta_token
+
+
+class DeltaTokenExpiredError(Exception):
+    """Raised when the Microsoft Graph delta token has expired."""
+    pass
+
+
+async def _get_access_token(
+    organization_id: Optional[UUID] = None,
+    session: Optional[AsyncSession] = None,
+) -> str:
+    """
+    Get a fresh Microsoft Graph access token.
+
+    Helper function for delta sync to refresh tokens during long operations.
+    """
+    credentials = await _get_sharepoint_credentials(organization_id, session)
+    tenant_id = credentials["tenant_id"]
+    client_id = credentials["client_id"]
+    client_secret = credentials["client_secret"]
+
+    token_payload = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "grant_type": "client_credentials",
+        "scope": _scope(),
+    }
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        token_resp = await client.post(_token_url(tenant_id), data=token_payload)
+        token_resp.raise_for_status()
+        access_token = token_resp.json().get("access_token")
+        if not access_token:
+            raise RuntimeError("No access_token returned from Microsoft identity platform.")
+        return access_token

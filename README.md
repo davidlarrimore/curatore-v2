@@ -431,6 +431,22 @@ curl -X POST http://localhost:8000/api/v1/search/reindex \
 
 ---
 
+## Development Backlog
+
+Planned features and improvements:
+
+### Archive & OneNote Extraction
+- **ZIP Archive Support**: Extract and process files from `.zip` archives
+  - Recursive extraction of nested archives
+  - File type detection and routing to appropriate extractors
+  - Maintain folder structure metadata
+- **OneNote Support**: Extract content from `.one` files
+  - Microsoft OneNote notebook parsing
+  - Section and page hierarchy preservation
+  - Embedded image and attachment handling
+
+---
+
 ## Security
 
 - Change default admin password immediately after first login

@@ -36,7 +36,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import text, select, delete
+from sqlalchemy import text, select, delete, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
@@ -175,6 +175,13 @@ class PgIndexService:
                     sync_config_id=sync_config_id,
                     metadata=metadata,
                 )
+
+            # Update asset.indexed_at timestamp
+            await session.execute(
+                update(Asset)
+                .where(Asset.id == asset_id)
+                .values(indexed_at=datetime.utcnow())
+            )
 
             await session.commit()
             logger.info(f"Indexed asset {asset_id} with {len(chunks)} chunks")

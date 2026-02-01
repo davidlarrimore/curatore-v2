@@ -764,6 +764,7 @@ export interface UnifiedQueueStats {
   celery_queues: {
     processing_priority: number
     extraction: number
+    enhancement: number
     sam: number
     scrape: number
     sharepoint: number
@@ -3269,6 +3270,7 @@ export interface SamNoticeListResponse {
 
 // Phase 7.6: Notice filter params
 export interface SamNoticeListParams {
+  keyword?: string
   agency?: string
   sub_agency?: string
   office?: string

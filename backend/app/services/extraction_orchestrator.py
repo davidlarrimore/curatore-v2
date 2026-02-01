@@ -337,28 +337,11 @@ class ExtractionOrchestrator:
                 f"run={run_id}, time={extraction_time:.2f}s"
             )
 
-            # Trigger search indexing if enabled
-            if _is_search_enabled():
-                try:
-                    await run_log_service.log_event(
-                        session=session,
-                        run_id=run_id,
-                        level="INFO",
-                        event_type="progress",
-                        message="Queueing asset for search indexing...",
-                    )
-
-                    from ..tasks import index_asset_task
-                    index_asset_task.delay(asset_id=str(asset_id))
-
-                    logger.info(f"Queued asset {asset_id} for search indexing")
-                except Exception as e:
-                    # Don't fail extraction if indexing queue fails
-                    logger.warning(f"Failed to queue asset {asset_id} for indexing: {e}")
-
             # Phase 2: Queue enhancement task if eligible and Docling is enabled
             enhancement_queued = False
-            if enhancement_eligible and self._is_docling_enabled():
+            will_be_enhanced = enhancement_eligible and self._is_docling_enabled()
+
+            if will_be_enhanced:
                 try:
                     enhancement_result = await self._queue_enhancement(
                         session=session,
@@ -373,12 +356,39 @@ class ExtractionOrchestrator:
                             run_id=run_id,
                             level="INFO",
                             event_type="progress",
-                            message="Queued for background Docling enhancement",
+                            message="Queued for background Docling enhancement (indexing deferred until enhancement completes)",
                             context=enhancement_result,
                         )
                 except Exception as e:
                     # Don't fail extraction if enhancement queue fails
                     logger.warning(f"Failed to queue enhancement for asset {asset_id}: {e}")
+                    # If enhancement queueing fails, fall back to indexing now
+                    enhancement_queued = False
+
+            # Trigger search indexing if enabled AND either:
+            # - Document is NOT enhancement-eligible, OR
+            # - Document IS eligible but enhancement was NOT queued (Docling disabled or queue failed)
+            # This avoids double-indexing: enhanced documents get indexed after enhancement completes
+            should_index_now = _is_search_enabled() and not enhancement_queued
+
+            if should_index_now:
+                try:
+                    index_reason = "not enhancement-eligible" if not enhancement_eligible else "enhancement not queued"
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_id,
+                        level="INFO",
+                        event_type="progress",
+                        message=f"Queueing asset for search indexing ({index_reason})...",
+                    )
+
+                    from ..tasks import index_asset_task
+                    index_asset_task.delay(asset_id=str(asset_id))
+
+                    logger.info(f"Queued asset {asset_id} for search indexing ({index_reason})")
+                except Exception as e:
+                    # Don't fail extraction if indexing queue fails
+                    logger.warning(f"Failed to queue asset {asset_id} for indexing: {e}")
 
             return {
                 "status": "success",

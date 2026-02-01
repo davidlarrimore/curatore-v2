@@ -10,7 +10,7 @@ import tempfile
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from celery import shared_task
 from sqlalchemy import select, and_
@@ -2601,6 +2601,19 @@ async def _enhance_extraction_async(
 
                 logger.info(f"Asset {asset_id} enhanced with Docling extraction")
 
+                # Re-index the asset with enhanced content
+                from .services.config_loader import config_loader as cfg_loader
+                search_config = cfg_loader.get_search_config()
+                search_enabled = search_config.enabled if search_config else getattr(settings, "search_enabled", True)
+
+                if search_enabled:
+                    try:
+                        index_asset_task.delay(asset_id=str(asset_id))
+                        logger.info(f"Queued re-indexing for enhanced asset {asset_id}")
+                    except Exception as e:
+                        # Don't fail enhancement if indexing queue fails
+                        logger.warning(f"Failed to queue re-indexing for asset {asset_id}: {e}")
+
                 return {
                     "status": "enhanced",
                     "basic_length": basic_length,
@@ -2657,28 +2670,35 @@ def sharepoint_sync_task(
     organization_id: str,
     run_id: str,
     full_sync: bool = False,
+    use_delta: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Execute SharePoint folder synchronization.
 
-    This task:
-    1. Gets folder inventory from SharePoint
-    2. Compares with existing synced documents
-    3. Downloads new/updated files and creates Assets
-    4. Detects deleted files and marks them
-    5. Triggers extraction for new assets
+    This task supports two sync modes:
+    1. Full enumeration: Scans all files, compares etags
+    2. Delta query: Uses Microsoft Graph Delta API for incremental changes
+
+    Phases:
+    1. Initialization - Load config, validate state
+    2. Connection - Authenticate with SharePoint
+    3. Sync - Either delta query or full streaming enumeration
+    4. Detection - Mark deleted files (full sync only)
+    5. Completion - Update stats, capture delta token
 
     Args:
         sync_config_id: SharePointSyncConfig UUID string
         organization_id: Organization UUID string
         run_id: Run UUID string
         full_sync: If True, re-download all files regardless of etag
+        use_delta: Override delta_enabled setting (None = use config)
 
     Returns:
-        Dict with sync results
+        Dict with sync results including sync_mode ('delta' or 'full')
     """
     logger = logging.getLogger("curatore.tasks.sharepoint_sync")
-    logger.info(f"Starting SharePoint sync for config {sync_config_id}")
+    sync_mode = "delta" if use_delta else "full (default)"
+    logger.info(f"Starting SharePoint sync for config {sync_config_id} (mode: {sync_mode})")
 
     try:
         result = asyncio.run(
@@ -2687,10 +2707,12 @@ def sharepoint_sync_task(
                 organization_id=uuid.UUID(organization_id),
                 run_id=uuid.UUID(run_id),
                 full_sync=full_sync,
+                use_delta=use_delta,
             )
         )
 
-        logger.info(f"SharePoint sync completed for config {sync_config_id}: {result}")
+        actual_mode = result.get("sync_mode", "full")
+        logger.info(f"SharePoint sync completed for config {sync_config_id} (mode: {actual_mode}): {result}")
         return result
 
     except Exception as e:
@@ -2705,6 +2727,7 @@ async def _sharepoint_sync_async(
     organization_id,
     run_id,
     full_sync: bool,
+    use_delta: Optional[bool] = None,
 ) -> Dict[str, Any]:
     """
     Async implementation of SharePoint sync.
@@ -2725,7 +2748,8 @@ async def _sharepoint_sync_async(
             run_id=run_id,
             level="INFO",
             event_type="start",
-            message=f"Starting SharePoint sync (full_sync={full_sync})",
+            message=f"Starting SharePoint sync (full_sync={full_sync}, use_delta={use_delta})",
+            context={"full_sync": full_sync, "use_delta": use_delta},
         )
         await session.commit()
 
@@ -2737,6 +2761,7 @@ async def _sharepoint_sync_async(
                 organization_id=organization_id,
                 run_id=run_id,
                 full_sync=full_sync,
+                use_delta=use_delta,
             )
 
             # Get newly created assets for extraction
@@ -2949,6 +2974,156 @@ async def _expand_folders_to_files(
     return expanded_files
 
 
+def _build_file_entry_from_graph(
+    child: Dict[str, Any],
+    parent_path: str,
+    drive_id: str,
+) -> Dict[str, Any]:
+    """
+    Build standardized file entry from Microsoft Graph API child item.
+
+    Args:
+        child: Graph API item response
+        parent_path: Relative folder path from sync root
+        drive_id: SharePoint drive ID
+
+    Returns:
+        Standardized file entry dict for import/sync processing
+    """
+    file_info = child.get("file", {})
+    parent_ref = child.get("parentReference", {})
+    created_by = child.get("createdBy", {}).get("user", {})
+    modified_by = child.get("lastModifiedBy", {}).get("user", {})
+
+    return {
+        "id": child.get("id"),
+        "name": child.get("name", ""),
+        "type": "file",
+        "folder": parent_path,
+        "size": child.get("size"),
+        "mime": file_info.get("mimeType"),
+        "file_type": file_info.get("mimeType"),
+        "web_url": child.get("webUrl"),
+        "drive_id": parent_ref.get("driveId") or drive_id,
+        "etag": child.get("eTag"),
+        "created": child.get("createdDateTime"),
+        "modified": child.get("lastModifiedDateTime"),
+        "created_by": created_by.get("displayName"),
+        "created_by_email": created_by.get("email"),
+        "last_modified_by": modified_by.get("displayName"),
+        "last_modified_by_email": modified_by.get("email"),
+    }
+
+
+async def _expand_folders_to_files_stream(
+    client: "httpx.AsyncClient",
+    headers: Dict[str, str],
+    graph_base: str,
+    items: list,
+    logger: "logging.Logger",
+    run_id: uuid.UUID,
+    session: "AsyncSession",
+) -> AsyncGenerator[Dict[str, Any], None]:
+    """
+    Stream files from folder expansion using BFS traversal.
+
+    Yields files as discovered with periodic activity updates to prevent timeout.
+    This is the streaming replacement for _expand_folders_to_files() that prevents
+    the 300-second activity timeout by touching last_activity_at periodically.
+
+    Args:
+        client: httpx AsyncClient with SharePoint token
+        headers: HTTP headers with Authorization
+        graph_base: Microsoft Graph API base URL
+        items: List of selected items (files and/or folders)
+        logger: Logger instance
+        run_id: Run UUID for activity tracking
+        session: Database session
+
+    Yields:
+        File entry dicts as they are discovered during BFS traversal
+    """
+    from .services.run_service import run_service
+    from .services.run_log_service import run_log_service
+
+    # BFS queue: (drive_id, folder_id, parent_path)
+    folder_queue: List[Tuple[str, str, str]] = []
+
+    # First pass: yield direct files, queue folders
+    for item in items:
+        item_type = item.get("type", "file")
+        if item_type == "folder":
+            folder_id = item.get("id")
+            drive_id = item.get("drive_id")
+            folder_name = item.get("name", "")
+            if folder_id and drive_id:
+                folder_queue.append((drive_id, folder_id, folder_name))
+        else:
+            yield item
+
+    # Tracking
+    folders_scanned = 0
+    files_discovered = 0
+    last_activity = datetime.utcnow()
+    activity_interval = 30  # seconds between activity updates
+
+    # BFS folder traversal
+    while folder_queue:
+        drive_id, folder_id, parent_path = folder_queue.pop(0)
+
+        # List folder contents with pagination
+        url = f"{graph_base}/drives/{drive_id}/items/{folder_id}/children"
+        params = {"$top": "200"}
+
+        while url:
+            response = await client.get(url, headers=headers, params=params)
+            response.raise_for_status()
+            data = response.json()
+
+            for child in data.get("value", []):
+                child_name = child.get("name", "")
+                child_path = f"{parent_path}/{child_name}".strip("/") if parent_path else child_name
+
+                if "folder" in child:
+                    # Queue subfolder for BFS
+                    child_id = child.get("id")
+                    if child_id:
+                        folder_queue.append((drive_id, child_id, child_path))
+                else:
+                    # It's a file - yield immediately
+                    files_discovered += 1
+                    yield _build_file_entry_from_graph(child, parent_path, drive_id)
+
+            url = data.get("@odata.nextLink")
+            params = None  # nextLink includes params
+
+        folders_scanned += 1
+
+        # Periodic activity update to prevent timeout
+        now = datetime.utcnow()
+        if (now - last_activity).total_seconds() >= activity_interval:
+            last_activity = now
+
+            # Touch run activity
+            await run_service.touch_activity(session, run_id)
+
+            # Log progress
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="progress",
+                message=f"Scanning: {folders_scanned} folders, {files_discovered} files, {len(folder_queue)} remaining",
+                context={
+                    "phase": "expanding",
+                    "folders_scanned": folders_scanned,
+                    "files_discovered": files_discovered,
+                    "folders_remaining": len(folder_queue),
+                },
+            )
+            await session.commit()
+
+
 async def _sharepoint_import_async(
     connection_id: Optional[uuid.UUID],
     organization_id: uuid.UUID,
@@ -3043,7 +3218,7 @@ async def _sharepoint_import_async(
         results = {
             "imported": 0,
             "failed": 0,
-            "skipped_folders": 0,
+            "skipped_non_extractable": 0,
             "errors": [],
         }
 
@@ -3071,7 +3246,7 @@ async def _sharepoint_import_async(
             await session.commit()
 
             # =================================================================
-            # PHASE 3: EXPANDING FOLDERS
+            # PHASE 3+4: STREAMING DISCOVERY AND DOWNLOAD
             # =================================================================
             # Count folders vs files in selection
             folder_count = sum(1 for item in selected_items if item.get("type") == "folder")
@@ -3082,57 +3257,26 @@ async def _sharepoint_import_async(
                 run_id=run_id,
                 level="INFO",
                 event_type="phase",
-                message=f"Phase 3: Expanding {folder_count} folders and {file_count} files",
-                context={"phase": "expanding", "folders": folder_count, "files": file_count},
+                message=f"Phase 3: Streaming discovery and download from {folder_count} folders and {file_count} direct files",
+                context={"phase": "streaming", "folders": folder_count, "direct_files": file_count},
             )
             await session.commit()
 
-            files_to_import = await _expand_folders_to_files(
+            # Track processed count (total unknown during streaming)
+            processed = 0
+            last_progress_log = datetime.utcnow()
+            progress_log_interval = 30  # Log progress every 30 seconds
+
+            # Stream files as they're discovered and process immediately
+            async for item in _expand_folders_to_files_stream(
                 client=client,
                 headers=headers,
                 graph_base=graph_base,
                 items=selected_items,
                 logger=logger,
-            )
-
-            await run_log_service.log_event(
-                session=session,
                 run_id=run_id,
-                level="INFO",
-                event_type="progress",
-                message=f"Expansion complete: Found {len(files_to_import)} files to import",
-                context={"phase": "expanding", "total_files": len(files_to_import)},
-            )
-            await session.commit()
-
-            # =================================================================
-            # PHASE 4: DOWNLOADING FILES
-            # =================================================================
-            total_files = len(files_to_import)
-            await run_log_service.log_event(
                 session=session,
-                run_id=run_id,
-                level="INFO",
-                event_type="phase",
-                message=f"Phase 4: Downloading {total_files} files",
-                context={"phase": "downloading", "total_files": total_files},
-            )
-
-            # Update run progress
-            await run_service.update_run_progress(
-                session=session,
-                run_id=run_id,
-                current=0,
-                total=total_files,
-                unit="files",
-            )
-            await session.commit()
-
-            # Track progress milestones
-            last_logged_percent = 0
-            log_interval_percent = 10
-
-            for idx, item in enumerate(files_to_import):
+            ):
                 item_id = item.get("id")
                 name = item.get("name", "unknown")
                 folder_path = item.get("folder", "").strip("/")
@@ -3140,6 +3284,37 @@ async def _sharepoint_import_async(
                 size = item.get("size")
                 web_url = item.get("web_url")
                 mime_type = item.get("mime") or item.get("file_type")
+
+                # Skip non-extractable file types (video, audio, images, etc.)
+                ext = Path(name).suffix.lower()
+                non_extractable = {
+                    # Video
+                    ".mp4", ".avi", ".mov", ".wmv", ".flv", ".mkv", ".webm", ".m4v",
+                    ".mpeg", ".mpg", ".3gp", ".3g2", ".ogv", ".ts", ".mts", ".m2ts",
+                    ".vob", ".asf",
+                    # Audio
+                    ".mp3", ".wav", ".flac", ".aac", ".ogg", ".wma", ".m4a", ".aiff",
+                    ".aif", ".opus", ".mid", ".midi", ".ac3", ".amr",
+                    # Images (not useful for text extraction)
+                    ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".ico", ".svg", ".webp",
+                    ".heic", ".heif",  # Apple image formats
+                    ".tiff", ".tif", ".raw", ".cr2", ".nef", ".arw",  # RAW/professional
+                    # Archives (skip for SharePoint sync - TODO: support for direct uploads)
+                    ".zip", ".rar", ".7z", ".tar", ".gz", ".bz2", ".xz", ".cab", ".lzh", ".lz4",
+                    # Large binary formats
+                    ".iso", ".dmg", ".exe", ".msi", ".dll", ".bin", ".dat",
+                    # Fonts
+                    ".ttf", ".otf", ".woff", ".woff2", ".eot",
+                    # Design/CAD files
+                    ".psd", ".ai", ".sketch", ".fig", ".xd",
+                    ".dwg", ".dxf", ".stl", ".obj", ".fbx",
+                    # OneNote (proprietary binary, requires MS Graph API)
+                    ".one", ".onetoc2", ".onepkg",
+                }
+                if ext in non_extractable:
+                    logger.debug(f"Skipping non-extractable file: {name}")
+                    results["skipped_non_extractable"] += 1
+                    continue
 
                 try:
                     # Download file
@@ -3244,15 +3419,6 @@ async def _sharepoint_import_async(
 
                     results["imported"] += 1
 
-                    await run_log_service.log_event(
-                        session=session,
-                        run_id=run_id,
-                        level="INFO",
-                        event_type="file_download",
-                        message=f"Downloaded: {name}",
-                        context={"phase": "downloading", "file": name, "folder": folder_path},
-                    )
-
                 except Exception as e:
                     logger.error(f"Failed to import {name}: {e}")
                     results["failed"] += 1
@@ -3263,53 +3429,53 @@ async def _sharepoint_import_async(
                         run_id=run_id,
                         level="ERROR",
                         event_type="file_error",
-                        message=f"Failed to download: {name}",
-                        context={"phase": "downloading", "file": name, "error": str(e)},
+                        message=f"Failed to import: {name}",
+                        context={"phase": "streaming", "file": name, "error": str(e)},
                     )
 
-                # Update progress
-                processed = idx + 1
+                # Update progress count
+                processed += 1
+
+                # Update run progress (total is unknown during streaming)
                 await run_service.update_run_progress(
                     session=session,
                     run_id=run_id,
                     current=processed,
-                    total=total_files,
+                    total=None,
                     unit="files",
+                    phase="streaming",
                 )
 
-                # Log progress at percentage milestones
-                if total_files > 0:
-                    current_percent = int((processed / total_files) * 100)
-                    if current_percent >= last_logged_percent + log_interval_percent:
-                        last_logged_percent = (current_percent // log_interval_percent) * log_interval_percent
-                        await run_log_service.log_event(
-                            session=session,
-                            run_id=run_id,
-                            level="INFO",
-                            event_type="progress",
-                            message=f"Download progress: {processed}/{total_files} files ({current_percent}%)",
-                            context={
-                                "phase": "downloading",
-                                "processed": processed,
-                                "total": total_files,
-                                "percent": current_percent,
-                                "imported": results["imported"],
-                                "failed": results["failed"],
-                            },
-                        )
+                # Log progress at time intervals (since total is unknown)
+                now = datetime.utcnow()
+                if (now - last_progress_log).total_seconds() >= progress_log_interval:
+                    last_progress_log = now
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_id,
+                        level="INFO",
+                        event_type="progress",
+                        message=f"Import progress: {processed} files processed ({results['imported']} imported, {results['failed']} failed)",
+                        context={
+                            "phase": "streaming",
+                            "processed": processed,
+                            "imported": results["imported"],
+                            "failed": results["failed"],
+                        },
+                    )
 
                 await session.commit()
 
             # =================================================================
-            # PHASE 5: COMPLETING IMPORT
+            # PHASE 4: COMPLETING IMPORT
             # =================================================================
             await run_log_service.log_event(
                 session=session,
                 run_id=run_id,
                 level="INFO",
                 event_type="phase",
-                message="Phase 5: Finalizing import",
-                context={"phase": "completing"},
+                message=f"Phase 4: Finalizing import ({processed} files processed)",
+                context={"phase": "completing", "total_processed": processed},
             )
             await session.commit()
 
@@ -3321,13 +3487,15 @@ async def _sharepoint_import_async(
             results_summary=results,
         )
 
+        skipped = results.get("skipped_non_extractable", 0)
         await run_log_service.log_summary(
             session=session,
             run_id=run_id,
-            message=f"SharePoint import {status_msg}: {results['imported']} imported, {results['failed']} failed",
+            message=f"SharePoint import {status_msg}: {results['imported']} imported, {results['failed']} failed, {skipped} skipped (non-extractable)",
             context={
                 "imported": results["imported"],
                 "failed": results["failed"],
+                "skipped_non_extractable": skipped,
                 "errors": results["errors"][:5] if results["errors"] else [],  # Limit errors in summary
                 "status": "success" if results["failed"] == 0 else "partial",
             },

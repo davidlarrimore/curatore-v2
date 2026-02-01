@@ -66,30 +66,35 @@ class ExtractionQueueService:
     5. prevent_duplicate() - Check if extraction already active
     """
 
-    # Configuration (can be overridden by config.yml or env vars)
+    # Configuration loaded from config.yml via queue_registry
     @property
     def max_concurrent(self) -> int:
         """Maximum concurrent extractions to submit to Celery.
 
-        Priority: config.yml queue.extraction_max_concurrent > env var > default
+        Configured via config.yml queues.extraction.max_concurrent
         """
-        # Try config.yml first
-        from .config_loader import config_loader
-        queue_config = config_loader.get_queue_config()
-        if queue_config and hasattr(queue_config, 'extraction_max_concurrent'):
-            return queue_config.extraction_max_concurrent
-        # Fall back to env var / settings default
-        return settings.extraction_max_concurrent
+        from .queue_registry import queue_registry
+        return queue_registry.get_max_concurrent("extraction") or 10
 
     @property
     def submission_interval(self) -> int:
-        """Seconds between queue submission checks."""
-        return settings.extraction_submission_interval
+        """Seconds between queue submission checks.
+
+        Configured via config.yml queues.extraction.submission_interval
+        """
+        from .queue_registry import queue_registry
+        queue_def = queue_registry.get("extraction")
+        return queue_def.submission_interval if queue_def else 5
 
     @property
     def duplicate_cooldown(self) -> int:
-        """Seconds before allowing re-extract on same asset."""
-        return settings.extraction_duplicate_cooldown
+        """Seconds before allowing re-extract on same asset.
+
+        Configured via config.yml queues.extraction.duplicate_cooldown
+        """
+        from .queue_registry import queue_registry
+        queue_def = queue_registry.get("extraction")
+        return queue_def.duplicate_cooldown if queue_def else 30
 
     @property
     def timeout_buffer(self) -> int:

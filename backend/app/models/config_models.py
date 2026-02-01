@@ -416,6 +416,40 @@ class EmailConfig(BaseModel):
         return v
 
 
+class QueueTypeOverride(BaseModel):
+    """
+    Runtime parameter overrides for a specific queue type.
+
+    These override the defaults defined in queue_registry.py.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    max_concurrent: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Maximum concurrent jobs for this queue (null = unlimited)"
+    )
+    timeout_seconds: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Job timeout in seconds"
+    )
+    submission_interval: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Seconds between queue processing checks"
+    )
+    duplicate_cooldown: Optional[int] = Field(
+        default=None,
+        ge=1,
+        description="Seconds before allowing duplicate job"
+    )
+    enabled: Optional[bool] = Field(
+        default=None,
+        description="Enable/disable this queue type"
+    )
+
+
 class QueueConfig(BaseModel):
     """Celery queue configuration."""
     model_config = ConfigDict(extra='forbid')
@@ -715,6 +749,10 @@ class AppConfig(BaseModel):
     queue: QueueConfig = Field(
         default_factory=QueueConfig,
         description="Queue configuration"
+    )
+    queues: Optional[Dict[str, QueueTypeOverride]] = Field(
+        default=None,
+        description="Per-queue-type parameter overrides (extraction, enhancement, sam, etc.)"
     )
     minio: Optional[MinIOConfig] = Field(
         default=None,

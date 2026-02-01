@@ -102,7 +102,7 @@ services:
     # Queue order: priority first, then by job type, maintenance last
     command: >
       sh -c "watchmedo auto-restart --directory=/app/app --pattern=*.py --recursive --
-      celery -A app.celery_app worker -Q processing_priority,extraction,sam,scrape,sharepoint,maintenance -l info --concurrency=${CELERY_CONCURRENCY:-4}"
+      celery -A app.celery_app worker -Q processing_priority,extraction,enhancement,sam,scrape,sharepoint,maintenance -l info --concurrency=${CELERY_CONCURRENCY:-4}"
     environment:
       - PYTHONUNBUFFERED=1
       # Mark as Celery worker for database service (uses NullPool to avoid event loop issues)
@@ -115,6 +115,8 @@ services:
       - CELERY_BROKER_URL=${CELERY_BROKER_URL:-redis://redis:6379/0}
       - CELERY_RESULT_BACKEND=${CELERY_RESULT_BACKEND:-redis://redis:6379/1}
       - CELERY_DEFAULT_QUEUE=${CELERY_DEFAULT_QUEUE:-processing}
+      # Worker concurrency - should be >= sum of all queue max_concurrent in config.yml
+      - CELERY_CONCURRENCY=${CELERY_CONCURRENCY:-4}
       # Extraction service (match backend)
       - EXTRACTION_SERVICE_URL=http://extraction:8010
       - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-180}

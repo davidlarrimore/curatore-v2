@@ -718,6 +718,9 @@ class Asset(Base):
     # extraction_tier: Current extraction quality tier ('basic' = fast MarkItDown, 'enhanced' = Docling)
     extraction_tier = Column(String(50), nullable=True, default="basic")
 
+    # indexed_at: When asset was indexed to pgvector search (null = not indexed)
+    indexed_at = Column(DateTime, nullable=True)
+
     # Relationships
     organization = relationship("Organization")
     user = relationship("User")
@@ -2551,6 +2554,20 @@ class SharePointSyncConfig(Base):
         UUID(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
     )
     sync_frequency = Column(String(50), nullable=False, default="manual")  # manual, hourly, daily
+
+    # Delta Query Support (Microsoft Graph incremental sync)
+    delta_token = Column(String(4096), nullable=True)
+    # Opaque token from Microsoft Graph for delta queries
+    # Format: Full deltaLink URL like "/drives/{id}/items/{id}/delta?token=..."
+
+    delta_enabled = Column(Boolean, default=False, nullable=False)
+    # Whether to use delta query for incremental syncs instead of full enumeration
+
+    last_delta_sync_at = Column(DateTime, nullable=True)
+    # When delta token was last used successfully
+
+    delta_token_acquired_at = Column(DateTime, nullable=True)
+    # When current delta token was first obtained (for token age tracking)
 
     # Statistics
     stats = Column(JSON, nullable=False, default=dict, server_default="{}")

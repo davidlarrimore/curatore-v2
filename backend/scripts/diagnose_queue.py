@@ -27,8 +27,15 @@ async def diagnose():
     # Check settings
     print("\n[1] SETTINGS")
     print(f"  extraction_queue_enabled: {settings.extraction_queue_enabled}")
-    print(f"  extraction_max_concurrent: {settings.extraction_max_concurrent}")
     print(f"  database_url: {settings.database_url[:50]}...")
+
+    # Queue configuration from config.yml
+    from app.services.queue_registry import queue_registry
+    queue_registry._ensure_initialized()
+    extraction_queue = queue_registry.get("extraction")
+    print(f"\n[1b] QUEUE CONFIG (from config.yml)")
+    print(f"  extraction.max_concurrent: {extraction_queue.max_concurrent if extraction_queue else 'N/A'}")
+    print(f"  extraction.timeout_seconds: {extraction_queue.timeout_seconds if extraction_queue else 'N/A'}")
 
     async with database_service.get_session() as session:
         # Check Asset counts by status

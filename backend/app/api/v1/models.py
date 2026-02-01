@@ -1171,6 +1171,15 @@ class AssetResponse(BaseModel):
     updated_at: datetime = Field(..., description="Update timestamp")
     created_by: Optional[str] = Field(None, description="User UUID who created the asset")
 
+    # Version tracking
+    current_version_number: Optional[int] = Field(None, description="Current version number")
+
+    # Extraction pipeline status fields
+    extraction_tier: Optional[str] = Field(None, description="Extraction quality tier (basic, enhanced)")
+    enhancement_eligible: Optional[bool] = Field(None, description="Whether file type is eligible for enhancement")
+    enhancement_queued_at: Optional[datetime] = Field(None, description="When enhancement was queued")
+    indexed_at: Optional[datetime] = Field(None, description="When asset was indexed to search")
+
     class Config:
         from_attributes = True
 
@@ -1181,6 +1190,7 @@ class ExtractionResultResponse(BaseModel):
     asset_id: str = Field(..., description="Asset UUID")
     run_id: str = Field(..., description="Run UUID")
     extractor_version: str = Field(..., description="Extractor version used")
+    extraction_tier: Optional[str] = Field(None, description="Extraction quality tier (basic, enhanced)")
     status: str = Field(..., description="Extraction status (pending, running, completed, failed)")
     extracted_bucket: Optional[str] = Field(None, description="Bucket for extracted content")
     extracted_object_key: Optional[str] = Field(None, description="Key for extracted markdown")
@@ -1724,6 +1734,10 @@ class SharePointSyncConfigResponse(BaseModel):
     # Active sync tracking
     is_syncing: bool = Field(default=False, description="True if sync is currently running")
     current_sync_status: Optional[str] = Field(None, description="Current sync run status")
+    # Delta query tracking
+    delta_enabled: bool = Field(default=False, description="Whether delta query is enabled for incremental sync")
+    has_delta_token: bool = Field(default=False, description="Whether a delta token is available")
+    last_delta_sync_at: Optional[datetime] = Field(None, description="When delta was last used successfully")
 
     class Config:
         from_attributes = True
@@ -2141,6 +2155,7 @@ class CeleryQueuesInfo(BaseModel):
     """Celery queue lengths."""
     processing_priority: int = Field(default=0, description="High priority queue length")
     extraction: int = Field(default=0, description="Extraction queue length")
+    enhancement: int = Field(default=0, description="Enhancement queue length (Docling)")
     sam: int = Field(default=0, description="SAM.gov queue length")
     scrape: int = Field(default=0, description="Web scrape queue length")
     sharepoint: int = Field(default=0, description="SharePoint queue length")

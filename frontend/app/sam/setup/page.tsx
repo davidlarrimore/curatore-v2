@@ -321,7 +321,7 @@ function SamSetupContent() {
             <div className="flex items-center gap-3">
               <Button
                 variant="secondary"
-                onClick={loadData}
+                onClick={() => loadData()}
                 disabled={isLoading}
                 className="gap-2"
               >

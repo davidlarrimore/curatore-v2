@@ -29,14 +29,24 @@ All background jobs are managed through the Queue Registry system:
 ### Key Data Models
 | Model | Purpose |
 |-------|---------|
-| `Asset` | Document with provenance and version history |
+| `Asset` | Document with provenance, version history, and pipeline status |
 | `AssetVersion` | Individual versions of an asset |
-| `ExtractionResult` | Extracted markdown linked to asset version |
-| `Run` | Universal execution tracking (extraction, crawl, summarization) |
+| `ExtractionResult` | Extracted markdown with extraction tier (basic/enhanced) |
+| `Run` | Universal execution tracking (extraction, enhancement, crawl, sync) |
 | `RunLogEvent` | Structured logging for runs |
 | `ScrapeCollection` | Web scraping project with seed URLs |
 | `SamSearch/SamSolicitation` | SAM.gov federal opportunity tracking |
+| `SharePointSyncConfig` | SharePoint folder sync configuration |
 | `ScheduledTask` | Database-backed scheduled maintenance |
+
+### Asset Pipeline Fields
+| Field | Type | Description |
+|-------|------|-------------|
+| `status` | string | pending, ready, failed, deleted |
+| `extraction_tier` | string | basic (MarkItDown) or enhanced (Docling) |
+| `enhancement_eligible` | bool | Whether file type supports Docling enhancement |
+| `enhancement_queued_at` | datetime | When enhancement task was queued |
+| `indexed_at` | datetime | When indexed to pgvector search (null = not indexed) |
 
 ---
 
@@ -131,21 +141,186 @@ playwright-service/         # Browser rendering microservice
 
 | Router | Endpoints |
 |--------|-----------|
-| `assets.py` | Asset CRUD, versions, re-extraction |
+| `assets.py` | Asset CRUD, versions, re-extraction, pipeline status |
 | `runs.py` | Run status, logs, retry |
 | `queue_admin.py` | Job Manager: queue registry, active jobs, cancel/boost |
-| `search.py` | Full-text search with facets |
+| `search.py` | Full-text + semantic search with facets |
 | `sam.py` | SAM.gov searches, solicitations, notices |
 | `scrape.py` | Web scraping collections |
+| `sharepoint_sync.py` | SharePoint folder sync configuration and triggers |
 | `storage.py` | File upload/download |
 | `scheduled_tasks.py` | Maintenance task admin |
 
 ---
 
-## Data Flow
+## Document Processing Pipeline
+
+Curatore uses a tiered extraction system with conditional enhancement and deferred indexing for efficiency.
+
+### Pipeline Overview
 
 ```
-Upload → Asset Created → Automatic Extraction → ExtractionResult → Search Index (PostgreSQL + pgvector)
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           DOCUMENT PROCESSING PIPELINE                           │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+     UPLOAD/SYNC                    EXTRACTION                 ENHANCEMENT              INDEXING
+         │                              │                          │                       │
+         ▼                              ▼                          ▼                       ▼
+┌─────────────────┐           ┌─────────────────┐         ┌─────────────────┐    ┌─────────────────┐
+│  Asset Created  │──────────▶│ Basic Extraction │────────▶│   Enhancement   │───▶│  Search Index   │
+│    (pending)    │           │  (MarkItDown)   │         │    (Docling)    │    │   (pgvector)    │
+└─────────────────┘           └─────────────────┘         └─────────────────┘    └─────────────────┘
+         │                              │                          │                       │
+         │                              ▼                          ▼                       ▼
+         │                     ┌─────────────────┐         ┌─────────────────┐    ┌─────────────────┐
+         │                     │  Asset: ready   │         │ Asset: enhanced │    │ Asset: indexed  │
+         │                     │  tier: basic    │         │  tier: enhanced │    │ indexed_at: set │
+         │                     └─────────────────┘         └─────────────────┘    └─────────────────┘
+         │                              │                          │
+         │                              ▼                          │
+         │               ┌──────────────────────────┐              │
+         │               │  Enhancement Eligible?   │              │
+         │               │  (PDF, DOCX, PPTX, etc.) │              │
+         │               └──────────────────────────┘              │
+         │                      │              │                   │
+         │                     YES            NO                   │
+         │                      │              │                   │
+         │                      ▼              ▼                   │
+         │               Queue Enhancement   Index Now ───────────▶│
+         │                      │                                  │
+         │                      ▼                                  │
+         │               Enhancement completes ───────────────────▶│
+         │                      │
+         │                      ▼
+         │               Index with enhanced content
+         │
+         └──────────────── Run + RunLogEvent tracking ─────────────┘
+```
+
+### Tiered Extraction
+
+| Tier | Engine | File Types | Quality | Speed |
+|------|--------|------------|---------|-------|
+| `basic` | MarkItDown | All supported | Good | Fast |
+| `enhanced` | Docling | PDF, DOCX, PPTX, DOC, PPT, XLS, XLSX | Excellent | Slower |
+
+### Indexing Strategy (Efficiency Optimization)
+
+To avoid generating embeddings twice, indexing is **deferred** for enhancement-eligible documents:
+
+| Scenario | When Indexing Happens |
+|----------|----------------------|
+| Non-eligible file (HTML, TXT, images) | Immediately after basic extraction |
+| Eligible file, Docling disabled | Immediately after basic extraction |
+| Eligible file, Docling enabled | **After enhancement completes** |
+
+### Asset Pipeline Status Fields
+
+Each asset tracks its processing state:
+
+```python
+class Asset:
+    # Core status
+    status: str                    # pending, ready, failed, deleted
+
+    # Extraction tracking
+    extraction_tier: str           # basic, enhanced
+    enhancement_eligible: bool     # Whether file type supports enhancement
+    enhancement_queued_at: datetime  # When enhancement was queued
+
+    # Search indexing
+    indexed_at: datetime           # When indexed to pgvector (null = not indexed)
+```
+
+### Frontend Pipeline Status Display
+
+The asset detail page (`/assets/{id}`) shows three status badges:
+
+| Badge | States |
+|-------|--------|
+| **Extracted** | "Extracting...", "Extracted (basic)", "Extracted (enhanced)", "Not Extracted" |
+| **Enhanced** | "Enhancing...", "Enhanced", "Enhancement Queued", "Enhancement Pending", "N/A" (if not eligible) |
+| **Indexed** | "Indexed" (with timestamp tooltip), "Not Indexed" |
+
+### Key Services
+
+| Service | Purpose |
+|---------|---------|
+| `extraction_orchestrator.py` | Coordinates extraction and conditional enhancement queueing |
+| `pg_index_service.py` | Chunks content, generates embeddings, indexes to PostgreSQL |
+| `embedding_service.py` | OpenAI text-embedding-3-small API calls |
+| `chunking_service.py` | Splits documents into ~1500 char chunks with 200 char overlap |
+
+---
+
+## Search Architecture
+
+Curatore uses PostgreSQL with pgvector for hybrid full-text + semantic search:
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                         SEARCH ARCHITECTURE                              │
+└─────────────────────────────────────────────────────────────────────────┘
+
+                    ┌─────────────────────┐
+                    │    Search Query     │
+                    └──────────┬──────────┘
+                               │
+                               ▼
+              ┌────────────────────────────────┐
+              │      pg_search_service.py      │
+              │   (Hybrid Search Orchestrator) │
+              └────────────────────────────────┘
+                       │              │
+          ┌────────────┘              └────────────┐
+          ▼                                        ▼
+┌──────────────────────┐               ┌──────────────────────┐
+│   Full-Text Search   │               │   Semantic Search    │
+│  (PostgreSQL tsvector)│               │  (pgvector cosine)   │
+│                      │               │                      │
+│  • GIN indexes       │               │  • 1536-dim vectors  │
+│  • Keyword matching  │               │  • OpenAI embeddings │
+│  • ts_rank scoring   │               │  • Similarity search │
+└──────────────────────┘               └──────────────────────┘
+          │                                        │
+          └────────────┐              ┌────────────┘
+                       ▼              ▼
+              ┌────────────────────────────────┐
+              │       Hybrid Scoring           │
+              │  (configurable weighting)      │
+              │                                │
+              │  score = α×keyword + β×semantic │
+              └────────────────────────────────┘
+                               │
+                               ▼
+              ┌────────────────────────────────┐
+              │       search_chunks table      │
+              │                                │
+              │  • source_type (asset, sam)    │
+              │  • source_id                   │
+              │  • chunk_index                 │
+              │  • content (text)              │
+              │  • embedding (vector)          │
+              │  • metadata (JSONB)            │
+              └────────────────────────────────┘
+```
+
+### Search Features
+- **Full-text search**: PostgreSQL tsvector + GIN indexes for keyword matching
+- **Semantic search**: pgvector embeddings (1536-dim via OpenAI text-embedding-3-small)
+- **Hybrid mode**: Combines keyword and semantic scores (configurable weighting)
+- **Chunking**: Documents split into ~1500 char chunks with 200 char overlap
+- **No external service**: Uses same PostgreSQL database (no Elasticsearch/OpenSearch)
+- **Configurable**: Embedding model set in `config.yml` under `llm.models.embedding`
+
+---
+
+## Data Flow
+
+### High-Level Flow
+```
+Upload → Asset Created → Extraction → [Enhancement] → Indexing → Search Ready
                               ↓
                          Run (tracks execution)
                               ↓
@@ -154,18 +329,10 @@ Upload → Asset Created → Automatic Extraction → ExtractionResult → Searc
 
 ### Processing Workflow
 1. **Upload**: `POST /api/v1/storage/upload/proxy` creates Asset, triggers extraction
-2. **Extraction**: Celery task converts to Markdown, stores in MinIO
-3. **Indexing**: Asset chunked, embedded, and indexed to search_chunks table
-4. **Access**: `GET /api/v1/assets/{id}` returns asset with extraction_result
-
-### Search Architecture
-Curatore uses PostgreSQL with pgvector for hybrid full-text + semantic search:
-- **Full-text search**: PostgreSQL tsvector + GIN indexes for keyword matching
-- **Semantic search**: pgvector embeddings (1536-dim via OpenAI text-embedding-3-small)
-- **Hybrid mode**: Combines keyword and semantic scores (configurable weighting)
-- Documents are split into ~1500 char chunks with 200 char overlap
-- No external search service required (uses same PostgreSQL database)
-- Embedding model configurable in `config.yml` under `llm.models.embedding`
+2. **Basic Extraction**: Celery task converts to Markdown via MarkItDown, stores in MinIO
+3. **Enhancement** (conditional): If eligible and Docling enabled, queues enhancement task
+4. **Indexing**: After final extraction completes, chunks content, generates embeddings, indexes to `search_chunks`
+5. **Access**: `GET /api/v1/assets/{id}` returns asset with extraction_result and pipeline status
 
 ---
 
@@ -601,3 +768,13 @@ curl -X POST http://localhost:8000/api/v1/scrape/collections/{id}/crawl \
 curl -X POST http://localhost:8000/api/v1/sam/searches/{id}/pull \
   -H "Authorization: Bearer $TOKEN"
 ```
+
+---
+
+## Related Documentation
+
+| Document | Description |
+|----------|-------------|
+| [`docs/DOCUMENT_PROCESSING.md`](docs/DOCUMENT_PROCESSING.md) | Detailed document processing pipeline with diagrams |
+| [`config.yml.example`](config.yml.example) | Configuration reference |
+| [`docker-compose.yml`](docker-compose.yml) | Service architecture |

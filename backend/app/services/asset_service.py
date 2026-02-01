@@ -302,7 +302,10 @@ class AssetService:
         asset_id: UUID,
     ) -> Optional[Tuple[Asset, Optional[ExtractionResult]]]:
         """
-        Get asset with its latest extraction result.
+        Get asset with its latest COMPLETED extraction result.
+
+        Prioritizes completed extractions so content is available even when
+        enhancement is running. Falls back to latest extraction if none completed.
 
         Args:
             session: Database session
@@ -317,14 +320,26 @@ class AssetService:
         if not asset:
             return None
 
-        # Get latest extraction result
-        extraction_result = await session.execute(
+        # First, try to get the latest COMPLETED extraction
+        # This ensures content is shown even when enhancement is running
+        completed_result = await session.execute(
             select(ExtractionResult)
             .where(ExtractionResult.asset_id == asset_id)
+            .where(ExtractionResult.status == "completed")
             .order_by(ExtractionResult.created_at.desc())
             .limit(1)
         )
-        extraction = extraction_result.scalar_one_or_none()
+        extraction = completed_result.scalar_one_or_none()
+
+        # If no completed extraction, fall back to latest (may be pending/running)
+        if not extraction:
+            latest_result = await session.execute(
+                select(ExtractionResult)
+                .where(ExtractionResult.asset_id == asset_id)
+                .order_by(ExtractionResult.created_at.desc())
+                .limit(1)
+            )
+            extraction = latest_result.scalar_one_or_none()
 
         return (asset, extraction)
 

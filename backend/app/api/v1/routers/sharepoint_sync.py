@@ -100,6 +100,9 @@ def _config_to_response(
         created_by=str(config.created_by) if config.created_by else None,
         is_syncing=is_syncing,
         current_sync_status=current_sync_status,
+        delta_enabled=config.delta_enabled,
+        has_delta_token=config.delta_token is not None,
+        last_delta_sync_at=config.last_delta_sync_at,
     )
 
 
@@ -1053,3 +1056,154 @@ async def import_sharepoint_files(
             message=f"Import queued for {len(request.selected_items)} files",
             selected_count=len(request.selected_items),
         )
+
+
+# =========================================================================
+# DELTA QUERY MANAGEMENT ENDPOINTS
+# =========================================================================
+
+@router.post("/configs/{config_id}/reset-delta")
+async def reset_delta_token(
+    config_id: UUID,
+    current_user: User = Depends(require_org_admin),
+):
+    """
+    Reset delta token to force full re-scan on next sync.
+
+    Use this when:
+    - Delta sync is returning incorrect results
+    - You want to re-baseline the sync state
+    - The delta token may have become corrupted
+
+    After reset, the next sync will:
+    1. Perform a full folder enumeration
+    2. Capture a new delta token for future incremental syncs
+    """
+    async with database_service.get_session() as session:
+        config = await sharepoint_sync_service.get_sync_config(session, config_id)
+
+        if not config:
+            raise HTTPException(status_code=404, detail="Sync config not found")
+
+        if config.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Clear delta token
+        had_token = config.delta_token is not None
+        config.delta_token = None
+        config.delta_token_acquired_at = None
+        config.last_delta_sync_at = None
+        await session.commit()
+
+        logger.info(f"Reset delta token for sync config {config_id}")
+
+        return {
+            "status": "ok",
+            "message": "Delta token reset. Next sync will be full enumeration.",
+            "had_token": had_token,
+            "delta_enabled": config.delta_enabled,
+        }
+
+
+@router.patch("/configs/{config_id}/delta")
+async def update_delta_setting(
+    config_id: UUID,
+    enabled: bool = Query(..., description="Enable or disable delta query for this sync config"),
+    current_user: User = Depends(require_org_admin),
+):
+    """
+    Enable or disable delta query for a sync config.
+
+    When enabled:
+    - Syncs will use Microsoft Graph Delta API for incremental changes
+    - Only changed/deleted files since last sync are processed
+    - Much faster for large sites with few changes
+
+    When disabled:
+    - Syncs will enumerate all files every time
+    - More thorough but slower for large sites
+
+    Note: Enabling delta requires a successful full sync first to capture
+    the initial delta token. The next sync after enabling will be a full sync.
+    """
+    async with database_service.get_session() as session:
+        config = await sharepoint_sync_service.get_sync_config(session, config_id)
+
+        if not config:
+            raise HTTPException(status_code=404, detail="Sync config not found")
+
+        if config.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Update delta_enabled setting
+        config.delta_enabled = enabled
+
+        # If disabling, optionally clear the token
+        if not enabled:
+            # Keep the token in case they re-enable, but it may expire
+            pass
+
+        await session.commit()
+
+        logger.info(f"Set delta_enabled={enabled} for sync config {config_id}")
+
+        return {
+            "status": "ok",
+            "delta_enabled": enabled,
+            "has_delta_token": config.delta_token is not None,
+            "delta_token_age_hours": (
+                (datetime.utcnow() - config.delta_token_acquired_at).total_seconds() / 3600
+                if config.delta_token_acquired_at else None
+            ),
+            "message": (
+                "Delta query enabled. Next sync will capture delta token."
+                if enabled and not config.delta_token
+                else "Delta query enabled. Incremental syncs active."
+                if enabled
+                else "Delta query disabled. Syncs will enumerate all files."
+            ),
+        }
+
+
+@router.get("/configs/{config_id}/delta-status")
+async def get_delta_status(
+    config_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get delta query status for a sync config.
+
+    Returns information about delta sync capability and token status.
+    """
+    async with database_service.get_session() as session:
+        config = await sharepoint_sync_service.get_sync_config(session, config_id)
+
+        if not config:
+            raise HTTPException(status_code=404, detail="Sync config not found")
+
+        if config.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        return {
+            "config_id": str(config_id),
+            "delta_enabled": config.delta_enabled,
+            "has_delta_token": config.delta_token is not None,
+            "delta_token_acquired_at": config.delta_token_acquired_at,
+            "last_delta_sync_at": config.last_delta_sync_at,
+            "delta_token_age_hours": (
+                (datetime.utcnow() - config.delta_token_acquired_at).total_seconds() / 3600
+                if config.delta_token_acquired_at else None
+            ),
+            "can_use_delta": (
+                config.delta_enabled and
+                config.delta_token is not None and
+                config.folder_drive_id is not None and
+                config.folder_item_id is not None
+            ),
+            "next_sync_mode": (
+                "delta" if (
+                    config.delta_enabled and
+                    config.delta_token is not None
+                ) else "full"
+            ),
+        }

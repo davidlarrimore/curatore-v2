@@ -43,6 +43,7 @@ router = APIRouter(prefix="/queue", tags=["Queue Admin"])
 # All known run_types that should be shown in Job Manager
 ALL_RUN_TYPES = [
     "extraction",
+    "extraction_enhancement",
     "sam_pull",
     "scrape",
     "sharepoint_sync",
@@ -277,7 +278,7 @@ async def get_unified_queue_stats(
             recent_stats[status] = result.scalar() or 0
 
         # Get Celery queue lengths from Redis
-        celery_queues = {"processing_priority": 0, "extraction": 0, "maintenance": 0}
+        celery_queues = {"processing_priority": 0, "extraction": 0, "enhancement": 0, "maintenance": 0}
         workers_info = {"active": 0, "tasks_running": 0}
         try:
             import redis
@@ -285,6 +286,7 @@ async def get_unified_queue_stats(
             celery_queues = {
                 "processing_priority": r.llen("processing_priority") or 0,
                 "extraction": r.llen("extraction") or 0,
+                "enhancement": r.llen("enhancement") or 0,
                 "sam": r.llen("sam") or 0,
                 "scrape": r.llen("scrape") or 0,
                 "sharepoint": r.llen("sharepoint") or 0,
@@ -313,6 +315,7 @@ async def get_unified_queue_stats(
             celery_queues=CeleryQueuesInfo(
                 processing_priority=celery_queues.get("processing_priority", 0),
                 extraction=celery_queues.get("extraction", 0),
+                enhancement=celery_queues.get("enhancement", 0),
                 sam=celery_queues.get("sam", 0),
                 scrape=celery_queues.get("scrape", 0),
                 sharepoint=celery_queues.get("sharepoint", 0),
@@ -775,10 +778,10 @@ async def list_active_jobs(
 
         logger.debug(f"Found {len(runs)} active jobs")
 
-        # Collect asset IDs for extraction runs
+        # Collect asset IDs for extraction and enhancement runs
         asset_ids = set()
         for run in runs:
-            if run.run_type == "extraction" and run.input_asset_ids:
+            if run.run_type in ("extraction", "extraction_enhancement") and run.input_asset_ids:
                 for aid in run.input_asset_ids:
                     try:
                         asset_ids.add(UUID(aid) if isinstance(aid, str) else aid)
@@ -839,6 +842,26 @@ async def list_active_jobs(
                 if run.status == "pending":
                     pos_info = await extraction_queue_service.get_queue_position(session, run.id)
                     queue_position = pos_info.get("queue_position")
+
+            elif run.run_type == "extraction_enhancement":
+                # Enhancement-specific fields (Docling enhancement)
+                if run.input_asset_ids:
+                    try:
+                        first_id = run.input_asset_ids[0]
+                        asset_uuid = UUID(first_id) if isinstance(first_id, str) else first_id
+                        asset_id_str = str(asset_uuid)
+                        asset = assets_map.get(asset_uuid)
+                        if asset:
+                            display_name = asset.original_filename or "Unknown"
+                            source_type = asset.source_type
+                            filename = asset.original_filename
+                    except (ValueError, TypeError, IndexError):
+                        display_name = "Unknown document"
+                else:
+                    display_name = "Unknown document"
+
+                # Enhancement uses Docling
+                display_context = "Docling enhancement"
 
             elif run.run_type == "sam_pull":
                 # SAM pull - display search name

@@ -31,6 +31,9 @@ import {
   ChevronDown,
   ChevronRight,
   GitCompare,
+  Search,
+  Sparkles,
+  FileCheck,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
@@ -50,6 +53,11 @@ interface Asset {
   created_at: string
   updated_at: string
   created_by: string | null
+  // Extraction pipeline status fields
+  extraction_tier: string | null
+  enhancement_eligible: boolean | null
+  enhancement_queued_at: string | null
+  indexed_at: string | null
 }
 
 interface ExtractionResult {
@@ -57,6 +65,7 @@ interface ExtractionResult {
   asset_id: string
   run_id: string
   extractor_version: string
+  extraction_tier: string | null
   status: string
   extraction_time_seconds: number | null
   extracted_bucket: string | null
@@ -674,6 +683,111 @@ function AssetDetailContent() {
                   <p className="text-sm font-medium text-gray-900 dark:text-white">{formatDateTime(asset.created_at)}</p>
                 </div>
               </div>
+            </div>
+          </div>
+
+          {/* Pipeline Status */}
+          <div className="mt-4">
+            <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Processing Pipeline</p>
+            <div className="flex flex-wrap items-center gap-2">
+              {/* Extraction Status */}
+              {(() => {
+                const isExtracted = extraction?.status === 'completed'
+                const tier = asset.extraction_tier || extraction?.extraction_tier || 'basic'
+                const isExtracting = extraction?.status === 'running' || extraction?.status === 'pending'
+
+                if (isExtracting) {
+                  return (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Extracting...
+                    </span>
+                  )
+                }
+
+                return isExtracted ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">
+                    <FileCheck className="w-3 h-3" />
+                    Extracted ({tier})
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                    <FileText className="w-3 h-3" />
+                    Not Extracted
+                  </span>
+                )
+              })()}
+
+              {/* Enhancement Status */}
+              {(() => {
+                const isEligible = asset.enhancement_eligible
+                const isEnhanced = asset.extraction_tier === 'enhanced'
+                const isEnhancing = runs.some((run) =>
+                  run.run_type === 'extraction_enhancement' &&
+                  ['pending', 'submitted', 'running', 'queued', 'processing'].includes(run.status)
+                )
+                const enhancementQueued = asset.enhancement_queued_at !== null
+
+                if (!isEligible) {
+                  return (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                      <Sparkles className="w-3 h-3" />
+                      Enhancement N/A
+                    </span>
+                  )
+                }
+
+                if (isEnhancing) {
+                  return (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      Enhancing...
+                    </span>
+                  )
+                }
+
+                if (isEnhanced) {
+                  return (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
+                      <Sparkles className="w-3 h-3" />
+                      Enhanced
+                    </span>
+                  )
+                }
+
+                if (enhancementQueued) {
+                  return (
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+                      <Clock className="w-3 h-3" />
+                      Enhancement Queued
+                    </span>
+                  )
+                }
+
+                return (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+                    <Sparkles className="w-3 h-3" />
+                    Enhancement Pending
+                  </span>
+                )
+              })()}
+
+              {/* Indexing Status */}
+              {(() => {
+                const isIndexed = asset.indexed_at !== null
+
+                return isIndexed ? (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300" title={`Indexed: ${formatDateTime(asset.indexed_at!)}`}>
+                    <Search className="w-3 h-3" />
+                    Indexed
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
+                    <Search className="w-3 h-3" />
+                    Not Indexed
+                  </span>
+                )
+              })()}
             </div>
           </div>
         </div>

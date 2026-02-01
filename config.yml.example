@@ -483,6 +483,65 @@ queue:
 
 
 # ============================================================================
+# Queue Type Settings (optional)
+# ============================================================================
+# Per-queue-type configuration for background job processing.
+# Queue types are defined in backend/app/services/queue_registry.py.
+# This section provides RUNTIME PARAMETER OVERRIDES for those queue types.
+#
+# Available queue types:
+#   - extraction: Document-to-Markdown conversion (fast, basic extraction)
+#   - enhancement: Docling-based document enhancement (slow, high-quality)
+#   - sam: SAM.gov federal opportunity data pulls
+#   - scrape: Web scraping and crawling
+#   - sharepoint: SharePoint document synchronization
+#   - maintenance: System maintenance and cleanup tasks
+#
+# Configurable parameters per queue:
+#   - max_concurrent: Maximum jobs running simultaneously (null = unlimited)
+#   - timeout_seconds: Job timeout in seconds
+#   - submission_interval: Seconds between queue processing checks
+#   - duplicate_cooldown: Seconds before allowing duplicate job
+#   - enabled: Enable/disable the queue type
+
+queues:
+  # Extraction queue - fast document conversion
+  extraction:
+    # Maximum concurrent extractions (default: 10)
+    # Increase for faster throughput, decrease to reduce resource usage
+    max_concurrent: 10
+
+    # Timeout for extraction jobs in seconds (default: 600 = 10 minutes)
+    timeout_seconds: 600
+
+  # Enhancement queue - Docling-based document enhancement
+  # Runs AFTER extraction to improve quality using advanced OCR and layout analysis
+  enhancement:
+    # Maximum concurrent enhancements (default: 3)
+    # Keep low as Docling is resource-intensive
+    max_concurrent: 3
+
+    # Timeout for enhancement jobs in seconds (default: 900 = 15 minutes)
+    # Docling can be slow for complex documents
+    timeout_seconds: 900
+
+  # SAM.gov queue - federal opportunity data pulls
+  # sam:
+  #   max_concurrent: null  # Unlimited by default
+  #   timeout_seconds: 1800
+
+  # Web scraping queue
+  # scrape:
+  #   max_concurrent: null  # Unlimited by default
+  #   timeout_seconds: 3600
+
+  # SharePoint sync queue
+  # sharepoint:
+  #   max_concurrent: null  # Unlimited by default
+  #   timeout_seconds: 1800
+
+
+# ============================================================================
 # MinIO / S3 Object Storage Configuration (REQUIRED)
 # ============================================================================
 # Curatore v2 requires object storage. Filesystem storage is no longer supported.

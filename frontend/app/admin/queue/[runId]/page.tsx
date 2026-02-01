@@ -35,6 +35,7 @@ import {
   Pause,
   StopCircle,
   Zap,
+  Sparkles,
 } from 'lucide-react';
 import { runsApi, queueAdminApi, assetsApi } from '@/lib/api';
 import type {
@@ -59,6 +60,7 @@ const STATUS_CONFIG: Record<string, { color: string; bgColor: string; icon: Reac
 // Job type configuration
 const JOB_TYPE_CONFIG: Record<string, { icon: React.ElementType; label: string; color: string }> = {
   extraction: { icon: FileText, label: 'Extraction', color: 'text-blue-600 dark:text-blue-400' },
+  extraction_enhancement: { icon: Sparkles, label: 'Enhancement', color: 'text-violet-600 dark:text-violet-400' },
   sam_pull: { icon: Building2, label: 'SAM.gov Pull', color: 'text-amber-600 dark:text-amber-400' },
   scrape: { icon: Globe, label: 'Web Scrape', color: 'text-emerald-600 dark:text-emerald-400' },
   sharepoint_sync: { icon: FolderSync, label: 'SharePoint Sync', color: 'text-purple-600 dark:text-purple-400' },
@@ -262,7 +264,7 @@ export default function JobDetailPage() {
           'check_stale_extractions': 'Check Stale Extractions',
           'expire_old_tokens': 'Expire Old Tokens',
         };
-        return taskLabels[taskName] || taskName.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+        return taskLabels[taskName] || taskName.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase());
       }
     }
     return jobTypeConfig.label;
