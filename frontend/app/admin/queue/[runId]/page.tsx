@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import Link from 'next/link';
 import {
@@ -728,6 +728,44 @@ function CapabilityBadge({ label, enabled }: { label: string; enabled: boolean }
   );
 }
 
+/**
+ * AnimatedValue component - flashes briefly when the value changes.
+ * Provides visual feedback for updating metrics across all job types.
+ */
+function AnimatedValue({ value, className = '' }: { value: unknown; className?: string }) {
+  const [isAnimating, setIsAnimating] = useState(false);
+  const prevValueRef = useRef<unknown>(value);
+
+  useEffect(() => {
+    // Check if value actually changed (not just on mount)
+    if (prevValueRef.current !== undefined && prevValueRef.current !== value) {
+      setIsAnimating(true);
+      const timer = setTimeout(() => setIsAnimating(false), 600);
+      return () => clearTimeout(timer);
+    }
+    prevValueRef.current = value;
+  }, [value]);
+
+  // Update ref after comparison
+  useEffect(() => {
+    prevValueRef.current = value;
+  });
+
+  const displayValue = typeof value === 'object' ? JSON.stringify(value) : String(value);
+
+  return (
+    <span
+      className={`inline-block transition-all duration-300 ${
+        isAnimating
+          ? 'bg-yellow-200 dark:bg-yellow-600/40 rounded px-1 -mx-1 scale-105'
+          : ''
+      } ${className}`}
+    >
+      {displayValue}
+    </span>
+  );
+}
+
 function ProgressDisplay({ progress }: { progress: Record<string, unknown> }) {
   // Handle standard progress format: { current, total, percent, phase, ... }
   const current = progress.current as number | undefined;
@@ -755,8 +793,8 @@ function ProgressDisplay({ progress }: { progress: Record<string, unknown> }) {
             </span>
             <span className="font-medium text-gray-900 dark:text-white">
               {current !== undefined && total !== undefined
-                ? `${current} / ${total}${unit ? ` ${unit}` : ''}`
-                : `${displayPercent}%`}
+                ? <><AnimatedValue value={current} /> / {total}{unit ? ` ${unit}` : ''}</>
+                : <><AnimatedValue value={displayPercent} />%</>}
             </span>
           </div>
           <div className="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
@@ -777,7 +815,7 @@ function ProgressDisplay({ progress }: { progress: Record<string, unknown> }) {
                 {key.replace(/_/g, ' ')}
               </div>
               <div className="text-sm font-medium text-gray-900 dark:text-white mt-1">
-                {typeof value === 'object' ? JSON.stringify(value) : String(value)}
+                <AnimatedValue value={value} />
               </div>
             </div>
           ))}
@@ -832,7 +870,7 @@ function ResultsSummaryDisplay({ summary }: { summary: Record<string, unknown> }
                     ? 'text-emerald-700 dark:text-emerald-400'
                     : 'text-gray-900 dark:text-white'
                 }`}>
-                  {value.toLocaleString()}
+                  <AnimatedValue value={value.toLocaleString()} />
                 </div>
               </div>
             );
