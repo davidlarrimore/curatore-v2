@@ -54,10 +54,12 @@ export default function JobManagerPage() {
 }
 
 // Job type filter options with icons
+// Note: Enhancement tab is deprecated - with the new triage architecture, Docling is selected
+// upfront when needed, eliminating the separate enhancement phase.
 const JOB_TYPE_TABS = [
   { value: 'all', label: 'All', icon: Activity },
   { value: 'extraction', label: 'Extraction', icon: FileText },
-  { value: 'extraction_enhancement', label: 'Enhancement', icon: Sparkles },
+  // { value: 'extraction_enhancement', label: 'Enhancement', icon: Sparkles }, // Deprecated: now part of triage
   { value: 'sam_pull', label: 'SAM.gov', icon: Building2 },
   { value: 'scrape', label: 'Web Scrape', icon: Globe },
   { value: 'sharepoint', label: 'SharePoint', icon: FolderSync },
@@ -69,7 +71,8 @@ const JOB_TYPE_TABS = [
 function getQueueType(runType: string): string {
   if (runType.startsWith('sharepoint')) return 'sharepoint'
   if (runType === 'sam_pull') return 'sam_pull'
-  if (runType === 'extraction_enhancement') return 'extraction_enhancement'
+  // Legacy enhancement jobs still map to extraction for display
+  if (runType === 'extraction_enhancement') return 'extraction'
   return runType
 }
 
@@ -98,7 +101,6 @@ function getJobTypeColor(runType: string): string {
   const queueType = getQueueType(runType)
   switch (queueType) {
     case 'extraction': return 'blue'
-    case 'extraction_enhancement': return 'violet'
     case 'sam_pull': return 'amber'
     case 'scrape': return 'emerald'
     case 'sharepoint': return 'purple'
@@ -722,7 +724,7 @@ function JobManagerContent() {
                         </td>
                         <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
                           <div className="min-w-0">
-                            {(job.run_type === 'extraction' || job.run_type === 'extraction_enhancement') && job.asset_id ? (
+                            {job.run_type === 'extraction' && job.asset_id ? (
                               <Link
                                 href={`/assets/${job.asset_id}`}
                                 className="text-sm font-medium text-gray-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-400 truncate block max-w-[250px]"
@@ -795,7 +797,7 @@ function JobManagerContent() {
                                 )}
                               </button>
                             )}
-                            {(job.run_type === 'extraction' || job.run_type === 'extraction_enhancement') && job.asset_id && (
+                            {job.run_type === 'extraction' && job.asset_id && (
                               <Link
                                 href={`/assets/${job.asset_id}`}
                                 className="p-1.5 rounded-lg text-blue-600 dark:text-blue-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 transition-colors"

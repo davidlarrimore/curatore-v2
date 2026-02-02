@@ -265,28 +265,6 @@ class SharePointQueue(QueueDefinition):
         )
 
 
-class EnhancementQueue(QueueDefinition):
-    """Document enhancement queue - runs Docling for improved extraction."""
-
-    def __init__(self):
-        super().__init__(
-            queue_type="enhancement",
-            celery_queue="enhancement",
-            run_type_aliases=["extraction_enhancement", "docling_enhancement"],
-            can_cancel=True,
-            can_boost=False,  # Enhancements are always low priority
-            can_retry=True,
-            label="Enhancement",
-            description="Docling document enhancement (low priority)",
-            icon="sparkles",
-            color="violet",
-            default_max_concurrent=3,  # Limit concurrent to not overwhelm Docling
-            default_timeout_seconds=900,  # 15 minutes - Docling can be slow
-            default_submission_interval=10,
-            default_duplicate_cooldown=60,
-        )
-
-
 class MaintenanceQueue(QueueDefinition):
     """System maintenance and cleanup tasks queue."""
 
@@ -357,7 +335,6 @@ class QueueRegistry:
     def _register_defaults(self):
         """Register all default queue types."""
         self.register(ExtractionQueue())
-        self.register(EnhancementQueue())
         self.register(SamQueue())
         self.register(ScrapeQueue())
         self.register(SharePointQueue())

@@ -3,9 +3,9 @@ FROM python:3.12-slim
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
-# System deps: Tesseract for OCR
+# System deps: LibreOffice for legacy Office format conversion (.doc, .ppt, .xls)
+# Note: Tesseract removed - OCR is handled by Docling service
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tesseract-ocr tesseract-ocr-eng \
     libreoffice \
     fonts-dejavu-core \
     && rm -rf /var/lib/apt/lists/*

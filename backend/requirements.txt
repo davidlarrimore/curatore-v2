@@ -58,3 +58,6 @@ pgvector>=0.3.0  # PostgreSQL vector similarity extension
 # PDF Generation (for SAM.gov summaries)
 markdown>=3.5.0  # Markdown to HTML conversion
 weasyprint>=60.0  # HTML to PDF conversion
+
+# Document Extraction Engines (Triage System)
+pymupdf>=1.24.0  # Fast PDF text extraction and analysis

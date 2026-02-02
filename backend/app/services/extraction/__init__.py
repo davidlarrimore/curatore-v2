@@ -24,8 +24,9 @@ Usage:
         print(f"Error: {result.error}")
 
 Available Engines:
-    - extraction-service: Internal MarkItDown + Tesseract OCR
-    - docling: IBM Docling for complex PDFs and Office documents
+    - extraction-service: MarkItDown for Office files and text files
+    - docling: IBM Docling for complex PDFs and OCR
+    - fast_pdf: PyMuPDF for simple text-based PDFs
     - tika: Apache Tika (stub - not yet implemented)
 """
 
@@ -33,6 +34,7 @@ from .base import BaseExtractionEngine, ExtractionResult
 from .extraction_service import ExtractionServiceEngine
 from .docling import DoclingEngine
 from .tika import TikaEngine
+from .fast_pdf import FastPdfEngine
 from .factory import ExtractionEngineFactory
 from .file_type_registry import FileTypeRegistry, file_type_registry
 
@@ -40,10 +42,12 @@ __all__ = [
     # Base classes
     "BaseExtractionEngine",
     "ExtractionResult",
-    # Concrete engines
-    "ExtractionServiceEngine",
-    "DoclingEngine",
+    # Service-based engines
+    "ExtractionServiceEngine",  # MarkItDown for Office files and general extraction
+    "DoclingEngine",  # IBM Docling for complex documents
     "TikaEngine",
+    # Local engines (triage-based)
+    "FastPdfEngine",  # PyMuPDF for simple PDFs
     # Factory
     "ExtractionEngineFactory",
     # File type registry

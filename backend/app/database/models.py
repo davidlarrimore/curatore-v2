@@ -709,13 +709,7 @@ class Asset(Base):
     # Phase 1: Version tracking
     current_version_number = Column(Integer, nullable=True, default=1)  # Track current version
 
-    # Phase 2: Tiered Extraction
-    # enhancement_eligible: Whether file type could benefit from Docling enhancement
-    # Eligible types: PDF, DOCX, PPTX, DOC, PPT, XLS, XLSX (structured documents)
-    enhancement_eligible = Column(Boolean, nullable=True, default=False)
-    # enhancement_queued_at: When background enhancement was queued (null = not queued)
-    enhancement_queued_at = Column(DateTime, nullable=True)
-    # extraction_tier: Current extraction quality tier ('basic' = fast MarkItDown, 'enhanced' = Docling)
+    # Extraction tier: Current extraction quality tier ('basic' = fast local, 'enhanced' = Docling/OCR)
     extraction_tier = Column(String(50), nullable=True, default="basic")
 
     # indexed_at: When asset was indexed to pgvector search (null = not indexed)
@@ -1002,7 +996,20 @@ class ExtractionResult(Base):
 
     # Phase 2: Tiered Extraction
     # extraction_tier: Quality tier of this extraction ('basic' = fast MarkItDown, 'enhanced' = Docling)
+    # Kept for backwards compatibility - computed from triage_engine
     extraction_tier = Column(String(50), nullable=True, default="basic")
+
+    # Triage fields: New intelligent extraction routing architecture
+    # triage_engine: The extraction engine selected by triage (fast_pdf, fast_office, docling, ocr_only)
+    triage_engine = Column(String(50), nullable=True)
+    # triage_needs_ocr: Whether document requires OCR
+    triage_needs_ocr = Column(Boolean, nullable=True)
+    # triage_needs_layout: Whether document has complex layout requiring advanced processing
+    triage_needs_layout = Column(Boolean, nullable=True)
+    # triage_complexity: Document complexity assessment (low, medium, high)
+    triage_complexity = Column(String(20), nullable=True)
+    # triage_duration_ms: Time taken for triage analysis in milliseconds
+    triage_duration_ms = Column(Integer, nullable=True)
 
     # Extraction status
     status = Column(String(50), nullable=False, default="pending", index=True)

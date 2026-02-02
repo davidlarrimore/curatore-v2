@@ -31,8 +31,8 @@ All background jobs are managed through the Queue Registry system:
 |-------|---------|
 | `Asset` | Document with provenance, version history, and pipeline status |
 | `AssetVersion` | Individual versions of an asset |
-| `ExtractionResult` | Extracted markdown with extraction tier (basic/enhanced) |
-| `Run` | Universal execution tracking (extraction, enhancement, crawl, sync) |
+| `ExtractionResult` | Extracted markdown with triage metadata |
+| `Run` | Universal execution tracking (extraction, crawl, sync) |
 | `RunLogEvent` | Structured logging for runs |
 | `ScrapeCollection` | Web scraping project with seed URLs |
 | `SamSearch/SamSolicitation` | SAM.gov federal opportunity tracking |
@@ -43,10 +43,17 @@ All background jobs are managed through the Queue Registry system:
 | Field | Type | Description |
 |-------|------|-------------|
 | `status` | string | pending, ready, failed, deleted |
-| `extraction_tier` | string | basic (MarkItDown) or enhanced (Docling) |
-| `enhancement_eligible` | bool | Whether file type supports Docling enhancement |
-| `enhancement_queued_at` | datetime | When enhancement task was queued |
+| `extraction_tier` | string | basic or enhanced (for backwards compatibility) |
 | `indexed_at` | datetime | When indexed to pgvector search (null = not indexed) |
+
+### Extraction Result Triage Fields
+| Field | Type | Description |
+|-------|------|-------------|
+| `triage_engine` | string | fast_pdf, extraction-service, docling, or unsupported |
+| `triage_needs_ocr` | bool | Whether document required OCR |
+| `triage_needs_layout` | bool | Whether complex layout handling was needed |
+| `triage_complexity` | string | low, medium, or high |
+| `triage_duration_ms` | int | Time spent in triage phase |
 
 ---
 
@@ -155,7 +162,7 @@ playwright-service/         # Browser rendering microservice
 
 ## Document Processing Pipeline
 
-Curatore uses a tiered extraction system with conditional enhancement and deferred indexing for efficiency.
+Curatore uses an intelligent **triage-based extraction system** that analyzes documents before extraction to route them to the optimal engine.
 
 ### Pipeline Overview
 
@@ -164,93 +171,88 @@ Curatore uses a tiered extraction system with conditional enhancement and deferr
 │                           DOCUMENT PROCESSING PIPELINE                           │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
-     UPLOAD/SYNC                    EXTRACTION                 ENHANCEMENT              INDEXING
+     UPLOAD/SYNC                     TRIAGE                    EXTRACTION              INDEXING
          │                              │                          │                       │
          ▼                              ▼                          ▼                       ▼
 ┌─────────────────┐           ┌─────────────────┐         ┌─────────────────┐    ┌─────────────────┐
-│  Asset Created  │──────────▶│ Basic Extraction │────────▶│   Enhancement   │───▶│  Search Index   │
-│    (pending)    │           │  (MarkItDown)   │         │    (Docling)    │    │   (pgvector)    │
+│  Asset Created  │──────────▶│  Analyze Doc    │────────▶│  Route to       │───▶│  Search Index   │
+│    (pending)    │           │  Select Engine  │         │  Optimal Engine │    │   (pgvector)    │
 └─────────────────┘           └─────────────────┘         └─────────────────┘    └─────────────────┘
-         │                              │                          │                       │
-         │                              ▼                          ▼                       ▼
-         │                     ┌─────────────────┐         ┌─────────────────┐    ┌─────────────────┐
-         │                     │  Asset: ready   │         │ Asset: enhanced │    │ Asset: indexed  │
-         │                     │  tier: basic    │         │  tier: enhanced │    │ indexed_at: set │
-         │                     └─────────────────┘         └─────────────────┘    └─────────────────┘
-         │                              │                          │
-         │                              ▼                          │
-         │               ┌──────────────────────────┐              │
-         │               │  Enhancement Eligible?   │              │
-         │               │  (PDF, DOCX, PPTX, etc.) │              │
-         │               └──────────────────────────┘              │
-         │                      │              │                   │
-         │                     YES            NO                   │
-         │                      │              │                   │
-         │                      ▼              ▼                   │
-         │               Queue Enhancement   Index Now ───────────▶│
-         │                      │                                  │
-         │                      ▼                                  │
-         │               Enhancement completes ───────────────────▶│
-         │                      │
-         │                      ▼
-         │               Index with enhanced content
+         │                         (< 100ms)                      │                       │
+         │                              │                         ▼                       ▼
+         │                    ┌─────────┴─────────┐      triage_engine set        indexed_at set
+         │                    ▼                   ▼
+         │              Simple docs         Complex docs
+         │              (fast_pdf,          (docling,
+         │               extraction-         ocr_only)
+         │               service)
          │
          └──────────────── Run + RunLogEvent tracking ─────────────┘
 ```
 
-### Tiered Extraction
+### Triage-Based Engine Selection
 
-| Tier | Engine | File Types | Quality | Speed |
-|------|--------|------------|---------|-------|
-| `basic` | MarkItDown | All supported | Good | Fast |
-| `enhanced` | Docling | PDF, DOCX, PPTX, DOC, PPT, XLS, XLSX | Excellent | Slower |
+The triage service analyzes each document and selects the optimal extraction engine:
 
-### Indexing Strategy (Efficiency Optimization)
+| Engine | When Used | Supported Extensions |
+|--------|-----------|---------------------|
+| `fast_pdf` | Simple text-based PDFs | `.pdf` |
+| `extraction-service` | Office files, text, emails, HTML | `.docx`, `.doc`, `.pptx`, `.ppt`, `.xlsx`, `.xls`, `.xlsb`, `.txt`, `.md`, `.csv`, `.html`, `.htm`, `.xml`, `.json`, `.msg`, `.eml` |
+| `docling` | Complex/scanned PDFs, large Office files | `.pdf` (complex), `.docx/.pptx/.xlsx` (>5MB) |
+| `unsupported` | Standalone image files | `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`, `.heic` |
 
-To avoid generating embeddings twice, indexing is **deferred** for enhancement-eligible documents:
+**Note:** Standalone image files are NOT supported. Image OCR is only performed within documents (e.g., scanned PDFs) via the Docling engine.
 
-| Scenario | When Indexing Happens |
-|----------|----------------------|
-| Non-eligible file (HTML, TXT, images) | Immediately after basic extraction |
-| Eligible file, Docling disabled | Immediately after basic extraction |
-| Eligible file, Docling enabled | **After enhancement completes** |
+### Triage Decision Logic
 
-### Asset Pipeline Status Fields
+**For PDFs** (analyzed with PyMuPDF):
+- Text per page < 100 chars → needs OCR → `docling`
+- Blocks per page > 50 → complex layout → `docling`
+- Images per page > 3 → image-heavy → `docling`
+- Otherwise → simple text → `fast_pdf`
 
-Each asset tracks its processing state:
+**For Office files**:
+- File size < 5MB → `extraction-service` (MarkItDown)
+- File size >= 5MB → `docling` (better layout handling)
+
+**For text files/emails/HTML**: Always → `extraction-service`
+
+**For images**: `unsupported` (standalone images not processed)
+
+### Extraction Result Fields
 
 ```python
-class Asset:
-    # Core status
-    status: str                    # pending, ready, failed, deleted
+class ExtractionResult:
+    status: str                    # pending, completed, failed
+    extraction_tier: str           # basic, enhanced (for backwards compat)
 
-    # Extraction tracking
-    extraction_tier: str           # basic, enhanced
-    enhancement_eligible: bool     # Whether file type supports enhancement
-    enhancement_queued_at: datetime  # When enhancement was queued
-
-    # Search indexing
-    indexed_at: datetime           # When indexed to pgvector (null = not indexed)
+    # Triage fields
+    triage_engine: str             # fast_pdf, extraction-service, docling, unsupported
+    triage_needs_ocr: bool         # Whether OCR was required
+    triage_needs_layout: bool      # Whether complex layout handling was needed
+    triage_complexity: str         # low, medium, high
+    triage_duration_ms: int        # Time spent in triage phase
 ```
 
 ### Frontend Pipeline Status Display
 
-The asset detail page (`/assets/{id}`) shows three status badges:
-
-| Badge | States |
-|-------|--------|
-| **Extracted** | "Extracting...", "Extracted (basic)", "Extracted (enhanced)", "Not Extracted" |
-| **Enhanced** | "Enhancing...", "Enhanced", "Enhancement Queued", "Enhancement Pending", "N/A" (if not eligible) |
-| **Indexed** | "Indexed" (with timestamp tooltip), "Not Indexed" |
+The asset detail page (`/assets/{id}`) shows:
+- **Engine badge**: Fast PDF, MarkItDown, Docling, or OCR
+- **OCR badge**: If OCR was used
+- **Complexity badge**: If document was complex
+- **Indexed badge**: With timestamp
 
 ### Key Services
 
 | Service | Purpose |
 |---------|---------|
-| `extraction_orchestrator.py` | Coordinates extraction and conditional enhancement queueing |
+| `triage_service.py` | Analyzes documents and selects optimal engine |
+| `extraction_orchestrator.py` | Coordinates triage and extraction |
+| `extraction/fast_pdf.py` | PyMuPDF-based extraction for simple PDFs |
+| `extraction/extraction_service.py` | MarkItDown for Office/text files |
 | `pg_index_service.py` | Chunks content, generates embeddings, indexes to PostgreSQL |
-| `embedding_service.py` | OpenAI text-embedding-3-small API calls |
-| `chunking_service.py` | Splits documents into ~1500 char chunks with 200 char overlap |
+
+For detailed documentation, see [`docs/DOCUMENT_PROCESSING.md`](docs/DOCUMENT_PROCESSING.md).
 
 ---
 
@@ -320,19 +322,19 @@ Curatore uses PostgreSQL with pgvector for hybrid full-text + semantic search:
 
 ### High-Level Flow
 ```
-Upload → Asset Created → Extraction → [Enhancement] → Indexing → Search Ready
-                              ↓
-                         Run (tracks execution)
-                              ↓
-                         RunLogEvent (structured logs)
+Upload → Asset Created → Triage → Extraction → Indexing → Search Ready
+                           ↓          ↓
+                   Select Engine   Run (tracks execution)
+                                       ↓
+                                  RunLogEvent (structured logs)
 ```
 
 ### Processing Workflow
 1. **Upload**: `POST /api/v1/storage/upload/proxy` creates Asset, triggers extraction
-2. **Basic Extraction**: Celery task converts to Markdown via MarkItDown, stores in MinIO
-3. **Enhancement** (conditional): If eligible and Docling enabled, queues enhancement task
-4. **Indexing**: After final extraction completes, chunks content, generates embeddings, indexes to `search_chunks`
-5. **Access**: `GET /api/v1/assets/{id}` returns asset with extraction_result and pipeline status
+2. **Triage**: Analyzes document to select optimal extraction engine (< 100ms)
+3. **Extraction**: Routes to selected engine (fast_pdf, extraction-service, or docling)
+4. **Indexing**: Chunks content, generates embeddings, indexes to `search_chunks`
+5. **Access**: `GET /api/v1/assets/{id}` returns asset with extraction_result and triage metadata
 
 ---
 
@@ -435,8 +437,11 @@ task_routes = {
 
 5. **Update docker-compose.yml** worker command to consume the new queue:
 ```yaml
+# Single worker handles all queues
 celery -A app.celery_app worker -Q processing_priority,extraction,sam,scrape,sharepoint,google_drive,maintenance
 ```
+
+**Note:** All queues are consumed by a single worker container (`curatore-worker`). Queue isolation is achieved through Celery queue routing, not separate worker containers.
 
 6. **Create the task** in `backend/app/tasks.py`:
 ```python

@@ -56,8 +56,6 @@ interface Asset {
   created_by: string | null
   // Extraction pipeline status fields
   extraction_tier: string | null
-  enhancement_eligible: boolean | null
-  enhancement_queued_at: string | null
   indexed_at: string | null
 }
 
@@ -75,6 +73,12 @@ interface ExtractionResult {
   warnings: string[]
   errors: string[]
   created_at: string
+  // Triage fields (new extraction routing architecture)
+  triage_engine?: 'fast_pdf' | 'fast_office' | 'docling' | 'ocr_only' | null
+  triage_needs_ocr?: boolean | null
+  triage_needs_layout?: boolean | null
+  triage_complexity?: 'low' | 'medium' | 'high' | null
+  triage_duration_ms?: number | null
 }
 
 interface AssetVersion {
@@ -157,7 +161,7 @@ function AssetDetailContent() {
   const [isLoadingDocx, setIsLoadingDocx] = useState(false)
   const [docxError, setDocxError] = useState<string>('')
 
-  // Check if any run is actively processing (extraction or enhancement)
+  // Check if any run is actively processing
   const hasActiveRuns = runs.some((run) =>
     ['pending', 'submitted', 'running', 'queued', 'processing'].includes(run.status)
   )
@@ -170,7 +174,6 @@ function AssetDetailContent() {
   }, [token, assetId])
 
   // Auto-poll when asset is processing OR when there are active runs
-  // This ensures we keep polling during secondary extraction (enhancement)
   useEffect(() => {
     const shouldPoll = asset?.status === 'pending' || hasActiveRuns
     if (shouldPoll) {
@@ -564,9 +567,9 @@ function AssetDetailContent() {
               {(() => {
                 // Check queueInfo for unified status
                 const isQueueActive = queueInfo && ['queued', 'submitted', 'processing'].includes(queueInfo.unified_status)
-                // Also check if any runs are actively processing (catches enhancement runs)
+                // Also check if any runs are actively processing
                 const hasActiveExtractionRuns = runs.some((run) =>
-                  (run.run_type === 'extraction' || run.run_type === 'extraction_enhancement') &&
+                  run.run_type === 'extraction' &&
                   ['pending', 'submitted', 'running', 'queued', 'processing'].includes(run.status)
                 )
                 const isExtractionActive = isQueueActive || hasActiveExtractionRuns
@@ -582,12 +585,7 @@ function AssetDetailContent() {
                 } else if (queueInfo?.unified_status === 'processing') {
                   buttonText = 'Processing...'
                 } else if (hasActiveExtractionRuns) {
-                  // Show enhancement status if that's what's running
-                  const enhancementRun = runs.find((run) =>
-                    run.run_type === 'extraction_enhancement' &&
-                    ['pending', 'submitted', 'running', 'queued', 'processing'].includes(run.status)
-                  )
-                  buttonText = enhancementRun ? 'Enhancing...' : 'Processing...'
+                  buttonText = 'Processing...'
                 } else if (asset.status === 'pending') {
                   buttonText = 'Queued'
                 }
@@ -698,11 +696,31 @@ function AssetDetailContent() {
           <div className="mt-4">
             <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2">Processing Pipeline</p>
             <div className="flex flex-wrap items-center gap-2">
-              {/* Extraction Status */}
+              {/* Extraction Status with Engine Info */}
               {(() => {
                 const isExtracted = extraction?.status === 'completed'
-                const tier = asset.extraction_tier || extraction?.extraction_tier || 'basic'
                 const isExtracting = extraction?.status === 'running' || extraction?.status === 'pending'
+                const triageEngine = extraction?.triage_engine
+                const needsOcr = extraction?.triage_needs_ocr
+
+                // Format engine name for display
+                const formatEngineName = (engine: string | null | undefined): string => {
+                  if (!engine) return 'basic'
+                  const names: Record<string, string> = {
+                    'fast_pdf': 'Fast PDF',
+                    'fast_office': 'Fast Office',
+                    'docling': 'Docling',
+                    'ocr_only': 'OCR',
+                  }
+                  return names[engine] || engine
+                }
+
+                // Get color based on engine
+                const getEngineColor = (engine: string | null | undefined) => {
+                  if (!engine) return 'emerald'
+                  if (engine === 'docling' || engine === 'ocr_only') return 'purple'
+                  return 'emerald'
+                }
 
                 if (isExtracting) {
                   return (
@@ -713,70 +731,41 @@ function AssetDetailContent() {
                   )
                 }
 
-                return isExtracted ? (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">
-                    <FileCheck className="w-3 h-3" />
-                    Extracted ({tier})
-                  </span>
-                ) : (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
-                    <FileText className="w-3 h-3" />
-                    Not Extracted
-                  </span>
-                )
-              })()}
-
-              {/* Enhancement Status */}
-              {(() => {
-                const isEligible = asset.enhancement_eligible
-                const isEnhanced = asset.extraction_tier === 'enhanced'
-                const isEnhancing = runs.some((run) =>
-                  run.run_type === 'extraction_enhancement' &&
-                  ['pending', 'submitted', 'running', 'queued', 'processing'].includes(run.status)
-                )
-                const enhancementQueued = asset.enhancement_queued_at !== null
-
-                if (!isEligible) {
+                if (!isExtracted) {
                   return (
                     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-400">
-                      <Sparkles className="w-3 h-3" />
-                      Enhancement N/A
+                      <FileText className="w-3 h-3" />
+                      Not Extracted
                     </span>
                   )
                 }
 
-                if (isEnhancing) {
-                  return (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
-                      <Loader2 className="w-3 h-3 animate-spin" />
-                      Enhancing...
-                    </span>
-                  )
-                }
-
-                if (isEnhanced) {
-                  return (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
-                      <Sparkles className="w-3 h-3" />
-                      Enhanced
-                    </span>
-                  )
-                }
-
-                if (enhancementQueued) {
-                  return (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
-                      <Clock className="w-3 h-3" />
-                      Enhancement Queued
-                    </span>
-                  )
+                // Extracted - show engine info if available
+                const engineColor = getEngineColor(triageEngine)
+                const engineName = triageEngine ? formatEngineName(triageEngine) : (asset.extraction_tier || 'basic')
+                const colorClasses = {
+                  emerald: 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300',
+                  purple: 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300',
                 }
 
                 return (
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
-                    <Sparkles className="w-3 h-3" />
-                    Enhancement Pending
-                  </span>
+                  <>
+                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full ${colorClasses[engineColor]}`}>
+                      <FileCheck className="w-3 h-3" />
+                      {engineName}
+                    </span>
+                    {needsOcr && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+                        <Eye className="w-3 h-3" />
+                        OCR
+                      </span>
+                    )}
+                    {extraction?.triage_complexity === 'high' && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400">
+                        Complex
+                      </span>
+                    )}
+                  </>
                 )
               })()}
 
@@ -1665,9 +1654,7 @@ function AssetDetailContent() {
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <p className="text-sm font-medium text-gray-900 dark:text-white">
-                              {run.run_type === 'extraction_enhancement'
-                                ? 'Enhancement'
-                                : run.run_type === 'extraction'
+                              {run.run_type === 'extraction'
                                 ? 'Extraction'
                                 : run.run_type.replace(/_/g, ' ').replace(/\b\w/g, l => l.toUpperCase())}
                             </p>
@@ -1684,11 +1671,6 @@ function AssetDetailContent() {
                             {run.config?.extractor_version && (
                               <span className="px-2 py-0.5 text-xs font-mono rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
                                 {run.config.extractor_version}
-                              </span>
-                            )}
-                            {run.config?.enhancement_type && (
-                              <span className="px-2 py-0.5 text-xs font-mono rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
-                                {run.config.enhancement_type}
                               </span>
                             )}
                           </div>

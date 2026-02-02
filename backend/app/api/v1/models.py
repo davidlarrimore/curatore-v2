@@ -1176,8 +1176,6 @@ class AssetResponse(BaseModel):
 
     # Extraction pipeline status fields
     extraction_tier: Optional[str] = Field(None, description="Extraction quality tier (basic, enhanced)")
-    enhancement_eligible: Optional[bool] = Field(None, description="Whether file type is eligible for enhancement")
-    enhancement_queued_at: Optional[datetime] = Field(None, description="When enhancement was queued")
     indexed_at: Optional[datetime] = Field(None, description="When asset was indexed to search")
 
     class Config:
@@ -1199,6 +1197,28 @@ class ExtractionResultResponse(BaseModel):
     errors: List[str] = Field(default_factory=list, description="Errors (if failed)")
     extraction_time_seconds: Optional[float] = Field(None, description="Extraction time")
     created_at: datetime = Field(..., description="Creation timestamp")
+
+    # Triage fields (new extraction routing architecture)
+    triage_engine: Optional[str] = Field(
+        None,
+        description="Engine selected by triage (fast_pdf, fast_office, docling, ocr_only)"
+    )
+    triage_needs_ocr: Optional[bool] = Field(
+        None,
+        description="Whether document requires OCR (determined by triage)"
+    )
+    triage_needs_layout: Optional[bool] = Field(
+        None,
+        description="Whether document has complex layout requiring advanced processing"
+    )
+    triage_complexity: Optional[str] = Field(
+        None,
+        description="Document complexity level (low, medium, high)"
+    )
+    triage_duration_ms: Optional[int] = Field(
+        None,
+        description="Time taken for triage analysis in milliseconds"
+    )
 
     class Config:
         from_attributes = True

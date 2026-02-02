@@ -4,15 +4,16 @@ uvicorn[standard]>=0.27,<0.31
 python-multipart>=0.0.9
 pydantic>=2.6,<3
 
-# File-type conversion + OCR
-markitdown>=0.0.1         # base package only; no [pdf] extras required
-pdfminer.six>=20231228     # text-layer extraction for PDFs (backend parity)
-pypdfium2>=4.30.0          # rasterize PDFs for OCR fallback
-pytesseract>=0.3.10
-Pillow>=10.0.0
+# Document conversion (MarkItDown handles Office files)
+markitdown[all]>=0.0.1    # Office documents, text files (includes docx, pptx, xlsx extras)
+Pillow>=10.0.0            # Image handling for MarkItDown
 
 # Email parsing
 extract-msg>=0.48.0        # Parse Outlook .msg files
 
 # Helpers
 filetype>=1.2.0
+
+# Note: PDF extraction and OCR are handled by:
+# - fast_pdf engine (PyMuPDF) for simple PDFs
+# - Docling service for complex PDFs and images requiring OCR

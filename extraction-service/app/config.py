@@ -1,6 +1,14 @@
+"""
+Configuration for the Extraction Service.
+
+This service handles Office documents, text files, and emails via MarkItDown.
+PDFs and images are handled by fast_pdf (PyMuPDF) and Docling respectively.
+"""
+
 from pydantic import BaseModel, Field
 import os
 from typing import List
+
 
 class Settings(BaseModel):
     # API
@@ -20,13 +28,5 @@ class Settings(BaseModel):
     # Upload Directory
     UPLOAD_DIR: str = Field(default=os.getenv("UPLOAD_DIR", "/tmp/extraction_uploads"))
 
-    # OCR
-    OCR_LANG: str = Field(default=os.getenv("OCR_LANG", "eng"))
-    OCR_PSM: str = Field(default=os.getenv("OCR_PSM", "3"))
-
-    # Behavior
-    # If markitdown yields too little text, try OCR (or LibreOffice->PDF->pdfminer/OCR).
-    # Make this tunable via env for tests and constrained environments.
-    MIN_TEXT_CHARS_FOR_NO_OCR: int = Field(default=int(os.getenv("MIN_TEXT_CHARS_FOR_NO_OCR", "300")))
 
 settings = Settings()

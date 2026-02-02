@@ -1,13 +1,13 @@
 # Document Processing Pipeline
 
-This document describes how Curatore processes documents from upload through search indexing.
+This document describes how Curatore processes documents from upload through search indexing using the intelligent **triage-based extraction system**.
 
 ## Overview
 
-Curatore uses a **tiered extraction system** with:
-- **Basic extraction** (fast) using MarkItDown for all files
-- **Enhanced extraction** (quality) using Docling for eligible document types
-- **Deferred indexing** to avoid duplicate embedding generation
+Curatore uses an intelligent **triage → route** architecture that analyzes each document before extraction to select the optimal extraction engine. This approach:
+- **Maximizes speed** for simple documents (local extraction, no service calls)
+- **Maximizes quality** for complex documents (advanced OCR and layout analysis)
+- **Eliminates redundant processing** (no separate enhancement phase)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
@@ -15,20 +15,229 @@ Curatore uses a **tiered extraction system** with:
 ├─────────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                          │
 │  ┌──────────┐    ┌───────────────┐    ┌─────────────────┐    ┌──────────────────────┐  │
-│  │  UPLOAD  │───▶│   EXTRACTION  │───▶│   ENHANCEMENT   │───▶│      INDEXING        │  │
-│  │          │    │    (Basic)    │    │   (Conditional) │    │     (pgvector)       │  │
+│  │  UPLOAD  │───▶│    TRIAGE     │───▶│   EXTRACTION    │───▶│      INDEXING        │  │
+│  │          │    │  (< 100ms)    │    │ (engine-routed) │    │     (pgvector)       │  │
 │  └──────────┘    └───────────────┘    └─────────────────┘    └──────────────────────┘  │
 │       │                 │                     │                        │               │
 │       │                 │                     │                        │               │
 │       ▼                 ▼                     ▼                        ▼               │
-│   Asset created     Markdown in          Enhanced                Searchable           │
-│   status=pending    MinIO bucket         markdown               in pgvector           │
-│                     tier=basic           tier=enhanced           indexed_at set       │
+│   Asset created    Analyze doc,         Markdown in              Searchable           │
+│   status=pending   select engine        MinIO bucket             in pgvector          │
+│                                         triage_engine set        indexed_at set       │
+│                                                                                        │
+└─────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+## Triage System
+
+The triage phase performs lightweight document analysis (typically < 100ms) to determine the optimal extraction engine.
+
+### Triage Decision Flow
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────────────┐
+│                                   TRIAGE DECISION                                        │
+├─────────────────────────────────────────────────────────────────────────────────────────┤
+│                                                                                          │
+│                              Document arrives for extraction                             │
+│                                          │                                               │
+│                                          ▼                                               │
+│                              ┌─────────────────────┐                                    │
+│                              │  Detect file type   │                                    │
+│                              └─────────────────────┘                                    │
+│                                          │                                               │
+│            ┌─────────────────┬───────────┼───────────┬─────────────────┐                │
+│            ▼                 ▼           ▼           ▼                 ▼                │
+│       ┌─────────┐      ┌─────────┐  ┌─────────┐  ┌─────────┐    ┌─────────┐            │
+│       │   PDF   │      │  Office │  │  Image  │  │  Text   │    │ Unknown │            │
+│       └─────────┘      └─────────┘  └─────────┘  └─────────┘    └─────────┘            │
+│            │                │            │            │              │                  │
+│            ▼                ▼            ▼            ▼              ▼                  │
+│    ┌───────────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   ┌──────────┐          │
+│    │ Analyze with  │  │ Check    │  │UNSUPPORTED│ │extraction│   │extraction│          │
+│    │  PyMuPDF:     │  │ file     │  │(standalone│ │-service  │   │-service  │          │
+│    │ - text layer? │  │ size     │  │ images    │ │(MarkIt   │   │(fallback)│          │
+│    │ - complexity? │  └──────────┘  │ not       │ │Down)     │   └──────────┘          │
+│    └───────────────┘       │        │ supported)│ └──────────┘                          │
+│         │    │             │        └──────────┘                                        │
+│   Simple │    │ Complex    │                                                            │
+│   text   │    │ or scanned │ < 5MB      >= 5MB                                          │
+│         ▼    ▼            ▼            ▼                                                │
+│    ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌─────────┐                                 │
+│    │fast_pdf │  │ docling │  │extraction│  │ docling │                                 │
+│    │(PyMuPDF)│  │(OCR/    │  │-service  │  │(layout) │                                 │
+│    └─────────┘  │layout)  │  │(MarkIt   │  └─────────┘                                 │
+│                 └─────────┘  │Down)     │                                               │
+│                              └──────────┘                                               │
 │                                                                                          │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-## Stage 1: Upload / Ingestion
+### PDF Triage Analysis
+
+For PDFs, PyMuPDF analyzes the first 3 pages to determine:
+
+| Check | Threshold | Result |
+|-------|-----------|--------|
+| Text per page | < 100 chars | Needs OCR → `docling` |
+| Blocks per page | > 50 | Complex layout → `docling` |
+| Images per page | > 3 | Image-heavy → `docling` |
+| Tables detected | > 20 drawing lines | Has tables → `docling` |
+| None of above | - | Simple text → `fast_pdf` |
+
+### Office File Triage
+
+For Office documents, file size is used as a complexity proxy:
+
+| File Size | Engine | Reason |
+|-----------|--------|--------|
+| < 5 MB | `extraction-service` | Simple document, MarkItDown handles well |
+| >= 5 MB | `docling` | Large file likely has complex content |
+
+## Extraction Engines
+
+Curatore uses four extraction engines, each optimized for specific document types:
+
+### 1. fast_pdf (PyMuPDF)
+
+**Purpose**: Fast local extraction for simple, text-based PDFs
+
+**Technology**: PyMuPDF (fitz) - direct text extraction without external service calls
+
+**Supported Extensions**:
+| Extension | MIME Type |
+|-----------|-----------|
+| `.pdf` | application/pdf |
+
+**When Used**:
+- PDF has extractable text layer (not scanned)
+- Simple layout (< 50 blocks/page)
+- Few images (< 3 images/page)
+- No complex tables
+
+**Characteristics**:
+- Very fast (local processing)
+- No network latency
+- Good for reports, articles, simple documents
+
+### 2. extraction-service (MarkItDown)
+
+**Purpose**: Document conversion for Office files, text files, and emails
+
+**Technology**: MarkItDown + LibreOffice (for legacy format conversion)
+
+**Supported Extensions**:
+| Extension | MIME Type | Notes |
+|-----------|-----------|-------|
+| `.docx` | application/vnd.openxmlformats-officedocument.wordprocessingml.document | Word documents |
+| `.doc` | application/msword | Legacy Word (via LibreOffice) |
+| `.pptx` | application/vnd.openxmlformats-officedocument.presentationml.presentation | PowerPoint |
+| `.ppt` | application/vnd.ms-powerpoint | Legacy PowerPoint (via LibreOffice) |
+| `.xlsx` | application/vnd.openxmlformats-officedocument.spreadsheetml.sheet | Excel |
+| `.xls` | application/vnd.ms-excel | Legacy Excel (via LibreOffice) |
+| `.xlsb` | application/vnd.ms-excel.sheet.binary.macroEnabled.12 | Excel Binary (via LibreOffice) |
+| `.txt` | text/plain | Plain text |
+| `.md` | text/markdown | Markdown |
+| `.csv` | text/csv | CSV files |
+| `.msg` | application/vnd.ms-outlook | Outlook emails |
+| `.eml` | message/rfc822 | Email files |
+
+**When Used**:
+- All Office documents (simple, < 5MB)
+- All text-based files
+- All email files
+- Unknown file types (fallback)
+
+**Characteristics**:
+- Good balance of speed and quality
+- Handles most common document types
+- LibreOffice converts legacy formats
+
+### 3. docling (IBM Docling)
+
+**Purpose**: Advanced extraction for complex documents requiring OCR or layout analysis
+
+**Technology**: IBM Docling with optional Tesseract OCR
+
+**Supported Extensions**:
+| Extension | MIME Type | Use Case |
+|-----------|-----------|----------|
+| `.pdf` | application/pdf | Scanned PDFs, complex layouts |
+| `.docx` | application/vnd.openxmlformats-officedocument.wordprocessingml.document | Large/complex documents |
+| `.doc` | application/msword | Large/complex legacy Word |
+| `.pptx` | application/vnd.openxmlformats-officedocument.presentationml.presentation | Large presentations |
+| `.ppt` | application/vnd.ms-powerpoint | Large legacy PowerPoint |
+| `.xlsx` | application/vnd.openxmlformats-officedocument.spreadsheetml.sheet | Large spreadsheets |
+| `.xls` | application/vnd.ms-excel | Large legacy Excel |
+
+**When Used**:
+- Scanned PDFs (little/no text layer)
+- Complex PDF layouts (many blocks, images, tables)
+- Large Office files (>= 5MB)
+- Documents requiring OCR
+
+**Characteristics**:
+- Highest quality extraction
+- Advanced table recognition
+- OCR for scanned content
+- Slower but more accurate
+
+### Unsupported File Types
+
+The following file types are **not supported** for extraction:
+
+| Type | Extensions | Reason |
+|------|------------|--------|
+| Images | `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`, `.heic` | Standalone image files are not processed. Image OCR is only performed within documents (e.g., scanned PDFs) via the Docling engine. |
+
+## Engine Selection Summary
+
+| Document Type | Condition | Engine | Service |
+|--------------|-----------|--------|---------|
+| PDF | Simple text-based | `fast_pdf` | Local (PyMuPDF) |
+| PDF | Scanned or complex | `docling` | Docling service |
+| DOCX, PPTX, XLSX | < 5MB | `extraction-service` | Extraction service (MarkItDown) |
+| DOCX, PPTX, XLSX | >= 5MB | `docling` | Docling service |
+| DOC, PPT, XLS | < 5MB | `extraction-service` | Extraction service (LibreOffice + MarkItDown) |
+| DOC, PPT, XLS | >= 5MB | `docling` | Docling service |
+| TXT, MD, CSV, HTML | Always | `extraction-service` | Extraction service |
+| MSG, EML | Always | `extraction-service` | Extraction service |
+| Images | Always | `unsupported` | N/A - standalone images not supported |
+| Unknown | Always | `extraction-service` | Extraction service (fallback) |
+
+## Extraction Result Fields
+
+After extraction, the `ExtractionResult` record stores triage decisions:
+
+```python
+ExtractionResult {
+    # Core fields
+    status: "completed"
+    extraction_tier: "basic" | "enhanced"  # For backwards compatibility
+
+    # Triage fields (new)
+    triage_engine: "fast_pdf" | "extraction-service" | "docling" | "unsupported"
+    triage_needs_ocr: bool       # Whether OCR was required
+    triage_needs_layout: bool    # Whether complex layout handling was needed
+    triage_complexity: "low" | "medium" | "high"
+    triage_duration_ms: int      # Time spent in triage phase
+}
+```
+
+### Tier Mapping
+
+For backwards compatibility, `extraction_tier` is computed from `triage_engine`:
+
+| Triage Engine | Extraction Tier |
+|--------------|-----------------|
+| `fast_pdf` | `basic` |
+| `extraction-service` | `basic` |
+| `docling` | `enhanced` |
+| `unsupported` | N/A (extraction fails) |
+
+## Stage-by-Stage Processing
+
+### Stage 1: Upload / Ingestion
 
 Documents enter Curatore through multiple sources:
 
@@ -39,271 +248,73 @@ Documents enter Curatore through multiple sources:
 | Web Scraping | Scrape collection crawl | `web_scrape` |
 | SAM.gov | SAM pull job | `sam_gov` |
 
-### What Happens
+**What Happens**:
 1. File uploaded to MinIO (`curatore-uploads` bucket)
 2. `Asset` record created with `status=pending`
 3. `Run` record created with `run_type=extraction`
-4. `ExtractionResult` record created with `status=pending`
-5. Extraction task queued to Celery
+4. Extraction task queued to Celery
 
-### Asset Created State
-```
-Asset {
-    status: "pending"
-    extraction_tier: null
-    enhancement_eligible: null
-    indexed_at: null
-}
-```
+### Stage 2: Triage
 
-## Stage 2: Basic Extraction
+The triage service analyzes the document:
 
-All files go through basic extraction using MarkItDown (via extraction-service).
+1. Detect file type from extension and MIME type
+2. For PDFs: Analyze with PyMuPDF (text layer, complexity)
+3. For Office files: Check file size
+4. Select optimal engine
+5. Record triage decision
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        BASIC EXTRACTION                              │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│   ┌──────────────┐      ┌─────────────────┐      ┌───────────────┐  │
-│   │  Download    │─────▶│   MarkItDown    │─────▶│    Upload     │  │
-│   │  from MinIO  │      │   Extraction    │      │   Markdown    │  │
-│   └──────────────┘      └─────────────────┘      └───────────────┘  │
-│          │                      │                        │          │
-│          ▼                      ▼                        ▼          │
-│   curatore-uploads       PDF → Markdown          curatore-processed │
-│   (raw file)             DOCX → Markdown         (extracted.md)     │
-│                          HTML → Markdown                             │
-│                          etc.                                        │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
+**Triage Duration**: Typically < 100ms
 
-### Supported File Types (Basic)
-- PDF, DOCX, DOC, PPTX, PPT, XLSX, XLS
-- HTML, TXT, MD, CSV, JSON, XML
-- Images (with OCR if enabled)
-- And many more via MarkItDown
+### Stage 3: Extraction
 
-### After Basic Extraction
-```
-Asset {
-    status: "ready"
-    extraction_tier: "basic"
-    enhancement_eligible: true/false  (determined by file type)
-    indexed_at: null                   (not yet indexed)
-}
+The selected engine extracts content:
 
-ExtractionResult {
-    status: "completed"
-    extraction_tier: "basic"
-    extracted_bucket: "curatore-processed"
-    extracted_object_key: "{org}/{path}/filename.md"
-}
+1. Download file from MinIO
+2. Execute engine-specific extraction
+3. Convert to Markdown format
+4. Upload to `curatore-processed` bucket
+5. Update `ExtractionResult` with triage fields
+
+### Stage 4: Search Indexing
+
+After extraction completes:
+
+1. Download extracted Markdown
+2. Split into chunks (~1500 chars with 200 char overlap)
+3. Generate embeddings via OpenAI API (text-embedding-3-small)
+4. Insert into `search_chunks` table (PostgreSQL + pgvector)
+5. Set `indexed_at` timestamp on Asset
+
+## Configuration
+
+### Enable/Disable Docling
+
+In `config.yml`:
+```yaml
+extraction:
+  engines:
+    - name: docling
+      engine_type: docling
+      enabled: true  # Set to false to use fast engines only
+      service_url: http://docling:8012
 ```
 
-## Stage 3: Enhancement (Conditional)
+When Docling is disabled:
+- PDFs use `fast_pdf` (may have lower quality for complex documents)
+- Large Office files use `extraction-service` instead
 
-Enhancement is triggered **only if**:
-1. File type is enhancement-eligible
-2. Docling service is enabled in config
+### Enable/Disable Search Indexing
 
-### Enhancement-Eligible File Types
-| Extension | MIME Type | Reason |
-|-----------|-----------|--------|
-| `.pdf` | application/pdf | Tables, forms, complex layouts |
-| `.docx` | application/vnd.openxmlformats-officedocument.wordprocessingml.document | Styles, tables |
-| `.doc` | application/msword | Legacy Word documents |
-| `.pptx` | application/vnd.openxmlformats-officedocument.presentationml.presentation | Slides, graphics |
-| `.ppt` | application/vnd.ms-powerpoint | Legacy PowerPoint |
-| `.xlsx` | application/vnd.openxmlformats-officedocument.spreadsheetml.sheet | Spreadsheet structure |
-| `.xls` | application/vnd.ms-excel | Legacy Excel |
-
-### Non-Eligible File Types
-- HTML (already well-structured)
-- Plain text, Markdown (no structure to enhance)
-- Images (no text structure)
-- CSV, JSON, XML (already structured data)
-
-### Enhancement Flow
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                        ENHANCEMENT DECISION                          │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│                    Basic Extraction Complete                         │
-│                            │                                         │
-│                            ▼                                         │
-│                  ┌─────────────────────┐                            │
-│                  │ Enhancement Eligible?│                            │
-│                  │ (PDF, DOCX, etc.)   │                            │
-│                  └─────────────────────┘                            │
-│                       │           │                                  │
-│                      YES          NO                                 │
-│                       │           │                                  │
-│                       ▼           ▼                                  │
-│            ┌─────────────────┐  ┌─────────────────┐                 │
-│            │ Docling Enabled? │  │  INDEX NOW     │                 │
-│            └─────────────────┘  │  (basic tier)   │                 │
-│                 │        │      └─────────────────┘                 │
-│                YES       NO                                          │
-│                 │        │                                           │
-│                 ▼        ▼                                           │
-│     ┌─────────────────┐ ┌─────────────────┐                         │
-│     │ Queue Enhancement│ │  INDEX NOW     │                         │
-│     │ (defer indexing) │ │  (basic tier)   │                         │
-│     └─────────────────┘ └─────────────────┘                         │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
+```yaml
+search:
+  enabled: true  # Set to false to disable indexing
 ```
 
-### Why Defer Indexing?
-
-Generating embeddings is expensive (OpenAI API calls). If we index after basic extraction and then index again after enhancement, we pay twice. By deferring indexing for enhancement-eligible files, we only generate embeddings once with the best available content.
-
-### After Enhancement
-```
-Asset {
-    status: "ready"
-    extraction_tier: "enhanced"
-    enhancement_eligible: true
-    indexed_at: null  (still waiting for indexing)
-}
-
-ExtractionResult {
-    status: "completed"
-    extraction_tier: "enhanced"
-    extracted_bucket: "curatore-processed"
-    extracted_object_key: "{org}/{path}/filename.md"  (overwritten with enhanced content)
-}
-```
-
-## Stage 4: Search Indexing
-
-Indexing happens via the `index_asset_task` Celery task.
-
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         SEARCH INDEXING                              │
-├─────────────────────────────────────────────────────────────────────┤
-│                                                                      │
-│   ┌───────────────┐    ┌─────────────────┐    ┌──────────────────┐  │
-│   │   Download    │───▶│    Chunking     │───▶│    Embedding     │  │
-│   │   Markdown    │    │  (~1500 chars)  │    │   Generation     │  │
-│   └───────────────┘    └─────────────────┘    └──────────────────┘  │
-│          │                     │                       │            │
-│          ▼                     ▼                       ▼            │
-│   curatore-processed     Split into           OpenAI API call       │
-│   (extracted.md)         overlapping          text-embedding-3-small │
-│                          chunks               1536 dimensions        │
-│                                                                      │
-│                          ┌─────────────────┐                        │
-│                          │  Insert into    │                        │
-│                          │ search_chunks   │                        │
-│                          │    table        │                        │
-│                          └─────────────────┘                        │
-│                                  │                                   │
-│                                  ▼                                   │
-│                          PostgreSQL + pgvector                       │
-│                          (hybrid full-text + semantic search)        │
-│                                                                      │
-└─────────────────────────────────────────────────────────────────────┘
-```
-
-### Indexing Trigger Points
-
-| Scenario | Trigger Point |
-|----------|---------------|
-| Non-eligible file | After basic extraction completes |
-| Eligible file, Docling disabled | After basic extraction completes |
-| Eligible file, Docling enabled | After enhancement completes |
-
-### After Indexing
-```
-Asset {
-    status: "ready"
-    extraction_tier: "basic" or "enhanced"
-    enhancement_eligible: true/false
-    indexed_at: "2026-02-01T20:00:00Z"  (timestamp set)
-}
-```
-
-### search_chunks Table Schema
-```sql
-CREATE TABLE search_chunks (
-    id SERIAL PRIMARY KEY,
-    source_type VARCHAR(50),        -- 'asset', 'sam_notice', 'sam_solicitation'
-    source_id UUID,                 -- Asset ID or notice ID
-    organization_id UUID,
-    chunk_index INTEGER,            -- 0, 1, 2, ... for each chunk
-    content TEXT,                   -- Chunk text content
-    title VARCHAR(500),
-    filename VARCHAR(500),
-    url TEXT,
-    embedding VECTOR(1536),         -- pgvector embedding
-    source_type_filter VARCHAR(50), -- 'upload', 'sharepoint', 'web_scrape', 'sam_gov'
-    content_type VARCHAR(255),
-    collection_id UUID,             -- For scrape collections
-    sync_config_id UUID,            -- For SharePoint syncs
-    metadata JSONB,
-    UNIQUE(source_type, source_id, chunk_index)
-);
-```
-
-## Complete Pipeline States
-
-### State Diagram
-
-```
-                              UPLOAD
-                                │
-                                ▼
-                    ┌───────────────────────┐
-                    │   status: pending     │
-                    │   tier: null          │
-                    │   eligible: null      │
-                    │   indexed_at: null    │
-                    └───────────────────────┘
-                                │
-                        BASIC EXTRACTION
-                                │
-                                ▼
-                    ┌───────────────────────┐
-                    │   status: ready       │
-                    │   tier: basic         │
-                    │   eligible: true/false│
-                    │   indexed_at: null    │
-                    └───────────────────────┘
-                         │              │
-              eligible=true &&     eligible=false ||
-              docling=enabled      docling=disabled
-                         │              │
-                         ▼              ▼
-              ┌─────────────────┐  ┌─────────────────┐
-              │   ENHANCING...  │  │    INDEXING...  │
-              │   (Docling)     │  │   (pgvector)    │
-              └─────────────────┘  └─────────────────┘
-                         │              │
-                         ▼              │
-              ┌─────────────────┐       │
-              │ tier: enhanced  │       │
-              │ indexed_at: null│       │
-              └─────────────────┘       │
-                         │              │
-                    INDEXING...         │
-                         │              │
-                         ▼              ▼
-                    ┌───────────────────────┐
-                    │   status: ready       │
-                    │   tier: basic/enhanced│
-                    │   eligible: true/false│
-                    │   indexed_at: <time>  │  ← FULLY PROCESSED
-                    └───────────────────────┘
-```
-
-## Monitoring Pipeline Status
+## Monitoring
 
 ### API Response
+
 `GET /api/v1/assets/{id}` returns:
 ```json
 {
@@ -311,95 +322,72 @@ CREATE TABLE search_chunks (
     "id": "...",
     "status": "ready",
     "extraction_tier": "enhanced",
-    "enhancement_eligible": true,
-    "enhancement_queued_at": "2026-02-01T19:00:00Z",
     "indexed_at": "2026-02-01T19:05:00Z"
   },
   "extraction": {
     "status": "completed",
     "extraction_tier": "enhanced",
-    "extractor_version": "docling-enhancement"
+    "triage_engine": "docling",
+    "triage_needs_ocr": true,
+    "triage_complexity": "high",
+    "triage_duration_ms": 45
   }
 }
 ```
 
 ### Frontend Display
-The asset detail page shows a "Processing Pipeline" section with badges:
-- **Extracted**: Shows tier (basic/enhanced) or processing state
-- **Enhanced**: Shows enhancement status or "N/A" if not eligible
-- **Indexed**: Shows "Indexed" with timestamp or "Not Indexed"
+
+The asset detail page shows:
+- **Engine**: Badge showing which engine was used (Fast PDF, MarkItDown, Docling, OCR)
+- **OCR**: Badge if OCR was used
+- **Complexity**: Badge if document was complex
+- **Indexed**: Shows "Indexed" with timestamp
 
 ### SQL Queries
 
 ```sql
--- Find assets not yet indexed
-SELECT id, original_filename, extraction_tier, enhancement_eligible
-FROM assets
-WHERE status = 'ready' AND indexed_at IS NULL;
+-- Assets by extraction engine
+SELECT triage_engine, COUNT(*)
+FROM extraction_results
+WHERE status = 'completed'
+GROUP BY triage_engine;
 
--- Find enhancement-eligible assets still at basic tier
-SELECT id, original_filename
-FROM assets
-WHERE enhancement_eligible = true
-  AND extraction_tier = 'basic'
-  AND status = 'ready';
+-- Average triage duration by engine
+SELECT triage_engine, AVG(triage_duration_ms) as avg_ms
+FROM extraction_results
+WHERE triage_duration_ms IS NOT NULL
+GROUP BY triage_engine;
 
--- Count assets by pipeline state
-SELECT
-    CASE
-        WHEN status = 'pending' THEN 'extracting'
-        WHEN indexed_at IS NULL AND enhancement_eligible AND extraction_tier = 'basic' THEN 'awaiting_enhancement'
-        WHEN indexed_at IS NULL THEN 'awaiting_indexing'
-        ELSE 'complete'
-    END as pipeline_state,
-    COUNT(*) as count
-FROM assets
-WHERE status IN ('pending', 'ready')
-GROUP BY 1;
-```
-
-## Configuration
-
-### Enable/Disable Enhancement
-In `config.yml`:
-```yaml
-extraction:
-  engines:
-    - name: docling
-      engine_type: docling
-      enabled: true  # Set to false to disable enhancement
-      service_url: http://docling:8012
-```
-
-### Enable/Disable Search Indexing
-```yaml
-search:
-  enabled: true  # Set to false to disable all indexing
-```
-
-Or via environment variable:
-```bash
-SEARCH_ENABLED=true
+-- Documents that needed OCR
+SELECT a.original_filename, er.triage_engine, er.triage_complexity
+FROM extraction_results er
+JOIN assets a ON er.asset_id = a.id
+WHERE er.triage_needs_ocr = true;
 ```
 
 ## Re-processing
 
 ### Trigger Re-extraction
+
 ```bash
 curl -X POST http://localhost:8000/api/v1/assets/{id}/reextract
 ```
-This creates a new extraction Run and re-processes the asset through the full pipeline.
 
-### Trigger Reindex (all assets)
+This creates a new extraction Run and re-processes through triage.
+
+### Bulk Re-extraction
+
 ```bash
-curl -X POST http://localhost:8000/api/v1/search/reindex
+docker exec curatore-backend python -m app.commands.reextract_all
 ```
 
-### Manual Reindex (single asset)
-```python
-from app.services.pg_index_service import pg_index_service
-from app.services.database_service import database_service
+Options:
+- `--dry-run`: Show what would be done
+- `--limit N`: Process only N assets
+- `--batch-size N`: Process in batches of N
 
-async with database_service.get_session() as session:
-    await pg_index_service.index_asset(session, asset_id)
+### Trigger Search Reindex
+
+```bash
+curl -X POST http://localhost:8000/api/v1/search/reindex
 ```

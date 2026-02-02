@@ -125,6 +125,18 @@ extraction:
   # Options: extraction-service, docling, tika
   default_engine: extraction-service
 
+  # Intelligent Triage-Based Extraction Routing
+  # Documents are automatically analyzed upfront to select the optimal extraction engine:
+  # - fast_pdf: PyMuPDF for simple text-based PDFs (fastest)
+  # - fast_office: Native Python libs for simple Office files (fast)
+  # - docling: Advanced extraction for complex documents (slower but high-quality)
+  # - ocr_only: OCR extraction for images and scanned documents
+  #
+  # Benefits:
+  # - Routes simple documents to fast local engines
+  # - Routes complex documents directly to Docling
+  # - Sub-second triage analysis
+
   # List of available extraction engines
   # Users can select these when creating jobs via Connections UI
   engines:
@@ -490,8 +502,7 @@ queue:
 # This section provides RUNTIME PARAMETER OVERRIDES for those queue types.
 #
 # Available queue types:
-#   - extraction: Document-to-Markdown conversion (fast, basic extraction)
-#   - enhancement: Docling-based document enhancement (slow, high-quality)
+#   - extraction: Document-to-Markdown conversion with triage-based engine selection
 #   - sam: SAM.gov federal opportunity data pulls
 #   - scrape: Web scraping and crawling
 #   - sharepoint: SharePoint document synchronization
@@ -505,7 +516,11 @@ queue:
 #   - enabled: Enable/disable the queue type
 
 queues:
-  # Extraction queue - fast document conversion
+  # Extraction queue - triage-based document conversion
+  # Uses intelligent routing to select optimal engine:
+  #   - fast_pdf: Simple text-based PDFs (PyMuPDF)
+  #   - extraction-service: Office files, text, emails (MarkItDown)
+  #   - docling: Complex PDFs, large Office files (OCR + layout)
   extraction:
     # Maximum concurrent extractions (default: 10)
     # Increase for faster throughput, decrease to reduce resource usage
@@ -513,17 +528,6 @@ queues:
 
     # Timeout for extraction jobs in seconds (default: 600 = 10 minutes)
     timeout_seconds: 600
-
-  # Enhancement queue - Docling-based document enhancement
-  # Runs AFTER extraction to improve quality using advanced OCR and layout analysis
-  enhancement:
-    # Maximum concurrent enhancements (default: 3)
-    # Keep low as Docling is resource-intensive
-    max_concurrent: 3
-
-    # Timeout for enhancement jobs in seconds (default: 900 = 15 minutes)
-    # Docling can be slow for complex documents
-    timeout_seconds: 900
 
   # SAM.gov queue - federal opportunity data pulls
   # sam:

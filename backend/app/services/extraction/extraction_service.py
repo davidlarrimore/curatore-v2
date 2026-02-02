@@ -2,7 +2,7 @@
 Extraction Service engine implementation.
 
 This module implements the extraction engine for the internal extraction-service
-that uses MarkItDown and Tesseract OCR for document conversion.
+that uses MarkItDown for document conversion.
 """
 
 from pathlib import Path
@@ -16,8 +16,8 @@ class ExtractionServiceEngine(BaseExtractionEngine):
     """
     Extraction engine for the internal extraction-service.
 
-    Uses MarkItDown and Tesseract OCR for document conversion.
-    Supports PDFs, Office documents, images, and text files.
+    Uses MarkItDown for document conversion.
+    Supports Office documents, text files, and emails.
     """
 
     @property
@@ -30,7 +30,7 @@ class ExtractionServiceEngine(BaseExtractionEngine):
 
     @property
     def description(self) -> str:
-        return "Built-in extraction using MarkItDown and Tesseract OCR"
+        return "Built-in extraction using MarkItDown"
 
     @property
     def default_endpoint(self) -> str:
@@ -40,28 +40,26 @@ class ExtractionServiceEngine(BaseExtractionEngine):
         """
         Get supported file formats for extraction-service.
 
-        The extraction-service uses MarkItDown, LibreOffice conversion,
-        and Tesseract OCR to support a wide range of document types.
+        The extraction-service uses MarkItDown and LibreOffice conversion.
 
         Supported categories:
-        - PDFs (native text + OCR fallback)
         - Office documents (doc/docx, ppt/pptx, xls/xlsx, xlsb)
-        - Plain text and markdown
-        - Images (via Tesseract OCR)
+        - Plain text, markup, and data files
         - Email files (msg, eml)
+
+        Note: PDFs are handled by fast_pdf engine. Images are not supported
+        as standalone files (only OCR within documents via Docling).
 
         Returns:
             List of supported file extensions
         """
         return [
-            # Documents
-            ".pdf", ".doc", ".docx", ".ppt", ".pptx",
+            # Office documents
+            ".doc", ".docx", ".ppt", ".pptx",
             # Spreadsheets (including xlsb via LibreOffice conversion)
             ".xls", ".xlsx", ".xlsb", ".csv",
-            # Plain text
-            ".txt", ".md",
-            # Images (OCR)
-            ".png", ".jpg", ".jpeg", ".gif", ".tif", ".tiff", ".bmp",
+            # Plain text and markup
+            ".txt", ".md", ".html", ".htm", ".xml", ".json",
             # Email formats
             ".msg", ".eml",
         ]

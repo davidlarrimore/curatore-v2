@@ -44,7 +44,6 @@ app = Celery(
 app.conf.task_queues = (
     Queue("processing_priority", routing_key="processing_priority"),
     Queue("extraction", routing_key="extraction"),
-    Queue("enhancement", routing_key="enhancement"),
     Queue("sam", routing_key="sam"),
     Queue("scrape", routing_key="scrape"),
     Queue("sharepoint", routing_key="sharepoint"),
@@ -64,14 +63,9 @@ app.conf.update(
     # This prevents one job type from blocking others
     task_routes={
         # =================================================================
-        # EXTRACTION QUEUE - Fast basic document conversion
+        # EXTRACTION QUEUE - Document extraction with triage-based routing
         # =================================================================
         "app.tasks.execute_extraction_task": {"queue": "extraction"},
-
-        # =================================================================
-        # ENHANCEMENT QUEUE - Slow Docling enhancement (separate from extraction)
-        # =================================================================
-        "app.tasks.enhance_extraction_task": {"queue": "enhancement"},
 
         # =================================================================
         # SAM QUEUE - SAM.gov API operations

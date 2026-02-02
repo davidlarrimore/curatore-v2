@@ -12,6 +12,7 @@ from .base import BaseExtractionEngine
 from .extraction_service import ExtractionServiceEngine
 from .docling import DoclingEngine
 from .tika import TikaEngine
+from .fast_pdf import FastPdfEngine
 
 logger = logging.getLogger(__name__)
 
@@ -29,8 +30,10 @@ class ExtractionEngineFactory:
         "extraction-service": ExtractionServiceEngine,
         "docling": DoclingEngine,
         "tika": TikaEngine,
-        # Future engines will be registered here:
-        # "unstructured": UnstructuredEngine,
+        # Triage-based engines
+        "fast_pdf": FastPdfEngine,  # PyMuPDF for simple PDFs
+        # Note: Office files route to "extraction-service" which uses MarkItDown
+        # Note: Standalone images are not supported (OCR only within docs via Docling)
     }
 
     @classmethod

@@ -764,7 +764,6 @@ export interface UnifiedQueueStats {
   celery_queues: {
     processing_priority: number
     extraction: number
-    enhancement: number
     sam: number
     scrape: number
     sharepoint: number
@@ -2070,6 +2069,7 @@ export interface ExtractionResult {
   asset_id: string
   run_id: string
   extractor_version: string
+  extraction_tier?: string | null
   status: string
   extracted_bucket: string | null
   extracted_object_key: string | null
@@ -2078,6 +2078,12 @@ export interface ExtractionResult {
   errors: string[]
   extraction_time_seconds: number | null
   created_at: string
+  // Triage fields (new extraction routing architecture)
+  triage_engine?: 'fast_pdf' | 'fast_office' | 'docling' | 'ocr_only' | null
+  triage_needs_ocr?: boolean | null
+  triage_needs_layout?: boolean | null
+  triage_complexity?: 'low' | 'medium' | 'high' | null
+  triage_duration_ms?: number | null
 }
 
 export interface Run {

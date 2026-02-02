@@ -37,9 +37,15 @@ from ..services.minio_service import get_minio_service
 from ..services.storage_path_service import storage_paths
 from ..services.document_service import document_service
 from ..services.config_loader import config_loader
+from ..services.triage_service import triage_service, ExtractionPlan
 from ..models import OCRSettings, ProcessingOptions
 from ..config import settings
-from .extraction import ExtractionEngineFactory
+from .extraction import (
+    ExtractionEngineFactory,
+    ExtractionServiceEngine,
+    DoclingEngine,
+    FastPdfEngine,
+)
 
 
 class UnsupportedFileTypeError(Exception):
@@ -257,20 +263,66 @@ class ExtractionOrchestrator:
 
             logger.info(f"Downloaded {asset.original_filename} to {temp_input_file}")
 
-            # Extract using document_service
+            # =====================================================================
+            # TRIAGE PHASE: Analyze document and select optimal extraction engine
+            # =====================================================================
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="triage",
+                message="Analyzing document to select extraction engine...",
+            )
+
+            triage_plan = await triage_service.triage(
+                file_path=temp_input_file,
+                mime_type=asset.content_type,
+                docling_enabled=self._is_docling_enabled(),
+            )
+
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="triage",
+                message=f"Selected engine: {triage_plan.engine} (complexity={triage_plan.complexity})",
+                context=triage_plan.to_dict(),
+            )
+
+            # =====================================================================
+            # EXTRACTION PHASE: Use triage-selected engine
+            # =====================================================================
+            # Check for unsupported file type
+            if triage_plan.engine == "unsupported":
+                await run_log_service.log_event(
+                    session=session,
+                    run_id=run_id,
+                    level="ERROR",
+                    event_type="error",
+                    message=f"Unsupported file type: {triage_plan.reason}",
+                )
+                raise ValueError(f"Unsupported file type: {triage_plan.reason}")
+
             await run_log_service.log_event(
                 session=session,
                 run_id=run_id,
                 level="INFO",
                 event_type="progress",
-                message="Extracting content to markdown...",
+                message=f"Extracting with {triage_plan.engine}...",
             )
 
-            # Call existing extraction logic
-            extraction_result = await self._extract_content(
-                file_path=temp_input_file,
-                filename=asset.original_filename,
-            )
+            # Extract using triage-selected engine
+            if triage_plan.engine == "fast_pdf":
+                extraction_result = await self._extract_with_triage_engine(
+                    file_path=temp_input_file,
+                    triage_plan=triage_plan,
+                )
+            else:
+                # Fall back to existing extraction logic (document_service)
+                extraction_result = await self._extract_content(
+                    file_path=temp_input_file,
+                    filename=asset.original_filename,
+                )
 
             if not extraction_result or not extraction_result.get("markdown"):
                 raise ValueError("Extraction produced no markdown content")
@@ -337,13 +389,25 @@ class ExtractionOrchestrator:
             extractor_version = f"{engine_name}" if engine_name != "unknown" else engine_type
             extraction.extractor_version = extractor_version
 
-            # Phase 2: Set extraction tier to "basic" for this extraction
-            extraction.extraction_tier = "basic"
-            asset.extraction_tier = "basic"
+            # =====================================================================
+            # TRIAGE-BASED EXTRACTION TIER AND METADATA
+            # =====================================================================
+            # Store triage information in extraction result
+            extraction.triage_engine = triage_plan.engine
+            extraction.triage_needs_ocr = triage_plan.needs_ocr
+            extraction.triage_needs_layout = triage_plan.needs_layout
+            extraction.triage_complexity = triage_plan.complexity
+            extraction.triage_duration_ms = triage_plan.triage_duration_ms
 
-            # Check if asset is eligible for enhancement
-            enhancement_eligible = self._is_enhancement_eligible(asset.original_filename)
-            asset.enhancement_eligible = enhancement_eligible
+            # Set extraction_tier based on triage engine
+            # fast_pdf, extraction-service → "basic"
+            # docling → "enhanced"
+            if triage_plan.engine == "docling":
+                extraction.extraction_tier = "enhanced"
+                asset.extraction_tier = "enhanced"
+            else:
+                extraction.extraction_tier = "basic"
+                asset.extraction_tier = "basic"
 
             # Update Asset status to ready
             await asset_service.update_asset_status(session, asset_id, "ready")
@@ -377,58 +441,24 @@ class ExtractionOrchestrator:
 
             logger.info(
                 f"Extraction successful for asset {asset_id}: "
-                f"run={run_id}, time={extraction_time:.2f}s"
+                f"run={run_id}, time={extraction_time:.2f}s, engine={triage_plan.engine}"
             )
 
-            # Phase 2: Queue enhancement task if eligible and Docling is enabled
-            enhancement_queued = False
-            will_be_enhanced = enhancement_eligible and self._is_docling_enabled()
-
-            if will_be_enhanced:
+            # Trigger search indexing if enabled
+            if _is_search_enabled():
                 try:
-                    enhancement_result = await self._queue_enhancement(
-                        session=session,
-                        asset=asset,
-                        organization_id=asset.organization_id,
-                    )
-                    enhancement_queued = enhancement_result.get("queued", False)
-
-                    if enhancement_queued:
-                        await run_log_service.log_event(
-                            session=session,
-                            run_id=run_id,
-                            level="INFO",
-                            event_type="progress",
-                            message="Queued for background Docling enhancement (indexing deferred until enhancement completes)",
-                            context=enhancement_result,
-                        )
-                except Exception as e:
-                    # Don't fail extraction if enhancement queue fails
-                    logger.warning(f"Failed to queue enhancement for asset {asset_id}: {e}")
-                    # If enhancement queueing fails, fall back to indexing now
-                    enhancement_queued = False
-
-            # Trigger search indexing if enabled AND either:
-            # - Document is NOT enhancement-eligible, OR
-            # - Document IS eligible but enhancement was NOT queued (Docling disabled or queue failed)
-            # This avoids double-indexing: enhanced documents get indexed after enhancement completes
-            should_index_now = _is_search_enabled() and not enhancement_queued
-
-            if should_index_now:
-                try:
-                    index_reason = "not enhancement-eligible" if not enhancement_eligible else "enhancement not queued"
                     await run_log_service.log_event(
                         session=session,
                         run_id=run_id,
                         level="INFO",
                         event_type="progress",
-                        message=f"Queueing asset for search indexing ({index_reason})...",
+                        message="Queueing asset for search indexing...",
                     )
 
                     from ..tasks import index_asset_task
                     index_asset_task.delay(asset_id=str(asset_id))
 
-                    logger.info(f"Queued asset {asset_id} for search indexing ({index_reason})")
+                    logger.info(f"Queued asset {asset_id} for search indexing")
                 except Exception as e:
                     # Don't fail extraction if indexing queue fails
                     logger.warning(f"Failed to queue asset {asset_id} for indexing: {e}")
@@ -443,7 +473,8 @@ class ExtractionOrchestrator:
                 "extraction_time_seconds": extraction_time,
                 "markdown_length": len(markdown_content),
                 "warnings": warnings,
-                "enhancement_queued": enhancement_queued,
+                "triage_engine": triage_plan.engine,
+                "triage_complexity": triage_plan.complexity,
             }
 
         except Exception as e:
@@ -627,72 +658,48 @@ class ExtractionOrchestrator:
         file_extension: str,
     ) -> tuple[bool, set[str], str]:
         """
-        Check if a file type is supported by the configured extraction engine.
+        Check if a file type is supported by any of the triage-routable extraction engines.
 
-        This method retrieves the default extraction engine from config and checks
-        if the file extension is in its supported formats list.
+        The triage system routes files to different engines based on type and complexity:
+        - fast_pdf: Simple PDFs
+        - extraction-service: Office files, text, emails
+        - docling: Complex PDFs and large Office files
+
+        This method checks against ALL supported formats, not just the default engine.
 
         Args:
             file_extension: File extension including the dot (e.g., '.pdf', '.xlsb')
 
         Returns:
             Tuple of (is_supported, supported_formats, engine_name)
-            - is_supported: True if the file type is supported
-            - supported_formats: Set of supported file extensions for the engine
-            - engine_name: Name of the configured extraction engine
+            - is_supported: True if the file type is supported by any engine
+            - supported_formats: Set of all supported file extensions
+            - engine_name: Description of the triage system
         """
         # Normalize extension
         ext = file_extension.lower()
         if not ext.startswith('.'):
             ext = f'.{ext}'
 
-        # Get default extraction engine from config
-        default_engine_config = config_loader.get_default_extraction_engine()
+        # All formats supported across all triage-routable engines
+        # fast_pdf handles PDFs
+        # extraction-service handles Office, text, emails
+        # docling handles complex PDFs and large Office files
+        supported_formats = {
+            # PDFs (fast_pdf or docling)
+            ".pdf",
+            # Office documents (extraction-service or docling)
+            ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".xlsb",
+            # Text and markup (extraction-service)
+            ".txt", ".md", ".csv", ".html", ".htm", ".xml", ".json",
+            # Email files (extraction-service)
+            ".msg", ".eml",
+        }
 
-        if default_engine_config:
-            try:
-                # Create engine instance to get supported formats
-                engine = ExtractionEngineFactory.from_config({
-                    "engine_type": default_engine_config.engine_type,
-                    "name": default_engine_config.name,
-                    "service_url": default_engine_config.service_url,
-                    "timeout": default_engine_config.timeout,
-                    "verify_ssl": default_engine_config.verify_ssl,
-                    "api_key": default_engine_config.api_key,
-                    "options": default_engine_config.options
-                })
-                supported_formats = set(engine.get_supported_formats())
-                engine_name = f"{engine.display_name} ({engine.engine_type})"
-                is_supported = ext in supported_formats
-                return (is_supported, supported_formats, engine_name)
-            except Exception as e:
-                logger.warning(f"Failed to check file type support via engine factory: {e}")
-
-        # Fallback: use document_service's supported extensions
-        supported_formats = document_service._supported_extensions
-        engine_name = "default"
+        engine_name = "Triage System (fast_pdf, extraction-service, docling)"
         is_supported = ext in supported_formats
 
         return (is_supported, supported_formats, engine_name)
-
-    def _is_enhancement_eligible(self, filename: str) -> bool:
-        """
-        Check if file type is eligible for Docling enhancement.
-
-        Eligible types are structured documents that Docling handles better
-        than basic MarkItDown extraction.
-
-        Args:
-            filename: Original filename
-
-        Returns:
-            True if file type could benefit from enhancement
-        """
-        ENHANCEMENT_ELIGIBLE_EXTENSIONS = {
-            ".pdf", ".docx", ".doc", ".pptx", ".ppt", ".xlsx", ".xls"
-        }
-        ext = Path(filename).suffix.lower()
-        return ext in ENHANCEMENT_ELIGIBLE_EXTENSIONS
 
     def _is_docling_enabled(self) -> bool:
         """
@@ -713,80 +720,139 @@ class ExtractionOrchestrator:
         docling_url = getattr(settings, 'docling_service_url', None)
         return bool(docling_url)
 
-    async def _queue_enhancement(
-        self,
-        session: AsyncSession,
-        asset,
-        organization_id,
-    ) -> Dict[str, Any]:
+    def _get_docling_service_url(self) -> str:
         """
-        Queue background enhancement task for an asset.
-
-        Creates a new Run and ExtractionResult for the enhancement,
-        then queues the enhance_extraction_task.
-
-        Args:
-            session: Database session
-            asset: Asset to enhance
-            organization_id: Organization ID
+        Get the Docling service URL from config.
 
         Returns:
-            Dict with queuing result
+            Docling service URL or default
         """
-        from datetime import datetime
-        from uuid import uuid4
+        extraction_config = config_loader.get_extraction_config()
+        if extraction_config:
+            engines = getattr(extraction_config, 'engines', [])
+            for engine in engines:
+                if hasattr(engine, 'engine_type') and engine.engine_type == 'docling':
+                    if hasattr(engine, 'service_url'):
+                        return engine.service_url
+        # Fallback to settings
+        return getattr(settings, 'docling_service_url', 'http://docling:5001')
 
-        from ..database.models import Run, ExtractionResult
-        from ..tasks import enhance_extraction_task
+    def _get_extraction_service_url(self) -> str:
+        """
+        Get the extraction service URL from config.
 
-        # Create enhancement run
-        enhancement_run = Run(
-            id=uuid4(),
-            organization_id=organization_id,
-            run_type="extraction_enhancement",
-            origin="system",
-            status="pending",
-            config={
-                "asset_id": str(asset.id),
-                "enhancement_type": "docling",
-            },
-            input_asset_ids=[str(asset.id)],
-        )
-        session.add(enhancement_run)
+        Returns:
+            Extraction service URL or default
+        """
+        extraction_config = config_loader.get_extraction_config()
+        if extraction_config:
+            engines = getattr(extraction_config, 'engines', [])
+            for engine in engines:
+                if hasattr(engine, 'engine_type') and engine.engine_type == 'extraction-service':
+                    if hasattr(engine, 'service_url'):
+                        return engine.service_url
+        # Fallback to settings
+        return getattr(settings, 'extraction_service_url', 'http://extraction:8010')
 
-        # Create extraction result for enhancement
-        enhancement_extraction = ExtractionResult(
-            id=uuid4(),
-            asset_id=asset.id,
-            run_id=enhancement_run.id,
-            extractor_version="docling-enhancement",
-            extraction_tier="enhanced",
-            status="pending",
-        )
-        session.add(enhancement_extraction)
+    async def _extract_with_triage_engine(
+        self,
+        file_path: Path,
+        triage_plan: ExtractionPlan,
+    ) -> Dict[str, Any]:
+        """
+        Extract content using the triage-selected engine.
 
-        # Update asset enhancement timestamp
-        asset.enhancement_queued_at = datetime.utcnow()
+        Args:
+            file_path: Path to file on disk
+            triage_plan: Extraction plan from triage
 
-        await session.commit()
+        Returns:
+            Dict with markdown, warnings, and extraction_info
+        """
+        engine_type = triage_plan.engine
 
-        # Queue the enhancement task (goes to maintenance queue)
-        enhance_extraction_task.delay(
-            asset_id=str(asset.id),
-            run_id=str(enhancement_run.id),
-            extraction_id=str(enhancement_extraction.id),
-        )
+        try:
+            if engine_type == "fast_pdf":
+                engine = FastPdfEngine(name="fast-pdf-triage")
+                result = await engine.extract(file_path)
+            elif engine_type == "extraction-service":
+                # Use extraction-service (MarkItDown) for Office files, text files, etc.
+                extraction_url = self._get_extraction_service_url()
+                engine = ExtractionServiceEngine(
+                    name="extraction-service-triage",
+                    service_url=extraction_url,
+                )
+                result = await engine.extract(file_path)
+            elif engine_type == "docling":
+                # Use Docling service for complex documents
+                docling_url = self._get_docling_service_url()
+                logger.info(f"Using Docling engine for complex document: {file_path.name}")
+                engine = DoclingEngine(
+                    name="docling-triage",
+                    service_url=docling_url,
+                )
+                result = await engine.extract(file_path)
+                if result.success:
+                    return {
+                        "markdown": result.content,
+                        "warnings": [],
+                        "extraction_info": {
+                            "engine": "docling",
+                            "engine_name": "Docling",
+                        },
+                    }
+                else:
+                    # Docling failed, fall back to extraction-service
+                    logger.warning(f"Docling extraction failed for {file_path.name}, falling back to extraction-service")
+                    extraction_url = self._get_extraction_service_url()
+                    fallback_engine = ExtractionServiceEngine(
+                        name="extraction-service-fallback",
+                        service_url=extraction_url,
+                    )
+                    result = await fallback_engine.extract(file_path)
+                    if result.success:
+                        return {
+                            "markdown": result.content,
+                            "warnings": ["Docling failed, used extraction-service fallback"],
+                            "extraction_info": {
+                                "engine": "extraction-service",
+                                "engine_name": "Extraction Service (Fallback)",
+                            },
+                        }
+                    else:
+                        raise Exception(f"Both Docling and extraction-service failed: {result.error}")
+            else:
+                # Unknown engine, fall back to document_service
+                logger.warning(f"Unknown triage engine: {engine_type}, falling back to document_service")
+                markdown = await document_service._extract_content(
+                    file_path,
+                    engine=None,
+                )
+                extraction_info = getattr(document_service, '_last_extraction_info', {})
+                return {
+                    "markdown": markdown,
+                    "warnings": [],
+                    "extraction_info": extraction_info,
+                }
 
-        logger.info(
-            f"Queued enhancement for asset {asset.id}: "
-            f"run={enhancement_run.id}, extraction={enhancement_extraction.id}"
-        )
+            # Handle extraction result from local engines
+            if result.success:
+                return {
+                    "markdown": result.content,
+                    "warnings": [],
+                    "extraction_info": {
+                        "engine": engine_type,
+                        "engine_name": result.metadata.get("engine_name", engine_type),
+                        "ok": True,
+                        **(result.metadata or {}),
+                    },
+                }
+            else:
+                raise ValueError(f"Extraction failed: {result.error}")
 
-        return {
-            "queued": True,
-            "run_id": str(enhancement_run.id),
-            "extraction_id": str(enhancement_extraction.id),
-        }
+        except Exception as e:
+            logger.error(f"Triage engine extraction failed: {e}")
+            raise
 
 
 # Singleton instance
