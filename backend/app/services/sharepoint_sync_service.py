@@ -1150,15 +1150,36 @@ class SharePointSyncService:
         # =================================================================
         # DELTA SYNC DECISION
         # =================================================================
-        # Determine if we should use delta sync:
-        # 1. use_delta parameter takes precedence if specified
-        # 2. Otherwise use config.delta_enabled setting
-        # 3. Must have a valid delta token (unless doing initial capture)
-        # 4. full_sync=True forces full enumeration
-        should_use_delta = use_delta if use_delta is not None else config.delta_enabled
+        # Incremental syncs (full_sync=False) should always use delta when possible:
+        # 1. use_delta parameter takes precedence if explicitly specified
+        # 2. Otherwise, incremental syncs default to delta (if token available)
+        # 3. full_sync=True always does full enumeration
+        # 4. Must have a valid delta token to actually use delta
+        #
+        # The config.delta_enabled setting controls whether to CAPTURE new delta
+        # tokens during full syncs, not whether to USE them for incremental syncs.
+        if use_delta is not None:
+            # Explicit override
+            should_use_delta = use_delta
+        elif full_sync:
+            # Full sync = full enumeration
+            should_use_delta = False
+        else:
+            # Incremental sync = use delta if we have a token
+            should_use_delta = True
 
-        if should_use_delta and not full_sync and config.delta_token:
+        if should_use_delta and config.delta_token:
             # Use delta sync path for incremental sync
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="progress",
+                message="Using delta sync for incremental changes",
+                context={"phase": "init", "sync_method": "delta"},
+            )
+            await session.commit()
+
             try:
                 return await self._execute_delta_sync(
                     session=session,
@@ -1187,6 +1208,17 @@ class SharePointSyncService:
                 config.delta_token = None
                 config.delta_token_acquired_at = None
                 await session.commit()
+        elif should_use_delta and not config.delta_token:
+            # Wanted to use delta but no token available
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="progress",
+                message="No delta token available - performing full enumeration to establish baseline",
+                context={"phase": "init", "sync_method": "full_enumeration", "reason": "no_delta_token"},
+            )
+            await session.commit()
 
         # =================================================================
         # PHASE 2: CONNECTING & STREAMING SYNC (FULL ENUMERATION)

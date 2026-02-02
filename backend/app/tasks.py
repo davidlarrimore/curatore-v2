@@ -2756,13 +2756,22 @@ async def _sharepoint_sync_async(
     async with database_service.get_session() as session:
         # Start the run
         await run_service.start_run(session, run_id)
+
+        # Determine sync mode for logging
+        if full_sync:
+            sync_mode = "full (re-download all files)"
+        elif use_delta is False:
+            sync_mode = "incremental (full enumeration, delta disabled)"
+        else:
+            sync_mode = "incremental (will use delta if token available)"
+
         await run_log_service.log_event(
             session=session,
             run_id=run_id,
             level="INFO",
             event_type="start",
-            message=f"Starting SharePoint sync (full_sync={full_sync}, use_delta={use_delta})",
-            context={"full_sync": full_sync, "use_delta": use_delta},
+            message=f"Starting SharePoint sync: {sync_mode}",
+            context={"full_sync": full_sync, "use_delta": use_delta, "sync_mode": sync_mode},
         )
         await session.commit()
 
