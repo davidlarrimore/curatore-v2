@@ -1408,7 +1408,7 @@ class SharePointSyncService:
                             level="INFO",
                             event_type="file_download",
                             message=f"Downloaded: {current_file}",
-                            context={"phase": "scanning_and_syncing", "file": current_file, "action": "new"},
+                            context={"phase": "scanning_and_syncing", "file": current_file, "action": "new", "folder": item.get("folder", "")},
                         )
                     elif result == "updated_files":
                         await run_log_service.log_event(
@@ -1417,7 +1417,7 @@ class SharePointSyncService:
                             level="INFO",
                             event_type="file_download",
                             message=f"Updated: {current_file}",
-                            context={"phase": "scanning_and_syncing", "file": current_file, "action": "updated"},
+                            context={"phase": "scanning_and_syncing", "file": current_file, "action": "updated", "folder": item.get("folder", "")},
                         )
 
                 except Exception as e:
@@ -1431,7 +1431,7 @@ class SharePointSyncService:
                         level="ERROR",
                         event_type="file_error",
                         message=f"Failed: {current_file}",
-                        context={"phase": "scanning_and_syncing", "file": current_file, "error": str(e)},
+                        context={"phase": "scanning_and_syncing", "file": current_file, "error": str(e), "folder": item.get("folder", "")},
                     )
 
                 # Update config stats periodically
@@ -1829,7 +1829,7 @@ class SharePointSyncService:
                             level="INFO",
                             event_type="file_delete",
                             message=f"Marked as deleted: {current_file}",
-                            context={"phase": "delta_sync", "file": current_file, "action": "deleted"},
+                            context={"phase": "delta_sync", "file": current_file, "action": "deleted", "folder": item.get("folder", "")},
                         )
                     else:
                         # Download/update file
@@ -1850,7 +1850,7 @@ class SharePointSyncService:
                                 level="INFO",
                                 event_type="file_download",
                                 message=f"Downloaded: {current_file}",
-                                context={"phase": "delta_sync", "file": current_file, "action": "new"},
+                                context={"phase": "delta_sync", "file": current_file, "action": "new", "folder": item.get("folder", "")},
                             )
                         elif result == "updated_files":
                             await run_log_service.log_event(
@@ -1859,7 +1859,7 @@ class SharePointSyncService:
                                 level="INFO",
                                 event_type="file_download",
                                 message=f"Updated: {current_file}",
-                                context={"phase": "delta_sync", "file": current_file, "action": "updated"},
+                                context={"phase": "delta_sync", "file": current_file, "action": "updated", "folder": item.get("folder", "")},
                             )
 
                 except Exception as e:
@@ -1873,7 +1873,7 @@ class SharePointSyncService:
                         level="ERROR",
                         event_type="file_error",
                         message=f"Failed: {current_file}",
-                        context={"phase": "delta_sync", "file": current_file, "error": str(e)},
+                        context={"phase": "delta_sync", "file": current_file, "error": str(e), "folder": item.get("folder", "")},
                     )
 
                 # Update config stats
