@@ -394,11 +394,15 @@ class ExtractionQueueService:
         cutoff = now - timedelta(seconds=activity_timeout)
 
         # Find stale runs (no activity within timeout window)
-        # Includes all run types, not just extraction
+        # Includes most run types, but excludes SharePoint syncs which have
+        # their own Celery time limits and can be blocked by PostgreSQL I/O
         result = await session.execute(
             select(Run)
             .where(and_(
                 Run.status.in_(["submitted", "running"]),
+                # Exclude SharePoint syncs - they have Celery time limits and can
+                # be blocked by database I/O during large syncs (4000+ files)
+                ~Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
                 or_(
                     # No activity recorded - use submitted_to_celery_at or started_at as fallback
                     and_(

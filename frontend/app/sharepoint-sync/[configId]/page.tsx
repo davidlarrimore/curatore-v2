@@ -82,6 +82,9 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
   const [syncMode, setSyncMode] = useState<'all' | 'selected'>(
     (config.sync_config?.selection_mode as 'all' | 'selected') || 'all'
   )
+  const [folderExcludePatterns, setFolderExcludePatterns] = useState(
+    (config.sync_config?.folder_exclude_patterns || []).join(', ')
+  )
   const [includePatterns, setIncludePatterns] = useState(
     (config.sync_config?.include_patterns || []).join(', ')
   )
@@ -118,6 +121,7 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
       setSyncFrequency(config.sync_frequency)
       setRecursive(config.sync_config?.recursive ?? true)
       setSyncMode((config.sync_config?.selection_mode as 'all' | 'selected') || 'all')
+      setFolderExcludePatterns((config.sync_config?.folder_exclude_patterns || []).join(', '))
       setIncludePatterns((config.sync_config?.include_patterns || []).join(', '))
       setExcludePatterns((config.sync_config?.exclude_patterns || []).join(', '))
       setMinModifiedDate(config.sync_config?.min_modified_date || '')
@@ -247,6 +251,15 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
     const wasSelectionMode = config.sync_config?.selection_mode || 'all'
     if (syncMode !== wasSelectionMode) syncConfigUpdates.selection_mode = syncMode
 
+    const newFolderExclude = folderExcludePatterns
+      .split(',')
+      .map((p: string) => p.trim())
+      .filter(Boolean)
+    const oldFolderExclude = config.sync_config?.folder_exclude_patterns || []
+    if (JSON.stringify(newFolderExclude) !== JSON.stringify(oldFolderExclude)) {
+      syncConfigUpdates.folder_exclude_patterns = newFolderExclude
+    }
+
     const newInclude = includePatterns
       .split(',')
       .map((p: string) => p.trim())
@@ -276,7 +289,7 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
     }
 
     return updates
-  }, [name, description, syncFrequency, recursive, syncMode, includePatterns, excludePatterns, minModifiedDate, config])
+  }, [name, description, syncFrequency, recursive, syncMode, folderExcludePatterns, includePatterns, excludePatterns, minModifiedDate, config])
 
   // Handle save attempt
   const handleSave = async (resetAssets: boolean = false) => {
@@ -670,6 +683,45 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
                       </button>
                     </div>
 
+                    {/* Folder Filters */}
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-3">
+                        Folder Filters
+                      </h4>
+                      <div className="space-y-4">
+                        <div>
+                          <div className="flex items-center gap-2 mb-1">
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                              Exclude Folders (comma-separated)
+                            </label>
+                            <div className="relative group">
+                              <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                              <div className="absolute left-0 top-full mt-2 px-3 py-2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-64 z-20 shadow-lg">
+                                <div className="absolute left-4 bottom-full w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-gray-900 dark:border-b-gray-700" />
+                                <p className="mb-2">Folders matching these patterns will be skipped entirely, including all subfolders. Patterns match folder names only.</p>
+                                <p className="font-medium mb-1">Examples:</p>
+                                <ul className="list-disc list-inside space-y-0.5">
+                                  <li>*Archive* - Contains &quot;Archive&quot;</li>
+                                  <li>_Old* - Starts with &quot;_Old&quot;</li>
+                                  <li>temp - Exact match</li>
+                                </ul>
+                              </div>
+                            </div>
+                          </div>
+                          <input
+                            type="text"
+                            value={folderExcludePatterns}
+                            onChange={e => setFolderExcludePatterns(e.target.value)}
+                            placeholder="e.g., *Archive*, _Old*, temp"
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                          />
+                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            Skip folders matching these patterns (including their contents)
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+
                     {/* File Filters */}
                     <div>
                       <h4 className="text-sm font-medium text-gray-900 dark:text-white mb-3">
@@ -677,9 +729,24 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
                       </h4>
                       <div className="space-y-4">
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                            Include Patterns (comma-separated)
-                          </label>
+                          <div className="flex items-center gap-2 mb-1">
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                              Include Patterns (comma-separated)
+                            </label>
+                            <div className="relative group">
+                              <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                              <div className="absolute left-0 top-full mt-2 px-3 py-2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-64 z-20 shadow-lg">
+                                <div className="absolute left-4 bottom-full w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-gray-900 dark:border-b-gray-700" />
+                                <p className="mb-2">Only files matching at least one pattern will be synced. Leave empty to include all files.</p>
+                                <p className="font-medium mb-1">Examples:</p>
+                                <ul className="list-disc list-inside space-y-0.5">
+                                  <li>*.pdf - All PDF files</li>
+                                  <li>*.doc* - DOC and DOCX</li>
+                                  <li>Report* - Starts with &quot;Report&quot;</li>
+                                </ul>
+                              </div>
+                            </div>
+                          </div>
                           <input
                             type="text"
                             value={includePatterns}
@@ -693,9 +760,24 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
                         </div>
 
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                            Exclude Patterns (comma-separated)
-                          </label>
+                          <div className="flex items-center gap-2 mb-1">
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                              Exclude Patterns (comma-separated)
+                            </label>
+                            <div className="relative group">
+                              <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                              <div className="absolute left-0 top-full mt-2 px-3 py-2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-64 z-20 shadow-lg">
+                                <div className="absolute left-4 bottom-full w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-gray-900 dark:border-b-gray-700" />
+                                <p className="mb-2">Files matching any pattern will be skipped. Applied after include patterns.</p>
+                                <p className="font-medium mb-1">Examples:</p>
+                                <ul className="list-disc list-inside space-y-0.5">
+                                  <li>~$* - Office temp files</li>
+                                  <li>*.tmp - Temp files</li>
+                                  <li>.DS_Store - macOS files</li>
+                                </ul>
+                              </div>
+                            </div>
+                          </div>
                           <input
                             type="text"
                             value={excludePatterns}
@@ -709,9 +791,18 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
                         </div>
 
                         <div>
-                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                            Do not sync files older than
-                          </label>
+                          <div className="flex items-center gap-2 mb-1">
+                            <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                              Do not sync files older than
+                            </label>
+                            <div className="relative group">
+                              <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                              <div className="absolute left-0 top-full mt-2 px-3 py-2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-64 z-20 shadow-lg">
+                                <div className="absolute left-4 bottom-full w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-gray-900 dark:border-b-gray-700" />
+                                <p>Only sync files modified on or after this date. Older files will be skipped. Existing synced files older than this date will be marked as deleted on next sync.</p>
+                              </div>
+                            </div>
+                          </div>
                           <input
                             type="date"
                             value={minModifiedDate}

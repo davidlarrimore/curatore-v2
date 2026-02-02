@@ -20,6 +20,7 @@ import {
   CheckSquare,
   Square,
   RefreshCw,
+  Info,
 } from 'lucide-react'
 
 interface Connection {
@@ -64,6 +65,7 @@ function NewSharePointSyncContent() {
   const [syncDescription, setSyncDescription] = useState('')
   const [syncFrequency, setSyncFrequency] = useState('manual')
   const [recursive, setRecursive] = useState(true)
+  const [folderExcludePatterns, setFolderExcludePatterns] = useState('')
   const [includePatterns, setIncludePatterns] = useState('')
   const [excludePatterns, setExcludePatterns] = useState('~$*,*.tmp')
   const [minModifiedDate, setMinModifiedDate] = useState('')
@@ -183,6 +185,10 @@ function NewSharePointSyncContent() {
 
       if (excludePatterns) {
         syncConfig.exclude_patterns = excludePatterns.split(',').map(p => p.trim()).filter(Boolean)
+      }
+
+      if (folderExcludePatterns) {
+        syncConfig.folder_exclude_patterns = folderExcludePatterns.split(',').map(p => p.trim()).filter(Boolean)
       }
 
       if (minModifiedDate) {
@@ -712,10 +718,58 @@ function NewSharePointSyncContent() {
                   </label>
                 </div>
 
+                {/* Folder Filters */}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Include Patterns (comma-separated)
-                  </label>
+                  <div className="flex items-center gap-2 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Exclude Folders (comma-separated)
+                    </label>
+                    <div className="relative group">
+                      <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                      <div className="absolute left-0 top-full mt-2 px-3 py-2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-64 z-20 shadow-lg">
+                        <div className="absolute left-4 bottom-full w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-gray-900 dark:border-b-gray-700" />
+                        <p className="mb-2">Folders matching these patterns will be skipped entirely, including all subfolders. Patterns match folder names only.</p>
+                        <p className="font-medium mb-1">Examples:</p>
+                        <ul className="list-disc list-inside space-y-0.5">
+                          <li>*Archive* - Contains &quot;Archive&quot;</li>
+                          <li>_Old* - Starts with &quot;_Old&quot;</li>
+                          <li>temp - Exact match</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
+                  <input
+                    type="text"
+                    value={folderExcludePatterns}
+                    onChange={(e) => setFolderExcludePatterns(e.target.value)}
+                    placeholder="e.g., *Archive*, _Old*, temp"
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Skip folders matching these patterns (including their contents)
+                  </p>
+                </div>
+
+                {/* File Filters */}
+                <div>
+                  <div className="flex items-center gap-2 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Include File Patterns (comma-separated)
+                    </label>
+                    <div className="relative group">
+                      <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                      <div className="absolute left-0 top-full mt-2 px-3 py-2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-64 z-20 shadow-lg">
+                        <div className="absolute left-4 bottom-full w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-gray-900 dark:border-b-gray-700" />
+                        <p className="mb-2">Only files matching at least one pattern will be synced. Leave empty to include all files.</p>
+                        <p className="font-medium mb-1">Examples:</p>
+                        <ul className="list-disc list-inside space-y-0.5">
+                          <li>*.pdf - All PDF files</li>
+                          <li>*.doc* - DOC and DOCX</li>
+                          <li>Report* - Starts with &quot;Report&quot;</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
                   <input
                     type="text"
                     value={includePatterns}
@@ -729,9 +783,24 @@ function NewSharePointSyncContent() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Exclude Patterns (comma-separated)
-                  </label>
+                  <div className="flex items-center gap-2 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Exclude File Patterns (comma-separated)
+                    </label>
+                    <div className="relative group">
+                      <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                      <div className="absolute left-0 top-full mt-2 px-3 py-2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-64 z-20 shadow-lg">
+                        <div className="absolute left-4 bottom-full w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-gray-900 dark:border-b-gray-700" />
+                        <p className="mb-2">Files matching any pattern will be skipped. Applied after include patterns.</p>
+                        <p className="font-medium mb-1">Examples:</p>
+                        <ul className="list-disc list-inside space-y-0.5">
+                          <li>~$* - Office temp files</li>
+                          <li>*.tmp - Temp files</li>
+                          <li>.DS_Store - macOS files</li>
+                        </ul>
+                      </div>
+                    </div>
+                  </div>
                   <input
                     type="text"
                     value={excludePatterns}
@@ -742,9 +811,18 @@ function NewSharePointSyncContent() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                    Do not sync files older than
-                  </label>
+                  <div className="flex items-center gap-2 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                      Do not sync files older than
+                    </label>
+                    <div className="relative group">
+                      <Info className="w-4 h-4 text-gray-400 cursor-help" />
+                      <div className="absolute left-0 top-full mt-2 px-3 py-2 bg-gray-900 dark:bg-gray-700 text-white text-xs rounded-lg opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-all duration-200 w-64 z-20 shadow-lg">
+                        <div className="absolute left-4 bottom-full w-0 h-0 border-l-4 border-r-4 border-b-4 border-transparent border-b-gray-900 dark:border-b-gray-700" />
+                        <p>Only sync files modified on or after this date. Older files will be skipped. Existing synced files older than this date will be marked as deleted on next sync.</p>
+                      </div>
+                    </div>
+                  </div>
                   <input
                     type="date"
                     value={minModifiedDate}
@@ -799,6 +877,14 @@ function NewSharePointSyncContent() {
                       {recursive ? 'Yes' : 'No'}
                     </span>
                   </div>
+                  {folderExcludePatterns && (
+                    <div className="flex items-start justify-between">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">Excluded Folders</span>
+                      <span className="text-sm font-medium text-amber-600 dark:text-amber-400 text-right max-w-xs">
+                        {folderExcludePatterns}
+                      </span>
+                    </div>
+                  )}
                   {minModifiedDate && (
                     <div className="flex items-center justify-between">
                       <span className="text-sm text-gray-500 dark:text-gray-400">Skip files older than</span>

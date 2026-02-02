@@ -72,6 +72,16 @@ logger = logging.getLogger("curatore.sharepoint_sync")
 
 
 # =============================================================================
+# BATCH COMMIT CONFIGURATION
+# =============================================================================
+
+# Commit database changes every N files to reduce PostgreSQL checkpoint pressure.
+# Large syncs (4000+ files) with per-file commits cause massive WAL writes and
+# checkpoint overload. Batching commits reduces I/O and prevents worker stalls.
+BATCH_COMMIT_SIZE = 50
+
+
+# =============================================================================
 # FILE DOWNLOAD WITH RETRY LOGIC
 # =============================================================================
 
@@ -1106,6 +1116,7 @@ class SharePointSyncService:
         recursive = sync_settings.get("recursive", True)
         include_patterns = sync_settings.get("include_patterns", [])
         exclude_patterns = sync_settings.get("exclude_patterns", [])
+        folder_exclude_patterns = sync_settings.get("folder_exclude_patterns", [])
         max_file_size_mb = sync_settings.get("max_file_size_mb", 100)
 
         # Parse min_modified_date filter (skip files older than this date)
@@ -1145,6 +1156,7 @@ class SharePointSyncService:
                 "folder_url": config.folder_url,
                 "recursive": recursive,
                 "exclude_patterns": exclude_patterns,
+                "folder_exclude_patterns": folder_exclude_patterns,
                 "selection_mode": selection_mode,
                 "selected_folders": len(selected_folders),
                 "selected_files": len(selected_files),
@@ -1257,6 +1269,7 @@ class SharePointSyncService:
             "updated_files": 0,
             "unchanged_files": 0,
             "skipped_files": 0,
+            "skipped_folders": 0,
             "failed_files": 0,
             "deleted_detected": 0,
             "errors": [],
@@ -1281,6 +1294,7 @@ class SharePointSyncService:
             "unchanged_files": 0,
             "failed_files": 0,
             "deleted_count": 0,
+            "skipped_folders": 0,
             "current_file": None,
             "folders_scanned": 0,
             "phase": "scanning_and_syncing",
@@ -1314,6 +1328,7 @@ class SharePointSyncService:
                         "updated_files": results["updated_files"],
                         "unchanged_files": results["unchanged_files"],
                         "skipped_files": results["skipped_files"],
+                        "skipped_folders": results["skipped_folders"],
                         "failed_files": results["failed_files"],
                     },
                 )
@@ -1333,6 +1348,11 @@ class SharePointSyncService:
                 )
                 await session.commit()
 
+        # Callback for skipped folders (due to folder_exclude_patterns)
+        async def on_folder_skipped(folder_name: str, folder_path: str):
+            results["skipped_folders"] += 1
+            logger.debug(f"Skipped excluded folder: {folder_path}")
+
         try:
             # Stream items and process them as they're discovered
             async for folder_data, item in sharepoint_inventory_stream(
@@ -1344,6 +1364,8 @@ class SharePointSyncService:
                 organization_id=organization_id,
                 session=session,
                 on_folder_scanned=on_folder_scanned,
+                on_folder_skipped=on_folder_skipped,
+                folder_exclude_patterns=folder_exclude_patterns,
             ):
                 # First yield is folder info
                 if folder_data is not None:
@@ -1448,7 +1470,11 @@ class SharePointSyncService:
                     "folders_scanned": folders_scanned,
                     "phase": "scanning_and_syncing",
                 }
-                await session.commit()
+
+                # Batch commit every N files to reduce PostgreSQL checkpoint pressure
+                # (per-file commits with 4000+ files cause massive WAL writes)
+                if processed_files % BATCH_COMMIT_SIZE == 0:
+                    await session.commit()
 
         except Exception as e:
             logger.error(f"Streaming sync failed: {e}")
@@ -1496,6 +1522,7 @@ class SharePointSyncService:
                 "updated_files": results["updated_files"],
                 "unchanged_files": results["unchanged_files"],
                 "skipped_files": results["skipped_files"],
+                "skipped_folders": results["skipped_folders"],
                 "failed_files": results["failed_files"],
             },
         )
@@ -1590,6 +1617,7 @@ class SharePointSyncService:
                 "updated_files": results["updated_files"],
                 "unchanged_files": results["unchanged_files"],
                 "skipped_files": results["skipped_files"],
+                "skipped_folders": results["skipped_folders"],
                 "failed_files": results["failed_files"],
                 "deleted_detected": deleted_count,
             },
@@ -1609,6 +1637,7 @@ class SharePointSyncService:
             "unchanged_files": results["unchanged_files"],
             "failed_files": results["failed_files"],
             "deleted_count": deleted_count,
+            "skipped_folders": results["skipped_folders"],
             "folders_scanned": folders_scanned,
             "current_file": None,
             "phase": "completed",
@@ -1624,6 +1653,7 @@ class SharePointSyncService:
             "updated_files": results["updated_files"],
             "unchanged_files": results["unchanged_files"],
             "skipped_files": results["skipped_files"],
+            "skipped_folders": results["skipped_folders"],
             "failed_files": results["failed_files"],
             "deleted_detected": deleted_count,
             "folders_scanned": folders_scanned,
@@ -1741,6 +1771,7 @@ class SharePointSyncService:
             "updated_files": 0,
             "unchanged_files": 0,
             "skipped_files": 0,
+            "skipped_folders": 0,
             "failed_files": 0,
             "deleted_detected": 0,
             "errors": [],
@@ -1757,6 +1788,7 @@ class SharePointSyncService:
             "unchanged_files": 0,
             "failed_files": 0,
             "deleted_count": 0,
+            "skipped_folders": 0,
             "current_file": None,
             "phase": "delta_sync",
         }
@@ -1937,6 +1969,7 @@ class SharePointSyncService:
             "updated_files": results["updated_files"],
             "unchanged_files": results["unchanged_files"],
             "skipped_files": results["skipped_files"],
+            "skipped_folders": results["skipped_folders"],
             "failed_files": results["failed_files"],
             "deleted_detected": results["deleted_detected"],
             "sync_mode": "delta",

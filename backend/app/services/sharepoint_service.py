@@ -460,6 +460,8 @@ async def _stream_items(
     page_size: int,
     max_items: Optional[int],
     on_folder_scanned: Optional[callable] = None,
+    on_folder_skipped: Optional[callable] = None,
+    folder_exclude_patterns: Optional[List[str]] = None,
     retry_delay_seconds: int = 30,
     max_retries: int = 3,
 ):
@@ -473,6 +475,7 @@ async def _stream_items(
     - Automatic token refresh before expiration (at 50 minutes)
     - Retry logic for transient errors with configurable delay
     - Handles 401 errors by refreshing token and retrying
+    - Folder filtering to skip entire folder hierarchies
 
     Args:
         client: httpx AsyncClient for making requests
@@ -486,6 +489,9 @@ async def _stream_items(
         max_items: Maximum items to return (None for unlimited)
         on_folder_scanned: Optional callback called after each folder is scanned
                           with (folder_path, files_found, folders_pending)
+        on_folder_skipped: Optional callback called when a folder is skipped due
+                          to exclude patterns, with (folder_name, folder_path)
+        folder_exclude_patterns: Optional list of fnmatch patterns to exclude folders
         retry_delay_seconds: Seconds to wait between retries (default: 30)
         max_retries: Maximum retry attempts for transient errors (default: 3)
 
@@ -617,7 +623,21 @@ async def _stream_items(
         for raw in raw_items:
             is_folder = "folder" in raw
             if is_folder and recursive:
-                next_path = f"{folder_path}/{raw.get('name', '')}".strip("/")
+                folder_name = raw.get('name', '')
+                next_path = f"{folder_path}/{folder_name}".strip("/")
+
+                # Check if folder should be excluded
+                if folder_exclude_patterns:
+                    import fnmatch
+                    if any(fnmatch.fnmatch(folder_name, p) for p in folder_exclude_patterns):
+                        # Folder matches exclude pattern - skip it entirely
+                        if on_folder_skipped:
+                            try:
+                                await on_folder_skipped(folder_name, next_path)
+                            except Exception:
+                                pass  # Don't let callback errors stop the scan
+                        continue  # Skip - don't add to pending queue
+
                 pending.append((raw.get("id", ""), next_path))
 
             index += 1
@@ -772,6 +792,8 @@ async def sharepoint_inventory_stream(
     organization_id: Optional[UUID] = None,
     session: Optional[AsyncSession] = None,
     on_folder_scanned: Optional[callable] = None,
+    on_folder_skipped: Optional[callable] = None,
+    folder_exclude_patterns: Optional[List[str]] = None,
     retry_delay_seconds: int = 30,
     max_retries: int = 3,
 ):
@@ -785,6 +807,7 @@ async def sharepoint_inventory_stream(
     - Automatic token refresh for long-running syncs (refreshes at 50 minutes)
     - Retry logic for transient errors with configurable delay
     - Handles 401 errors by refreshing token and retrying
+    - Folder filtering to skip entire folder hierarchies
 
     Args:
         folder_url: SharePoint folder URL
@@ -795,6 +818,8 @@ async def sharepoint_inventory_stream(
         organization_id: Optional organization ID for database connection lookup
         session: Optional database session for connection lookup
         on_folder_scanned: Optional callback(folder_path, files_found, folders_pending)
+        on_folder_skipped: Optional callback(folder_name, folder_path) when folder excluded
+        folder_exclude_patterns: Optional list of fnmatch patterns to exclude folders
         retry_delay_seconds: Seconds to wait between retries (default: 30)
         max_retries: Maximum retry attempts for transient errors (default: 3)
 
@@ -874,6 +899,8 @@ async def sharepoint_inventory_stream(
             page_size,
             max_items,
             on_folder_scanned,
+            on_folder_skipped=on_folder_skipped,
+            folder_exclude_patterns=folder_exclude_patterns,
             retry_delay_seconds=retry_delay_seconds,
             max_retries=max_retries,
         ):
