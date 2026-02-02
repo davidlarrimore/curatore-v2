@@ -1,7 +1,7 @@
 # Curatore v2 - User Guide
 
 **Version**: 2.0.0
-**Last Updated**: 2026-01-13
+**Last Updated**: 2026-02-02
 
 ---
 
@@ -389,68 +389,154 @@ To download multiple documents:
 
 ### Overview
 
-Curatore can directly access files from Microsoft SharePoint, eliminating manual download/upload steps.
+Curatore provides automatic synchronization with Microsoft SharePoint folders. Once configured, files are automatically imported, extracted, and indexed. The sync system supports efficient incremental updates using Microsoft Graph delta queries.
 
 ### Prerequisites
 
-- SharePoint connection configured (admin)
-- Permissions to access target SharePoint site
-- SharePoint site URL
+- Microsoft Graph API connection configured (admin) with SharePoint permissions
+- Permissions to access target SharePoint site/folder
+- SharePoint folder URL
 
-### Listing SharePoint Files
+### Setting Up a SharePoint Sync
 
-1. **Navigate** to **SharePoint** → **Browse Files**
-2. **Enter folder URL**:
+1. **Navigate** to **SharePoint Sync** in the sidebar
+2. **Click "New Sync Configuration"**
+3. **Select a Microsoft Graph connection** (must have SharePoint permissions)
+4. **Enter the SharePoint folder URL**:
    ```
    https://yourcompany.sharepoint.com/sites/docs/Shared Documents/Reports
    ```
-3. **Configure options**:
-   - **Recursive**: Include subfolders
-   - **Include Folders**: Show folder structure
-   - **Page Size**: Files per page (default: 200)
+5. **Configure sync settings**:
+   - **Name**: Descriptive name for the sync configuration
+   - **Description**: Optional description
+   - **Sync Frequency**: Manual, Hourly, or Daily
 
-4. **Click "List Files"**
-5. **View results**:
-   - File index number
-   - File name and type
-   - File size
-   - Last modified date
-   - Folder path
+6. **Click "Create"** to set up the sync configuration
 
-### Downloading SharePoint Files
+### Sync Types
 
-After listing files:
+#### Full Sync
 
-1. **Select files** by index numbers (e.g., `1,3,5-10`)
-2. **Configure options**:
-   - **Preserve Folders**: Maintain folder structure
-   - **Skip Duplicates**: Don't re-download existing files
+A full sync downloads and processes all files in the configured SharePoint folder:
 
-3. **Click "Download Selected"**
-4. **Monitor progress**:
-   - Download count
-   - Total size
-   - Duration
+- **When to use**: First-time sync, recovering from errors, or ensuring complete synchronization
+- **How it works**: Enumerates all files in the folder and subfolders, downloads each file, and creates assets
+- **Duration**: Depends on folder size; can take a long time for large folders
+- **Result**: Establishes a delta token for future incremental syncs
 
-5. **Files saved** to batch directory for processing
+#### Incremental Sync
 
-### Processing SharePoint Files
+An incremental sync only processes changes since the last sync:
 
-After downloading:
+- **When to use**: Regular ongoing synchronization (most common)
+- **Requirement**: A full sync must complete first to establish a delta token
+- **How it works**: Uses Microsoft Graph delta queries to detect only new, modified, or deleted files
+- **Efficiency**: Much faster than full sync - only processes changes
+- **UI Note**: The "Incremental Sync" button is disabled until a full sync completes
 
-1. **Navigate** to **Batch Processing**
-2. **See downloaded files** in batch list
-3. **Click "Process Batch"** to process all files
-4. **Monitor batch progress**
-5. **View results** when complete
+### Running a Sync
 
-### SharePoint Best Practices
+1. **Navigate** to your sync configuration detail page
+2. **Choose sync type**:
+   - **Full Sync**: Downloads all files (use for first sync or recovery)
+   - **Incremental Sync**: Only processes changes (requires completed full sync)
 
-- **Test connection** before large downloads
-- **Use recursive mode** carefully (can download many files)
-- **Check file sizes** before downloading
-- **Use batch processing** for multiple files
-- **Set quality thresholds** appropriate for your use case
+3. **Monitor progress** in the Job Manager or on the sync configuration page
+4. **View results**: Synced files appear as assets and are automatically extracted and indexed
+
+### Sync Status and Monitoring
+
+The sync configuration page shows:
+
+- **Sync Status**: Active, Syncing, Archived, or Deleting
+- **Last Sync**: When the last sync completed
+- **Statistics**:
+  - Total synced files
+  - Deleted files detected
+  - Failed files
+  - Storage size
+
+- **Sync History**: Recent sync jobs with status and duration
+
+### Handling Long-Running Syncs
+
+For large SharePoint folders, syncs may run for extended periods. The system includes:
+
+- **Automatic Token Refresh**: Microsoft Graph tokens (1-hour expiry) are automatically refreshed during long syncs
+- **Retry Logic**: Transient network errors (disconnects, timeouts) automatically retry with 30-second delays
+- **Progress Tracking**: Real-time progress updates in the Job Manager
+- **Cancellation**: Jobs can be cancelled from the Job Manager if needed
+
+### File Change Detection
+
+When using incremental sync, the system detects:
+
+- **New files**: Automatically downloaded and processed
+- **Modified files**: Re-downloaded and a new asset version created
+- **Deleted files**: Marked as deleted (assets preserved for audit trail)
+- **Moved/renamed files**: Detected and tracked appropriately
+
+### Managing Sync Configurations
+
+#### Enabling/Disabling Sync
+
+- **Disable**: Pauses automatic syncs while preserving configuration and files
+- **Enable**: Resumes sync capability
+
+#### Archiving
+
+- **Archive**: Stops syncing and removes files from search index
+- **Archived files** remain accessible but won't appear in search results
+
+#### Deleting
+
+- **Delete**: Permanently removes sync configuration and all associated assets
+- **Warning**: This action is irreversible
+
+### SharePoint Sync Best Practices
+
+- **Start with Full Sync**: Always run a full sync first to establish the delta token baseline
+- **Use Incremental for Regular Syncs**: After the initial full sync, use incremental syncs for efficiency
+- **Monitor Large Syncs**: For folders with thousands of files, monitor progress in Job Manager
+- **Test with Small Folders**: Start with a small folder to verify configuration before large syncs
+- **Use Appropriate Frequency**: Set sync frequency based on how often files change
+- **Review Sync Errors**: Check failed files and sync errors in the configuration detail page
+
+### Troubleshooting SharePoint Sync
+
+#### Incremental Sync Button Disabled
+
+**Cause**: No full sync has completed yet (no delta token)
+
+**Solution**: Run a Full Sync first to establish the baseline
+
+#### Sync Fails with Authentication Error
+
+**Cause**: Token expired or connection permissions changed
+
+**Solutions**:
+1. Verify Microsoft Graph connection is still valid
+2. Test the connection in Connection Management
+3. Re-authorize if permissions were revoked
+
+#### Sync Stuck or Taking Too Long
+
+**Cause**: Large folder, network issues, or SharePoint throttling
+
+**Solutions**:
+1. Check Job Manager for progress updates
+2. Cancel and retry if no progress for extended period
+3. Check if SharePoint site has throttling limits
+4. For very large folders, consider syncing subfolders separately
+
+#### Files Not Appearing After Sync
+
+**Cause**: Extraction still in progress or failed
+
+**Solutions**:
+1. Check the asset status in the sync configuration detail page
+2. View extraction queue in Job Manager
+3. Check for extraction errors on individual assets
 
 ---
 
@@ -1101,29 +1187,47 @@ Configure in **Settings** → **Storage** → **Retention Policies**
 4. Check service isn't under maintenance
 5. Contact admin to check service status
 
-### SharePoint Integration Issues
+### SharePoint Sync Issues
 
-#### Cannot List Files
+#### Sync Configuration Creation Fails
 
-**Symptoms**: SharePoint inventory fails
+**Symptoms**: Cannot create new sync configuration
 
 **Solutions**:
-1. Verify SharePoint connection configured
-2. Test connection
-3. Check folder URL format
+1. Verify Microsoft Graph connection is configured and active
+2. Test the connection in Connection Management
+3. Check folder URL format (must be valid SharePoint URL)
 4. Verify permissions on SharePoint site
-5. Check folder exists and has files
+5. Check folder exists and is accessible
 
-#### Download Fails
+#### Sync Fails with Token Expiration
 
-**Symptoms**: SharePoint download returns error
+**Symptoms**: Sync fails after running for ~1 hour with 401 error
 
 **Solutions**:
-1. Verify file indices are valid
-2. Check disk space available
-3. Verify permissions to write to batch directory
-4. Try smaller batch of files
-5. Check network connection
+1. This should be handled automatically by token refresh
+2. If persists, check Microsoft Graph connection validity
+3. Re-authorize the connection if needed
+4. Check if Azure AD app permissions changed
+
+#### Incremental Sync Shows No Changes
+
+**Symptoms**: Incremental sync completes but no files processed
+
+**Solutions**:
+1. This is normal if no files changed since last sync
+2. Verify files were actually modified in SharePoint
+3. Check if sync is looking at correct folder
+4. Run a Full Sync to reset delta token if needed
+
+#### Sync Cancellation
+
+**Symptoms**: Need to stop a running sync
+
+**Solutions**:
+1. Go to Job Manager (/admin/queue)
+2. Find the sync job and click Cancel
+3. Or use the "Cancel Stuck" button on the sync config page
 
 ### Performance Issues
 
@@ -1238,5 +1342,5 @@ If you cannot resolve an issue:
 ---
 
 **Version**: 2.0.0
-**Last Updated**: 2026-01-13
+**Last Updated**: 2026-02-02
 **Maintained by**: Curatore Development Team
