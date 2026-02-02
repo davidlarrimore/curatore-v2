@@ -101,6 +101,8 @@ async def list_assets(
                     created_at=a.created_at,
                     updated_at=a.updated_at,
                     created_by=str(a.created_by) if a.created_by else None,
+                    extraction_tier=a.extraction_tier,
+                    indexed_at=a.indexed_at,
                 )
                 for a in assets
             ],
@@ -254,6 +256,8 @@ async def get_asset(
             created_at=asset.created_at,
             updated_at=asset.updated_at,
             created_by=str(asset.created_by) if asset.created_by else None,
+            extraction_tier=asset.extraction_tier,
+            indexed_at=asset.indexed_at,
         )
 
 

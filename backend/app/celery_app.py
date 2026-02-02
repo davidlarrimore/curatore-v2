@@ -66,6 +66,8 @@ app.conf.update(
         # EXTRACTION QUEUE - Document extraction with triage-based routing
         # =================================================================
         "app.tasks.execute_extraction_task": {"queue": "extraction"},
+        # Index task runs after extraction, uses same queue
+        "app.tasks.index_asset_task": {"queue": "extraction"},
 
         # =================================================================
         # SAM QUEUE - SAM.gov API operations

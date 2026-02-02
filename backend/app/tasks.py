@@ -15,6 +15,7 @@ from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 from celery import shared_task
 from sqlalchemy import select, and_
 
+from .celery_app import app as celery_app
 from .services.database_service import database_service
 from .services.extraction_orchestrator import extraction_orchestrator
 from .services.config_loader import config_loader
@@ -414,11 +415,11 @@ async def _check_extraction_timeouts_async() -> Dict[str, Any]:
 
 
 # ============================================================================
-# OPENSEARCH INDEXING TASKS (Phase 6)
+# SEARCH INDEXING TASKS
 # ============================================================================
 
 
-@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
 def index_asset_task(
     self,
     asset_id: str,
