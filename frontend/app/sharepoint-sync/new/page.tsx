@@ -66,6 +66,7 @@ function NewSharePointSyncContent() {
   const [recursive, setRecursive] = useState(true)
   const [includePatterns, setIncludePatterns] = useState('')
   const [excludePatterns, setExcludePatterns] = useState('~$*,*.tmp')
+  const [minModifiedDate, setMinModifiedDate] = useState('')
 
   // Load connections
   const loadConnections = useCallback(async () => {
@@ -182,6 +183,10 @@ function NewSharePointSyncContent() {
 
       if (excludePatterns) {
         syncConfig.exclude_patterns = excludePatterns.split(',').map(p => p.trim()).filter(Boolean)
+      }
+
+      if (minModifiedDate) {
+        syncConfig.min_modified_date = minModifiedDate
       }
 
       let syncConfigId: string | null = null
@@ -735,6 +740,21 @@ function NewSharePointSyncContent() {
                     className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white placeholder-gray-400 focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
                   />
                 </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                    Do not sync files older than
+                  </label>
+                  <input
+                    type="date"
+                    value={minModifiedDate}
+                    onChange={(e) => setMinModifiedDate(e.target.value)}
+                    className="w-full px-4 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                  />
+                  <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Leave empty to sync all files regardless of modification date
+                  </p>
+                </div>
               </div>
             </div>
           )}
@@ -779,6 +799,14 @@ function NewSharePointSyncContent() {
                       {recursive ? 'Yes' : 'No'}
                     </span>
                   </div>
+                  {minModifiedDate && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">Skip files older than</span>
+                      <span className="text-sm font-medium text-gray-900 dark:text-white">
+                        {new Date(minModifiedDate).toLocaleDateString()}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-500 dark:text-gray-400">Sync Mode</span>
                     <span className="text-sm font-medium text-gray-900 dark:text-white">

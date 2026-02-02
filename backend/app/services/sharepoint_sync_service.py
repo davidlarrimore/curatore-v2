@@ -1108,6 +1108,19 @@ class SharePointSyncService:
         exclude_patterns = sync_settings.get("exclude_patterns", [])
         max_file_size_mb = sync_settings.get("max_file_size_mb", 100)
 
+        # Parse min_modified_date filter (skip files older than this date)
+        min_modified_date: Optional[datetime] = None
+        min_modified_date_str = sync_settings.get("min_modified_date")
+        if min_modified_date_str:
+            try:
+                from dateutil.parser import parse as parse_date
+                min_modified_date = parse_date(min_modified_date_str)
+                # Convert to naive UTC for consistent comparison
+                if min_modified_date.tzinfo is not None:
+                    min_modified_date = min_modified_date.astimezone(timezone.utc).replace(tzinfo=None)
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Could not parse min_modified_date '{min_modified_date_str}': {e}")
+
         # Selection mode: 'all' syncs everything, 'selected' uses folder/file selection
         selection_mode = sync_settings.get("selection_mode", "all")
 
@@ -1135,6 +1148,7 @@ class SharePointSyncService:
                 "selection_mode": selection_mode,
                 "selected_folders": len(selected_folders),
                 "selected_files": len(selected_files),
+                "min_modified_date": min_modified_date.isoformat() if min_modified_date else None,
             },
         )
         await session.commit()
@@ -1189,6 +1203,7 @@ class SharePointSyncService:
                     include_patterns=include_patterns,
                     exclude_patterns=exclude_patterns,
                     max_file_size_mb=max_file_size_mb,
+                    min_modified_date=min_modified_date,
                     has_selection_filter=has_selection_filter,
                     selected_folders=selected_folders,
                     selected_file_ids=selected_file_ids,
@@ -1351,7 +1366,7 @@ class SharePointSyncService:
                     continue
 
                 # Skip if item doesn't pass filters
-                if not self._item_passes_filter(item, include_patterns, exclude_patterns, max_file_size_mb):
+                if not self._item_passes_filter(item, include_patterns, exclude_patterns, max_file_size_mb, min_modified_date):
                     results["skipped_files"] += 1
                     continue
 
@@ -1671,6 +1686,7 @@ class SharePointSyncService:
         include_patterns: List[str],
         exclude_patterns: List[str],
         max_file_size_mb: int,
+        min_modified_date: Optional[datetime],
         has_selection_filter: bool,
         selected_folders: List[str],
         selected_file_ids: set,
@@ -1689,6 +1705,7 @@ class SharePointSyncService:
             include_patterns: File patterns to include
             exclude_patterns: File patterns to exclude
             max_file_size_mb: Maximum file size in MB
+            min_modified_date: Skip files older than this date
             has_selection_filter: Whether folder/file selection is active
             selected_folders: Selected folder paths
             selected_file_ids: Set of selected file IDs
@@ -1782,7 +1799,7 @@ class SharePointSyncService:
                     continue
 
                 # Apply filters
-                if not self._item_passes_filter(item, include_patterns, exclude_patterns, max_file_size_mb):
+                if not self._item_passes_filter(item, include_patterns, exclude_patterns, max_file_size_mb, min_modified_date):
                     results["skipped_files"] += 1
                     continue
 
@@ -2119,6 +2136,7 @@ class SharePointSyncService:
         include_patterns: List[str],
         exclude_patterns: List[str],
         max_file_size_mb: int,
+        min_modified_date: Optional[datetime] = None,
     ) -> bool:
         """
         Check if a single item passes the filter criteria.
@@ -2129,9 +2147,11 @@ class SharePointSyncService:
         3. Skip files matching exclude patterns
         4. Skip files not matching include patterns (if specified)
         5. Skip non-extractable file types (video, audio, etc.)
+        6. Skip files older than min_modified_date (if specified)
         """
         import fnmatch
         from pathlib import Path
+        from dateutil.parser import parse as parse_date
 
         # Skip folders
         if item.get("type") == "folder":
@@ -2161,6 +2181,30 @@ class SharePointSyncService:
         ext = Path(name).suffix.lower()
         if ext in self.NON_EXTRACTABLE_EXTENSIONS:
             return False
+
+        # Check min_modified_date filter
+        if min_modified_date:
+            item_modified = item.get("modified")
+            if item_modified:
+                try:
+                    # Parse the modified date string
+                    if isinstance(item_modified, str):
+                        item_modified_dt = parse_date(item_modified)
+                    else:
+                        item_modified_dt = item_modified
+
+                    # Convert both to naive UTC for comparison
+                    if item_modified_dt.tzinfo is not None:
+                        item_modified_dt = item_modified_dt.astimezone(timezone.utc).replace(tzinfo=None)
+                    min_date_naive = min_modified_date
+                    if min_date_naive.tzinfo is not None:
+                        min_date_naive = min_date_naive.astimezone(timezone.utc).replace(tzinfo=None)
+
+                    if item_modified_dt < min_date_naive:
+                        return False
+                except (ValueError, TypeError) as e:
+                    # If we can't parse the date, log and include the file
+                    logger.warning(f"Could not parse modified date for {name}: {e}")
 
         return True
 

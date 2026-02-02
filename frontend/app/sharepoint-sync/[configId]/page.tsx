@@ -88,6 +88,9 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
   const [excludePatterns, setExcludePatterns] = useState(
     (config.sync_config?.exclude_patterns || []).join(', ')
   )
+  const [minModifiedDate, setMinModifiedDate] = useState(
+    config.sync_config?.min_modified_date || ''
+  )
 
   // Folder browser state
   const [browseItems, setBrowseItems] = useState<SharePointBrowseItem[]>([])
@@ -117,6 +120,7 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
       setSyncMode((config.sync_config?.selection_mode as 'all' | 'selected') || 'all')
       setIncludePatterns((config.sync_config?.include_patterns || []).join(', '))
       setExcludePatterns((config.sync_config?.exclude_patterns || []).join(', '))
+      setMinModifiedDate(config.sync_config?.min_modified_date || '')
       setError('')
       setFolderError('')
       setBreakingChanges([])
@@ -261,12 +265,18 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
       syncConfigUpdates.exclude_patterns = newExclude
     }
 
+    // Check min_modified_date change
+    const oldMinDate = config.sync_config?.min_modified_date || ''
+    if (minModifiedDate !== oldMinDate) {
+      syncConfigUpdates.min_modified_date = minModifiedDate || null
+    }
+
     if (Object.keys(syncConfigUpdates).length > 0) {
       updates.sync_config = syncConfigUpdates
     }
 
     return updates
-  }, [name, description, syncFrequency, recursive, syncMode, includePatterns, excludePatterns, config])
+  }, [name, description, syncFrequency, recursive, syncMode, includePatterns, excludePatterns, minModifiedDate, config])
 
   // Handle save attempt
   const handleSave = async (resetAssets: boolean = false) => {
@@ -695,6 +705,21 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
                           />
                           <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
                             Files matching these patterns will be skipped during sync.
+                          </p>
+                        </div>
+
+                        <div>
+                          <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                            Do not sync files older than
+                          </label>
+                          <input
+                            type="date"
+                            value={minModifiedDate}
+                            onChange={e => setMinModifiedDate(e.target.value)}
+                            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-white dark:bg-gray-700 text-gray-900 dark:text-white focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+                          />
+                          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            Files with a last modified date before this will be skipped. Run a full sync after changing to apply to existing files.
                           </p>
                         </div>
                       </div>
