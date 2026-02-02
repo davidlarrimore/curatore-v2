@@ -34,6 +34,7 @@ import {
   Search,
   Sparkles,
   FileCheck,
+  ExternalLink,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
@@ -88,6 +89,13 @@ interface AssetVersion {
   is_current: boolean
   created_at: string
   created_by: string | null
+  // Extraction info (permanent data)
+  extraction_status: string | null
+  extraction_tier: string | null
+  extractor_version: string | null
+  extraction_time_seconds: number | null
+  extraction_created_at: string | null
+  extraction_run_id: string | null
 }
 
 type TabType = 'original' | 'extracted' | 'metadata' | 'history'
@@ -1565,6 +1573,56 @@ function AssetDetailContent() {
                           )}
                         </div>
                       </div>
+
+                      {/* Extraction Info */}
+                      {version.extraction_status && (
+                        <div className="mt-3 pt-3 border-t border-gray-200 dark:border-gray-700">
+                          <div className="flex items-center flex-wrap gap-2">
+                            {/* Status Badge */}
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 text-xs font-medium rounded-full ${
+                              version.extraction_status === 'completed'
+                                ? 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300'
+                                : version.extraction_status === 'failed'
+                                ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300'
+                                : 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
+                            }`}>
+                              {version.extraction_status === 'completed' ? (
+                                <CheckCircle className="w-3 h-3" />
+                              ) : version.extraction_status === 'failed' ? (
+                                <XCircle className="w-3 h-3" />
+                              ) : (
+                                <Loader2 className="w-3 h-3" />
+                              )}
+                              {version.extraction_status}
+                            </span>
+
+                            {/* Tier Badge */}
+                            {version.extraction_tier && (
+                              <span className={`px-2 py-0.5 text-xs font-medium rounded-full ${
+                                version.extraction_tier === 'enhanced'
+                                  ? 'bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300'
+                                  : 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                              }`}>
+                                {version.extraction_tier}
+                              </span>
+                            )}
+
+                            {/* Extractor Version */}
+                            {version.extractor_version && (
+                              <span className="px-2 py-0.5 text-xs font-mono rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400">
+                                {version.extractor_version}
+                              </span>
+                            )}
+
+                            {/* Extraction Time */}
+                            {version.extraction_time_seconds != null && (
+                              <span className="text-xs text-gray-500 dark:text-gray-400">
+                                {version.extraction_time_seconds.toFixed(1)}s
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1590,12 +1648,16 @@ function AssetDetailContent() {
                             ? 'bg-emerald-100 dark:bg-emerald-900/30'
                             : run.status === 'failed'
                             ? 'bg-red-100 dark:bg-red-900/30'
+                            : run.status === 'pending'
+                            ? 'bg-amber-100 dark:bg-amber-900/30'
                             : 'bg-blue-100 dark:bg-blue-900/30'
                         }`}>
                           {run.status === 'completed' ? (
                             <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
                           ) : run.status === 'failed' ? (
                             <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
+                          ) : run.status === 'pending' ? (
+                            <Clock className="w-4 h-4 text-amber-600 dark:text-amber-400" />
                           ) : (
                             <Loader2 className="w-4 h-4 text-blue-600 dark:text-blue-400 animate-spin" />
                           )}
@@ -1612,6 +1674,13 @@ function AssetDetailContent() {
                             <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-800 text-gray-600 dark:text-gray-400 capitalize">
                               {run.origin}
                             </span>
+                            {/* Queue position badge for pending runs */}
+                            {run.status === 'pending' && run.queue_position != null && (
+                              <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300">
+                                Queue #{run.queue_position}
+                                {run.queue_priority && run.queue_priority > 0 && ' (Priority)'}
+                              </span>
+                            )}
                             {run.config?.extractor_version && (
                               <span className="px-2 py-0.5 text-xs font-mono rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
                                 {run.config.extractor_version}
@@ -1624,6 +1693,9 @@ function AssetDetailContent() {
                             )}
                           </div>
                           <div className="flex items-center gap-4 mt-1 text-xs text-gray-500 dark:text-gray-400">
+                            {run.status === 'pending' && !run.started_at && (
+                              <span>Queued: {formatDateTime(run.created_at)}</span>
+                            )}
                             {run.started_at && (
                               <span>Started: {formatDateTime(run.started_at)}</span>
                             )}
@@ -1650,6 +1722,37 @@ function AssetDetailContent() {
                               {run.error_message}
                             </div>
                           )}
+                        </div>
+                        {/* Action buttons */}
+                        <div className="flex-shrink-0 flex items-center gap-2">
+                          {/* Prioritize button for pending runs */}
+                          {run.can_boost && (
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await assetsApi.boostAssetExtraction(token, id as string)
+                                  // Refresh runs to get updated queue position
+                                  const runsData = await assetsApi.getAssetRuns(token, id as string)
+                                  setRuns(runsData)
+                                } catch (err: any) {
+                                  console.error('Failed to boost:', err)
+                                }
+                              }}
+                              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors"
+                              title="Move to high priority queue"
+                            >
+                              <ArrowUp className="w-3 h-3" />
+                              Prioritize
+                            </button>
+                          )}
+                          {/* View Job Link */}
+                          <Link
+                            href={`/admin/queue/${run.id}`}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 hover:bg-indigo-200 dark:hover:bg-indigo-900/50 transition-colors"
+                          >
+                            <ExternalLink className="w-3 h-3" />
+                            View Job
+                          </Link>
                         </div>
                       </div>
                     ))}

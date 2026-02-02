@@ -19,6 +19,8 @@ from ....services.asset_service import asset_service
 from ....services.run_service import run_service
 from ....services.extraction_result_service import extraction_result_service
 from ....services.upload_integration_service import upload_integration_service
+from ....services.extraction_queue_service import extraction_queue_service
+from ....services.queue_registry import queue_registry
 from ..models import (
     AssetResponse,
     AssetWithExtractionResponse,
@@ -339,25 +341,47 @@ async def get_runs_for_asset(
         # Get runs
         runs = await run_service.get_runs_by_asset(session=session, asset_id=asset_id)
 
-        return [
-            RunResponse(
-                id=str(r.id),
-                organization_id=str(r.organization_id),
-                run_type=r.run_type,
-                origin=r.origin,
-                status=r.status,
-                input_asset_ids=[str(aid) for aid in (r.input_asset_ids or [])],
-                config=r.config or {},
-                progress=r.progress,
-                results_summary=r.results_summary,
-                error_message=r.error_message,
-                created_at=r.created_at,
-                started_at=r.started_at,
-                completed_at=r.completed_at,
-                created_by=str(r.created_by) if r.created_by else None,
+        # Build responses with queue info
+        responses = []
+        for r in runs:
+            # Get queue position for pending extraction runs
+            queue_position = None
+            if r.status == "pending" and r.run_type in ("extraction", "extraction_enhancement"):
+                pos_info = await extraction_queue_service.get_queue_position(session, r.id)
+                queue_position = pos_info.get("queue_position")
+
+            # Check if run can be boosted
+            queue_def = queue_registry.get(r.run_type)
+            can_boost = (
+                queue_def is not None
+                and queue_def.can_boost
+                and r.status == "pending"
+                and (r.queue_priority or 0) == 0
             )
-            for r in runs
-        ]
+
+            responses.append(
+                RunResponse(
+                    id=str(r.id),
+                    organization_id=str(r.organization_id),
+                    run_type=r.run_type,
+                    origin=r.origin,
+                    status=r.status,
+                    input_asset_ids=[str(aid) for aid in (r.input_asset_ids or [])],
+                    config=r.config or {},
+                    progress=r.progress,
+                    results_summary=r.results_summary,
+                    error_message=r.error_message,
+                    created_at=r.created_at,
+                    started_at=r.started_at,
+                    completed_at=r.completed_at,
+                    created_by=str(r.created_by) if r.created_by else None,
+                    queue_position=queue_position,
+                    queue_priority=r.queue_priority,
+                    can_boost=can_boost,
+                )
+            )
+
+        return responses
 
 
 @router.post(
@@ -495,6 +519,45 @@ async def get_asset_versions(
         # Get version history
         versions = await asset_service.get_asset_versions(session=session, asset_id=asset_id)
 
+        # Get extraction results for each version
+        # Build a map of version_id -> extraction_result for efficient lookup
+        extraction_map = {}
+        for v in versions:
+            extraction = await extraction_result_service.get_latest_extraction_for_version(
+                session=session,
+                asset_version_id=v.id,
+            )
+            if extraction:
+                extraction_map[v.id] = extraction
+
+        # Build version responses with extraction info
+        version_responses = []
+        for v in versions:
+            extraction = extraction_map.get(v.id)
+            version_responses.append(
+                AssetVersionResponse(
+                    id=str(v.id),
+                    asset_id=str(v.asset_id),
+                    version_number=v.version_number,
+                    raw_bucket=v.raw_bucket,
+                    raw_object_key=v.raw_object_key,
+                    file_size=v.file_size,
+                    file_hash=v.file_hash,
+                    content_type=v.content_type,
+                    is_current=v.is_current,
+                    created_at=v.created_at,
+                    created_by=str(v.created_by) if v.created_by else None,
+                    # Extraction info (permanent data from extraction_results)
+                    extraction_status=extraction.status if extraction else None,
+                    extraction_tier=extraction.extraction_tier if extraction else None,
+                    extractor_version=extraction.extractor_version if extraction else None,
+                    extraction_time_seconds=extraction.extraction_time_seconds if extraction else None,
+                    extraction_created_at=extraction.created_at if extraction else None,
+                    # Run link (may be null if run was purged)
+                    extraction_run_id=str(extraction.run_id) if extraction and extraction.run_id else None,
+                )
+            )
+
         return AssetVersionHistoryResponse(
             asset=AssetResponse(
                 id=str(asset.id),
@@ -513,22 +576,7 @@ async def get_asset_versions(
                 updated_at=asset.updated_at,
                 created_by=str(asset.created_by) if asset.created_by else None,
             ),
-            versions=[
-                AssetVersionResponse(
-                    id=str(v.id),
-                    asset_id=str(v.asset_id),
-                    version_number=v.version_number,
-                    raw_bucket=v.raw_bucket,
-                    raw_object_key=v.raw_object_key,
-                    file_size=v.file_size,
-                    file_hash=v.file_hash,
-                    content_type=v.content_type,
-                    is_current=v.is_current,
-                    created_at=v.created_at,
-                    created_by=str(v.created_by) if v.created_by else None,
-                )
-                for v in versions
-            ],
+            versions=version_responses,
             total_versions=len(versions),
         )
 

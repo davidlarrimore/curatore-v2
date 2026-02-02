@@ -1218,6 +1218,15 @@ class AssetVersionResponse(BaseModel):
     created_at: datetime = Field(..., description="Creation timestamp")
     created_by: Optional[str] = Field(None, description="User UUID who created this version")
 
+    # Extraction info (from extraction_results - permanent data)
+    extraction_status: Optional[str] = Field(None, description="Extraction status (completed, failed, etc)")
+    extraction_tier: Optional[str] = Field(None, description="Extraction quality tier (basic, enhanced)")
+    extractor_version: Optional[str] = Field(None, description="Extractor engine used")
+    extraction_time_seconds: Optional[float] = Field(None, description="Extraction duration")
+    extraction_created_at: Optional[datetime] = Field(None, description="When extraction completed")
+    # Run link (may be null if run was purged)
+    extraction_run_id: Optional[str] = Field(None, description="Run UUID for detailed logs (if available)")
+
     class Config:
         from_attributes = True
 
@@ -1266,6 +1275,11 @@ class RunResponse(BaseModel):
     completed_at: Optional[datetime] = Field(None, description="Completion timestamp")
     last_activity_at: Optional[datetime] = Field(None, description="Last activity timestamp (for timeout tracking)")
     created_by: Optional[UUID] = Field(None, description="User UUID who created the run")
+
+    # Queue info (for pending runs)
+    queue_position: Optional[int] = Field(None, description="Position in queue (1-indexed, only for pending runs)")
+    queue_priority: Optional[int] = Field(None, description="Queue priority (0=normal, 1=high)")
+    can_boost: bool = Field(False, description="Whether this run can be boosted to high priority")
 
     class Config:
         from_attributes = True

@@ -148,6 +148,8 @@ class AssetService:
                     logger.debug(f"Auto-queued extraction for asset {asset.id}")
                 elif extract_status == "skipped_content_type":
                     logger.debug(f"Skipped extraction for asset {asset.id} (content type)")
+                elif extract_status == "skipped_unsupported_type":
+                    logger.info(f"Skipped extraction for asset {asset.id} (unsupported file type)")
                 elif extract_status == "already_pending":
                     logger.debug(f"Extraction already pending for asset {asset.id}")
             except Exception as e:

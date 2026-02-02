@@ -133,9 +133,24 @@ class ExtractionOrchestrator:
                 "message": "Run was already completed (task re-delivered after restart)",
             }
 
+        # Skip runs that are already in a terminal state (timed_out, failed, cancelled)
+        # These can be redelivered by Celery after a restart but shouldn't be reprocessed
+        if run.status in ("timed_out", "failed", "cancelled"):
+            logger.info(
+                f"[Run {run_id}] Run already in terminal state '{run.status}', skipping re-execution"
+            )
+            return {
+                "status": f"already_{run.status}",
+                "asset_id": str(asset_id),
+                "run_id": str(run_id),
+                "extraction_id": str(extraction_id),
+                "message": f"Run was already {run.status} (task re-delivered after restart)",
+            }
+
         # Handle restart scenario: if status is "running" but we're starting fresh,
         # this means the previous execution was interrupted (worker crash/restart)
-        if extraction.status == "running" or run.status == "running":
+        is_restart = extraction.status == "running" or run.status == "running"
+        if is_restart:
             logger.warning(
                 f"[Run {run_id}] Found in 'running' state - likely interrupted by restart. "
                 f"Resuming extraction..."
@@ -199,9 +214,10 @@ class ExtractionOrchestrator:
         temp_dir = None
 
         try:
-            # Start the run (or re-start if resuming)
-            await run_service.start_run(session, run_id)
-            await extraction_result_service.update_extraction_status(session, extraction_id, "running")
+            # Start the run (skip if resuming after restart - already running)
+            if not is_restart:
+                await run_service.start_run(session, run_id)
+                await extraction_result_service.update_extraction_status(session, extraction_id, "running")
 
             # Phase 1: Get current version for logging
             current_version = await asset_service.get_current_asset_version(session, asset_id)
@@ -261,6 +277,27 @@ class ExtractionOrchestrator:
 
             markdown_content = extraction_result["markdown"]
             warnings = extraction_result.get("warnings", [])
+            extraction_info = extraction_result.get("extraction_info", {})
+
+            # Log extraction completion with engine details
+            engine_name = extraction_info.get("engine_name") or extraction_info.get("engine", "unknown")
+            engine_type = extraction_info.get("engine", "unknown")
+            engine_url = extraction_info.get("url", "")
+
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="progress",
+                message=f"Extraction complete using {engine_name} ({engine_type})",
+                context={
+                    "engine": engine_type,
+                    "engine_name": engine_name,
+                    "engine_url": engine_url,
+                    "content_length": len(markdown_content),
+                    "extraction_ok": extraction_info.get("ok", True),
+                },
+            )
 
             # Upload extracted markdown to object storage
             await run_log_service.log_event(
@@ -296,6 +333,10 @@ class ExtractionOrchestrator:
                 warnings=warnings,
             )
 
+            # Update extractor_version with engine info for Job Manager display
+            extractor_version = f"{engine_name}" if engine_name != "unknown" else engine_type
+            extraction.extractor_version = extractor_version
+
             # Phase 2: Set extraction tier to "basic" for this extraction
             extraction.extraction_tier = "basic"
             asset.extraction_tier = "basic"
@@ -316,6 +357,8 @@ class ExtractionOrchestrator:
                     "extraction_time_seconds": extraction_time,
                     "markdown_length": len(markdown_content),
                     "warnings_count": len(warnings),
+                    "engine": engine_type,
+                    "engine_name": engine_name,
                 },
             )
 
@@ -506,7 +549,7 @@ class ExtractionOrchestrator:
             filename: Original filename
 
         Returns:
-            Dict with markdown and warnings
+            Dict with markdown, warnings, and extraction_info
         """
         try:
             # Use document_service's extraction logic
@@ -517,13 +560,19 @@ class ExtractionOrchestrator:
                 engine=None,  # Use default engine from config
             )
 
+            # Capture extraction info from document_service for logging
+            extraction_info = getattr(document_service, '_last_extraction_info', {})
+
             return {
                 "markdown": result,
                 "warnings": [],
+                "extraction_info": extraction_info,
             }
 
         except Exception as e:
-            logger.error(f"Extraction failed: {e}")
+            # Capture extraction info even on failure
+            extraction_info = getattr(document_service, '_last_extraction_info', {})
+            logger.error(f"Extraction failed: {e}, extraction_info: {extraction_info}")
             raise
 
     async def _fail_extraction(

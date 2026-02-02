@@ -48,8 +48,11 @@ from uuid import UUID
 from sqlalchemy import select, and_, func, or_
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from pathlib import Path
+
 from ..database.models import Asset, Run, ExtractionResult
 from ..config import settings
+from .extraction.file_type_registry import file_type_registry
 
 logger = logging.getLogger("curatore.extraction_queue")
 
@@ -823,7 +826,8 @@ class ExtractionQueueService:
 
         Returns:
             Tuple of (Run, ExtractionResult, status_message)
-            - status_message: "queued", "already_pending", "skipped_content_type", "asset_not_found"
+            - status_message: "queued", "already_pending", "skipped_content_type",
+              "skipped_unsupported_type", "asset_not_found"
         """
         # Get asset
         asset = await session.get(Asset, asset_id)
@@ -837,6 +841,18 @@ class ExtractionQueueService:
             if content_type.startswith("text/html") or content_type == "application/xhtml+xml":
                 logger.debug(f"Skipping extraction for HTML asset {asset_id}")
                 return None, None, "skipped_content_type"
+
+        # Check file extension - skip unsupported file types
+        file_ext = Path(asset.original_filename).suffix.lower()
+        is_supported, supporting_engines = file_type_registry.is_supported(file_ext)
+        if not is_supported:
+            logger.info(
+                f"Skipping extraction for unsupported file type: {asset.original_filename} ({file_ext})"
+            )
+            # Update asset status to indicate it's not extractable
+            asset.status = "unsupported"
+            await session.commit()
+            return None, None, "skipped_unsupported_type"
 
         # Determine origin based on whether user initiated
         origin = "user" if user_id else "system"

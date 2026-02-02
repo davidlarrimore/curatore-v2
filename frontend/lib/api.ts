@@ -2096,6 +2096,10 @@ export interface Run {
   completed_at: string | null
   last_activity_at: string | null
   created_by: string | null
+  // Queue info (for pending runs)
+  queue_position: number | null
+  queue_priority: number | null
+  can_boost: boolean
 }
 
 export interface RunLogEvent {
@@ -2319,6 +2323,24 @@ export const assetsApi = {
    */
   async reextractAsset(token: string | undefined, assetId: string): Promise<Run> {
     const url = apiUrl(`/assets/${assetId}/reextract`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Boost extraction priority for an asset
+   */
+  async boostAssetExtraction(token: string | undefined, assetId: string): Promise<{
+    status: string
+    run_id?: string
+    old_priority?: number
+    new_priority?: number
+    message?: string
+  }> {
+    const url = apiUrl(`/assets/${assetId}/boost`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },

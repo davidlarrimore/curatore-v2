@@ -2404,6 +2404,18 @@ async def _enhance_extraction_async(
             logger.error(error)
             return {"status": "failed", "error": error}
 
+        # Skip if run is already in a terminal state (redelivered by Celery after restart)
+        if run.status in ("completed", "failed", "timed_out", "cancelled"):
+            logger.info(
+                f"Enhancement run {run_id} already in terminal state '{run.status}', skipping"
+            )
+            return {
+                "status": f"already_{run.status}",
+                "asset_id": str(asset_id),
+                "run_id": str(run_id),
+                "message": f"Run was already {run.status} (task re-delivered after restart)",
+            }
+
         # Skip if already enhanced
         if asset.extraction_tier == "enhanced" and not force:
             logger.info(f"Asset {asset_id} already enhanced, skipping")

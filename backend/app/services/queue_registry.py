@@ -395,9 +395,11 @@ class QueueRegistry:
         logger.info(f"Queue registry initialized with {len(self._queues)} queue types")
 
     def _ensure_initialized(self):
-        """Ensure registry is initialized with defaults."""
+        """Ensure registry is initialized with config overrides."""
         if not self._initialized:
-            self.initialize()
+            # Call the module-level initializer to load config overrides
+            # This is needed because forked worker processes need to re-load config
+            initialize_queue_registry()
 
     def get(self, queue_type: str) -> Optional[QueueDefinition]:
         """

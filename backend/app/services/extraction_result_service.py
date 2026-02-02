@@ -171,6 +171,29 @@ class ExtractionResultService:
         )
         return result.scalar_one_or_none()
 
+    async def get_latest_extraction_for_version(
+        self,
+        session: AsyncSession,
+        asset_version_id: UUID,
+    ) -> Optional[ExtractionResult]:
+        """
+        Get the most recent extraction result for a specific asset version.
+
+        Args:
+            session: Database session
+            asset_version_id: AssetVersion UUID
+
+        Returns:
+            Latest ExtractionResult for this version or None
+        """
+        result = await session.execute(
+            select(ExtractionResult)
+            .where(ExtractionResult.asset_version_id == asset_version_id)
+            .order_by(ExtractionResult.created_at.desc())
+            .limit(1)
+        )
+        return result.scalar_one_or_none()
+
     async def get_extractions_by_run(
         self,
         session: AsyncSession,
