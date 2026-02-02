@@ -1026,10 +1026,12 @@ async def handle_stale_run_cleanup(
         stale_running_runs = list(stale_running.scalars().all())
 
         # Find stale 'pending' runs (queue processing failed)
+        # Include both extraction and system_maintenance runs
+        # Maintenance runs get special handling (timed_out immediately)
         stale_pending_query = (
             select(Run)
             .where(and_(
-                Run.run_type == "extraction",
+                Run.run_type.in_(["extraction", "system_maintenance"]),
                 Run.status == "pending",
                 Run.created_at < pending_cutoff,
             ))

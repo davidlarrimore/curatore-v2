@@ -38,7 +38,7 @@ def _is_search_enabled() -> bool:
 # PHASE 0: EXTRACTION TASKS
 # ============================================================================
 
-@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
 def execute_extraction_task(
     self,
     asset_id: str,
@@ -880,7 +880,7 @@ def send_invitation_email_task(
 # PHASE 5: SCHEDULED TASK EXECUTION
 # ============================================================================
 
-@shared_task(bind=True)
+@celery_app.task(bind=True)
 def check_scheduled_tasks(self) -> Dict[str, Any]:
     """
     Periodic task to check for due scheduled tasks (Phase 5).
@@ -1019,7 +1019,7 @@ async def _check_scheduled_tasks() -> Dict[str, Any]:
     }
 
 
-@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
 def execute_scheduled_task_async(
     self,
     task_id: str,
