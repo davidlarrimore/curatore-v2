@@ -5,6 +5,7 @@ This module implements the extraction engine for the internal extraction-service
 that uses MarkItDown for document conversion.
 """
 
+import uuid
 from pathlib import Path
 from typing import Optional, Dict, Any
 import httpx
@@ -67,7 +68,8 @@ class ExtractionServiceEngine(BaseExtractionEngine):
     async def extract(
         self,
         file_path: Path,
-        max_retries: int = 2
+        max_retries: int = 2,
+        request_id: Optional[str] = None
     ) -> ExtractionResult:
         """
         Extract markdown content using extraction-service.
@@ -75,6 +77,7 @@ class ExtractionServiceEngine(BaseExtractionEngine):
         Args:
             file_path: Path to the document file
             max_retries: Maximum number of retry attempts
+            request_id: Optional correlation ID (generated if not provided)
 
         Returns:
             ExtractionResult with extracted content or error
@@ -82,24 +85,28 @@ class ExtractionServiceEngine(BaseExtractionEngine):
         url = self.full_url
         timeout_extension = 30.0  # 30 seconds per retry
 
+        # Generate request ID for correlation if not provided
+        if not request_id:
+            request_id = str(uuid.uuid4())[:8]
+
         for attempt in range(max_retries + 1):
             current_timeout = self.timeout + (attempt * timeout_extension)
 
-            try:
-                if attempt == 0:
-                    self._logger.info(
-                        "Using extraction-service: %s (timeout: %.0fs) for file: %s",
-                        url, current_timeout, file_path.name
-                    )
-                else:
-                    self._logger.info(
-                        "Retrying extraction-service (attempt %d/%d, timeout: %.0fs): %s",
-                        attempt + 1, max_retries + 1, current_timeout, file_path.name
-                    )
-            except Exception:
-                pass
+            if attempt == 0:
+                self._logger.info(
+                    "[%s] SEND_REQUEST: url=%s, file=%s, timeout=%.0fs",
+                    request_id, url, file_path.name, current_timeout
+                )
+            else:
+                self._logger.info(
+                    "[%s] RETRY_REQUEST: attempt=%d/%d, file=%s, timeout=%.0fs",
+                    request_id, attempt + 1, max_retries + 1, file_path.name, current_timeout
+                )
 
-            headers = {"Accept": "application/json"}
+            headers = {
+                "Accept": "application/json",
+                "X-Request-ID": request_id,
+            }
             if self.api_key:
                 headers["Authorization"] = f"Bearer {self.api_key}"
 
@@ -119,14 +126,18 @@ class ExtractionServiceEngine(BaseExtractionEngine):
                     if 'application/json' in content_type:
                         data = response.json()
                         markdown_content = data.get('content_markdown', '') or data.get('markdown', '') or data.get('content', '')
+                        service_request_id = data.get('metadata', {}).get('request_id', '')
+                        elapsed_ms = data.get('metadata', {}).get('elapsed_ms', 0)
                     else:
                         # Assume text/plain response
                         markdown_content = response.text
+                        service_request_id = ''
+                        elapsed_ms = 0
 
                     if markdown_content and markdown_content.strip():
                         self._logger.info(
-                            "Extraction successful: %d characters extracted from %s",
-                            len(markdown_content), file_path.name
+                            "[%s] EXTRACT_SUCCESS: chars=%d, file=%s, service_elapsed=%dms",
+                            request_id, len(markdown_content), file_path.name, elapsed_ms
                         )
                         return ExtractionResult(
                             content=markdown_content,
@@ -134,17 +145,34 @@ class ExtractionServiceEngine(BaseExtractionEngine):
                             metadata={
                                 "engine": self.engine_type,
                                 "url": url,
+                                "request_id": request_id,
+                                "service_request_id": service_request_id,
                                 "attempts": attempt + 1,
-                                "processing_time": current_timeout
+                                "service_elapsed_ms": elapsed_ms,
                             }
                         )
                     else:
-                        self._logger.warning("Extraction returned empty content for %s", file_path.name)
+                        self._logger.warning(
+                            "[%s] EXTRACT_EMPTY: file=%s returned no content",
+                            request_id, file_path.name
+                        )
+                        # Return error immediately instead of continuing
+                        return ExtractionResult(
+                            content="",
+                            success=False,
+                            error="Extraction service returned empty content",
+                            metadata={
+                                "engine": self.engine_type,
+                                "url": url,
+                                "request_id": request_id,
+                                "attempts": attempt + 1,
+                            }
+                        )
 
             except httpx.TimeoutException as e:
                 self._logger.warning(
-                    "Extraction timeout (attempt %d/%d) for %s: %s",
-                    attempt + 1, max_retries + 1, file_path.name, str(e)
+                    "[%s] TIMEOUT: attempt=%d/%d, file=%s, error=%s",
+                    request_id, attempt + 1, max_retries + 1, file_path.name, str(e)
                 )
                 if attempt < max_retries:
                     continue  # Retry on timeout
@@ -152,36 +180,62 @@ class ExtractionServiceEngine(BaseExtractionEngine):
                     return ExtractionResult(
                         content="",
                         success=False,
-                        error=f"Timeout after {max_retries + 1} attempts",
+                        error=f"Timeout after {max_retries + 1} attempts (request_id: {request_id})",
                         metadata={
                             "engine": self.engine_type,
                             "url": url,
-                            "attempts": attempt + 1
+                            "request_id": request_id,
+                            "attempts": attempt + 1,
+                            "error_type": "timeout",
                         }
                     )
 
             except httpx.HTTPStatusError as e:
                 error_msg = f"HTTP {e.response.status_code}: {e.response.text[:200]}"
                 self._logger.error(
-                    "Extraction failed for %s: %s",
-                    file_path.name, error_msg
+                    "[%s] HTTP_ERROR: file=%s, status=%d, error=%s",
+                    request_id, file_path.name, e.response.status_code, error_msg
                 )
                 return ExtractionResult(
                     content="",
                     success=False,
-                    error=error_msg,
+                    error=f"{error_msg} (request_id: {request_id})",
                     metadata={
                         "engine": self.engine_type,
                         "url": url,
+                        "request_id": request_id,
                         "attempts": attempt + 1,
-                        "status_code": e.response.status_code
+                        "status_code": e.response.status_code,
+                        "error_type": "http_error",
                     }
                 )
 
+            except httpx.ConnectError as e:
+                self._logger.error(
+                    "[%s] CONNECT_ERROR: file=%s, url=%s, error=%s",
+                    request_id, file_path.name, url, str(e)
+                )
+                if attempt < max_retries:
+                    continue  # Retry on connection errors
+                else:
+                    return ExtractionResult(
+                        content="",
+                        success=False,
+                        error=f"Connection failed: {str(e)} (request_id: {request_id})",
+                        metadata={
+                            "engine": self.engine_type,
+                            "url": url,
+                            "request_id": request_id,
+                            "attempts": attempt + 1,
+                            "error_type": "connection_error",
+                        }
+                    )
+
             except Exception as e:
                 self._logger.error(
-                    "Extraction error (attempt %d/%d) for %s: %s",
-                    attempt + 1, max_retries + 1, file_path.name, str(e)
+                    "[%s] EXTRACT_ERROR: attempt=%d/%d, file=%s, error=%s",
+                    request_id, attempt + 1, max_retries + 1, file_path.name, str(e),
+                    exc_info=True
                 )
                 if attempt < max_retries:
                     continue  # Retry on other errors
@@ -189,11 +243,13 @@ class ExtractionServiceEngine(BaseExtractionEngine):
                     return ExtractionResult(
                         content="",
                         success=False,
-                        error=str(e),
+                        error=f"{str(e)} (request_id: {request_id})",
                         metadata={
                             "engine": self.engine_type,
                             "url": url,
-                            "attempts": attempt + 1
+                            "request_id": request_id,
+                            "attempts": attempt + 1,
+                            "error_type": "exception",
                         }
                     )
 
@@ -201,10 +257,11 @@ class ExtractionServiceEngine(BaseExtractionEngine):
         return ExtractionResult(
             content="",
             success=False,
-            error="Extraction failed after all retries",
+            error=f"Extraction failed after all retries (request_id: {request_id})",
             metadata={
                 "engine": self.engine_type,
                 "url": url,
+                "request_id": request_id,
                 "attempts": max_retries + 1
             }
         )
