@@ -3990,6 +3990,10 @@ export interface SharePointSyncConfig {
   created_by: string | null
   is_syncing: boolean
   current_sync_status: string | null
+  // Delta sync fields
+  delta_enabled: boolean
+  has_delta_token: boolean
+  last_delta_sync_at: string | null
 }
 
 export interface SharePointSyncedDocument {

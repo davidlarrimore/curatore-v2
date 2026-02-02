@@ -413,20 +413,29 @@ function SharePointSyncContent() {
                     </div>
                     <div className="flex items-center gap-2 flex-shrink-0">
                       {config.status === 'active' && config.is_active && !isDeleting(config.id) && (
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => handleSync(config.id, config.name)}
-                          disabled={config.is_syncing || syncingConfigs.has(config.id)}
-                          className="gap-1.5"
-                        >
-                          {config.is_syncing || syncingConfigs.has(config.id) ? (
-                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
-                          ) : (
-                            <Play className="w-3.5 h-3.5" />
+                        <div className="relative group">
+                          <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => handleSync(config.id, config.name)}
+                            disabled={config.is_syncing || syncingConfigs.has(config.id) || !config.has_delta_token}
+                            className="gap-1.5"
+                          >
+                            {config.is_syncing || syncingConfigs.has(config.id) ? (
+                              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            ) : (
+                              <Play className="w-3.5 h-3.5" />
+                            )}
+                            {config.is_syncing || syncingConfigs.has(config.id) ? 'Syncing...' : 'Incremental Sync'}
+                          </Button>
+                          {/* Tooltip for disabled state - needs full sync first */}
+                          {!config.has_delta_token && !config.is_syncing && !syncingConfigs.has(config.id) && (
+                            <div className="absolute z-50 px-2 py-1.5 text-xs font-normal text-white bg-gray-900 dark:bg-gray-700 rounded-lg shadow-lg whitespace-nowrap left-1/2 -translate-x-1/2 bottom-full mb-2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
+                              Run a full sync first
+                              <div className="absolute left-1/2 -translate-x-1/2 top-full border-4 border-transparent border-t-gray-900 dark:border-t-gray-700" />
+                            </div>
                           )}
-                          {config.is_syncing || syncingConfigs.has(config.id) ? 'Syncing...' : 'Sync Now'}
-                        </Button>
+                        </div>
                       )}
                       {config.status !== 'deleting' && !isDeleting(config.id) && (
                         <Link href={`/sharepoint-sync/${config.id}`}>

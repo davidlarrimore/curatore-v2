@@ -140,6 +140,8 @@ export default function JobDetailPage() {
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const [cancelling, setCancelling] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const fetchData = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setRefreshing(true);
@@ -198,6 +200,35 @@ export default function JobDetailPage() {
     const interval = setInterval(() => fetchData(false), 3000);
     return () => clearInterval(interval);
   }, [autoRefresh, data, fetchData]);
+
+  // Handle job cancellation
+  const handleCancel = async () => {
+    if (!data?.queueDefinition?.can_cancel) return;
+    if (!confirm('Are you sure you want to cancel this job?')) return;
+
+    setCancelling(true);
+    setError(null);
+    setSuccessMessage(null);
+
+    try {
+      await queueAdminApi.cancelJob(undefined, runId);
+      setSuccessMessage('Job cancelled successfully');
+      // Refresh data to show updated status
+      await fetchData(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel job');
+    } finally {
+      setCancelling(false);
+    }
+  };
+
+  // Clear success message after a delay
+  useEffect(() => {
+    if (successMessage) {
+      const timeout = setTimeout(() => setSuccessMessage(null), 3000);
+      return () => clearTimeout(timeout);
+    }
+  }, [successMessage]);
 
   if (loading) {
     return (
@@ -298,6 +329,22 @@ export default function JobDetailPage() {
               </div>
             </div>
             <div className="flex items-center gap-3">
+              {/* Cancel Button - only for active jobs with can_cancel capability */}
+              {isActive && queueDefinition?.can_cancel && (
+                <button
+                  onClick={handleCancel}
+                  disabled={cancelling}
+                  className="px-4 py-2 rounded-lg border border-red-300 dark:border-red-700 bg-red-50 dark:bg-red-900/30 text-red-700 dark:text-red-300 hover:bg-red-100 dark:hover:bg-red-900/50 transition-colors disabled:opacity-50 flex items-center gap-2"
+                  title="Cancel this job"
+                >
+                  {cancelling ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <StopCircle className="h-4 w-4" />
+                  )}
+                  <span>Cancel</span>
+                </button>
+              )}
               {isActive && (
                 <button
                   onClick={() => setAutoRefresh(!autoRefresh)}
@@ -340,6 +387,24 @@ export default function JobDetailPage() {
               </span>
             )}
           </div>
+
+          {/* Success/Error Messages for actions */}
+          {successMessage && (
+            <div className="mt-4 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 rounded-xl p-4">
+              <div className="flex items-center gap-3">
+                <CheckCircle2 className="h-5 w-5 text-emerald-600 dark:text-emerald-400 flex-shrink-0" />
+                <p className="text-emerald-700 dark:text-emerald-300 text-sm font-medium">{successMessage}</p>
+              </div>
+            </div>
+          )}
+          {error && !loading && (
+            <div className="mt-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 rounded-xl p-4">
+              <div className="flex items-center gap-3">
+                <XCircle className="h-5 w-5 text-red-600 dark:text-red-400 flex-shrink-0" />
+                <p className="text-red-700 dark:text-red-300 text-sm font-medium">{error}</p>
+              </div>
+            </div>
+          )}
         </div>
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">

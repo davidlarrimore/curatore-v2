@@ -558,7 +558,7 @@ function EditModal({ config, token, isOpen, onClose, onSave, onImportFiles, onRe
                         <option value="daily">Daily</option>
                       </select>
                       <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                        You can always trigger a sync manually using the &quot;Sync Now&quot; button.
+                        You can always trigger a sync manually using the sync buttons above.
                       </p>
                     </div>
                   </div>
@@ -1608,19 +1608,29 @@ function SharePointSyncConfigContent() {
               {/* Sync Buttons - only when active and enabled */}
               {config.status === 'active' && config.is_active && (
                 <>
-                  <Button
-                    variant="primary"
-                    onClick={() => handleSync(false)}
-                    disabled={isSyncing}
-                    className="gap-2"
-                  >
-                    {isSyncing ? (
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                    ) : (
-                      <Play className="w-4 h-4" />
+                  {/* Incremental Sync Button - disabled if no full sync completed yet */}
+                  <div className="relative group">
+                    <Button
+                      variant="primary"
+                      onClick={() => handleSync(false)}
+                      disabled={isSyncing || !config.has_delta_token}
+                      className="gap-2"
+                    >
+                      {isSyncing ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Play className="w-4 h-4" />
+                      )}
+                      {isSyncing ? 'Syncing...' : 'Incremental Sync'}
+                    </Button>
+                    {/* Tooltip for disabled state */}
+                    {!config.has_delta_token && !isSyncing && (
+                      <div className="absolute z-50 px-3 py-2 text-xs font-normal text-white bg-gray-900 dark:bg-gray-700 rounded-lg shadow-lg whitespace-nowrap left-1/2 -translate-x-1/2 bottom-full mb-2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
+                        A full sync must complete first to enable incremental sync
+                        <div className="absolute left-1/2 -translate-x-1/2 top-full border-4 border-transparent border-t-gray-900 dark:border-t-gray-700" />
+                      </div>
                     )}
-                    {isSyncing ? 'Syncing...' : 'Sync Now'}
-                  </Button>
+                  </div>
                   <Button
                     variant="secondary"
                     onClick={() => handleSync(true)}
@@ -2047,11 +2057,11 @@ function SharePointSyncConfigContent() {
                 {config.status === 'active' && config.is_active && !isSyncing && (
                   <Button
                     variant="primary"
-                    onClick={() => handleSync(false)}
+                    onClick={() => handleSync(true)}
                     className="gap-2"
                   >
-                    <Play className="w-4 h-4" />
-                    Start First Sync
+                    <RefreshCw className="w-4 h-4" />
+                    Start Full Sync
                   </Button>
                 )}
               </div>
