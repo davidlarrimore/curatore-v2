@@ -1,16 +1,194 @@
 """SharePoint integration helpers for inventory and downloads via Microsoft Graph."""
 from __future__ import annotations
 
+import asyncio
 import base64
+import logging
 import os
+import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import UUID
 
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
+
+
+logger = logging.getLogger("curatore.sharepoint")
+
+
+# =============================================================================
+# TOKEN MANAGEMENT
+# =============================================================================
+
+class TokenManager:
+    """
+    Manages Microsoft Graph API tokens with automatic refresh.
+
+    Tokens are refreshed proactively before expiration (at 50 minutes)
+    or reactively when a 401 error is encountered.
+    """
+
+    # Refresh token at 50 minutes (tokens expire at 60 minutes)
+    TOKEN_REFRESH_THRESHOLD_SECONDS = 50 * 60
+
+    def __init__(
+        self,
+        tenant_id: str,
+        client_id: str,
+        client_secret: str,
+    ):
+        self.tenant_id = tenant_id
+        self.client_id = client_id
+        self.client_secret = client_secret
+        self._token: Optional[str] = None
+        self._token_acquired_at: float = 0
+        self._refresh_count = 0
+
+    @property
+    def token(self) -> Optional[str]:
+        """Get current token (may be expired - use get_valid_token() instead)."""
+        return self._token
+
+    def is_token_expired(self) -> bool:
+        """Check if token needs refresh based on age."""
+        if not self._token:
+            return True
+        age = time.time() - self._token_acquired_at
+        return age >= self.TOKEN_REFRESH_THRESHOLD_SECONDS
+
+    async def get_valid_token(self, client: httpx.AsyncClient) -> str:
+        """
+        Get a valid token, refreshing if necessary.
+
+        Args:
+            client: httpx client to use for token request
+
+        Returns:
+            Valid access token
+        """
+        if self.is_token_expired():
+            await self.refresh_token(client)
+        return self._token
+
+    async def refresh_token(self, client: httpx.AsyncClient) -> str:
+        """
+        Force refresh the token.
+
+        Args:
+            client: httpx client to use for token request
+
+        Returns:
+            New access token
+        """
+        token_url = _token_url(self.tenant_id)
+        token_payload = {
+            "client_id": self.client_id,
+            "client_secret": self.client_secret,
+            "grant_type": "client_credentials",
+            "scope": _scope(),
+        }
+
+        token_resp = await client.post(token_url, data=token_payload)
+        token_resp.raise_for_status()
+        self._token = token_resp.json().get("access_token")
+
+        if not self._token:
+            raise RuntimeError("No access_token returned from Microsoft identity platform.")
+
+        self._token_acquired_at = time.time()
+        self._refresh_count += 1
+
+        if self._refresh_count > 1:
+            logger.info(f"Refreshed Microsoft Graph token (refresh #{self._refresh_count})")
+
+        return self._token
+
+    def get_headers(self) -> Dict[str, str]:
+        """Get authorization headers with current token."""
+        if not self._token:
+            raise RuntimeError("Token not initialized - call get_valid_token() first")
+        return {"Authorization": f"Bearer {self._token}"}
+
+
+# =============================================================================
+# RETRY LOGIC FOR TRANSIENT ERRORS
+# =============================================================================
+
+# Errors that should trigger a retry with wait
+TRANSIENT_ERRORS = (
+    "Server disconnected",
+    "Connection reset",
+    "Connection refused",
+    "Timeout",
+    "TimeoutException",
+    "ConnectError",
+    "RemoteProtocolError",
+)
+
+async def _retry_on_transient_error(
+    func: Callable,
+    *args,
+    max_retries: int = 3,
+    retry_delay_seconds: int = 30,
+    on_retry: Optional[Callable[[int, str], None]] = None,
+    **kwargs,
+):
+    """
+    Execute a function with retry logic for transient errors.
+
+    Args:
+        func: Async function to execute
+        max_retries: Maximum number of retry attempts
+        retry_delay_seconds: Seconds to wait between retries
+        on_retry: Optional callback(attempt, error_message) called before each retry
+        *args, **kwargs: Arguments to pass to func
+
+    Returns:
+        Result from func
+
+    Raises:
+        Last exception if all retries fail
+    """
+    last_error = None
+
+    for attempt in range(max_retries + 1):
+        try:
+            return await func(*args, **kwargs)
+        except httpx.HTTPStatusError as e:
+            # Don't retry on 4xx errors except 401 (which is handled separately for token refresh)
+            # and 429 (rate limiting)
+            if 400 <= e.response.status_code < 500 and e.response.status_code not in (401, 429):
+                raise
+            last_error = e
+            error_msg = f"HTTP {e.response.status_code}"
+        except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout,
+                httpx.ConnectTimeout, httpx.RemoteProtocolError) as e:
+            last_error = e
+            error_msg = str(e)
+        except Exception as e:
+            # Check if error message contains transient error patterns
+            error_str = str(e)
+            if any(pattern.lower() in error_str.lower() for pattern in TRANSIENT_ERRORS):
+                last_error = e
+                error_msg = error_str
+            else:
+                raise
+
+        # If we get here, we had a retryable error
+        if attempt < max_retries:
+            if on_retry:
+                on_retry(attempt + 1, error_msg)
+            logger.warning(
+                f"Transient error (attempt {attempt + 1}/{max_retries + 1}): {error_msg}. "
+                f"Waiting {retry_delay_seconds}s before retry..."
+            )
+            await asyncio.sleep(retry_delay_seconds)
+
+    # All retries exhausted
+    raise last_error
 
 
 def _require_env(name: str) -> str:
@@ -274,7 +452,7 @@ async def _collect_items(
 async def _stream_items(
     client: httpx.AsyncClient,
     graph_base: str,
-    token: str,
+    token_manager: TokenManager,
     drive_id: str,
     root_id: str,
     include_folders: bool,
@@ -282,6 +460,8 @@ async def _stream_items(
     page_size: int,
     max_items: Optional[int],
     on_folder_scanned: Optional[callable] = None,
+    retry_delay_seconds: int = 30,
+    max_retries: int = 3,
 ):
     """
     Async generator that yields items as they are discovered.
@@ -289,9 +469,25 @@ async def _stream_items(
     This allows processing files immediately while continuing to scan folders,
     rather than waiting for the complete inventory.
 
+    Features:
+    - Automatic token refresh before expiration (at 50 minutes)
+    - Retry logic for transient errors with configurable delay
+    - Handles 401 errors by refreshing token and retrying
+
     Args:
+        client: httpx AsyncClient for making requests
+        graph_base: Microsoft Graph API base URL
+        token_manager: TokenManager instance for handling token refresh
+        drive_id: SharePoint drive ID
+        root_id: Root folder ID to start scanning from
+        include_folders: Whether to include folder items in results
+        recursive: Whether to recursively scan subfolders
+        page_size: Number of items per API page
+        max_items: Maximum items to return (None for unlimited)
         on_folder_scanned: Optional callback called after each folder is scanned
                           with (folder_path, files_found, folders_pending)
+        retry_delay_seconds: Seconds to wait between retries (default: 30)
+        max_retries: Maximum retry attempts for transient errors (default: 3)
 
     Yields:
         Dict items as they are discovered
@@ -300,24 +496,122 @@ async def _stream_items(
     fetched = 0
     index = 0
 
+    async def _list_children_single_page(
+        url: str,
+        params: Optional[Dict[str, str]] = None,
+    ) -> Tuple[List[Dict[str, Any]], Optional[str]]:
+        """
+        Fetch a single page of children with token refresh and retry support.
+
+        Returns:
+            Tuple of (items, next_page_url)
+        """
+        # Ensure token is valid before request
+        await token_manager.get_valid_token(client)
+        headers = token_manager.get_headers()
+
+        for attempt in range(max_retries + 1):
+            try:
+                response = await client.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+                return data.get("value", []), data.get("@odata.nextLink")
+
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 401:
+                    # Token expired - refresh and retry
+                    logger.warning("Received 401 Unauthorized - refreshing token...")
+                    await token_manager.refresh_token(client)
+                    headers = token_manager.get_headers()
+                    if attempt < max_retries:
+                        continue
+                elif e.response.status_code == 429:
+                    # Rate limited - wait and retry
+                    retry_after = int(e.response.headers.get("Retry-After", retry_delay_seconds))
+                    logger.warning(f"Rate limited (429) - waiting {retry_after}s...")
+                    await asyncio.sleep(retry_after)
+                    if attempt < max_retries:
+                        continue
+                elif 400 <= e.response.status_code < 500:
+                    # Client error - don't retry
+                    raise
+                else:
+                    # Server error - retry with delay
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"Server error {e.response.status_code} (attempt {attempt + 1}/{max_retries + 1}). "
+                            f"Waiting {retry_delay_seconds}s..."
+                        )
+                        await asyncio.sleep(retry_delay_seconds)
+                        continue
+                raise
+
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout,
+                    httpx.ConnectTimeout, httpx.RemoteProtocolError) as e:
+                # Transient network error - retry with delay
+                if attempt < max_retries:
+                    logger.warning(
+                        f"Network error (attempt {attempt + 1}/{max_retries + 1}): {e}. "
+                        f"Waiting {retry_delay_seconds}s..."
+                    )
+                    await asyncio.sleep(retry_delay_seconds)
+                    # Refresh token in case it expired during the wait
+                    await token_manager.get_valid_token(client)
+                    headers = token_manager.get_headers()
+                    continue
+                raise
+
+            except Exception as e:
+                # Check for transient error patterns in message
+                error_str = str(e)
+                is_transient = any(
+                    pattern.lower() in error_str.lower()
+                    for pattern in TRANSIENT_ERRORS
+                )
+                if is_transient and attempt < max_retries:
+                    logger.warning(
+                        f"Transient error (attempt {attempt + 1}/{max_retries + 1}): {e}. "
+                        f"Waiting {retry_delay_seconds}s..."
+                    )
+                    await asyncio.sleep(retry_delay_seconds)
+                    await token_manager.get_valid_token(client)
+                    headers = token_manager.get_headers()
+                    continue
+                raise
+
+        # Should not reach here, but just in case
+        raise RuntimeError("All retries exhausted")
+
     async def _list_children(item_id: str) -> List[Dict[str, Any]]:
+        """List all children of a folder, handling pagination."""
         url = f"{graph_base}/drives/{drive_id}/items/{item_id}/children"
-        headers = {"Authorization": f"Bearer {token}"}
         params = {"$top": str(page_size)}
         items: List[Dict[str, Any]] = []
+
         while url:
-            response = await client.get(url, headers=headers, params=params)
-            response.raise_for_status()
-            data = response.json()
-            page_items = data.get("value", [])
+            page_items, next_url = await _list_children_single_page(url, params)
             items.extend(page_items)
-            url = data.get("@odata.nextLink")
-            params = None
+            url = next_url
+            params = None  # Only use params on first request
+
         return items
 
     while pending:
         item_id, folder_path = pending.pop(0)
-        raw_items = await _list_children(item_id)
+
+        try:
+            raw_items = await _list_children(item_id)
+        except Exception as e:
+            # Log error but continue with other folders
+            logger.error(f"Failed to list folder '{folder_path}': {e}")
+            # Callback with error info
+            if on_folder_scanned:
+                try:
+                    await on_folder_scanned(folder_path or "/", 0, len(pending))
+                except Exception:
+                    pass
+            continue
+
         files_in_folder = 0
 
         for raw in raw_items:
@@ -478,12 +772,19 @@ async def sharepoint_inventory_stream(
     organization_id: Optional[UUID] = None,
     session: Optional[AsyncSession] = None,
     on_folder_scanned: Optional[callable] = None,
+    retry_delay_seconds: int = 30,
+    max_retries: int = 3,
 ):
     """
     Stream SharePoint folder contents, yielding items as they are discovered.
 
     This is a streaming version of sharepoint_inventory that yields items
     immediately as folders are scanned, rather than collecting everything first.
+
+    Features:
+    - Automatic token refresh for long-running syncs (refreshes at 50 minutes)
+    - Retry logic for transient errors with configurable delay
+    - Handles 401 errors by refreshing token and retrying
 
     Args:
         folder_url: SharePoint folder URL
@@ -494,6 +795,8 @@ async def sharepoint_inventory_stream(
         organization_id: Optional organization ID for database connection lookup
         session: Optional database session for connection lookup
         on_folder_scanned: Optional callback(folder_path, files_found, folders_pending)
+        retry_delay_seconds: Seconds to wait between retries (default: 30)
+        max_retries: Maximum retry attempts for transient errors (default: 3)
 
     Yields:
         Tuple of (folder_info, item) where folder_info is only set on first yield
@@ -503,28 +806,50 @@ async def sharepoint_inventory_stream(
     client_id = credentials["client_id"]
     client_secret = credentials["client_secret"]
 
-    token_payload = {
-        "client_id": client_id,
-        "client_secret": client_secret,
-        "grant_type": "client_credentials",
-        "scope": _scope(),
-    }
-
     graph_base = _graph_base_url()
     share_id = _encode_share_url(folder_url)
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        token_resp = await client.post(_token_url(tenant_id), data=token_payload)
-        token_resp.raise_for_status()
-        token = token_resp.json().get("access_token")
-        if not token:
-            raise RuntimeError("No access_token returned from Microsoft identity platform.")
+    # Create token manager for automatic token refresh
+    token_manager = TokenManager(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
 
-        headers = {"Authorization": f"Bearer {token}"}
-        drive_resp = await client.get(f"{graph_base}/shares/{share_id}/driveItem", headers=headers)
-        drive_resp.raise_for_status()
+    # Use longer timeout for large file operations
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        # Get initial token
+        await token_manager.get_valid_token(client)
+        headers = token_manager.get_headers()
+
+        # Get drive info with retry logic
+        for attempt in range(max_retries + 1):
+            try:
+                drive_resp = await client.get(
+                    f"{graph_base}/shares/{share_id}/driveItem",
+                    headers=headers
+                )
+                drive_resp.raise_for_status()
+                break
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 401 and attempt < max_retries:
+                    logger.warning("Initial connection got 401 - refreshing token...")
+                    await token_manager.refresh_token(client)
+                    headers = token_manager.get_headers()
+                    continue
+                raise
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout,
+                    httpx.ConnectTimeout, httpx.RemoteProtocolError) as e:
+                if attempt < max_retries:
+                    logger.warning(
+                        f"Connection error (attempt {attempt + 1}/{max_retries + 1}): {e}. "
+                        f"Waiting {retry_delay_seconds}s..."
+                    )
+                    await asyncio.sleep(retry_delay_seconds)
+                    continue
+                raise
+
         folder = drive_resp.json()
-
         drive_id, item_id = _extract_drive_info(folder)
 
         folder_info = {
@@ -541,7 +866,7 @@ async def sharepoint_inventory_stream(
         async for item in _stream_items(
             client,
             graph_base,
-            token,
+            token_manager,
             drive_id,
             item_id,
             include_folders,
@@ -549,6 +874,8 @@ async def sharepoint_inventory_stream(
             page_size,
             max_items,
             on_folder_scanned,
+            retry_delay_seconds=retry_delay_seconds,
+            max_retries=max_retries,
         ):
             yield None, item
 

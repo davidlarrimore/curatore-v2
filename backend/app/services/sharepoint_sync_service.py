@@ -27,6 +27,7 @@ Usage:
     )
 """
 
+import asyncio
 import hashlib
 import logging
 import re
@@ -35,6 +36,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
+
+import httpx
 
 
 def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
@@ -66,6 +69,179 @@ from ..config import settings
 from .storage_path_service import storage_paths
 
 logger = logging.getLogger("curatore.sharepoint_sync")
+
+
+# =============================================================================
+# FILE DOWNLOAD WITH RETRY LOGIC
+# =============================================================================
+
+# Transient errors that should trigger a retry
+TRANSIENT_ERROR_PATTERNS = (
+    "Server disconnected",
+    "Connection reset",
+    "Connection refused",
+    "RemoteProtocolError",
+    "ReadTimeout",
+    "WriteTimeout",
+    "ConnectTimeout",
+)
+
+
+async def _download_file_with_retry(
+    organization_id: UUID,
+    session: AsyncSession,
+    drive_id: str,
+    item_id: str,
+    file_name: str,
+    max_retries: int = 3,
+    retry_delay_seconds: int = 30,
+) -> bytes:
+    """
+    Download a file from SharePoint with retry logic for transient errors.
+
+    Features:
+    - Retries on network errors (server disconnected, connection reset, etc.)
+    - Retries on 401 with token refresh
+    - Retries on 429 (rate limiting) with Retry-After header support
+    - 30 second wait between retries by default
+
+    Args:
+        organization_id: Organization UUID for credentials lookup
+        session: Database session for credentials lookup
+        drive_id: SharePoint drive ID
+        item_id: SharePoint item ID
+        file_name: File name for logging
+        max_retries: Maximum retry attempts (default: 3)
+        retry_delay_seconds: Seconds to wait between retries (default: 30)
+
+    Returns:
+        File content as bytes
+
+    Raises:
+        Exception if all retries fail
+    """
+    from .sharepoint_service import (
+        _get_sharepoint_credentials,
+        _graph_base_url,
+        TokenManager,
+    )
+
+    credentials = await _get_sharepoint_credentials(organization_id, session)
+    tenant_id = credentials["tenant_id"]
+    client_id = credentials["client_id"]
+    client_secret = credentials["client_secret"]
+
+    graph_base = _graph_base_url()
+    download_url = f"{graph_base}/drives/{drive_id}/items/{item_id}/content"
+
+    # Create token manager for automatic refresh
+    token_manager = TokenManager(
+        tenant_id=tenant_id,
+        client_id=client_id,
+        client_secret=client_secret,
+    )
+
+    last_error = None
+
+    async with httpx.AsyncClient(timeout=120.0, follow_redirects=True) as client:
+        # Get initial token
+        await token_manager.get_valid_token(client)
+
+        for attempt in range(max_retries + 1):
+            try:
+                headers = token_manager.get_headers()
+
+                with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
+                    async with client.stream("GET", download_url, headers=headers) as response:
+                        response.raise_for_status()
+                        async for chunk in response.aiter_bytes():
+                            tmp_file.write(chunk)
+                    tmp_path = tmp_file.name
+
+                # Read file content
+                try:
+                    with open(tmp_path, "rb") as f:
+                        file_content = f.read()
+                    return file_content
+                finally:
+                    # Clean up temp file
+                    try:
+                        Path(tmp_path).unlink()
+                    except Exception:
+                        pass
+
+            except httpx.HTTPStatusError as e:
+                last_error = e
+                status_code = e.response.status_code
+
+                if status_code == 401:
+                    # Token expired - refresh and retry
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"Download {file_name}: 401 Unauthorized (attempt {attempt + 1}/{max_retries + 1}). "
+                            f"Refreshing token and retrying..."
+                        )
+                        await token_manager.refresh_token(client)
+                        continue
+                elif status_code == 429:
+                    # Rate limited - wait and retry
+                    retry_after = int(e.response.headers.get("Retry-After", retry_delay_seconds))
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"Download {file_name}: Rate limited (429). "
+                            f"Waiting {retry_after}s before retry..."
+                        )
+                        await asyncio.sleep(retry_after)
+                        continue
+                elif status_code >= 500:
+                    # Server error - retry with delay
+                    if attempt < max_retries:
+                        logger.warning(
+                            f"Download {file_name}: Server error {status_code} "
+                            f"(attempt {attempt + 1}/{max_retries + 1}). "
+                            f"Waiting {retry_delay_seconds}s..."
+                        )
+                        await asyncio.sleep(retry_delay_seconds)
+                        continue
+                # 4xx errors (except 401, 429) - don't retry
+                raise
+
+            except (httpx.ConnectError, httpx.ReadTimeout, httpx.WriteTimeout,
+                    httpx.ConnectTimeout, httpx.RemoteProtocolError) as e:
+                last_error = e
+                if attempt < max_retries:
+                    logger.warning(
+                        f"Download {file_name}: Network error (attempt {attempt + 1}/{max_retries + 1}): {e}. "
+                        f"Waiting {retry_delay_seconds}s..."
+                    )
+                    await asyncio.sleep(retry_delay_seconds)
+                    # Refresh token in case it expired during the wait
+                    await token_manager.get_valid_token(client)
+                    continue
+                raise
+
+            except Exception as e:
+                last_error = e
+                error_str = str(e)
+                is_transient = any(
+                    pattern.lower() in error_str.lower()
+                    for pattern in TRANSIENT_ERROR_PATTERNS
+                )
+
+                if is_transient and attempt < max_retries:
+                    logger.warning(
+                        f"Download {file_name}: Transient error (attempt {attempt + 1}/{max_retries + 1}): {e}. "
+                        f"Waiting {retry_delay_seconds}s..."
+                    )
+                    await asyncio.sleep(retry_delay_seconds)
+                    await token_manager.get_valid_token(client)
+                    continue
+                raise
+
+    # All retries exhausted
+    if last_error:
+        raise last_error
+    raise RuntimeError(f"Download failed for {file_name} after {max_retries + 1} attempts")
 
 
 def generate_slug(name: str) -> str:
@@ -2280,66 +2456,20 @@ class SharePointSyncService:
             await session.flush()
             return "unchanged_files"
 
-        # Download file to temp location, then upload to MinIO
-        # For now, use SharePoint download and then upload to MinIO
-        # In the future, this could stream directly
-
-        import tempfile
-        import httpx
-
-        # Get the download URL and fetch the file
-        from .sharepoint_service import _get_sharepoint_credentials, _graph_base_url, _encode_share_url
-
-        credentials = await _get_sharepoint_credentials(config.organization_id, session)
-        tenant_id = credentials["tenant_id"]
-        client_id = credentials["client_id"]
-        client_secret = credentials["client_secret"]
-
-        token_payload = {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "grant_type": "client_credentials",
-            "scope": "https://graph.microsoft.com/.default",
-        }
-
-        graph_base = _graph_base_url()
+        # Download file with retry logic for transient errors
         drive_id = config.folder_drive_id
+        file_content = await _download_file_with_retry(
+            organization_id=config.organization_id,
+            session=session,
+            drive_id=drive_id,
+            item_id=item_id,
+            file_name=name,
+            max_retries=3,
+            retry_delay_seconds=30,
+        )
 
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            # Get token
-            token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-            token_resp = await client.post(token_url, data=token_payload)
-            token_resp.raise_for_status()
-            token = token_resp.json().get("access_token")
-
-            headers = {"Authorization": f"Bearer {token}"}
-
-            # Download file content
-            download_url = f"{graph_base}/drives/{drive_id}/items/{item_id}/content"
-
-            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                async with client.stream("GET", download_url, headers=headers) as response:
-                    response.raise_for_status()
-                    async for chunk in response.aiter_bytes():
-                        tmp_file.write(chunk)
-                tmp_path = tmp_file.name
-
-        # Read file content and calculate hash
-        content_hash = None
-        file_content = None
-        try:
-            with open(tmp_path, "rb") as f:
-                file_content = f.read()
-                content_hash = hashlib.sha256(file_content).hexdigest()
-        except Exception as e:
-            logger.error(f"Failed to read temp file {tmp_path}: {e}")
-            raise
-        finally:
-            # Clean up temp file
-            try:
-                Path(tmp_path).unlink()
-            except:
-                pass
+        # Calculate content hash
+        content_hash = hashlib.sha256(file_content).hexdigest()
 
         # Upload to MinIO
         from io import BytesIO
@@ -2558,59 +2688,20 @@ class SharePointSyncService:
                 run_id=run_id,
             )
 
-        # Download updated content
-        import tempfile
-        import httpx
-
-        from .sharepoint_service import _get_sharepoint_credentials, _graph_base_url
-
-        credentials = await _get_sharepoint_credentials(config.organization_id, session)
-        tenant_id = credentials["tenant_id"]
-        client_id = credentials["client_id"]
-        client_secret = credentials["client_secret"]
-
-        token_payload = {
-            "client_id": client_id,
-            "client_secret": client_secret,
-            "grant_type": "client_credentials",
-            "scope": "https://graph.microsoft.com/.default",
-        }
-
-        graph_base = _graph_base_url()
+        # Download updated content with retry logic for transient errors
         drive_id = config.folder_drive_id
+        file_content = await _download_file_with_retry(
+            organization_id=config.organization_id,
+            session=session,
+            drive_id=drive_id,
+            item_id=item_id,
+            file_name=name,
+            max_retries=3,
+            retry_delay_seconds=30,
+        )
 
-        async with httpx.AsyncClient(timeout=60.0, follow_redirects=True) as client:
-            token_url = f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-            token_resp = await client.post(token_url, data=token_payload)
-            token_resp.raise_for_status()
-            token = token_resp.json().get("access_token")
-
-            headers = {"Authorization": f"Bearer {token}"}
-            download_url = f"{graph_base}/drives/{drive_id}/items/{item_id}/content"
-
-            with tempfile.NamedTemporaryFile(delete=False) as tmp_file:
-                async with client.stream("GET", download_url, headers=headers) as response:
-                    response.raise_for_status()
-                    async for chunk in response.aiter_bytes():
-                        tmp_file.write(chunk)
-                tmp_path = tmp_file.name
-
-        # Read file content and calculate hash
-        content_hash = None
-        file_content = None
-        try:
-            with open(tmp_path, "rb") as f:
-                file_content = f.read()
-                content_hash = hashlib.sha256(file_content).hexdigest()
-        except Exception as e:
-            logger.error(f"Failed to read temp file {tmp_path}: {e}")
-            raise
-        finally:
-            # Clean up temp file
-            try:
-                Path(tmp_path).unlink()
-            except:
-                pass
+        # Calculate content hash
+        content_hash = hashlib.sha256(file_content).hexdigest()
 
         # Upload to same location (overwrite)
         from io import BytesIO
