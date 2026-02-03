@@ -35,6 +35,8 @@ import {
   Sparkles,
   FileCheck,
   ExternalLink,
+  Copy,
+  Check,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
@@ -155,6 +157,8 @@ function AssetDetailContent() {
 
   // Track extraction ID to detect when extraction result changes
   const [lastExtractionId, setLastExtractionId] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
+  const [contentLoadProgress, setContentLoadProgress] = useState<number>(0)
 
   // State for rendering .docx files
   const [docxHtml, setDocxHtml] = useState<string>('')
@@ -315,6 +319,7 @@ function AssetDetailContent() {
     if (!extraction?.extracted_object_key || !extraction?.extracted_bucket || !token) return
 
     setIsLoadingContent(true)
+    setContentLoadProgress(0)
     try {
       // Download extracted content from object storage via proxy
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
@@ -331,8 +336,40 @@ function AssetDetailContent() {
         throw new Error(`Failed to download content: ${response.statusText}`)
       }
 
-      const content = await response.text()
-      setExtractedContent(content)
+      // Get content length for progress tracking
+      const contentLength = response.headers.get('Content-Length')
+      const totalBytes = contentLength ? parseInt(contentLength, 10) : 0
+
+      if (totalBytes && response.body) {
+        // Stream the response to track progress
+        const reader = response.body.getReader()
+        const chunks: Uint8Array[] = []
+        let receivedBytes = 0
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+
+          chunks.push(value)
+          receivedBytes += value.length
+          setContentLoadProgress(Math.round((receivedBytes / totalBytes) * 100))
+        }
+
+        // Combine chunks and decode as text
+        const allChunks = new Uint8Array(receivedBytes)
+        let position = 0
+        for (const chunk of chunks) {
+          allChunks.set(chunk, position)
+          position += chunk.length
+        }
+        const content = new TextDecoder().decode(allChunks)
+        setExtractedContent(content)
+      } else {
+        // Fallback if no content-length header (indeterminate progress)
+        const content = await response.text()
+        setExtractedContent(content)
+      }
+      setContentLoadProgress(100)
     } catch (err: any) {
       setExtractedContent(`# Error Loading Content\n\n${err.message}`)
     } finally {
@@ -1085,7 +1122,26 @@ function AssetDetailContent() {
           {activeTab === 'extracted' && (
             <div>
               <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Extracted Content</h3>
+                <div className="flex items-center gap-3">
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Extracted Content</h3>
+                  {extractedContent && (
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(extractedContent)
+                        setCopied(true)
+                        setTimeout(() => setCopied(false), 2000)
+                      }}
+                      className="p-1.5 rounded-md text-gray-400 hover:text-gray-600 hover:bg-gray-100 dark:hover:text-gray-300 dark:hover:bg-gray-700 transition-colors"
+                      title="Copy to clipboard"
+                    >
+                      {copied ? (
+                        <Check className="w-4 h-4 text-emerald-500" />
+                      ) : (
+                        <Copy className="w-4 h-4" />
+                      )}
+                    </button>
+                  )}
+                </div>
                 {extraction && (
                   <ExtractionStatus status={extraction.status} />
                 )}
@@ -1094,9 +1150,25 @@ function AssetDetailContent() {
                 <div>
                   {/* Show loading/processing state */}
                   {isLoadingContent ? (
-                    <div className="flex items-center justify-center py-8">
-                      <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
-                      <span className="ml-2 text-sm text-gray-500 dark:text-gray-400">Loading content...</span>
+                    <div className="flex flex-col items-center justify-center py-8">
+                      <div className="w-64 mb-3">
+                        <div className="flex items-center justify-between mb-1">
+                          <span className="text-sm text-gray-500 dark:text-gray-400">Loading content...</span>
+                          <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400">
+                            {contentLoadProgress > 0 ? `${contentLoadProgress}%` : ''}
+                          </span>
+                        </div>
+                        <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-2 overflow-hidden">
+                          {contentLoadProgress > 0 ? (
+                            <div
+                              className="bg-indigo-500 h-2 rounded-full transition-all duration-300 ease-out"
+                              style={{ width: `${contentLoadProgress}%` }}
+                            />
+                          ) : (
+                            <div className="bg-indigo-500 h-2 rounded-full w-full animate-pulse" />
+                          )}
+                        </div>
+                      </div>
                     </div>
                   ) : extraction.status === 'pending' || extraction.status === 'running' ? (
                     <div className="flex flex-col items-center justify-center py-8 text-gray-500 dark:text-gray-400">
@@ -1707,26 +1779,6 @@ function AssetDetailContent() {
                         </div>
                         {/* Action buttons */}
                         <div className="flex-shrink-0 flex items-center gap-2">
-                          {/* Prioritize button for pending runs */}
-                          {run.can_boost && (
-                            <button
-                              onClick={async () => {
-                                try {
-                                  await assetsApi.boostAssetExtraction(token, id as string)
-                                  // Refresh runs to get updated queue position
-                                  const runsData = await assetsApi.getAssetRuns(token, id as string)
-                                  setRuns(runsData)
-                                } catch (err: any) {
-                                  console.error('Failed to boost:', err)
-                                }
-                              }}
-                              className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 hover:bg-amber-200 dark:hover:bg-amber-900/50 transition-colors"
-                              title="Move to high priority queue"
-                            >
-                              <ArrowUp className="w-3 h-3" />
-                              Prioritize
-                            </button>
-                          )}
                           {/* View Job Link */}
                           <Link
                             href={`/admin/queue/${run.id}`}

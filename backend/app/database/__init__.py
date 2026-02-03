@@ -14,6 +14,15 @@ from .models import (
     SystemSetting,
     AuditLog,
 )
+from .procedures import (
+    Procedure,
+    Pipeline,
+    ProcedureTrigger,
+    PipelineTrigger,
+    PipelineRun,
+    PipelineItemState,
+    FunctionExecution,
+)
 
 __all__ = [
     "Base",
@@ -24,4 +33,12 @@ __all__ = [
     "Connection",
     "SystemSetting",
     "AuditLog",
+    # Procedures framework
+    "Procedure",
+    "Pipeline",
+    "ProcedureTrigger",
+    "PipelineTrigger",
+    "PipelineRun",
+    "PipelineItemState",
+    "FunctionExecution",
 ]

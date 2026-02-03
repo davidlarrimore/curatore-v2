@@ -673,21 +673,6 @@ export const runsApi = {
   },
 
   /**
-   * Get queue statistics
-   */
-  async getQueueStats(token?: string): Promise<{
-    priority: number
-    normal: number
-    maintenance: number
-  }> {
-    const res = await fetch(apiUrl('/runs/queues'), {
-      headers: authHeaders(token),
-      cache: 'no-store',
-    })
-    return handleJson(res)
-  },
-
-  /**
    * Get a single run by ID
    */
   async getRun(runId: string, token?: string): Promise<Run> {
@@ -834,7 +819,6 @@ export interface QueueDefinition {
   icon: string
   color: string
   can_cancel: boolean
-  can_boost: boolean
   can_retry: boolean
   max_concurrent: number | null
   timeout_seconds: number
@@ -848,6 +832,20 @@ export interface QueueDefinition {
 export interface QueueRegistryResponse {
   queues: Record<string, QueueDefinition>
   run_type_mapping: Record<string, string>
+}
+
+/**
+ * Child job stats for parent jobs
+ */
+export interface ChildJobStats {
+  total: number
+  pending: number
+  submitted: number
+  running: number
+  completed: number
+  failed: number
+  cancelled: number
+  timed_out: number
 }
 
 /**
@@ -880,8 +878,13 @@ export interface ActiveJob {
 
   // Capabilities (computed from queue_registry)
   can_cancel: boolean
-  can_boost: boolean
   can_retry: boolean
+
+  // Parent-child job tracking
+  is_parent_job: boolean
+  group_id: string | null
+  parent_run_id: string | null
+  child_stats: ChildJobStats | null
 }
 
 /**
@@ -969,22 +972,6 @@ export const queueAdminApi = {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ run_ids: runIds }),
-    })
-    return handleJson(res)
-  },
-
-  /**
-   * Boost an extraction priority
-   */
-  async boostExtraction(token: string | undefined, runId: string): Promise<{
-    status: string
-    run_id: string
-    old_priority?: number
-    new_priority?: number
-  }> {
-    const res = await fetch(apiUrl(`/queue/${runId}/boost`), {
-      method: 'POST',
-      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -2105,7 +2092,6 @@ export interface Run {
   // Queue info (for pending runs)
   queue_position: number | null
   queue_priority: number | null
-  can_boost: boolean
 }
 
 export interface RunLogEvent {
@@ -2329,24 +2315,6 @@ export const assetsApi = {
    */
   async reextractAsset(token: string | undefined, assetId: string): Promise<Run> {
     const url = apiUrl(`/assets/${assetId}/reextract`)
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    })
-    return handleJson(res)
-  },
-
-  /**
-   * Boost extraction priority for an asset
-   */
-  async boostAssetExtraction(token: string | undefined, assetId: string): Promise<{
-    status: string
-    run_id?: string
-    old_priority?: number
-    new_priority?: number
-    message?: string
-  }> {
-    const url = apiUrl(`/assets/${assetId}/boost`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -4344,6 +4312,464 @@ export const sharepointSyncApi = {
   },
 }
 
+// =============================================================================
+// FUNCTIONS API
+// =============================================================================
+
+export interface FunctionParameter {
+  name: string
+  type: string
+  description: string
+  required: boolean
+  default?: any
+  enum_values?: string[]
+  example?: any
+}
+
+export interface FunctionMeta {
+  name: string
+  description: string
+  category: string
+  parameters: FunctionParameter[]
+  returns: string
+  examples?: Array<Record<string, any>>
+  tags: string[]
+  is_async: boolean
+  version: string
+  requires_llm?: boolean
+  requires_session?: boolean
+}
+
+export interface FunctionListResponse {
+  functions: FunctionMeta[]
+  categories: string[]
+  total: number
+}
+
+export interface FunctionExecuteResult {
+  status: string
+  message?: string
+  data?: any
+  error?: string
+  metadata?: Record<string, any>
+  items_processed?: number
+  items_failed?: number
+  duration_ms?: number
+}
+
+export const functionsApi = {
+  async listFunctions(token?: string): Promise<FunctionListResponse> {
+    const res = await fetch(apiUrl('/functions/'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getCategories(token?: string): Promise<{ categories: Record<string, string[]> }> {
+    const res = await fetch(apiUrl('/functions/categories'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getFunction(token?: string, name: string): Promise<FunctionMeta> {
+    const res = await fetch(apiUrl(`/functions/${name}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async executeFunction(
+    token?: string,
+    name: string,
+    params: Record<string, any> = {},
+    dryRun: boolean = false
+  ): Promise<FunctionExecuteResult> {
+    const res = await fetch(apiUrl(`/functions/${name}/execute`), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify({ params, dry_run: dryRun }),
+    })
+    return handleJson(res)
+  },
+}
+
+// =============================================================================
+// PROCEDURES API
+// =============================================================================
+
+export interface ProcedureTrigger {
+  id?: string
+  trigger_type: string
+  cron_expression?: string
+  event_name?: string
+  event_filter?: Record<string, any>
+  is_active: boolean
+  last_triggered_at?: string
+  next_trigger_at?: string
+}
+
+export interface ProcedureListItem {
+  id: string
+  name: string
+  slug: string
+  description?: string
+  version: number
+  is_active: boolean
+  is_system: boolean
+  source_type: string
+  trigger_count: number
+  tags: string[]
+  created_at: string
+  updated_at: string
+}
+
+export interface Procedure {
+  id: string
+  name: string
+  slug: string
+  description?: string
+  version: number
+  is_active: boolean
+  is_system: boolean
+  source_type: string
+  definition: Record<string, any>
+  triggers: ProcedureTrigger[]
+  created_at: string
+  updated_at: string
+}
+
+export interface ProcedureRunResponse {
+  run_id?: string
+  status: string
+  message?: string
+  results?: Record<string, any>
+}
+
+export const proceduresApi = {
+  async listProcedures(
+    token?: string,
+    params?: { is_active?: boolean; tag?: string }
+  ): Promise<{ procedures: ProcedureListItem[]; total: number }> {
+    const searchParams = new URLSearchParams()
+    if (params?.is_active !== undefined) searchParams.append('is_active', String(params.is_active))
+    if (params?.tag) searchParams.append('tag', params.tag)
+
+    const res = await fetch(apiUrl(`/procedures/?${searchParams.toString()}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getProcedure(token?: string, slug: string): Promise<Procedure> {
+    const res = await fetch(apiUrl(`/procedures/${slug}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async runProcedure(
+    token?: string,
+    slug: string,
+    params: Record<string, any> = {},
+    dryRun: boolean = false,
+    asyncExecution: boolean = true
+  ): Promise<ProcedureRunResponse> {
+    const res = await fetch(apiUrl(`/procedures/${slug}/run`), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify({ params, dry_run: dryRun, async_execution: asyncExecution }),
+    })
+    return handleJson(res)
+  },
+
+  async enableProcedure(token?: string, slug: string): Promise<{ status: string; message: string }> {
+    const res = await fetch(apiUrl(`/procedures/${slug}/enable`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  async disableProcedure(token?: string, slug: string): Promise<{ status: string; message: string }> {
+    const res = await fetch(apiUrl(`/procedures/${slug}/disable`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  async listTriggers(token?: string, slug: string): Promise<ProcedureTrigger[]> {
+    const res = await fetch(apiUrl(`/procedures/${slug}/triggers`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async createTrigger(
+    token?: string,
+    slug: string,
+    data: {
+      trigger_type: string
+      cron_expression?: string
+      event_name?: string
+      event_filter?: Record<string, any>
+      trigger_params?: Record<string, any>
+    }
+  ): Promise<ProcedureTrigger> {
+    const res = await fetch(apiUrl(`/procedures/${slug}/triggers`), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteTrigger(token?: string, slug: string, triggerId: string): Promise<{ status: string; message: string }> {
+    const res = await fetch(apiUrl(`/procedures/${slug}/triggers/${triggerId}`), {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+}
+
+// =============================================================================
+// PIPELINES API
+// =============================================================================
+
+export interface PipelineStage {
+  name: string
+  type: string
+  function: string
+  description?: string
+  batch_size: number
+  on_error: string
+}
+
+export interface PipelineTrigger {
+  id?: string
+  trigger_type: string
+  cron_expression?: string
+  event_name?: string
+  event_filter?: Record<string, any>
+  is_active: boolean
+  last_triggered_at?: string
+  next_trigger_at?: string
+}
+
+export interface PipelineListItem {
+  id: string
+  name: string
+  slug: string
+  description?: string
+  version: number
+  is_active: boolean
+  is_system: boolean
+  source_type: string
+  stage_count: number
+  trigger_count: number
+  tags: string[]
+  created_at: string
+  updated_at: string
+}
+
+export interface Pipeline {
+  id: string
+  name: string
+  slug: string
+  description?: string
+  version: number
+  is_active: boolean
+  is_system: boolean
+  source_type: string
+  stages: PipelineStage[]
+  triggers: PipelineTrigger[]
+  created_at: string
+  updated_at: string
+}
+
+export interface PipelineRun {
+  id: string
+  pipeline_id: string
+  run_id?: string
+  status: string
+  current_stage: number
+  items_processed: number
+  stage_results?: Record<string, any>
+  error_message?: string
+  started_at?: string
+  completed_at?: string
+  created_at: string
+}
+
+export interface PipelineItemState {
+  id: string
+  item_type: string
+  item_id: string
+  stage_name: string
+  status: string
+  stage_data?: Record<string, any>
+  error_message?: string
+  started_at?: string
+  completed_at?: string
+}
+
+export interface PipelineRunResponse {
+  run_id?: string
+  pipeline_run_id?: string
+  status: string
+  message?: string
+  results?: Record<string, any>
+}
+
+export const pipelinesApi = {
+  async listPipelines(
+    token?: string,
+    params?: { is_active?: boolean; tag?: string }
+  ): Promise<{ pipelines: PipelineListItem[]; total: number }> {
+    const searchParams = new URLSearchParams()
+    if (params?.is_active !== undefined) searchParams.append('is_active', String(params.is_active))
+    if (params?.tag) searchParams.append('tag', params.tag)
+
+    const res = await fetch(apiUrl(`/pipelines/?${searchParams.toString()}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getPipeline(token?: string, slug: string): Promise<Pipeline> {
+    const res = await fetch(apiUrl(`/pipelines/${slug}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async runPipeline(
+    token?: string,
+    slug: string,
+    params: Record<string, any> = {},
+    dryRun: boolean = false,
+    asyncExecution: boolean = true
+  ): Promise<PipelineRunResponse> {
+    const res = await fetch(apiUrl(`/pipelines/${slug}/run`), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify({ params, dry_run: dryRun, async_execution: asyncExecution }),
+    })
+    return handleJson(res)
+  },
+
+  async listRuns(
+    token?: string,
+    slug: string,
+    params?: { status?: string; limit?: number; offset?: number }
+  ): Promise<{ runs: PipelineRun[]; total: number }> {
+    const searchParams = new URLSearchParams()
+    if (params?.status) searchParams.append('status', params.status)
+    if (params?.limit) searchParams.append('limit', String(params.limit))
+    if (params?.offset) searchParams.append('offset', String(params.offset))
+
+    const res = await fetch(apiUrl(`/pipelines/${slug}/runs?${searchParams.toString()}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getRunItems(
+    token?: string,
+    slug: string,
+    runId: string,
+    params?: { status?: string; stage?: string; limit?: number; offset?: number }
+  ): Promise<{ items: PipelineItemState[]; total: number; by_status: Record<string, number> }> {
+    const searchParams = new URLSearchParams()
+    if (params?.status) searchParams.append('status', params.status)
+    if (params?.stage) searchParams.append('stage', params.stage)
+    if (params?.limit) searchParams.append('limit', String(params.limit))
+    if (params?.offset) searchParams.append('offset', String(params.offset))
+
+    const res = await fetch(apiUrl(`/pipelines/${slug}/runs/${runId}/items?${searchParams.toString()}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async resumeRun(
+    token?: string,
+    slug: string,
+    runId: string,
+    fromStage?: number
+  ): Promise<PipelineRunResponse> {
+    const res = await fetch(apiUrl(`/pipelines/${slug}/runs/${runId}/resume`), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify({ from_stage: fromStage }),
+    })
+    return handleJson(res)
+  },
+
+  async enablePipeline(token?: string, slug: string): Promise<{ status: string; message: string }> {
+    const res = await fetch(apiUrl(`/pipelines/${slug}/enable`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  async disablePipeline(token?: string, slug: string): Promise<{ status: string; message: string }> {
+    const res = await fetch(apiUrl(`/pipelines/${slug}/disable`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  async listTriggers(token?: string, slug: string): Promise<PipelineTrigger[]> {
+    const res = await fetch(apiUrl(`/pipelines/${slug}/triggers`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async createTrigger(
+    token?: string,
+    slug: string,
+    data: {
+      trigger_type: string
+      cron_expression?: string
+      event_name?: string
+      event_filter?: Record<string, any>
+      trigger_params?: Record<string, any>
+    }
+  ): Promise<PipelineTrigger> {
+    const res = await fetch(apiUrl(`/pipelines/${slug}/triggers`), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteTrigger(token?: string, slug: string, triggerId: string): Promise<{ status: string; message: string }> {
+    const res = await fetch(apiUrl(`/pipelines/${slug}/triggers/${triggerId}`), {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+}
+
 // Default export with all API modules
 export default {
   API_BASE_URL,
@@ -4366,5 +4792,8 @@ export default {
   searchApi,
   samApi,
   sharepointSyncApi,
+  functionsApi,
+  proceduresApi,
+  pipelinesApi,
   utils,
 }

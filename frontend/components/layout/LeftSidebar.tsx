@@ -9,7 +9,6 @@ import {
   FileText,
   PanelLeftOpen,
   PanelLeftClose,
-  Link as LinkIcon,
   Shield,
   HardDrive,
   Zap,
@@ -19,7 +18,10 @@ import {
   Search,
   Building2,
   FolderSync,
-  Activity
+  Activity,
+  Code,
+  Workflow,
+  GitBranch,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import clsx from 'clsx'
@@ -79,41 +81,6 @@ export function LeftSidebar({
         icon: FileText,
         current: pathname?.startsWith('/assets'),
         gradient: 'from-indigo-500 to-blue-600'
-      },
-      {
-        name: 'Connections',
-        href: '/connections',
-        icon: LinkIcon,
-        current: pathname === '/connections',
-        gradient: 'from-blue-500 to-cyan-500'
-      },
-      {
-        name: 'SharePoint Sync',
-        href: '/sharepoint-sync',
-        icon: FolderSync,
-        current: pathname?.startsWith('/sharepoint-sync'),
-        gradient: 'from-teal-500 to-cyan-600'
-      },
-      {
-        name: 'Web Scraping',
-        href: '/scrape',
-        icon: Globe,
-        current: pathname?.startsWith('/scrape'),
-        gradient: 'from-indigo-500 to-purple-600'
-      },
-      {
-        name: 'SAM.gov',
-        href: '/sam',
-        icon: Building2,
-        current: pathname?.startsWith('/sam'),
-        gradient: 'from-blue-500 to-indigo-600'
-      },
-      {
-        name: 'Search',
-        href: '/search',
-        icon: Search,
-        current: pathname?.startsWith('/search'),
-        gradient: 'from-amber-500 to-orange-500'
       }
     ] : []),
     ...(isAuthenticated && user?.role === 'org_admin' ? [
@@ -124,8 +91,42 @@ export function LeftSidebar({
         current: pathname === '/storage',
         gradient: 'from-emerald-500 to-teal-500'
       }
+    ] : []),
+    ...(isAuthenticated ? [
+      {
+        name: 'Search',
+        href: '/search',
+        icon: Search,
+        current: pathname?.startsWith('/search'),
+        gradient: 'from-amber-500 to-orange-500'
+      }
     ] : [])
   ]
+
+  // Acquire section items
+  const acquireNavigation: NavItem[] = isAuthenticated ? [
+    {
+      name: 'SharePoint Sync',
+      href: '/sharepoint-sync',
+      icon: FolderSync,
+      current: pathname?.startsWith('/sharepoint-sync'),
+      gradient: 'from-teal-500 to-cyan-600'
+    },
+    {
+      name: 'Web Scraping',
+      href: '/scrape',
+      icon: Globe,
+      current: pathname?.startsWith('/scrape'),
+      gradient: 'from-indigo-500 to-purple-600'
+    },
+    {
+      name: 'SAM.gov',
+      href: '/sam',
+      icon: Building2,
+      current: pathname?.startsWith('/sam'),
+      gradient: 'from-blue-500 to-indigo-600'
+    }
+  ] : []
 
   // Sidebar content (shared between mobile and desktop)
   const SidebarContent = ({ isMobile = false }: { isMobile?: boolean }) => (
@@ -142,7 +143,7 @@ export function LeftSidebar({
             </div>
             <div>
               <h1 className="text-base font-bold text-gray-900 dark:text-white">Curatorè</h1>
-              <p className="text-[10px] text-gray-500 dark:text-gray-400 -mt-0.5">RAG Platform</p>
+              <p className="text-[10px] text-gray-500 dark:text-gray-400 -mt-0.5">Data Platform</p>
             </div>
           </div>
         )}
@@ -213,73 +214,223 @@ export function LeftSidebar({
             </li>
           ))}
         </ul>
+
+        {/* Acquire section */}
+        {isAuthenticated && acquireNavigation.length > 0 && (
+          <div className="mt-4 space-y-1">
+            {(!collapsed || isMobile) && (
+              <p className="px-3 mb-2 text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
+                Acquire
+              </p>
+            )}
+            {acquireNavigation.map((item) => (
+              <button
+                key={item.name}
+                onClick={() => {
+                  router.push(item.href)
+                  if (isMobile) onOpenChange(false)
+                }}
+                className={clsx(
+                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
+                  item.current
+                    ? "bg-gradient-to-r text-white shadow-lg"
+                    : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
+                  item.current && item.gradient,
+                  collapsed && !isMobile && "justify-center px-2"
+                )}
+                title={collapsed && !isMobile ? item.name : ''}
+              >
+                <item.icon
+                  className={clsx(
+                    "w-5 h-5 shrink-0",
+                    item.current ? "text-white" : "text-gray-400 dark:text-gray-500"
+                  )}
+                />
+                {(!collapsed || isMobile) && (
+                  <>
+                    <span className="flex-1 text-left">{item.name}</span>
+                    {item.current && (
+                      <ChevronRight className="w-4 h-4 text-white/70" />
+                    )}
+                  </>
+                )}
+              </button>
+            ))}
+          </div>
+        )}
+
+        {/* Build section */}
+        {isAuthenticated && user?.role === 'org_admin' && (
+          <div className="mt-4 space-y-1">
+            {(!collapsed || isMobile) && (
+              <p className="px-3 mb-2 text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
+                Build
+              </p>
+            )}
+            {/* Functions button */}
+            <button
+              onClick={() => {
+                router.push('/admin/functions')
+                if (isMobile) onOpenChange(false)
+              }}
+              className={clsx(
+                "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
+                pathname === '/admin/functions'
+                  ? "bg-gradient-to-r from-purple-500 to-indigo-600 text-white shadow-lg"
+                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
+                collapsed && !isMobile && "justify-center px-2"
+              )}
+              title={collapsed && !isMobile ? 'Functions' : ''}
+            >
+              <Code
+                className={clsx(
+                  "w-5 h-5 shrink-0",
+                  pathname === '/admin/functions' ? "text-white" : "text-gray-400 dark:text-gray-500"
+                )}
+              />
+              {(!collapsed || isMobile) && (
+                <>
+                  <span className="flex-1 text-left">Functions</span>
+                  {pathname === '/admin/functions' && (
+                    <ChevronRight className="w-4 h-4 text-white/70" />
+                  )}
+                </>
+              )}
+            </button>
+            {/* Procedures button */}
+            <button
+              onClick={() => {
+                router.push('/admin/procedures')
+                if (isMobile) onOpenChange(false)
+              }}
+              className={clsx(
+                "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
+                pathname === '/admin/procedures'
+                  ? "bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-lg"
+                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
+                collapsed && !isMobile && "justify-center px-2"
+              )}
+              title={collapsed && !isMobile ? 'Procedures' : ''}
+            >
+              <Workflow
+                className={clsx(
+                  "w-5 h-5 shrink-0",
+                  pathname === '/admin/procedures' ? "text-white" : "text-gray-400 dark:text-gray-500"
+                )}
+              />
+              {(!collapsed || isMobile) && (
+                <>
+                  <span className="flex-1 text-left">Procedures</span>
+                  {pathname === '/admin/procedures' && (
+                    <ChevronRight className="w-4 h-4 text-white/70" />
+                  )}
+                </>
+              )}
+            </button>
+            {/* Pipelines button */}
+            <button
+              onClick={() => {
+                router.push('/admin/pipelines')
+                if (isMobile) onOpenChange(false)
+              }}
+              className={clsx(
+                "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
+                pathname === '/admin/pipelines'
+                  ? "bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-lg"
+                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
+                collapsed && !isMobile && "justify-center px-2"
+              )}
+              title={collapsed && !isMobile ? 'Pipelines' : ''}
+            >
+              <GitBranch
+                className={clsx(
+                  "w-5 h-5 shrink-0",
+                  pathname === '/admin/pipelines' ? "text-white" : "text-gray-400 dark:text-gray-500"
+                )}
+              />
+              {(!collapsed || isMobile) && (
+                <>
+                  <span className="flex-1 text-left">Pipelines</span>
+                  {pathname === '/admin/pipelines' && (
+                    <ChevronRight className="w-4 h-4 text-white/70" />
+                  )}
+                </>
+              )}
+            </button>
+          </div>
+        )}
       </nav>
 
-      {/* Bottom section */}
+      {/* Bottom section - Admin */}
       <div className="mt-auto border-t border-gray-100 dark:border-gray-800 p-3 space-y-2">
-        {/* Extraction Queue button (only for org_admin) */}
         {isAuthenticated && user?.role === 'org_admin' && (
-          <button
-            onClick={() => {
-              router.push('/admin/queue')
-              if (isMobile) onOpenChange(false)
-            }}
-            className={clsx(
-              "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
-              pathname === '/admin/queue'
-                ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg"
-                : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
-              collapsed && !isMobile && "justify-center px-2"
-            )}
-            title={collapsed && !isMobile ? 'Extraction Queue' : ''}
-          >
-            <Activity
-              className={clsx(
-                "w-5 h-5 shrink-0",
-                pathname === '/admin/queue' ? "text-white" : "text-gray-400 dark:text-gray-500"
-              )}
-            />
+          <>
             {(!collapsed || isMobile) && (
-              <>
-                <span className="flex-1 text-left">Queue</span>
-                {pathname === '/admin/queue' && (
-                  <ChevronRight className="w-4 h-4 text-white/70" />
-                )}
-              </>
+              <p className="px-3 mb-1 text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
+                Admin
+              </p>
             )}
-          </button>
-        )}
-        {/* Admin Settings button (only for org_admin) */}
-        {isAuthenticated && user?.role === 'org_admin' && (
-          <button
-            onClick={() => {
-              router.push('/settings-admin')
-              if (isMobile) onOpenChange(false)
-            }}
-            className={clsx(
-              "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
-              pathname === '/settings-admin'
-                ? "bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-lg"
-                : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
-              collapsed && !isMobile && "justify-center px-2"
-            )}
-            title={collapsed && !isMobile ? 'Admin Settings' : ''}
-          >
-            <Shield
+            {/* Job Manager button */}
+            <button
+              onClick={() => {
+                router.push('/admin/queue')
+                if (isMobile) onOpenChange(false)
+              }}
               className={clsx(
-                "w-5 h-5 shrink-0",
-                pathname === '/settings-admin' ? "text-white" : "text-gray-400 dark:text-gray-500"
+                "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
+                pathname === '/admin/queue'
+                  ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg"
+                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
+                collapsed && !isMobile && "justify-center px-2"
               )}
-            />
-            {(!collapsed || isMobile) && (
-              <>
-                <span className="flex-1 text-left">Admin Settings</span>
-                {pathname === '/settings-admin' && (
-                  <ChevronRight className="w-4 h-4 text-white/70" />
+              title={collapsed && !isMobile ? 'Job Manager' : ''}
+            >
+              <Activity
+                className={clsx(
+                  "w-5 h-5 shrink-0",
+                  pathname === '/admin/queue' ? "text-white" : "text-gray-400 dark:text-gray-500"
                 )}
-              </>
-            )}
-          </button>
+              />
+              {(!collapsed || isMobile) && (
+                <>
+                  <span className="flex-1 text-left">Job Manager</span>
+                  {pathname === '/admin/queue' && (
+                    <ChevronRight className="w-4 h-4 text-white/70" />
+                  )}
+                </>
+              )}
+            </button>
+            {/* Admin Settings button */}
+            <button
+              onClick={() => {
+                router.push('/settings-admin')
+                if (isMobile) onOpenChange(false)
+              }}
+              className={clsx(
+                "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
+                pathname === '/settings-admin'
+                  ? "bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-lg"
+                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
+                collapsed && !isMobile && "justify-center px-2"
+              )}
+              title={collapsed && !isMobile ? 'Admin Settings' : ''}
+            >
+              <Shield
+                className={clsx(
+                  "w-5 h-5 shrink-0",
+                  pathname === '/settings-admin' ? "text-white" : "text-gray-400 dark:text-gray-500"
+                )}
+              />
+              {(!collapsed || isMobile) && (
+                <>
+                  <span className="flex-1 text-left">Admin Settings</span>
+                  {pathname === '/settings-admin' && (
+                    <ChevronRight className="w-4 h-4 text-white/70" />
+                  )}
+                </>
+              )}
+            </button>
+          </>
         )}
       </div>
     </div>

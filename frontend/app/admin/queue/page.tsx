@@ -10,6 +10,7 @@ import {
   type ActiveJob,
   type QueueDefinition,
   type QueueRegistryResponse,
+  type ChildJobStats,
 } from '@/lib/api'
 import { formatDateTime, formatTimeAgo, formatShortDateTime } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
@@ -42,6 +43,8 @@ import {
   Search,
   History,
   Sparkles,
+  Workflow,
+  GitBranch,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
@@ -54,40 +57,29 @@ export default function JobManagerPage() {
 }
 
 // Job type filter options with icons
-// Note: Enhancement tab is deprecated - with the new triage architecture, Docling is selected
-// upfront when needed, eliminating the separate enhancement phase.
 const JOB_TYPE_TABS = [
   { value: 'all', label: 'All', icon: Activity },
   { value: 'extraction', label: 'Extraction', icon: FileText },
-  // { value: 'extraction_enhancement', label: 'Enhancement', icon: Sparkles }, // Deprecated: now part of triage
   { value: 'sam_pull', label: 'SAM.gov', icon: Building2 },
   { value: 'scrape', label: 'Web Scrape', icon: Globe },
   { value: 'sharepoint', label: 'SharePoint', icon: FolderSync },
+  { value: 'procedure', label: 'Procedures', icon: Workflow },
+  { value: 'pipeline', label: 'Pipelines', icon: GitBranch },
   { value: 'system_maintenance', label: 'Maintenance', icon: Wrench },
 ]
 
 // Map run_type to parent queue type for filtering
-// This groups related run types (e.g., sharepoint_sync, sharepoint_import, sharepoint_delete -> sharepoint)
 function getQueueType(runType: string): string {
   if (runType.startsWith('sharepoint')) return 'sharepoint'
   if (runType === 'sam_pull') return 'sam_pull'
-  // Legacy enhancement jobs still map to extraction for display
   if (runType === 'extraction_enhancement') return 'extraction'
+  if (runType === 'procedure' || runType === 'procedure_run') return 'procedure'
+  if (runType === 'pipeline' || runType === 'pipeline_run') return 'pipeline'
   return runType
 }
 
-// Status filter options
-type StatusFilterOption = 'recent' | 'all' | 'pending' | 'submitted' | 'running' | 'completed' | 'failed'
-
-const STATUS_FILTER_OPTIONS: { value: StatusFilterOption; label: string; icon: React.ReactNode }[] = [
-  { value: 'recent', label: 'Recent Jobs', icon: <History className="w-4 h-4" /> },
-  { value: 'all', label: 'All Active', icon: <Activity className="w-4 h-4" /> },
-  { value: 'pending', label: 'Pending', icon: <Clock className="w-4 h-4" /> },
-  { value: 'submitted', label: 'Submitted', icon: <Zap className="w-4 h-4" /> },
-  { value: 'running', label: 'Running', icon: <Loader2 className="w-4 h-4" /> },
-  { value: 'completed', label: 'Completed', icon: <CheckCircle className="w-4 h-4" /> },
-  { value: 'failed', label: 'Failed', icon: <XCircle className="w-4 h-4" /> },
-]
+// Status filter type
+type StatusFilter = 'all' | 'pending' | 'submitted' | 'running' | 'completed' | 'failed' | 'timed_out'
 
 // Helper to get icon component for a run type
 function getJobTypeIcon(runType: string): React.ComponentType<{ className?: string }> {
@@ -104,6 +96,8 @@ function getJobTypeColor(runType: string): string {
     case 'sam_pull': return 'amber'
     case 'scrape': return 'emerald'
     case 'sharepoint': return 'purple'
+    case 'procedure': return 'teal'
+    case 'pipeline': return 'indigo'
     case 'system_maintenance': return 'gray'
     default: return 'gray'
   }
@@ -131,21 +125,69 @@ function getStatusClasses(status: string): string {
   }
 }
 
+// Check if a date is within the last 24 hours
+function isWithin24Hours(dateStr: string): boolean {
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diff = now.getTime() - date.getTime()
+  return diff < 24 * 60 * 60 * 1000
+}
+
+// Child job stats component for parent jobs
+function ChildJobStatsDisplay({ stats }: { stats: ChildJobStats }) {
+  const active = stats.pending + stats.submitted + stats.running
+  const done = stats.completed + stats.failed + stats.cancelled + stats.timed_out
+  const hasIssues = stats.failed > 0 || stats.timed_out > 0
+
+  return (
+    <div className="flex items-center gap-2 text-xs">
+      <span className="text-gray-500 dark:text-gray-400">Children:</span>
+      {stats.running > 0 && (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">
+          <Loader2 className="w-3 h-3 animate-spin" />
+          {stats.running}
+        </span>
+      )}
+      {(stats.pending + stats.submitted) > 0 && (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400">
+          <Clock className="w-3 h-3" />
+          {stats.pending + stats.submitted}
+        </span>
+      )}
+      {stats.completed > 0 && (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400">
+          <CheckCircle className="w-3 h-3" />
+          {stats.completed}
+        </span>
+      )}
+      {hasIssues && (
+        <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400">
+          <XCircle className="w-3 h-3" />
+          {stats.failed + stats.timed_out}
+        </span>
+      )}
+      <span className="text-gray-400 dark:text-gray-500">
+        ({done}/{stats.total})
+      </span>
+    </div>
+  )
+}
+
 function JobManagerContent() {
   const router = useRouter()
   const { token } = useAuth()
   const { stats: queueStats, isLoading: queueLoading, refresh: refreshQueue } = useQueue()
 
   const [registry, setRegistry] = useState<QueueRegistryResponse | null>(null)
-  const [jobs, setJobs] = useState<ActiveJob[]>([])
+  const [allJobs, setAllJobs] = useState<ActiveJob[]>([]) // All jobs for stats
   const [isLoading, setIsLoading] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
 
   // Filters
-  const [activeTab, setActiveTab] = useState('all')
-  const [statusFilter, setStatusFilter] = useState<StatusFilterOption>('recent')
+  const [queueFilter, setQueueFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [searchQuery, setSearchQuery] = useState('')
 
   // Selection for bulk operations
@@ -154,17 +196,14 @@ function JobManagerContent() {
 
   // Actions in progress
   const [cancellingIds, setCancellingIds] = useState<Set<string>>(new Set())
-  const [boostingIds, setBoostingIds] = useState<Set<string>>(new Set())
 
-  // Request ID to prevent stale responses from overwriting fresh data
-  // When filters change, we increment this counter and ignore responses with old IDs
+  // Request ID to prevent stale responses
   const requestIdRef = useRef(0)
 
-  // Load jobs and registry
+  // Load all jobs for accurate stats
   const loadData = useCallback(async (silent = false) => {
     if (!token) return
 
-    // Capture the request ID at the start of this request
     const thisRequestId = ++requestIdRef.current
 
     if (!silent) {
@@ -176,30 +215,23 @@ function JobManagerContent() {
       const [registryData, jobsData] = await Promise.all([
         queueAdminApi.getRegistry(token),
         queueAdminApi.listJobs(token, {
-          run_type: activeTab === 'all' ? undefined : activeTab,
-          status_filter: statusFilter === 'all' || statusFilter === 'recent' ? undefined : statusFilter,
-          include_completed: statusFilter === 'completed' || statusFilter === 'failed' || statusFilter === 'recent',
-          limit: statusFilter === 'recent' ? 20 : 200,
+          include_completed: true,
+          limit: 500,
         }),
       ])
 
-      // Only apply results if this is still the latest request
-      // This prevents stale auto-refresh results from overwriting filtered data
       if (thisRequestId !== requestIdRef.current) {
-        return // A newer request has been started, ignore this response
+        return
       }
 
       setRegistry(registryData)
-      setJobs(jobsData.items)
-      // Clear selections when data changes
+      setAllJobs(jobsData.items)
       setSelectedIds(new Set())
     } catch (err: any) {
-      // Only show error if this is still the latest request
       if (thisRequestId === requestIdRef.current && !silent) {
         setError(err.message || 'Failed to load job data')
       }
     } finally {
-      // Only update loading state if this is still the latest request
       if (thisRequestId === requestIdRef.current) {
         if (!silent) {
           setIsLoading(false)
@@ -207,30 +239,101 @@ function JobManagerContent() {
         setIsRefreshing(false)
       }
     }
-  }, [token, activeTab, statusFilter])
+  }, [token])
 
-  // Initial load and reload on filter change
+  // Initial load
   useEffect(() => {
     if (token) {
       loadData()
     }
   }, [token, loadData])
 
-  // Handle tab change
-  const handleTabChange = (value: string) => {
-    setActiveTab(value)
-    setSelectedIds(new Set())
+  // Auto-refresh every 5 seconds
+  useEffect(() => {
+    const interval = setInterval(() => {
+      if (!isLoading && !isRefreshing) {
+        loadData(true)
+      }
+    }, 5000)
+
+    return () => clearInterval(interval)
+  }, [isLoading, isRefreshing, loadData])
+
+  // Manual refresh
+  const handleRefresh = async () => {
+    setIsRefreshing(true)
+    await Promise.all([loadData(), refreshQueue()])
   }
 
-  // Handle status filter change
-  const handleStatusFilterChange = (value: StatusFilterOption) => {
-    setStatusFilter(value)
-    setSelectedIds(new Set())
-  }
+  // Compute stats for queue tabs (active jobs only: pending + submitted + running)
+  const queueStats24h = useMemo(() => {
+    const stats: Record<string, number> = { all: 0 }
 
-  // Filter and sort jobs (client-side)
+    for (const job of allJobs) {
+      const isActive = ['pending', 'submitted', 'running'].includes(job.status)
+      if (isActive) {
+        stats.all++
+        const queueType = getQueueType(job.run_type)
+        stats[queueType] = (stats[queueType] || 0) + 1
+      }
+    }
+
+    return stats
+  }, [allJobs])
+
+  // Compute status stats - active for pending/submitted/running, 24h for completed/failed/timed_out
+  const statusStats = useMemo(() => {
+    const stats = {
+      pending: 0,
+      submitted: 0,
+      running: 0,
+      completed24h: 0,
+      failed24h: 0,
+      timedOut24h: 0,
+    }
+
+    // Filter by queue first if selected
+    const jobsInQueue = queueFilter === 'all'
+      ? allJobs
+      : allJobs.filter(j => getQueueType(j.run_type) === queueFilter)
+
+    for (const job of jobsInQueue) {
+      if (job.status === 'pending') stats.pending++
+      else if (job.status === 'submitted') stats.submitted++
+      else if (job.status === 'running') stats.running++
+      else if (job.status === 'completed') {
+        if (job.completed_at && isWithin24Hours(job.completed_at)) {
+          stats.completed24h++
+        }
+      }
+      else if (job.status === 'failed') {
+        if (job.completed_at && isWithin24Hours(job.completed_at)) {
+          stats.failed24h++
+        }
+      }
+      else if (job.status === 'timed_out') {
+        if (job.completed_at && isWithin24Hours(job.completed_at)) {
+          stats.timedOut24h++
+        }
+      }
+    }
+
+    return stats
+  }, [allJobs, queueFilter])
+
+  // Filter jobs based on queue and status filters
   const filteredJobs = useMemo(() => {
-    let result = [...jobs]
+    let result = [...allJobs]
+
+    // Filter by queue type
+    if (queueFilter !== 'all') {
+      result = result.filter(j => getQueueType(j.run_type) === queueFilter)
+    }
+
+    // Filter by status
+    if (statusFilter !== 'all') {
+      result = result.filter(j => j.status === statusFilter)
+    }
 
     // Filter by search query
     if (searchQuery.trim()) {
@@ -246,16 +349,27 @@ function JobManagerContent() {
       })
     }
 
-    // Sort by started_at descending (most recent first)
-    // Use created_at as fallback for jobs that haven't started yet
+    // Sort by created_at descending (most recent first)
     result.sort((a, b) => {
-      const aTime = a.started_at || a.created_at || ''
-      const bTime = b.started_at || b.created_at || ''
+      const aTime = a.created_at || ''
+      const bTime = b.created_at || ''
       return bTime.localeCompare(aTime)
     })
 
     return result
-  }, [jobs, searchQuery])
+  }, [allJobs, queueFilter, statusFilter, searchQuery])
+
+  // Handle queue filter change
+  const handleQueueChange = (value: string) => {
+    setQueueFilter(value)
+    setSelectedIds(new Set())
+  }
+
+  // Handle status filter change
+  const handleStatusChange = (value: StatusFilter) => {
+    setStatusFilter(value)
+    setSelectedIds(new Set())
+  }
 
   // Selection handlers
   const toggleSelectAll = () => {
@@ -278,26 +392,9 @@ function JobManagerContent() {
 
   // Get cancellable selected items
   const cancellableSelectedIds = Array.from(selectedIds).filter(id => {
-    const job = jobs.find(j => j.run_id === id)
+    const job = allJobs.find(j => j.run_id === id)
     return job && job.can_cancel
   })
-
-  // Auto-refresh every 5 seconds
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (!isLoading && !isRefreshing) {
-        loadData(true) // Silent refresh
-      }
-    }, 5000)
-
-    return () => clearInterval(interval)
-  }, [isLoading, isRefreshing, loadData])
-
-  // Manual refresh
-  const handleRefresh = async () => {
-    setIsRefreshing(true)
-    await Promise.all([loadData(), refreshQueue()])
-  }
 
   // Cancel job
   const handleCancel = async (runId: string) => {
@@ -315,28 +412,6 @@ function JobManagerContent() {
       setTimeout(() => setError(''), 5000)
     } finally {
       setCancellingIds(prev => {
-        const next = new Set(prev)
-        next.delete(runId)
-        return next
-      })
-    }
-  }
-
-  // Boost job priority
-  const handleBoost = async (runId: string) => {
-    if (!token) return
-
-    setBoostingIds(prev => new Set(prev).add(runId))
-    try {
-      await queueAdminApi.boostExtraction(token, runId)
-      setSuccessMessage('Job boosted to high priority')
-      await loadData(true)
-      setTimeout(() => setSuccessMessage(''), 3000)
-    } catch (err: any) {
-      setError(err.message || 'Failed to boost job')
-      setTimeout(() => setError(''), 5000)
-    } finally {
-      setBoostingIds(prev => {
         const next = new Set(prev)
         next.delete(runId)
         return next
@@ -375,18 +450,6 @@ function JobManagerContent() {
     setTimeout(() => setSuccessMessage(''), 3000)
     setTimeout(() => setError(''), 5000)
   }
-
-  // Compute stats from filtered jobs
-  const stats = useMemo(() => {
-    const pending = jobs.filter(j => j.status === 'pending').length
-    const submitted = jobs.filter(j => j.status === 'submitted').length
-    const running = jobs.filter(j => j.status === 'running').length
-    const completed = jobs.filter(j => j.status === 'completed').length
-    const failed = jobs.filter(j => j.status === 'failed').length
-    const timedOut = jobs.filter(j => j.status === 'timed_out').length
-
-    return { pending, submitted, running, completed, failed, timedOut }
-  }, [jobs])
 
   if (isLoading) {
     return (
@@ -454,20 +517,18 @@ function JobManagerContent() {
           )}
         </div>
 
-        {/* Job Type Tabs */}
+        {/* Queue Type Tabs */}
         <div className="mb-6">
           <div className="flex flex-wrap gap-2">
             {JOB_TYPE_TABS.map((tab) => {
               const Icon = tab.icon
-              const isActive = activeTab === tab.value
-              const count = tab.value === 'all'
-                ? jobs.length
-                : jobs.filter(j => getQueueType(j.run_type) === tab.value).length
+              const isActive = queueFilter === tab.value
+              const count = queueStats24h[tab.value] || 0
 
               return (
                 <button
                   key={tab.value}
-                  onClick={() => handleTabChange(tab.value)}
+                  onClick={() => handleQueueChange(tab.value)}
                   className={`
                     flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors
                     ${isActive
@@ -495,80 +556,153 @@ function JobManagerContent() {
           </div>
         </div>
 
-        {/* Stats Cards */}
+        {/* Status Filter Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-4 mb-6">
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          {/* Pending */}
+          <button
+            onClick={() => handleStatusChange(statusFilter === 'pending' ? 'all' : 'pending')}
+            className={`bg-white dark:bg-gray-800 rounded-xl border-2 p-4 transition-all ${
+              statusFilter === 'pending'
+                ? 'border-blue-500 ring-2 ring-blue-500/20'
+                : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700'
+            }`}
+          >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center">
                 <Clock className="w-5 h-5 text-blue-600 dark:text-blue-400" />
               </div>
-              <div>
+              <div className="text-left">
                 <p className="text-xs text-gray-500 dark:text-gray-400">Pending</p>
-                <p className="text-xl font-bold text-gray-900 dark:text-white">{stats.pending}</p>
+                <p className="text-xl font-bold text-gray-900 dark:text-white">{statusStats.pending}</p>
               </div>
             </div>
-          </div>
+          </button>
 
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          {/* Submitted */}
+          <button
+            onClick={() => handleStatusChange(statusFilter === 'submitted' ? 'all' : 'submitted')}
+            className={`bg-white dark:bg-gray-800 rounded-xl border-2 p-4 transition-all ${
+              statusFilter === 'submitted'
+                ? 'border-indigo-500 ring-2 ring-indigo-500/20'
+                : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-700'
+            }`}
+          >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 flex items-center justify-center">
                 <Zap className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
               </div>
-              <div>
+              <div className="text-left">
                 <p className="text-xs text-gray-500 dark:text-gray-400">Submitted</p>
-                <p className="text-xl font-bold text-gray-900 dark:text-white">{stats.submitted}</p>
+                <p className="text-xl font-bold text-gray-900 dark:text-white">{statusStats.submitted}</p>
               </div>
             </div>
-          </div>
+          </button>
 
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          {/* Running */}
+          <button
+            onClick={() => handleStatusChange(statusFilter === 'running' ? 'all' : 'running')}
+            className={`bg-white dark:bg-gray-800 rounded-xl border-2 p-4 transition-all ${
+              statusFilter === 'running'
+                ? 'border-purple-500 ring-2 ring-purple-500/20'
+                : 'border-gray-200 dark:border-gray-700 hover:border-purple-300 dark:hover:border-purple-700'
+            }`}
+          >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-purple-50 dark:bg-purple-900/20 flex items-center justify-center">
-                <Loader2 className="w-5 h-5 text-purple-600 dark:text-purple-400 animate-spin" />
+                <Loader2 className={`w-5 h-5 text-purple-600 dark:text-purple-400 ${statusStats.running > 0 ? 'animate-spin' : ''}`} />
               </div>
-              <div>
+              <div className="text-left">
                 <p className="text-xs text-gray-500 dark:text-gray-400">Running</p>
-                <p className="text-xl font-bold text-gray-900 dark:text-white">{stats.running}</p>
+                <p className="text-xl font-bold text-gray-900 dark:text-white">{statusStats.running}</p>
               </div>
             </div>
-          </div>
+          </button>
 
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          {/* Completed (24h) */}
+          <button
+            onClick={() => handleStatusChange(statusFilter === 'completed' ? 'all' : 'completed')}
+            className={`bg-white dark:bg-gray-800 rounded-xl border-2 p-4 transition-all ${
+              statusFilter === 'completed'
+                ? 'border-emerald-500 ring-2 ring-emerald-500/20'
+                : 'border-gray-200 dark:border-gray-700 hover:border-emerald-300 dark:hover:border-emerald-700'
+            }`}
+          >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 flex items-center justify-center">
                 <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
               </div>
-              <div>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Completed</p>
-                <p className="text-xl font-bold text-gray-900 dark:text-white">{stats.completed}</p>
+              <div className="text-left">
+                <p className="text-xs text-gray-500 dark:text-gray-400">Completed <span className="text-[10px]">(24h)</span></p>
+                <p className="text-xl font-bold text-gray-900 dark:text-white">{statusStats.completed24h}</p>
               </div>
             </div>
-          </div>
+          </button>
 
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          {/* Failed (24h) */}
+          <button
+            onClick={() => handleStatusChange(statusFilter === 'failed' ? 'all' : 'failed')}
+            className={`bg-white dark:bg-gray-800 rounded-xl border-2 p-4 transition-all ${
+              statusFilter === 'failed'
+                ? 'border-red-500 ring-2 ring-red-500/20'
+                : 'border-gray-200 dark:border-gray-700 hover:border-red-300 dark:hover:border-red-700'
+            }`}
+          >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-red-50 dark:bg-red-900/20 flex items-center justify-center">
                 <XCircle className="w-5 h-5 text-red-600 dark:text-red-400" />
               </div>
-              <div>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Failed</p>
-                <p className="text-xl font-bold text-gray-900 dark:text-white">{stats.failed}</p>
+              <div className="text-left">
+                <p className="text-xs text-gray-500 dark:text-gray-400">Failed <span className="text-[10px]">(24h)</span></p>
+                <p className="text-xl font-bold text-gray-900 dark:text-white">{statusStats.failed24h}</p>
               </div>
             </div>
-          </div>
+          </button>
 
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+          {/* Timed Out (24h) */}
+          <button
+            onClick={() => handleStatusChange(statusFilter === 'timed_out' ? 'all' : 'timed_out')}
+            className={`bg-white dark:bg-gray-800 rounded-xl border-2 p-4 transition-all ${
+              statusFilter === 'timed_out'
+                ? 'border-amber-500 ring-2 ring-amber-500/20'
+                : 'border-gray-200 dark:border-gray-700 hover:border-amber-300 dark:hover:border-amber-700'
+            }`}
+          >
             <div className="flex items-center gap-3">
               <div className="w-10 h-10 rounded-lg bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center">
                 <Timer className="w-5 h-5 text-amber-600 dark:text-amber-400" />
               </div>
-              <div>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Timed Out</p>
-                <p className="text-xl font-bold text-gray-900 dark:text-white">{stats.timedOut}</p>
+              <div className="text-left">
+                <p className="text-xs text-gray-500 dark:text-gray-400">Timed Out <span className="text-[10px]">(24h)</span></p>
+                <p className="text-xl font-bold text-gray-900 dark:text-white">{statusStats.timedOut24h}</p>
               </div>
             </div>
-          </div>
+          </button>
         </div>
+
+        {/* Active Filters Display */}
+        {(queueFilter !== 'all' || statusFilter !== 'all') && (
+          <div className="mb-4 flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-gray-500 dark:text-gray-400">Filters:</span>
+            {queueFilter !== 'all' && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400">
+                {JOB_TYPE_TABS.find(t => t.value === queueFilter)?.label}
+                <button onClick={() => handleQueueChange('all')} className="ml-1 hover:text-indigo-900 dark:hover:text-indigo-200">×</button>
+              </span>
+            )}
+            {statusFilter !== 'all' && (
+              <span className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${getStatusClasses(statusFilter)}`}>
+                {statusFilter.replace('_', ' ')}
+                <button onClick={() => handleStatusChange('all')} className="ml-1 hover:opacity-70">×</button>
+              </span>
+            )}
+            <button
+              onClick={() => { handleQueueChange('all'); handleStatusChange('all'); }}
+              className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+            >
+              Clear all
+            </button>
+          </div>
+        )}
 
         {/* Jobs Table */}
         <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -576,7 +710,7 @@ function JobManagerContent() {
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
               <div>
                 <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                  Active Jobs
+                  Jobs
                 </h2>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                   {filteredJobs.length} job{filteredJobs.length !== 1 ? 's' : ''}
@@ -594,22 +728,6 @@ function JobManagerContent() {
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
                   />
-                </div>
-
-                {/* Status Filter */}
-                <div className="relative">
-                  <select
-                    value={statusFilter}
-                    onChange={(e) => handleStatusFilterChange(e.target.value as StatusFilterOption)}
-                    className="appearance-none pl-9 pr-8 py-2 text-sm font-medium rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-500 cursor-pointer"
-                  >
-                    {STATUS_FILTER_OPTIONS.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                  <Filter className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400 pointer-events-none" />
                 </div>
 
                 {/* Bulk actions */}
@@ -650,7 +768,7 @@ function JobManagerContent() {
               <Activity className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
               <p className="text-gray-500 dark:text-gray-400">No jobs found</p>
               <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">
-                {searchQuery ? 'Try adjusting your search' : 'All jobs have completed or the queue is empty'}
+                {searchQuery ? 'Try adjusting your search' : 'No jobs match the current filters'}
               </p>
             </div>
           ) : (
@@ -724,22 +842,40 @@ function JobManagerContent() {
                         </td>
                         <td className="px-4 py-4" onClick={(e) => e.stopPropagation()}>
                           <div className="min-w-0">
-                            {job.run_type === 'extraction' && job.asset_id ? (
-                              <Link
-                                href={`/assets/${job.asset_id}`}
-                                className="text-sm font-medium text-gray-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-400 truncate block max-w-[250px]"
-                              >
-                                {job.display_name}
-                              </Link>
-                            ) : (
-                              <span className="text-sm font-medium text-gray-900 dark:text-white truncate block max-w-[250px]">
-                                {job.display_name}
-                              </span>
-                            )}
+                            <div className="flex items-center gap-2">
+                              {job.run_type === 'extraction' && job.asset_id ? (
+                                <Link
+                                  href={`/assets/${job.asset_id}`}
+                                  className="text-sm font-medium text-gray-900 dark:text-white hover:text-indigo-600 dark:hover:text-indigo-400 truncate block max-w-[250px]"
+                                >
+                                  {job.display_name}
+                                </Link>
+                              ) : (
+                                <span className="text-sm font-medium text-gray-900 dark:text-white truncate block max-w-[250px]">
+                                  {job.display_name}
+                                </span>
+                              )}
+                              {job.is_parent_job && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400">
+                                  <GitBranch className="w-3 h-3" />
+                                  Parent
+                                </span>
+                              )}
+                              {job.parent_run_id && (
+                                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-900/30 text-gray-600 dark:text-gray-400">
+                                  Child
+                                </span>
+                              )}
+                            </div>
                             {job.display_context && (
                               <p className="text-xs text-gray-500 dark:text-gray-400 font-mono">
                                 {job.display_context}
                               </p>
+                            )}
+                            {job.is_parent_job && job.child_stats && job.child_stats.total > 0 && (
+                              <div className="mt-1">
+                                <ChildJobStatsDisplay stats={job.child_stats} />
+                              </div>
                             )}
                           </div>
                         </td>
@@ -769,20 +905,6 @@ function JobManagerContent() {
                         </td>
                         <td className="px-4 py-4 text-right" onClick={(e) => e.stopPropagation()}>
                           <div className="flex items-center justify-end gap-2">
-                            {job.can_boost && (
-                              <button
-                                onClick={() => handleBoost(job.run_id)}
-                                disabled={boostingIds.has(job.run_id)}
-                                className="p-1.5 rounded-lg text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-900/20 transition-colors disabled:opacity-50"
-                                title="Boost priority"
-                              >
-                                {boostingIds.has(job.run_id) ? (
-                                  <Loader2 className="w-4 h-4 animate-spin" />
-                                ) : (
-                                  <ArrowUp className="w-4 h-4" />
-                                )}
-                              </button>
-                            )}
                             {job.can_cancel && (
                               <button
                                 onClick={() => handleCancel(job.run_id)}
@@ -817,7 +939,7 @@ function JobManagerContent() {
           )}
         </div>
 
-        {/* Queue Registry Info (optional) */}
+        {/* Queue Registry Info */}
         {registry && (
           <div className="mt-8 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
@@ -842,9 +964,6 @@ function JobManagerContent() {
                     <div className="flex gap-2 mt-2">
                       {queue.can_cancel && (
                         <span className="px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700">Cancel</span>
-                      )}
-                      {queue.can_boost && (
-                        <span className="px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700">Boost</span>
                       )}
                       {queue.can_retry && (
                         <span className="px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700">Retry</span>

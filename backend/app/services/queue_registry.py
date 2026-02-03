@@ -33,9 +33,36 @@ Example - Adding a Google Drive sync queue:
 import logging
 from abc import ABC
 from dataclasses import dataclass, field
+from enum import IntEnum
 from typing import Dict, List, Optional, Any, Type
 
 logger = logging.getLogger("curatore.services.queue_registry")
+
+
+# =============================================================================
+# QUEUE PRIORITY LEVELS
+# =============================================================================
+
+class QueuePriority(IntEnum):
+    """
+    Queue priority levels for extraction jobs.
+
+    Lower numbers = lower priority (processed later).
+    Higher numbers = higher priority (processed first).
+
+    Priority determines the order in which jobs are picked from the queue.
+    Jobs with priority >= PIPELINE route to the 'processing_priority' Celery queue.
+    """
+    SHAREPOINT_SYNC = 0  # Background SharePoint sync extractions (lowest)
+    SAM_SCRAPE = 1       # SAM.gov and web scrape extractions
+    PIPELINE = 2         # Pipeline/workflow extractions
+    USER_UPLOAD = 3      # Direct user uploads (default for new runs)
+    USER_BOOSTED = 4     # Manually boosted by user (highest)
+
+    @classmethod
+    def get_celery_queue(cls, priority: int) -> str:
+        """Get the appropriate Celery queue for a priority level."""
+        return "processing_priority" if priority >= cls.PIPELINE else "extraction"
 
 
 @dataclass
@@ -53,7 +80,6 @@ class QueueDefinition:
 
         # Capabilities - what actions are allowed
         can_cancel: Whether jobs can be cancelled
-        can_boost: Whether job priority can be boosted
         can_retry: Whether failed jobs can be retried
 
         # Display metadata for UI
@@ -76,7 +102,6 @@ class QueueDefinition:
 
     # Capabilities (defined in code, not configurable)
     can_cancel: bool = False
-    can_boost: bool = False
     can_retry: bool = False
 
     # Display metadata
@@ -166,7 +191,6 @@ class QueueDefinition:
             "icon": self.icon,
             "color": self.color,
             "can_cancel": self.can_cancel,
-            "can_boost": self.can_boost,
             "can_retry": self.can_retry,
             "max_concurrent": self.max_concurrent,
             "timeout_seconds": self.timeout_seconds,
@@ -192,7 +216,6 @@ class ExtractionQueue(QueueDefinition):
             celery_queue="extraction",
             run_type_aliases=[],
             can_cancel=True,
-            can_boost=True,
             can_retry=True,
             label="Extraction",
             description="Document to Markdown conversion",
@@ -213,8 +236,7 @@ class SamQueue(QueueDefinition):
             queue_type="sam",
             celery_queue="sam",
             run_type_aliases=["sam_pull"],
-            can_cancel=False,
-            can_boost=False,
+            can_cancel=True,  # Enable cancellation - cancels queued child extractions
             can_retry=False,
             label="SAM.gov",
             description="Federal opportunity data pulls",
@@ -234,7 +256,6 @@ class ScrapeQueue(QueueDefinition):
             celery_queue="scrape",
             run_type_aliases=["scrape_crawl", "scrape_delete"],
             can_cancel=True,  # Enable cancellation via Celery revoke
-            can_boost=False,
             can_retry=False,
             label="Web Scrape",
             description="Web scraping and crawling",
@@ -254,7 +275,6 @@ class SharePointQueue(QueueDefinition):
             celery_queue="sharepoint",
             run_type_aliases=["sharepoint_sync", "sharepoint_import", "sharepoint_delete"],
             can_cancel=True,
-            can_boost=False,
             can_retry=False,
             label="SharePoint",
             description="SharePoint document synchronization",
@@ -274,7 +294,6 @@ class MaintenanceQueue(QueueDefinition):
             celery_queue="maintenance",
             run_type_aliases=["system_maintenance"],
             can_cancel=False,
-            can_boost=False,
             can_retry=False,
             label="Maintenance",
             description="System maintenance and cleanup tasks",
@@ -282,6 +301,44 @@ class MaintenanceQueue(QueueDefinition):
             color="gray",
             default_max_concurrent=1,  # Always serialize maintenance
             default_timeout_seconds=300,
+        )
+
+
+class PipelineQueue(QueueDefinition):
+    """Pipeline processing queue for multi-stage document workflows."""
+
+    def __init__(self):
+        super().__init__(
+            queue_type="pipeline",
+            celery_queue="pipeline",
+            run_type_aliases=["pipeline_run"],
+            can_cancel=True,
+            can_retry=True,
+            label="Pipeline",
+            description="Multi-stage document processing pipelines",
+            icon="git-branch",
+            color="violet",
+            default_max_concurrent=None,  # Unlimited by default
+            default_timeout_seconds=3600,  # 1 hour
+        )
+
+
+class ProcedureQueue(QueueDefinition):
+    """Procedure execution queue for scheduled/event-driven workflows."""
+
+    def __init__(self):
+        super().__init__(
+            queue_type="procedure",
+            celery_queue="maintenance",  # Use maintenance queue for procedures
+            run_type_aliases=["procedure_run"],
+            can_cancel=True,
+            can_retry=True,
+            label="Procedure",
+            description="Scheduled and event-driven workflow procedures",
+            icon="play-circle",
+            color="indigo",
+            default_max_concurrent=None,  # Unlimited by default
+            default_timeout_seconds=600,  # 10 minutes
         )
 
 
@@ -339,6 +396,8 @@ class QueueRegistry:
         self.register(ScrapeQueue())
         self.register(SharePointQueue())
         self.register(MaintenanceQueue())
+        self.register(PipelineQueue())
+        self.register(ProcedureQueue())
 
     def initialize(self, config_overrides: Optional[Dict[str, Dict[str, Any]]] = None):
         """
@@ -430,11 +489,6 @@ class QueueRegistry:
         """Check if jobs of this type can be cancelled."""
         queue = self.get(run_type)
         return queue.can_cancel if queue else False
-
-    def can_boost(self, run_type: str) -> bool:
-        """Check if jobs of this type can be priority boosted."""
-        queue = self.get(run_type)
-        return queue.can_boost if queue else False
 
     def can_retry(self, run_type: str) -> bool:
         """Check if failed jobs of this type can be retried."""

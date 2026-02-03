@@ -5,6 +5,7 @@ import { AppLayout } from '@/components/layout/AppLayout'
 import { AuthProvider } from '@/lib/auth-context'
 import { QueueProvider } from '@/lib/queue-context'
 import { DeletionJobsProvider } from '@/lib/deletion-jobs-context'
+import { ActiveJobsProvider } from '@/lib/active-jobs-context'
 import { LoadingBar } from '@/components/LoadingBar'
 
 export const metadata = {
@@ -27,9 +28,11 @@ export default function RootLayout({ children }: RootLayoutProps) {
         <AuthProvider>
           <QueueProvider>
             <DeletionJobsProvider>
-              <AppLayout>
-                {children}
-              </AppLayout>
+              <ActiveJobsProvider>
+                <AppLayout>
+                  {children}
+                </AppLayout>
+              </ActiveJobsProvider>
             </DeletionJobsProvider>
           </QueueProvider>
         </AuthProvider>

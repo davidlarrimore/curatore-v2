@@ -537,6 +537,43 @@ async def get_current_user_optional(
 
 
 # =========================================================================
+# ORGANIZATION ID HELPER
+# =========================================================================
+
+
+async def get_current_org_id(
+    user: User = Depends(get_current_user),
+) -> "UUID":
+    """
+    Get the organization ID for the current user.
+
+    A convenience dependency that extracts just the organization ID from
+    the authenticated user. Useful when endpoints only need the org_id
+    for queries.
+
+    Args:
+        user: Current authenticated user
+
+    Returns:
+        UUID: User's organization ID
+
+    Example:
+        @router.get("/org-data")
+        async def get_org_data(
+            org_id: UUID = Depends(get_current_org_id)
+        ):
+            # Query using org_id
+            return {"org_id": str(org_id)}
+    """
+    from uuid import UUID as UUID_TYPE
+    return UUID_TYPE(str(user.organization_id))
+
+
+# Alias for backwards compatibility
+get_optional_current_user = get_current_user_optional
+
+
+# =========================================================================
 # DOCUMENT ID VALIDATION
 # =========================================================================
 

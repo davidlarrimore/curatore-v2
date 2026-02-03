@@ -149,7 +149,6 @@ class TestQueueDefinition:
             queue_type="test",
             celery_queue="test_queue",
             can_cancel=True,
-            can_boost=False,
             can_retry=True,
             label="Test Queue",
             description="Test description",
@@ -162,7 +161,6 @@ class TestQueueDefinition:
         assert result["queue_type"] == "test"
         assert result["celery_queue"] == "test_queue"
         assert result["can_cancel"] is True
-        assert result["can_boost"] is False
         assert result["can_retry"] is True
         assert result["label"] == "Test Queue"
 

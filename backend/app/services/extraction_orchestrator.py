@@ -463,6 +463,39 @@ class ExtractionOrchestrator:
                     # Don't fail extraction if indexing queue fails
                     logger.warning(f"Failed to queue asset {asset_id} for indexing: {e}")
 
+            # Emit event for completed extraction
+            try:
+                from .event_service import event_service
+                await event_service.emit(
+                    session=session,
+                    event_name="asset.extraction_completed",
+                    organization_id=asset.organization_id,
+                    payload={
+                        "asset_id": str(asset_id),
+                        "run_id": str(run_id),
+                        "extraction_id": str(extraction_id),
+                        "filename": asset.original_filename,
+                        "source_type": asset.source_type,
+                        "engine": triage_plan.engine,
+                        "extraction_tier": extraction.extraction_tier,
+                        "markdown_length": len(markdown_content),
+                    },
+                    source_run_id=run_id,
+                )
+            except Exception as e:
+                # Don't fail extraction if event emission fails
+                logger.warning(f"Failed to emit asset.extraction_completed event: {e}")
+
+            # Notify group service if this run is part of a parent-child group
+            try:
+                if run.group_id:
+                    from .run_group_service import run_group_service
+                    await run_group_service.child_completed(session, run_id)
+                    logger.debug(f"Notified group service of completed extraction for run {run_id}")
+            except Exception as e:
+                # Don't fail extraction if group notification fails
+                logger.warning(f"Failed to notify group service of completion: {e}")
+
             return {
                 "status": "success",
                 "asset_id": str(asset_id),
@@ -561,6 +594,27 @@ class ExtractionOrchestrator:
 
             return storage_paths.sharepoint_sync(org_id, sync_slug, folder_path, filename, extracted=True)
 
+        elif asset.source_type == "sam_gov":
+            # SAM.gov attachments preserve SAM folder structure
+            # Format: {org_id}/sam/{agency}/{bureau}/solicitations/{notice_id}/attachments/{filename}
+            source_meta = asset.source_metadata or {}
+
+            # Extract info from metadata
+            agency = source_meta.get("agency", "unknown-agency")
+            bureau = source_meta.get("bureau", agency)  # Fall back to agency if no bureau
+            notice_id = source_meta.get("solicitation_number") or source_meta.get("notice_id", "unknown")
+
+            # Try to extract from raw_object_key if metadata is incomplete
+            if asset.raw_object_key and (notice_id == "unknown" or agency == "unknown-agency"):
+                # Format: {org_id}/sam/{agency}/{bureau}/solicitations/{notice_id}/attachments/{filename}
+                parts = asset.raw_object_key.split("/")
+                if len(parts) >= 7 and parts[1] == "sam" and parts[4] == "solicitations":
+                    agency = parts[2]
+                    bureau = parts[3]
+                    notice_id = parts[5]
+
+            return storage_paths.sam_attachment(org_id, agency, bureau, notice_id, filename, extracted=True)
+
         else:
             # Uploads and other sources use UUID-based paths
             return storage_paths.upload(org_id, asset_id, filename, extracted=True)
@@ -649,6 +703,16 @@ class ExtractionOrchestrator:
                     "error": error_message,
                 },
             )
+
+            # Notify group service if this run is part of a parent-child group
+            try:
+                run = await run_service.get_run(session, run_id)
+                if run and run.group_id:
+                    from .run_group_service import run_group_service
+                    await run_group_service.child_failed(session, run_id, error_message)
+                    logger.debug(f"Notified group service of failed extraction for run {run_id}")
+            except Exception as group_e:
+                logger.warning(f"Failed to notify group service of failure: {group_e}")
 
         except Exception as e:
             logger.error(f"Failed to record extraction failure: {e}", exc_info=True)

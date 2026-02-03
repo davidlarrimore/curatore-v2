@@ -11,7 +11,6 @@ Each handler:
 4. Returns a summary dict
 
 Handlers:
-- handle_job_cleanup: Delete expired jobs based on retention policies
 - handle_orphan_detection: Find orphaned objects (assets without extraction, etc.)
 - handle_retention_enforcement: Enforce data retention policies
 - handle_health_report: Generate system health summary
@@ -67,46 +66,6 @@ async def _log_event(
     )
     session.add(event)
     await session.flush()
-
-
-# =============================================================================
-# Handler: Job Cleanup (DEPRECATED)
-# =============================================================================
-
-async def handle_job_cleanup(
-    session: AsyncSession,
-    run: Run,
-    config: Dict[str, Any],
-) -> Dict[str, Any]:
-    """
-    DEPRECATED: Job system has been removed in favor of Run-based tracking.
-
-    This handler is kept as a no-op for backwards compatibility with
-    existing scheduled tasks that may reference "gc.cleanup".
-
-    Returns:
-        Dict indicating deprecation
-    """
-    await _log_event(
-        session, run.id, "INFO", "start",
-        "Job cleanup task is deprecated - Job system has been removed",
-        {"deprecated": True}
-    )
-
-    summary = {
-        "status": "deprecated",
-        "message": "Job system removed. Use Run-based tracking instead.",
-        "deleted_jobs": 0,
-        "deleted_documents": 0,
-    }
-
-    await _log_event(
-        session, run.id, "INFO", "summary",
-        "Job cleanup skipped (deprecated)",
-        summary
-    )
-
-    return summary
 
 
 # =============================================================================
@@ -1572,19 +1531,283 @@ async def handle_queue_pending_assets(
 
 
 # =============================================================================
+# Handler: Procedure Execute
+# =============================================================================
+
+async def handle_procedure_execute(
+    session: AsyncSession,
+    run: Run,
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Execute a procedure from a scheduled task.
+
+    This handler is used when procedures are triggered via the scheduled
+    task system (cron-based triggers converted to ScheduledTask records).
+
+    Config:
+    - procedure_slug: Slug of the procedure to execute
+    - params: Optional parameters to pass to the procedure
+
+    Returns:
+        Dict with procedure execution results
+    """
+    from ..procedures import procedure_executor
+
+    procedure_slug = config.get("procedure_slug")
+    params = config.get("params", {})
+
+    if not procedure_slug:
+        await _log_event(
+            session, run.id, "ERROR", "error",
+            "Procedure execute failed: procedure_slug not specified",
+            {"config": config}
+        )
+        return {"status": "failed", "error": "procedure_slug not specified"}
+
+    await _log_event(
+        session, run.id, "INFO", "start",
+        f"Starting scheduled procedure execution: {procedure_slug}",
+        {"procedure_slug": procedure_slug, "params": params}
+    )
+
+    try:
+        result = await procedure_executor.execute(
+            session=session,
+            organization_id=run.organization_id,
+            procedure_slug=procedure_slug,
+            params=params,
+            run_id=run.id,
+        )
+
+        status = result.get("status", "unknown")
+        await _log_event(
+            session, run.id, "INFO" if status == "completed" else "ERROR", "complete",
+            f"Procedure {procedure_slug} finished with status: {status}",
+            {
+                "status": status,
+                "steps_executed": result.get("steps_executed", 0),
+                "duration_ms": result.get("duration_ms"),
+            }
+        )
+
+        return result
+
+    except Exception as e:
+        error_msg = f"Procedure execution failed: {str(e)}"
+        logger.error(error_msg, exc_info=True)
+        await _log_event(session, run.id, "ERROR", "error", error_msg)
+        return {"status": "failed", "error": str(e)}
+
+
+# =============================================================================
+# Handler: Cleanup Expired Runs (formerly gc.cleanup)
+# =============================================================================
+
+
+async def handle_cleanup_expired_runs(
+    session: AsyncSession,
+    run: Run,
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Delete old completed/failed runs and their log events.
+
+    This handler cleans up run records that are past their retention period.
+    It only deletes runs in terminal states (completed, failed, cancelled, timed_out).
+
+    Args:
+        session: Database session
+        run: Run context for tracking
+        config: Task configuration:
+            - retention_days: Days to keep runs (default: 30)
+            - batch_size: Max runs to delete per execution (default: 1000)
+            - dry_run: If True, only count without deleting (default: False)
+
+    Returns:
+        Dict with cleanup statistics:
+        {
+            "deleted_runs": int,
+            "deleted_log_events": int,
+            "retention_days": int,
+            "dry_run": bool
+        }
+    """
+    retention_days = config.get("retention_days", 30)
+    batch_size = config.get("batch_size", 1000)
+    dry_run = config.get("dry_run", False)
+
+    cutoff = datetime.utcnow() - timedelta(days=retention_days)
+
+    await _log_event(
+        session, run.id, "INFO", "start",
+        f"Starting expired runs cleanup (retention={retention_days} days, dry_run={dry_run})",
+        {"retention_days": retention_days, "cutoff": cutoff.isoformat(), "dry_run": dry_run}
+    )
+
+    deleted_runs = 0
+    deleted_log_events = 0
+
+    try:
+        # Find expired runs in terminal states
+        terminal_statuses = ["completed", "failed", "cancelled", "timed_out"]
+
+        expired_runs_result = await session.execute(
+            select(Run)
+            .where(
+                and_(
+                    Run.status.in_(terminal_statuses),
+                    Run.created_at < cutoff,
+                    # Don't delete the current cleanup run
+                    Run.id != run.id,
+                )
+            )
+            .order_by(Run.created_at)
+            .limit(batch_size)
+        )
+        expired_runs = list(expired_runs_result.scalars().all())
+
+        await _log_event(
+            session, run.id, "INFO", "progress",
+            f"Found {len(expired_runs)} expired runs to clean up",
+            {"expired_count": len(expired_runs)}
+        )
+
+        if dry_run:
+            # Count log events that would be deleted
+            for expired_run in expired_runs:
+                log_count_result = await session.execute(
+                    select(func.count(RunLogEvent.id))
+                    .where(RunLogEvent.run_id == expired_run.id)
+                )
+                deleted_log_events += log_count_result.scalar() or 0
+            deleted_runs = len(expired_runs)
+
+            await _log_event(
+                session, run.id, "INFO", "progress",
+                f"[DRY RUN] Would delete {deleted_runs} runs and {deleted_log_events} log events",
+            )
+        else:
+            for expired_run in expired_runs:
+                try:
+                    # Count and delete log events first
+                    log_count_result = await session.execute(
+                        select(func.count(RunLogEvent.id))
+                        .where(RunLogEvent.run_id == expired_run.id)
+                    )
+                    log_count = log_count_result.scalar() or 0
+
+                    # Delete log events
+                    await session.execute(
+                        delete(RunLogEvent).where(RunLogEvent.run_id == expired_run.id)
+                    )
+
+                    # Delete the run
+                    await session.execute(
+                        delete(Run).where(Run.id == expired_run.id)
+                    )
+
+                    deleted_runs += 1
+                    deleted_log_events += log_count
+
+                    # Flush periodically
+                    if deleted_runs % 100 == 0:
+                        await session.flush()
+                        await _log_event(
+                            session, run.id, "INFO", "progress",
+                            f"Deleted {deleted_runs} runs so far...",
+                        )
+
+                except Exception as e:
+                    logger.error(f"Error deleting run {expired_run.id}: {e}")
+
+            await session.flush()
+
+    except Exception as e:
+        logger.error(f"Expired runs cleanup failed: {e}")
+        await _log_event(
+            session, run.id, "ERROR", "error",
+            f"Cleanup failed: {str(e)}",
+        )
+        raise
+
+    summary = {
+        "deleted_runs": deleted_runs,
+        "deleted_log_events": deleted_log_events,
+        "retention_days": retention_days,
+        "dry_run": dry_run,
+    }
+
+    await _log_event(
+        session, run.id, "INFO", "summary",
+        f"Expired runs cleanup complete: {deleted_runs} runs, {deleted_log_events} log events deleted",
+        summary
+    )
+
+    return summary
+
+
+# =============================================================================
 # Handler Registry
 # =============================================================================
 
+# Canonical handler names follow the pattern: {domain}.{action}
+# where domain is the resource area and action is a verb describing the operation.
+#
+# Domains:
+#   - assets: Asset-related operations (orphan detection, etc.)
+#   - runs: Run lifecycle management (stale cleanup, expired cleanup)
+#   - retention: Data retention policy enforcement
+#   - health: System health monitoring
+#   - search: Search index operations
+#   - sharepoint: SharePoint sync operations
+#   - sam: SAM.gov pull operations
+#   - extraction: Extraction queue operations
+#   - procedure: Procedure execution
+#
+# See CLAUDE.md for full documentation of each handler.
+
 MAINTENANCE_HANDLERS = {
-    "gc.cleanup": handle_job_cleanup,
-    "orphan.detect": handle_orphan_detection,
+    # === Canonical Names (use these for new scheduled tasks) ===
+
+    # Assets domain - orphan detection and cleanup
+    "assets.detect_orphans": handle_orphan_detection,
+
+    # Runs domain - run lifecycle management
+    "runs.cleanup_stale": handle_stale_run_cleanup,
+    "runs.cleanup_expired": handle_cleanup_expired_runs,
+
+    # Retention domain - data retention
     "retention.enforce": handle_retention_enforcement,
+
+    # Health domain - system monitoring
     "health.report": handle_health_report,
+
+    # Search domain - index management
     "search.reindex": handle_search_reindex,
-    "stale_run.cleanup": handle_stale_run_cleanup,
-    "sharepoint.scheduled_sync": handle_sharepoint_scheduled_sync,
-    "sam.scheduled_pull": handle_sam_scheduled_pull,
-    "extraction.queue_pending": handle_queue_pending_assets,
+
+    # SharePoint domain - sync triggers
+    "sharepoint.trigger_sync": handle_sharepoint_scheduled_sync,
+
+    # SAM.gov domain - pull triggers
+    "sam.trigger_pull": handle_sam_scheduled_pull,
+
+    # Extraction domain - queue management
+    "extraction.queue_orphans": handle_queue_pending_assets,
+
+    # Procedure domain - procedure execution
+    "procedure.execute": handle_procedure_execute,
+
+    # === Legacy Aliases (for backwards compatibility) ===
+    # These map old names to their canonical handlers.
+    # Existing scheduled tasks using these names will continue to work.
+
+    "orphan.detect": handle_orphan_detection,           # → assets.detect_orphans
+    "stale_run.cleanup": handle_stale_run_cleanup,      # → runs.cleanup_stale
+    "gc.cleanup": handle_cleanup_expired_runs,          # → runs.cleanup_expired
+    "sharepoint.scheduled_sync": handle_sharepoint_scheduled_sync,  # → sharepoint.trigger_sync
+    "sam.scheduled_pull": handle_sam_scheduled_pull,    # → sam.trigger_pull
+    "extraction.queue_pending": handle_queue_pending_assets,  # → extraction.queue_orphans
 }
 
 
@@ -1593,7 +1816,7 @@ async def get_handler(task_type: str):
     Get the handler function for a task type.
 
     Args:
-        task_type: Type of maintenance task
+        task_type: Type of maintenance task (canonical or legacy alias)
 
     Returns:
         Handler function or None if not found

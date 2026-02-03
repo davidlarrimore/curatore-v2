@@ -159,6 +159,18 @@ class LLMService:
             print(f"Warning: Failed to initialize OpenAI client: {e}")
             self._client = None
 
+    def _get_model(self) -> str:
+        """
+        Get the default LLM model name.
+
+        Returns:
+            str: Model name from config.yml or settings.
+        """
+        llm_config = config_loader.get_llm_config()
+        if llm_config and llm_config.model:
+            return llm_config.model
+        return settings.openai_model
+
     async def _get_llm_config(
         self,
         organization_id: Optional[UUID] = None,

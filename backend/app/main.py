@@ -290,6 +290,48 @@ async def startup_event() -> None:
             print(f"   ⚠️  Queue registry initialization warning: {e}")
             # Non-fatal - registry will use defaults
 
+        # Discover and register procedures and pipelines
+        try:
+            print("🔄 Discovering procedures and pipelines...")
+            async with database_service.get_session() as session:
+                from .procedures.discovery import procedure_discovery_service
+                from .pipelines.discovery import pipeline_discovery_service
+                from sqlalchemy import select
+                from .database.models import Organization
+
+                # Get organizations to register procedures/pipelines for
+                result = await session.execute(select(Organization))
+                orgs = result.scalars().all()
+
+                for org in orgs:
+                    # Discover and register procedures
+                    proc_result = await procedure_discovery_service.discover_and_register(
+                        session, org.id
+                    )
+                    proc_removed = proc_result.get('removed', 0)
+                    proc_msg = f"   ✅ Procedures: {proc_result.get('registered', 0)} registered, {proc_result.get('updated', 0)} updated"
+                    if proc_removed > 0:
+                        proc_msg += f", {proc_removed} removed"
+                    proc_msg += f" for org {org.name}"
+                    print(proc_msg)
+
+                    # Discover and register pipelines
+                    pipe_result = await pipeline_discovery_service.discover_and_register(
+                        session, org.id
+                    )
+                    pipe_removed = pipe_result.get('removed', 0)
+                    pipe_msg = f"   ✅ Pipelines: {pipe_result.get('registered', 0)} registered, {pipe_result.get('updated', 0)} updated"
+                    if pipe_removed > 0:
+                        pipe_msg += f", {pipe_removed} removed"
+                    pipe_msg += f" for org {org.name}"
+                    print(pipe_msg)
+
+        except ImportError as e:
+            print(f"   ⚠️  Procedure/pipeline discovery not available: {e}")
+        except Exception as e:
+            print(f"   ⚠️  Procedure/pipeline discovery warning: {e}")
+            # Non-fatal - procedures can be loaded on-demand
+
         # Sync default connections from environment variables
         try:
             print("🔗 Syncing default connections from environment variables...")

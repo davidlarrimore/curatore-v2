@@ -20,6 +20,10 @@ from .routers import (
     sam,
     sharepoint_sync,
     queue_admin,
+    functions,
+    procedures,
+    pipelines,
+    webhooks,
 )
 
 api_router = APIRouter()
@@ -49,5 +53,10 @@ api_router.include_router(sam.router)
 api_router.include_router(sharepoint_sync.router)
 # Extraction Queue Admin endpoints
 api_router.include_router(queue_admin.router)
+# Procedures Framework endpoints
+api_router.include_router(functions.router)
+api_router.include_router(procedures.router)
+api_router.include_router(pipelines.router)
+api_router.include_router(webhooks.router)
 
 __all__ = ["api_router"]

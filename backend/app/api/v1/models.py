@@ -1299,7 +1299,6 @@ class RunResponse(BaseModel):
     # Queue info (for pending runs)
     queue_position: Optional[int] = Field(None, description="Position in queue (1-indexed, only for pending runs)")
     queue_priority: Optional[int] = Field(None, description="Queue priority (0=normal, 1=high)")
-    can_boost: bool = Field(False, description="Whether this run can be boosted to high priority")
 
     class Config:
         from_attributes = True

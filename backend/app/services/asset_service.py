@@ -68,6 +68,7 @@ class AssetService:
         status: str = "pending",
         created_by: Optional[UUID] = None,
         auto_extract: bool = True,
+        group_id: Optional[UUID] = None,
     ) -> Asset:
         """
         Create a new asset record with initial version (Phase 1).
@@ -90,6 +91,7 @@ class AssetService:
             status: Initial status (default: pending)
             created_by: User UUID who created the asset
             auto_extract: Automatically queue extraction (default: True)
+            group_id: Optional group UUID to link extraction to (for parent-child tracking)
 
         Returns:
             Created Asset instance (with initial version created)
@@ -143,9 +145,10 @@ class AssetService:
                     session=session,
                     asset_id=asset.id,
                     user_id=created_by,
+                    group_id=group_id,
                 )
                 if extract_status == "queued":
-                    logger.debug(f"Auto-queued extraction for asset {asset.id}")
+                    logger.debug(f"Auto-queued extraction for asset {asset.id}" + (f" (group: {group_id})" if group_id else ""))
                 elif extract_status == "skipped_content_type":
                     logger.debug(f"Skipped extraction for asset {asset.id} (content type)")
                 elif extract_status == "skipped_unsupported_type":

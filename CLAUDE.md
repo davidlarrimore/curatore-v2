@@ -33,11 +33,14 @@ All background jobs are managed through the Queue Registry system:
 | `AssetVersion` | Individual versions of an asset |
 | `ExtractionResult` | Extracted markdown with triage metadata |
 | `Run` | Universal execution tracking (extraction, crawl, sync) |
+| `RunGroup` | Parent-child job tracking for group completion |
 | `RunLogEvent` | Structured logging for runs |
 | `ScrapeCollection` | Web scraping project with seed URLs |
 | `SamSearch/SamSolicitation` | SAM.gov federal opportunity tracking |
 | `SharePointSyncConfig` | SharePoint folder sync configuration |
 | `ScheduledTask` | Database-backed scheduled maintenance |
+| `Procedure` | Reusable workflow definitions (scheduled, event-driven) |
+| `Pipeline` | Multi-stage document processing workflows |
 
 ### Asset Pipeline Fields
 | Field | Type | Description |
@@ -107,14 +110,26 @@ backend/
 ├── app/
 │   ├── api/v1/routers/     # API endpoints
 │   ├── services/           # Business logic
-│   ├── database/models.py  # SQLAlchemy models
+│   ├── database/
+│   │   ├── models.py       # SQLAlchemy models
+│   │   └── procedures.py   # Procedure/Pipeline models
+│   ├── functions/          # Function library (llm, search, output, etc.)
+│   ├── procedures/         # Procedure executor and YAML definitions
+│   ├── pipelines/          # Pipeline executor and YAML definitions
 │   └── tasks.py            # Celery tasks
 ├── alembic/                # Database migrations
 
 frontend/
 ├── app/                    # Next.js App Router pages
+│   └── admin/
+│       ├── functions/      # Function browser
+│       ├── procedures/     # Procedure management
+│       └── pipelines/      # Pipeline management
 ├── components/             # React components
-└── lib/api.ts              # API client
+└── lib/
+    ├── api.ts              # API client
+    ├── active-jobs-context.tsx   # Parent job tracking
+    └── job-type-config.ts        # Job type configuration
 
 extraction-service/         # Document conversion microservice
 playwright-service/         # Browser rendering microservice
@@ -130,6 +145,8 @@ playwright-service/         # Browser rendering microservice
 |---------|---------|
 | `asset_service.py` | Asset CRUD and version management |
 | `run_service.py` | Run execution tracking |
+| `run_group_service.py` | Parent-child job tracking for group completion |
+| `event_service.py` | Event emission for triggering procedures/pipelines |
 | `extraction_orchestrator.py` | Extraction coordination |
 | `extraction_queue_service.py` | Extraction queue throttling and management |
 | `queue_registry.py` | Queue type definitions and capabilities |
@@ -149,14 +166,18 @@ playwright-service/         # Browser rendering microservice
 | Router | Endpoints |
 |--------|-----------|
 | `assets.py` | Asset CRUD, versions, re-extraction, pipeline status |
-| `runs.py` | Run status, logs, retry |
-| `queue_admin.py` | Job Manager: queue registry, active jobs, cancel/boost |
+| `runs.py` | Run status, logs, retry, group status |
+| `queue_admin.py` | Job Manager: queue registry, active jobs, cancel |
 | `search.py` | Full-text + semantic search with facets |
 | `sam.py` | SAM.gov searches, solicitations, notices |
 | `scrape.py` | Web scraping collections |
 | `sharepoint_sync.py` | SharePoint folder sync configuration and triggers |
 | `storage.py` | File upload/download |
 | `scheduled_tasks.py` | Maintenance task admin |
+| `functions.py` | Function browser and direct execution |
+| `procedures.py` | Procedure CRUD, triggers, execution |
+| `pipelines.py` | Pipeline CRUD, triggers, runs, item states |
+| `webhooks.py` | Webhook triggers for procedures/pipelines |
 
 ---
 
@@ -318,6 +339,123 @@ Curatore uses PostgreSQL with pgvector for hybrid full-text + semantic search:
 
 ---
 
+## Procedures & Pipelines Framework
+
+Curatore includes a framework for schedulable, event-driven workflows that search content, apply business rules, and execute actions.
+
+### Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                     PROCEDURES & PIPELINES FRAMEWORK                             │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+  TRIGGERS                    WORKFLOWS                     OUTPUTS
+      │                           │                            │
+      ▼                           ▼                            ▼
+┌─────────────┐           ┌─────────────┐            ┌─────────────────┐
+│   Schedule  │──────────▶│  PROCEDURE  │───────────▶│  LLM Analysis   │
+│   (cron)    │           │  (steps)    │            │  Notifications  │
+├─────────────┤           └─────────────┘            │  Artifacts      │
+│   Event     │                                      └─────────────────┘
+│   (system)  │──────────▶┌─────────────┐
+├─────────────┤           │  PIPELINE   │───────────▶┌─────────────────┐
+│   Webhook   │           │  (stages)   │            │  Enriched Data  │
+│   (HTTP)    │──────────▶│  [items]    │            │  Classifications│
+└─────────────┘           └─────────────┘            │  Updated Assets │
+                                                     └─────────────────┘
+```
+
+### Procedures vs Pipelines
+
+| Feature | Procedure | Pipeline |
+|---------|-----------|----------|
+| Purpose | Execute workflow steps | Process collections of items |
+| Structure | Sequential steps | Multi-stage with item tracking |
+| Item State | None | Per-item status and checkpoints |
+| Use Cases | Digests, notifications, reports | Document classification, enrichment |
+
+### Functions
+
+Functions are the atomic units of work. Located in `backend/app/functions/`:
+
+| Category | Functions |
+|----------|-----------|
+| `llm` | `generate`, `extract`, `summarize`, `classify` |
+| `search` | `search_assets`, `query_solicitations`, `get_content` |
+| `output` | `update_metadata`, `bulk_update_metadata`, `create_artifact`, `create_pdf` |
+| `notify` | `send_email`, `webhook` |
+| `compound` | `analyze_solicitation`, `summarize_solicitations`, `generate_digest` |
+
+### YAML Definitions
+
+Procedures and pipelines are defined in YAML with Jinja2 templating:
+
+```yaml
+# backend/app/procedures/definitions/sam_weekly_digest.yaml
+name: SAM.gov Weekly Digest
+slug: sam_weekly_digest
+
+triggers:
+  - type: cron
+    cron_expression: "0 18 * * 0"  # Sunday 6 PM
+  - type: event
+    event_name: sam_pull.completed
+
+steps:
+  - name: query_opportunities
+    function: query_solicitations
+    params:
+      posted_within_days: "{{ params.posted_within_days }}"
+  - name: generate_digest
+    function: generate
+    params:
+      prompt: "Create digest for {{ steps.query_opportunities | length }} opportunities"
+```
+
+### Event System
+
+Events trigger procedures and pipelines:
+
+| Event | Trigger |
+|-------|---------|
+| `sam_pull.completed` | After SAM.gov pull finishes |
+| `sharepoint_sync.completed` | After SharePoint sync finishes |
+| `sam_pull.group_completed` | After all extractions from a SAM pull complete |
+| `sharepoint_sync.group_completed` | After all extractions from a sync complete |
+
+### Key Files
+
+```
+backend/app/
+├── functions/
+│   ├── base.py              # BaseFunction, FunctionResult
+│   ├── context.py           # FunctionContext with services
+│   ├── registry.py          # FunctionRegistry
+│   └── llm/, search/, output/, notify/, compound/
+├── procedures/
+│   ├── executor.py          # ProcedureExecutor
+│   ├── loader.py            # YAML loader with Jinja2
+│   └── definitions/         # YAML procedure definitions
+├── pipelines/
+│   ├── executor.py          # PipelineExecutor with checkpoints
+│   └── definitions/         # YAML pipeline definitions
+├── database/
+│   └── procedures.py        # Procedure, Pipeline, Trigger models
+└── services/
+    └── event_service.py     # Event emission
+```
+
+### Frontend Pages
+
+| Page | Path | Purpose |
+|------|------|---------|
+| Functions | `/admin/functions` | Browse and test functions |
+| Procedures | `/admin/procedures` | Manage and run procedures |
+| Pipelines | `/admin/pipelines` | Manage pipelines and view runs |
+
+---
+
 ## Data Flow
 
 ### High-Level Flow
@@ -380,11 +518,13 @@ The Queue Registry (`backend/app/services/queue_registry.py`) defines all job qu
 **Existing Queue Types:**
 | Queue | Run Type | Celery Queue | Capabilities |
 |-------|----------|--------------|--------------|
-| Extraction | `extraction` | `extraction` | cancel, boost, retry |
+| Extraction | `extraction` | `extraction` | cancel, retry |
 | SAM.gov | `sam_pull` | `sam` | - |
-| Web Scrape | `scrape` | `scrape` | - |
+| Web Scrape | `scrape` | `scrape` | cancel |
 | SharePoint | `sharepoint_sync` | `sharepoint` | cancel |
 | Maintenance | `system_maintenance` | `maintenance` | - |
+| Procedure | `procedure` | `maintenance` | cancel, retry |
+| Pipeline | `pipeline` | `pipeline` | cancel, retry |
 
 **To add a new queue type (e.g., Google Drive sync):**
 
@@ -399,7 +539,6 @@ class GoogleDriveQueue(QueueDefinition):
             celery_queue="google_drive",         # Celery queue name
             run_type_aliases=["gdrive_sync"],    # Alternative run_type values
             can_cancel=True,                     # Allow job cancellation
-            can_boost=False,                     # No priority boosting
             can_retry=False,                     # No automatic retry
             label="Google Drive",                # UI display name
             description="Google Drive sync",     # UI description
@@ -533,6 +672,163 @@ const handleDelete = async () => {
 - `frontend/lib/deletion-jobs-context.tsx` - Global job tracking
 - `frontend/components/ui/ConfirmDeleteDialog.tsx` - Reusable dialog
 
+### Parent-Child Job Pattern (Run Groups)
+
+For parent jobs that spawn child jobs (e.g., SAM pull creates extraction jobs for attachments), use Run Groups to track completion of all children before triggering follow-up procedures:
+
+**Architecture:**
+```
+Parent Job (SAM Pull) → Creates Run Group → Downloads Attachments
+                                                   ↓
+                                         Creates Assets (with group_id)
+                                                   ↓
+                                         Queues Extractions (children linked to group)
+                                                   ↓
+                                   Each child extraction notifies group on complete/fail
+                                                   ↓
+                                   When all children done → Group completes
+                                                   ↓
+                                   Emits {group_type}.group_completed event
+                                                   ↓
+                                   Triggers configured after_procedure_slug
+```
+
+**Supported Group Types:**
+| Type | Description | Parent Job | Priority |
+|------|-------------|------------|----------|
+| `sharepoint_sync` | SharePoint sync + file extractions | SharePoint sync task | 0 (lowest) |
+| `sam_pull` | SAM.gov pull + attachment extractions | SAM pull task | 1 |
+| `scrape` | Web crawl + document extractions | Scrape task | 1 |
+| `pipeline` | Pipeline workflow extractions | Pipeline task | 2 |
+| `upload_group` | Grouped uploads + extractions | Bulk upload | 3 |
+
+**Queue Priority System:**
+
+Child extractions spawned by parent jobs are automatically assigned priority based on `group_type`:
+```python
+# QueuePriority levels (in backend/app/services/queue_registry.py)
+SHAREPOINT_SYNC = 0  # Background SharePoint sync extractions (lowest)
+SAM_SCRAPE = 1       # SAM.gov and web scrape extractions
+PIPELINE = 2         # Pipeline/workflow extractions
+USER_UPLOAD = 3      # Direct user uploads (default for new runs)
+USER_BOOSTED = 4     # Manually boosted by user (highest)
+```
+
+Priority is auto-determined when `group_id` is passed to `asset_service.create_asset()`.
+
+**Timeout Handling:**
+
+Parent jobs are excluded from timeout checks while they have active children:
+- Parent jobs with `is_group_parent=True` are not timed out while `completed_children + failed_children < total_children`
+- This prevents parent jobs from timing out while waiting for child extractions in queue
+
+**Cancellation Behavior:**
+
+Different job types have different cancellation cascade behavior:
+
+| Job Type | Cascade Mode | Behavior |
+|----------|--------------|----------|
+| SharePoint Sync | `QUEUED_ONLY` | Cancel pending/submitted children only; running extractions complete |
+| SAM.gov Pull | `QUEUED_ONLY` | Cancel pending/submitted children only; running extractions complete |
+| Web Scrape | `QUEUED_ONLY` | Cancel pending/submitted children only; running extractions complete |
+| Pipeline | `ALL` | Cancel ALL children including running (atomicity - partial results useless) |
+
+Use `job_cancellation_service` for cascade cancellation:
+```python
+from .services.job_cancellation_service import job_cancellation_service
+
+result = await job_cancellation_service.cancel_parent_job(
+    session=session,
+    run_id=run_id,
+    reason="User cancelled",
+)
+# Returns: {"success": True, "children_cancelled": 5, "children_skipped": 2}
+```
+
+**Failure Handling:**
+
+When a parent job fails:
+1. The RunGroup is marked as failed (prevents post-job triggers from running)
+2. No new children can be spawned (`should_spawn_children()` returns False)
+3. For pipelines: all active children are cancelled
+4. For other types: running children complete normally
+
+```python
+# In parent task error handler:
+await run_group_service.mark_group_failed(session, group_id, str(error))
+```
+
+**Backend Implementation:**
+
+1. **Parent job creates group:**
+```python
+from .services.run_group_service import run_group_service
+
+group = await run_group_service.create_group(
+    session=session,
+    organization_id=org_id,
+    group_type="sam_pull",
+    parent_run_id=run_id,
+    config={
+        "after_procedure_slug": "sam-weekly-digest",
+        "after_procedure_params": {},
+    },
+)
+```
+
+2. **Pass group_id when creating assets:**
+```python
+asset = await asset_service.create_asset(
+    session=session,
+    # ... other params ...
+    group_id=group.id,  # Links child extraction to group with auto-priority
+)
+```
+
+3. **Extraction orchestrator auto-notifies group:**
+The extraction orchestrator automatically calls `run_group_service.child_completed()` or `child_failed()` when extractions finish (no additional code needed).
+
+4. **Finalize group after parent job completes:**
+```python
+await run_group_service.finalize_group(session, group.id)
+```
+
+5. **Handle parent job failure:**
+```python
+try:
+    # ... parent job work ...
+except Exception as e:
+    await run_group_service.mark_group_failed(session, group_id, str(e))
+    raise
+```
+
+**Key Files:**
+- `backend/app/services/run_group_service.py` - Group lifecycle management
+- `backend/app/services/job_cancellation_service.py` - Cascade cancellation logic
+- `backend/app/services/extraction_queue_service.py` - Priority handling, timeout exclusion
+- `backend/app/services/queue_registry.py` - QueuePriority enum
+- `backend/app/database/models.py` - `RunGroup` model, `Run.group_id`, `Run.spawned_by_parent`
+- `backend/app/services/extraction_orchestrator.py` - Auto-notifies group
+
+**Frontend Integration:**
+
+The Job Manager UI (`/admin/queue`) displays:
+- Parent job badge with "Parent" indicator
+- Child job stats showing running/pending/completed/failed counts
+- Child job badge for jobs that belong to a parent group
+
+**Automation Configuration:**
+
+Jobs can be configured with `automation_config` JSONB field (e.g., `SamSearch.automation_config`):
+```json
+{
+  "after_procedure_slug": "sam-weekly-digest",
+  "after_procedure_params": {
+    "include_summaries": true
+  }
+}
+```
+
 ---
 
 ## Database Configuration
@@ -644,6 +940,45 @@ See `frontend/app/connections/page.tsx` as reference implementation.
 
 **Dark Mode**: All components use `dark:` prefix
 
+### Active Jobs Tracking Pattern
+
+For tracking long-running parent jobs (SAM pull, SharePoint sync, pipelines) across page navigation:
+
+```tsx
+import { useActiveJobs } from '@/lib/active-jobs-context'
+import { RunningJobBanner } from '@/components/ui/RunningJobBanner'
+
+function MyPage() {
+  const { addJob, getJobsForResource, isResourceBusy } = useActiveJobs()
+
+  // Start tracking a job
+  const handleStart = async () => {
+    const result = await api.startJob(resourceId)
+    addJob({
+      runId: result.run_id,
+      jobType: 'sharepoint_sync',
+      displayName: 'My Sync',
+      resourceId: resourceId,
+      resourceType: 'sharepoint_config',
+    })
+  }
+
+  // Show banners for active jobs
+  return (
+    <>
+      {getJobsForResource('sharepoint_config', resourceId).map(job => (
+        <RunningJobBanner key={job.runId} job={job} showChildJobs />
+      ))}
+    </>
+  )
+}
+```
+
+**Key Files:**
+- `frontend/lib/active-jobs-context.tsx` - Global job tracking context
+- `frontend/lib/job-type-config.ts` - Job type icons, colors, labels
+- `frontend/components/ui/RunningJobBanner.tsx` - Reusable job banner
+
 ---
 
 ## API Quick Reference
@@ -681,11 +1016,183 @@ Job Manager (Queue Admin):
   GET    /api/v1/queue/registry               # Get queue type definitions
   GET    /api/v1/queue/jobs                   # List all active jobs
   GET    /api/v1/queue/jobs?run_type=X        # Filter by job type
-  POST   /api/v1/queue/jobs/{run_id}/cancel   # Cancel a job
+  GET    /api/v1/queue/jobs/{run_id}/children # Get child job stats (parent jobs)
+  POST   /api/v1/queue/jobs/{run_id}/cancel   # Cancel job with cascade
   GET    /api/v1/queue/unified                # Unified queue statistics
+
+Functions:
+  GET    /api/v1/functions/                   # List all functions
+  GET    /api/v1/functions/categories         # List categories
+  GET    /api/v1/functions/{name}             # Get function details
+  POST   /api/v1/functions/{name}/execute     # Execute function directly
+
+Procedures:
+  GET    /api/v1/procedures/                  # List procedures
+  GET    /api/v1/procedures/{slug}            # Get procedure details
+  POST   /api/v1/procedures/{slug}/run        # Execute procedure
+  POST   /api/v1/procedures/{slug}/enable     # Enable procedure
+  POST   /api/v1/procedures/{slug}/disable    # Disable procedure
+
+Pipelines:
+  GET    /api/v1/pipelines/                   # List pipelines
+  GET    /api/v1/pipelines/{slug}             # Get pipeline details
+  POST   /api/v1/pipelines/{slug}/run         # Execute pipeline
+  GET    /api/v1/pipelines/{slug}/runs/{id}/items  # Get item states
+
+Webhooks:
+  POST   /api/v1/webhooks/procedures/{slug}   # Trigger procedure via webhook
+  POST   /api/v1/webhooks/pipelines/{slug}    # Trigger pipeline via webhook
 
 System:
   GET    /api/v1/system/health/comprehensive    # Full health check
+```
+
+---
+
+## Scheduled Maintenance Tasks
+
+Curatore uses a scheduled task system for background maintenance operations. Tasks are defined in the database (`ScheduledTask` model) and executed by Celery workers.
+
+### Naming Convention
+
+Task types follow the pattern `{domain}.{action}`:
+- **domain**: The resource area being acted upon
+- **action**: A verb or verb_modifier describing the operation
+
+### Handler Reference
+
+| Task Type | Handler | Description |
+|-----------|---------|-------------|
+| **Assets Domain** |||
+| `assets.detect_orphans` | `handle_orphan_detection` | Find/fix orphaned assets: stuck pending, missing files, orphaned SharePoint docs |
+| **Runs Domain** |||
+| `runs.cleanup_stale` | `handle_stale_run_cleanup` | Reset runs stuck in pending/submitted/running; retry before failing |
+| `runs.cleanup_expired` | `handle_cleanup_expired_runs` | Delete old completed/failed runs after retention period |
+| **Retention Domain** |||
+| `retention.enforce` | `handle_retention_enforcement` | Mark old temp artifacts as deleted per retention policy |
+| **Health Domain** |||
+| `health.report` | `handle_health_report` | Generate system health summary with metrics and warnings |
+| **Search Domain** |||
+| `search.reindex` | `handle_search_reindex` | Rebuild PostgreSQL full-text + semantic search index |
+| **SharePoint Domain** |||
+| `sharepoint.trigger_sync` | `handle_sharepoint_scheduled_sync` | Trigger syncs for configs with specified frequency |
+| **SAM.gov Domain** |||
+| `sam.trigger_pull` | `handle_sam_scheduled_pull` | Trigger pulls for searches with specified frequency |
+| **Extraction Domain** |||
+| `extraction.queue_orphans` | `handle_queue_pending_assets` | Safety net: queue extractions for orphaned pending assets |
+| **Procedure Domain** |||
+| `procedure.execute` | `handle_procedure_execute` | Execute a procedure from scheduled task |
+
+### Legacy Aliases
+
+For backwards compatibility, these old names map to canonical handlers:
+
+| Legacy Name | Maps To |
+|-------------|---------|
+| `orphan.detect` | `assets.detect_orphans` |
+| `stale_run.cleanup` | `runs.cleanup_stale` |
+| `gc.cleanup` | `runs.cleanup_expired` |
+| `sharepoint.scheduled_sync` | `sharepoint.trigger_sync` |
+| `sam.scheduled_pull` | `sam.trigger_pull` |
+| `extraction.queue_pending` | `extraction.queue_orphans` |
+
+### Handler Details
+
+#### `assets.detect_orphans`
+Finds and fixes orphaned assets:
+- Assets stuck in "pending" status (auto-retries extraction, up to 3 times)
+- Assets marked "ready" but missing extraction results
+- Assets with missing raw files in object storage
+- Orphaned SharePoint assets (sync config deleted/archived)
+
+**Config:**
+```json
+{"auto_fix": true}
+```
+
+#### `runs.cleanup_stale`
+Resets or fails runs stuck in non-terminal states:
+- `submitted` runs older than `stale_submitted_minutes` (default: 30)
+- `running` runs older than `stale_running_hours` (default: 2)
+- `pending` runs older than `stale_pending_hours` (default: 1)
+- Retries up to `max_retries` (default: 3) before marking as failed
+
+**Config:**
+```json
+{
+  "stale_submitted_minutes": 30,
+  "stale_running_hours": 2,
+  "stale_pending_hours": 1,
+  "max_retries": 3,
+  "dry_run": false
+}
+```
+
+#### `runs.cleanup_expired`
+Deletes old completed/failed runs and their log events:
+- Only deletes runs in terminal states (completed, failed, cancelled, timed_out)
+- Respects `retention_days` config (default: 30)
+- Processes up to `batch_size` runs per execution (default: 1000)
+
+**Config:**
+```json
+{
+  "retention_days": 30,
+  "batch_size": 1000,
+  "dry_run": false
+}
+```
+
+#### `sharepoint.trigger_sync` / `sam.trigger_pull`
+Trigger scheduled syncs/pulls for configs with matching frequency:
+- Skips configs that already have a running sync/pull
+- Creates new Run record and dispatches Celery task
+
+**Config:**
+```json
+{"frequency": "hourly"}  // or "daily"
+```
+
+### Adding a New Maintenance Handler
+
+1. Add handler function in `backend/app/services/maintenance_handlers.py`:
+```python
+async def handle_my_task(
+    session: AsyncSession,
+    run: Run,
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Docstring describing the handler."""
+    await _log_event(session, run.id, "INFO", "start", "Starting my task")
+    # ... implementation ...
+    return {"status": "completed", ...}
+```
+
+2. Register in `MAINTENANCE_HANDLERS` dict with canonical name:
+```python
+MAINTENANCE_HANDLERS = {
+    # ... existing handlers ...
+    "mydomain.myaction": handle_my_task,
+}
+```
+
+3. Add default scheduled task in `backend/app/commands/seed.py`:
+```python
+{
+    "name": "my_task",
+    "display_name": "My Task",
+    "description": "What this task does",
+    "task_type": "mydomain.myaction",
+    "scope_type": "global",
+    "schedule_expression": "0 * * * *",  # Cron expression
+    "enabled": True,
+    "config": {},
+},
+```
+
+4. Re-seed scheduled tasks:
+```bash
+docker exec curatore-backend python -m app.commands.seed --seed-scheduled-tasks
 ```
 
 ---

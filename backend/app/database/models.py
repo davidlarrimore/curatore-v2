@@ -893,7 +893,15 @@ class Run(Base):
     submitted_to_celery_at = Column(DateTime, nullable=True)
     timeout_at = Column(DateTime, nullable=True)  # Legacy: absolute timeout (deprecated)
     last_activity_at = Column(DateTime, nullable=True, index=True)  # Activity-based timeout tracking
-    queue_priority = Column(Integer, default=0, index=True)  # 0=normal, 1=high (user-requested)
+    # Queue priority levels:
+    # 0 = SharePoint sync extractions (lowest - background sync)
+    # 1 = SAM.gov/Scrape extractions (background pulls/crawls)
+    # 2 = Pipeline extractions (workflow extractions)
+    # 3 = User upload extractions (direct user uploads)
+    # 4 = User boosted (manually prioritized)
+    queue_priority = Column(Integer, default=3, index=True)
+    # Track if extraction was spawned by a parent job (for timeout/cancel logic)
+    spawned_by_parent = Column(Boolean, default=False, nullable=False, index=True)
 
     # Input and configuration (JSONB for proper PostgreSQL containment queries)
     input_asset_ids = Column(JSONB, nullable=False, default=list, server_default="[]")
@@ -932,8 +940,103 @@ class Run(Base):
         Index("ix_runs_queue_priority_status", "queue_priority", "status"),  # Queue processing
     )
 
+    # Group relationship (for parent-child job tracking)
+    group_id = Column(UUID(), ForeignKey("run_groups.id", ondelete="SET NULL"), nullable=True, index=True)
+    is_group_parent = Column(Boolean, default=False, nullable=False)
+    group = relationship("RunGroup", back_populates="runs", foreign_keys=[group_id])
+
     def __repr__(self) -> str:
         return f"<Run(id={self.id}, type={self.run_type}, status={self.status})>"
+
+
+class RunGroup(Base):
+    """
+    RunGroup model for tracking parent-child job relationships.
+
+    When a parent job (like SAM pull) creates child jobs (like extractions), we need
+    to track when ALL related work is complete before emitting completion events.
+    This enables proper procedure triggers that run only after all processing is done.
+
+    Group Types:
+        - sam_pull: SAM.gov pull + attachment extractions
+        - sharepoint_sync: SharePoint sync + file extractions
+        - scrape: Web crawl + page/document extractions
+        - upload_group: Group of related uploads + extractions
+
+    Lifecycle:
+        1. Parent job creates group
+        2. Child runs are linked to group as they're created
+        3. As children complete, counters are updated
+        4. When all children complete, group status changes and events fire
+
+    Attributes:
+        id: Unique group identifier
+        organization_id: Organization context
+        group_type: Type of group (sam_pull, sharepoint_sync, scrape, upload_group)
+        parent_run_id: The parent run that initiated this group
+        status: Group status (pending, running, completed, failed, partial)
+        total_children: Expected number of child runs
+        completed_children: Number of successfully completed children
+        failed_children: Number of failed children
+        config: Group-specific config (e.g., procedure triggers to run)
+        created_at: When group was created
+        completed_at: When group completed
+    """
+
+    __tablename__ = "run_groups"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Group metadata
+    group_type = Column(String(50), nullable=False, index=True)  # sam_pull, sharepoint_sync, scrape, upload_group
+    parent_run_id = Column(UUID(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True)
+
+    # Group status
+    # - pending: Group created, waiting for children
+    # - running: Children are being processed
+    # - completed: All children completed successfully
+    # - failed: All children failed
+    # - partial: Some children completed, some failed
+    status = Column(String(50), nullable=False, default="pending", index=True)
+
+    # Child tracking
+    total_children = Column(Integer, default=0, nullable=False)
+    completed_children = Column(Integer, default=0, nullable=False)
+    failed_children = Column(Integer, default=0, nullable=False)
+
+    # Configuration (includes procedure triggers)
+    # Example: {
+    #   "before_procedure_slug": "pre-sam-check",
+    #   "after_procedure_slug": "sam-weekly-digest",
+    #   "source_config_id": "uuid-of-sam-search"
+    # }
+    config = Column(JSONB, nullable=False, default=dict, server_default="{}")
+
+    # Results summary
+    results_summary = Column(JSONB, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    started_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    organization = relationship("Organization")
+    parent_run = relationship("Run", foreign_keys=[parent_run_id], post_update=True)
+    runs = relationship("Run", back_populates="group", foreign_keys="Run.group_id")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_run_groups_org_status", "organization_id", "status"),
+        Index("ix_run_groups_type_status", "group_type", "status"),
+        Index("ix_run_groups_parent_run", "parent_run_id"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<RunGroup(id={self.id}, type={self.group_type}, status={self.status}, children={self.completed_children}/{self.total_children})>"
 
 
 class ExtractionResult(Base):
@@ -1579,7 +1682,6 @@ class ScheduledTask(Base):
     - Task execution is tracked via last_run_id linking to Run model
 
     Task Types:
-    - gc.cleanup: Garbage collection (expired jobs, orphaned files)
     - orphan.detect: Find orphaned objects (assets without extraction, etc.)
     - retention.enforce: Enforce data retention policies
     - health.report: Generate system health summary
@@ -1611,15 +1713,15 @@ class ScheduledTask(Base):
         last_run: Most recent Run for this task
 
     Usage:
-        # Create a global cleanup task
+        # Create a global orphan detection task
         task = ScheduledTask(
-            name="cleanup_expired_jobs",
-            display_name="Cleanup Expired Jobs",
-            task_type="gc.cleanup",
+            name="detect_orphaned_objects",
+            display_name="Detect Orphaned Objects",
+            task_type="orphan.detect",
             scope_type="global",
-            schedule_expression="0 3 * * *",  # Daily at 3 AM
+            schedule_expression="0 4 * * 0",  # Weekly on Sunday at 4 AM
             enabled=True,
-            config={"dry_run": False}
+            config={}
         )
 
         # Trigger task manually
@@ -1640,7 +1742,7 @@ class ScheduledTask(Base):
 
     # Task classification
     task_type = Column(String(50), nullable=False, index=True)
-    # gc.cleanup, orphan.detect, retention.enforce, health.report
+    # orphan.detect, retention.enforce, health.report
     scope_type = Column(String(50), nullable=False, default="global")
     # global, organization
 
@@ -1759,6 +1861,15 @@ class SamSearch(Base):
         UUID(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
     )
     pull_frequency = Column(String(50), nullable=False, default="manual")  # manual, hourly, daily
+
+    # Automation configuration (procedure triggers)
+    # Example: {
+    #   "before_procedure_slug": "pre-sam-validation",
+    #   "before_procedure_params": {},
+    #   "after_procedure_slug": "sam-weekly-digest",
+    #   "after_procedure_params": {"include_summaries": true}
+    # }
+    automation_config = Column(JSONB, nullable=False, default=dict, server_default="{}")
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

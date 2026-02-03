@@ -20,7 +20,6 @@ import {
   ChevronDown,
   ChevronRight,
   Timer,
-  Trash2,
   Search,
   Activity,
   Shield,
@@ -33,7 +32,6 @@ interface SystemMaintenanceTabProps {
 
 // Task type icons
 const TASK_TYPE_ICONS: Record<string, React.ReactNode> = {
-  'gc.cleanup': <Trash2 className="w-4 h-4" />,
   'orphan.detect': <Search className="w-4 h-4" />,
   'retention.enforce': <Shield className="w-4 h-4" />,
   'health.report': <Activity className="w-4 h-4" />,
@@ -41,7 +39,6 @@ const TASK_TYPE_ICONS: Record<string, React.ReactNode> = {
 
 // Task type colors
 const TASK_TYPE_COLORS: Record<string, string> = {
-  'gc.cleanup': 'from-red-500 to-orange-500',
   'orphan.detect': 'from-amber-500 to-yellow-500',
   'retention.enforce': 'from-blue-500 to-cyan-500',
   'health.report': 'from-emerald-500 to-teal-500',

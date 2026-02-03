@@ -187,78 +187,95 @@ async def seed_scheduled_tasks() -> list:
 
     logger.info("Seeding default scheduled tasks...")
 
+    # Scheduled tasks use canonical task_type names following the pattern: {domain}.{action}
+    # See CLAUDE.md "Scheduled Maintenance Tasks" section for full documentation.
     default_tasks = [
-        {
-            "name": "cleanup_expired_jobs",
-            "display_name": "Cleanup Expired Jobs",
-            "description": "Delete jobs that have exceeded their retention period based on organization settings.",
-            "task_type": "gc.cleanup",
-            "scope_type": "global",
-            "schedule_expression": "0 3 * * *",  # Daily at 3 AM UTC
-            "enabled": True,
-            "config": {"dry_run": False},
-        },
+        # === Assets Domain ===
         {
             "name": "detect_orphaned_objects",
-            "display_name": "Detect Orphaned Objects",
-            "description": "Find orphaned objects: assets without extraction results, stuck runs, etc.",
-            "task_type": "orphan.detect",
+            "display_name": "Detect Orphaned Assets",
+            "description": "Find and fix orphaned assets: stuck in pending, missing files, orphaned SharePoint docs. Auto-retries extraction for stuck assets.",
+            "task_type": "assets.detect_orphans",
             "scope_type": "global",
             "schedule_expression": "0 4 * * 0",  # Weekly on Sunday at 4 AM UTC
             "enabled": True,
-            "config": {},
+            "config": {"auto_fix": True},
         },
+
+        # === Runs Domain ===
+        {
+            "name": "stale_run_cleanup",
+            "display_name": "Cleanup Stale Runs",
+            "description": "Reset runs stuck in pending/submitted/running state. Retries up to max_retries before marking as failed.",
+            "task_type": "runs.cleanup_stale",
+            "scope_type": "global",
+            "schedule_expression": "0 * * * *",  # Every hour
+            "enabled": True,
+            "config": {
+                "stale_submitted_minutes": 30,
+                "stale_running_hours": 2,
+                "stale_pending_hours": 1,
+                "max_retries": 3,
+                "dry_run": False,
+            },
+        },
+        {
+            "name": "expired_run_cleanup",
+            "display_name": "Cleanup Expired Runs",
+            "description": "Delete old completed/failed runs and their log events after retention period.",
+            "task_type": "runs.cleanup_expired",
+            "scope_type": "global",
+            "schedule_expression": "0 3 * * 0",  # Weekly on Sunday at 3 AM UTC
+            "enabled": True,
+            "config": {
+                "retention_days": 30,
+                "batch_size": 1000,
+                "dry_run": False,
+            },
+        },
+
+        # === Retention Domain ===
         {
             "name": "enforce_retention",
             "display_name": "Enforce Retention Policies",
-            "description": "Enforce data retention policies by marking old artifacts as deleted.",
+            "description": "Enforce data retention policies by marking old temp artifacts as deleted.",
             "task_type": "retention.enforce",
             "scope_type": "global",
             "schedule_expression": "0 5 * * *",  # Daily at 5 AM UTC
             "enabled": True,
             "config": {"default_retention_days": 90, "dry_run": False},
         },
+
+        # === Health Domain ===
         {
             "name": "system_health_report",
             "display_name": "System Health Report",
-            "description": "Generate a system health summary with asset, job, and extraction statistics.",
+            "description": "Generate system health summary with asset counts, extraction success rates, and warning detection.",
             "task_type": "health.report",
             "scope_type": "global",
             "schedule_expression": "0 6 * * *",  # Daily at 6 AM UTC
             "enabled": True,
             "config": {},
         },
+
+        # === Search Domain ===
         {
             "name": "search_reindex",
             "display_name": "Search Index Rebuild",
-            "description": "Rebuild the PostgreSQL search index (full-text + semantic) for all assets. Useful after enabling search or recovering from index issues.",
+            "description": "Rebuild PostgreSQL search index (full-text + semantic) for all assets. Enable when search is configured or to recover from index issues.",
             "task_type": "search.reindex",
             "scope_type": "global",
             "schedule_expression": "0 2 * * 0",  # Weekly on Sunday at 2 AM UTC
-            "enabled": False,  # Disabled by default - enable when search is configured
+            "enabled": False,  # Disabled by default
             "config": {"batch_size": 100},
         },
-        {
-            "name": "stale_run_cleanup",
-            "display_name": "Stale Run Cleanup",
-            "description": "Clean up runs stuck in pending/submitted/running state. Retries before failing.",
-            "task_type": "stale_run.cleanup",
-            "scope_type": "global",
-            "schedule_expression": "0 * * * *",  # Every hour (was every 4 hours)
-            "enabled": True,
-            "config": {
-                "stale_submitted_minutes": 30,  # Reset runs stuck in 'submitted' for >30 min
-                "stale_running_hours": 2,       # Reset runs stuck in 'running' for >2 hours
-                "stale_pending_hours": 1,       # Reset runs stuck in 'pending' for >1 hour
-                "max_retries": 3,               # Fail after 3 retry attempts
-                "dry_run": False,
-            },
-        },
+
+        # === SharePoint Domain ===
         {
             "name": "sharepoint_sync_hourly",
             "display_name": "SharePoint Sync (Hourly)",
             "description": "Trigger SharePoint syncs for all configs with 'hourly' frequency.",
-            "task_type": "sharepoint.scheduled_sync",
+            "task_type": "sharepoint.trigger_sync",
             "scope_type": "global",
             "schedule_expression": "0 * * * *",  # Every hour at minute 0
             "enabled": True,
@@ -268,17 +285,19 @@ async def seed_scheduled_tasks() -> list:
             "name": "sharepoint_sync_daily",
             "display_name": "SharePoint Sync (Daily)",
             "description": "Trigger SharePoint syncs for all configs with 'daily' frequency.",
-            "task_type": "sharepoint.scheduled_sync",
+            "task_type": "sharepoint.trigger_sync",
             "scope_type": "global",
             "schedule_expression": "0 1 * * *",  # Daily at 1 AM UTC
             "enabled": True,
             "config": {"frequency": "daily"},
         },
+
+        # === SAM.gov Domain ===
         {
             "name": "sam_pull_hourly",
             "display_name": "SAM.gov Pull (Hourly)",
             "description": "Trigger SAM.gov pulls for all searches with 'hourly' frequency.",
-            "task_type": "sam.scheduled_pull",
+            "task_type": "sam.trigger_pull",
             "scope_type": "global",
             "schedule_expression": "0 * * * *",  # Every hour at minute 0
             "enabled": True,
@@ -288,17 +307,19 @@ async def seed_scheduled_tasks() -> list:
             "name": "sam_pull_daily",
             "display_name": "SAM.gov Pull (Daily)",
             "description": "Trigger SAM.gov pulls for all searches with 'daily' frequency.",
-            "task_type": "sam.scheduled_pull",
+            "task_type": "sam.trigger_pull",
             "scope_type": "global",
             "schedule_expression": "0 2 * * *",  # Daily at 2 AM UTC
             "enabled": True,
             "config": {"frequency": "daily"},
         },
+
+        # === Extraction Domain ===
         {
             "name": "queue_pending_assets",
-            "display_name": "Queue Pending Assets (Safety Net)",
-            "description": "Safety net: Queue extractions for any pending assets that don't have active extraction runs. Catches edge cases missed by auto-queueing.",
-            "task_type": "extraction.queue_pending",
+            "display_name": "Queue Orphaned Extractions",
+            "description": "Safety net: Queue extractions for pending assets without active runs. Catches edge cases missed by auto-queueing.",
+            "task_type": "extraction.queue_orphans",
             "scope_type": "global",
             "schedule_expression": "*/5 * * * *",  # Every 5 minutes
             "enabled": True,

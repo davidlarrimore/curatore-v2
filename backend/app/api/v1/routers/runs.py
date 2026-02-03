@@ -1,30 +1,26 @@
 # backend/app/api/v1/routers/runs.py
 """
-Runs API Router for Phase 0.
+Runs API Router.
 
-Provides endpoints for querying runs, log events, triggering retries,
-and priority boosting for extractions.
+Provides endpoints for querying runs, viewing log events, triggering retries,
+and getting run group status for parent-child job tracking.
 """
 
 import logging
-from typing import Optional, List
+from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Body, Response
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from ....database.models import User
 from ....dependencies import get_current_user
 from ....services.database_service import database_service
 from ....services.run_service import run_service
 from ....services.run_log_service import run_log_service
+from ....services.run_group_service import run_group_service
 from ....services.asset_service import asset_service
 from ....services.extraction_result_service import extraction_result_service
-from ....services.priority_queue_service import (
-    priority_queue_service,
-    BoostReason,
-    PriorityTier,
-)
+from ....services.priority_queue_service import PriorityTier
 from ..models import (
     RunResponse,
     RunWithLogsResponse,
@@ -171,172 +167,6 @@ async def get_run_stats(
 
 
 # =============================================================================
-# Queue and Priority Boost Endpoints (must be before /{run_id})
-# =============================================================================
-
-
-class BoostAssetRequest(BaseModel):
-    """Request model for boosting a single asset."""
-    asset_id: UUID
-    reason: Optional[str] = "user_requested"
-
-
-class BoostAssetsRequest(BaseModel):
-    """Request model for boosting multiple assets."""
-    asset_ids: List[UUID]
-    reason: Optional[str] = "user_requested"
-
-
-@router.get(
-    "/queues",
-    summary="Get queue statistics (Deprecated)",
-    description="Get current queue lengths and processing status. "
-                "DEPRECATED: Use GET /api/v1/queue/unified instead.",
-    deprecated=True,
-)
-async def get_queue_stats(
-    response: Response,
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Get queue statistics for monitoring.
-
-    Returns lengths of priority, normal, and maintenance queues.
-
-    DEPRECATED: Use GET /api/v1/queue/unified for comprehensive stats.
-    """
-    # Add deprecation headers
-    response.headers["Deprecation"] = "true"
-    response.headers["Sunset"] = "2026-06-01"
-    response.headers["Link"] = '</api/v1/queue/unified>; rel="successor-version"'
-
-    return await priority_queue_service.get_queue_stats()
-
-
-@router.post(
-    "/boost/asset",
-    summary="Boost extraction priority (Deprecated)",
-    description="Boost the extraction priority for a single asset. "
-                "DEPRECATED: Use POST /api/v1/assets/{asset_id}/boost instead.",
-    deprecated=True,
-)
-async def boost_asset_extraction_endpoint(
-    request: BoostAssetRequest,
-    response: Response,
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Boost extraction priority for a single asset.
-
-    Use this when a user is waiting for a specific document to be processed.
-    The extraction will be moved to the high-priority queue.
-
-    DEPRECATED: Use POST /api/v1/assets/{asset_id}/boost instead.
-    """
-    # Add deprecation headers
-    response.headers["Deprecation"] = "true"
-    response.headers["Sunset"] = "2026-06-01"
-    response.headers["Link"] = '</api/v1/assets/{asset_id}/boost>; rel="successor-version"'
-
-    # Map string reason to enum
-    try:
-        reason = BoostReason(request.reason) if request.reason else BoostReason.USER_REQUESTED
-    except ValueError:
-        reason = BoostReason.USER_REQUESTED
-
-    async with database_service.get_session() as session:
-        # Verify asset belongs to user's organization
-        asset = await asset_service.get_asset(session=session, asset_id=request.asset_id)
-        if not asset:
-            raise HTTPException(status_code=404, detail="Asset not found")
-        if asset.organization_id != current_user.organization_id:
-            raise HTTPException(status_code=403, detail="Access denied")
-
-        result = await priority_queue_service.boost_extraction(
-            session=session,
-            asset_id=request.asset_id,
-            reason=reason,
-            organization_id=current_user.organization_id,
-        )
-
-        return result
-
-
-@router.post(
-    "/boost/assets",
-    summary="Boost multiple extraction priorities",
-    description="Boost extraction priority for multiple assets at once.",
-)
-async def boost_multiple_assets_endpoint(
-    request: BoostAssetsRequest,
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Boost extraction priority for multiple assets.
-
-    Use this when preparing for a batch operation that needs multiple
-    documents to be ready (e.g., export, AI summarization).
-    """
-    # Map string reason to enum
-    try:
-        reason = BoostReason(request.reason) if request.reason else BoostReason.USER_REQUESTED
-    except ValueError:
-        reason = BoostReason.USER_REQUESTED
-
-    async with database_service.get_session() as session:
-        # Verify all assets belong to user's organization
-        for asset_id in request.asset_ids:
-            asset = await asset_service.get_asset(session=session, asset_id=asset_id)
-            if not asset:
-                raise HTTPException(
-                    status_code=404,
-                    detail=f"Asset {asset_id} not found"
-                )
-            if asset.organization_id != current_user.organization_id:
-                raise HTTPException(status_code=403, detail="Access denied")
-
-        result = await priority_queue_service.boost_multiple_extractions(
-            session=session,
-            asset_ids=request.asset_ids,
-            reason=reason,
-            organization_id=current_user.organization_id,
-        )
-
-        return result
-
-
-@router.post(
-    "/boost/check-ready",
-    summary="Check if assets are ready",
-    description="Check if specified assets have completed extraction.",
-)
-async def check_assets_ready_endpoint(
-    asset_ids: List[UUID] = Body(..., embed=True),
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Check if assets are ready for processing.
-
-    Returns which assets are ready and which are still pending.
-    Useful for UI to show progress before running operations.
-    """
-    async with database_service.get_session() as session:
-        all_ready, ready_ids, pending_ids = await priority_queue_service.check_assets_ready(
-            session=session,
-            asset_ids=asset_ids,
-        )
-
-        return {
-            "all_ready": all_ready,
-            "total": len(asset_ids),
-            "ready_count": len(ready_ids),
-            "pending_count": len(pending_ids),
-            "ready_ids": [str(id) for id in ready_ids],
-            "pending_ids": [str(id) for id in pending_ids],
-        }
-
-
-# =============================================================================
 # Run-specific endpoints (dynamic paths with /{run_id})
 # =============================================================================
 
@@ -363,6 +193,55 @@ async def get_run(
             raise HTTPException(status_code=403, detail="Access denied")
 
         return RunResponse.model_validate(run)
+
+
+@router.get(
+    "/{run_id}/group-status",
+    summary="Get run with group status",
+    description="Get run status with child job counts if part of a run group.",
+)
+async def get_run_group_status(
+    run_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Get run status with child job counts.
+
+    If the run is a group parent (e.g., SAM pull spawning extractions),
+    this returns child job statistics from the associated RunGroup.
+
+    Used by the Running Job Panel to display progress for parent jobs.
+    """
+    async with database_service.get_session() as session:
+        run = await run_service.get_run(session=session, run_id=run_id)
+
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        if run.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        response = {
+            "run": RunResponse.model_validate(run).model_dump(),
+            "group": None,
+        }
+
+        # If this is a group parent, get child stats
+        if run.is_group_parent and run.group_id:
+            group = await run_group_service.get_group(session, run.group_id)
+            if group:
+                response["group"] = {
+                    "id": str(group.id),
+                    "group_type": group.group_type,
+                    "status": group.status,
+                    "total_children": group.total_children,
+                    "completed_children": group.completed_children,
+                    "failed_children": group.failed_children,
+                    "started_at": group.started_at.isoformat() if group.started_at else None,
+                    "completed_at": group.completed_at.isoformat() if group.completed_at else None,
+                }
+
+        return response
 
 
 @router.get(

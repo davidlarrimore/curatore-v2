@@ -47,6 +47,7 @@ app.conf.task_queues = (
     Queue("sam", routing_key="sam"),
     Queue("scrape", routing_key="scrape"),
     Queue("sharepoint", routing_key="sharepoint"),
+    Queue("pipeline", routing_key="pipeline"),
     Queue("maintenance", routing_key="maintenance"),
 )
 
@@ -89,8 +90,15 @@ app.conf.update(
         "app.tasks.async_delete_sync_config_task": {"queue": "maintenance"},
 
         # =================================================================
+        # PIPELINE QUEUE - Multi-stage document processing
+        # =================================================================
+        "app.tasks.execute_pipeline_task": {"queue": "pipeline"},
+
+        # =================================================================
         # MAINTENANCE QUEUE - System tasks, queue management, cleanup
         # =================================================================
+        # Procedure execution (uses maintenance queue for lightweight execution)
+        "app.tasks.execute_procedure_task": {"queue": "maintenance"},
         # Scheduled task system
         "app.tasks.check_scheduled_tasks": {"queue": "maintenance"},
         "app.tasks.execute_scheduled_task_async": {"queue": "maintenance"},

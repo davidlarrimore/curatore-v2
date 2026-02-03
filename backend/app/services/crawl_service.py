@@ -735,6 +735,7 @@ class CrawlService:
         parent_url: Optional[str] = None,
         crawl_depth: int = 0,
         config: Optional[Dict[str, Any]] = None,
+        group_id: Optional[UUID] = None,
     ) -> CrawlResult:
         """
         Crawl a single URL using Playwright with inline extraction.
@@ -751,6 +752,7 @@ class CrawlService:
             parent_url: URL of parent page
             crawl_depth: Current depth from seed URL
             config: Crawl configuration
+            group_id: Optional RunGroup ID for child extraction tracking
 
         Returns:
             CrawlResult with crawl outcome
@@ -881,7 +883,7 @@ class CrawlService:
                 documents_downloaded = 0
                 if config.get("download_documents", False) and document_links:
                     documents_downloaded = await self._download_discovered_documents(
-                        session, collection, document_links, crawl_run_id
+                        session, collection, document_links, crawl_run_id, group_id
                     )
 
                 return CrawlResult(
@@ -929,7 +931,7 @@ class CrawlService:
             documents_downloaded = 0
             if config.get("download_documents", False) and document_links:
                 documents_downloaded = await self._download_discovered_documents(
-                    session, collection, document_links, crawl_run_id
+                    session, collection, document_links, crawl_run_id, group_id
                 )
 
             return CrawlResult(
@@ -985,7 +987,7 @@ class CrawlService:
         documents_downloaded = 0
         if config.get("download_documents", False) and document_links:
             documents_downloaded = await self._download_discovered_documents(
-                session, collection, document_links, crawl_run_id
+                session, collection, document_links, crawl_run_id, group_id
             )
 
         return CrawlResult(
@@ -1251,6 +1253,7 @@ class CrawlService:
         collection: ScrapeCollection,
         document_links: List[Dict],
         crawl_run_id: UUID,
+        group_id: Optional[UUID] = None,
     ) -> int:
         """
         Download discovered documents and create assets for extraction.
@@ -1262,6 +1265,7 @@ class CrawlService:
             collection: Collection instance
             document_links: List of document link info dicts
             crawl_run_id: Crawl run UUID
+            group_id: Optional RunGroup ID for child extraction tracking
 
         Returns:
             Number of documents successfully downloaded
@@ -1394,6 +1398,7 @@ class CrawlService:
                     file_size=len(content),
                     file_hash=content_hash,
                     status="pending",  # Will go through extraction (auto-queued)
+                    group_id=group_id,  # Link extraction to parent job's group
                 )
 
                 # Create scraped asset record for the document
@@ -1460,6 +1465,7 @@ class CrawlService:
         user_id: Optional[UUID] = None,
         max_pages: Optional[int] = None,
         run_id: Optional[UUID] = None,
+        group_id: Optional[UUID] = None,
     ) -> Dict[str, Any]:
         """
         Crawl all sources in a collection.
@@ -1474,6 +1480,7 @@ class CrawlService:
             user_id: User initiating the crawl
             max_pages: Override max pages limit
             run_id: Optional existing Run ID to use (skips creating new run)
+            group_id: Optional RunGroup ID for parent-child job tracking
 
         Returns:
             Summary of crawl results
@@ -1601,6 +1608,7 @@ class CrawlService:
                     parent_url=parent_url,
                     crawl_depth=depth,
                     config=config,
+                    group_id=group_id,
                 )
 
                 results.append(result)

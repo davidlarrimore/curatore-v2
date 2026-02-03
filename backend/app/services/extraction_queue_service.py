@@ -119,9 +119,10 @@ class ExtractionQueueService:
         asset_id: UUID,
         organization_id: UUID,
         origin: str = "system",
-        priority: int = 0,
+        priority: Optional[int] = None,
         user_id: Optional[UUID] = None,
         extractor_version: Optional[str] = None,
+        group_id: Optional[UUID] = None,
     ) -> Tuple[Run, ExtractionResult, str]:
         """
         Queue an extraction request (does NOT immediately submit to Celery).
@@ -129,14 +130,22 @@ class ExtractionQueueService:
         Creates a Run with status="pending" and an ExtractionResult linked to it.
         The run will be submitted to Celery later by process_queue().
 
+        Priority is auto-determined based on context:
+        - 0: SharePoint sync extractions (background)
+        - 1: SAM.gov/Scrape extractions (background)
+        - 2: Pipeline extractions (workflow)
+        - 3: User upload extractions (default)
+        - 4: User boosted (manually prioritized)
+
         Args:
             session: Database session
             asset_id: Asset UUID to extract
             organization_id: Organization UUID
             origin: Who triggered ("system" or "user")
-            priority: Queue priority (0=normal, 1=high for user-requested)
+            priority: Queue priority (None = auto-determine based on group_type)
             user_id: User UUID if user-initiated
             extractor_version: Extractor version to use
+            group_id: Optional group UUID to link this extraction to (for parent-child tracking)
 
         Returns:
             Tuple of (Run, ExtractionResult, status_message)
@@ -187,8 +196,38 @@ class ExtractionQueueService:
             created_by=user_id,
         )
 
-        # Set queue priority on the run
+        # Determine queue priority and set spawned_by_parent flag
+        from .queue_registry import QueuePriority
+
+        if group_id:
+            # This is a child extraction spawned by a parent job
+            run.group_id = group_id
+            run.is_group_parent = False
+            run.spawned_by_parent = True
+
+            # Auto-determine priority based on group type if not explicitly set
+            if priority is None:
+                from ..database.models import RunGroup
+                group = await session.get(RunGroup, group_id)
+                if group:
+                    # Map group_type to priority level
+                    group_type_priorities = {
+                        "sharepoint_sync": QueuePriority.SHAREPOINT_SYNC,  # 0
+                        "sam_pull": QueuePriority.SAM_SCRAPE,              # 1
+                        "scrape": QueuePriority.SAM_SCRAPE,                # 1
+                        "upload_group": QueuePriority.USER_UPLOAD,         # 3
+                        "pipeline": QueuePriority.PIPELINE,                # 2
+                    }
+                    priority = group_type_priorities.get(group.group_type, QueuePriority.SAM_SCRAPE)
+                else:
+                    priority = QueuePriority.SAM_SCRAPE  # Default for unknown group
+
+        # Default to USER_UPLOAD priority for standalone extractions
+        if priority is None:
+            priority = QueuePriority.USER_UPLOAD  # 3 = direct user upload
+
         run.queue_priority = priority
+
         await session.flush()
 
         # Create extraction result
@@ -342,9 +381,11 @@ class ExtractionQueueService:
 
         # Import and call Celery task
         from ..tasks import execute_extraction_task
+        from .queue_registry import QueuePriority
 
         # Determine queue based on priority
-        queue = "processing_priority" if run.queue_priority > 0 else "extraction"
+        # Priority >= PIPELINE (2) goes to priority queue, lower goes to regular extraction queue
+        queue = QueuePriority.get_celery_queue(run.queue_priority)
 
         task = execute_extraction_task.apply_async(
             kwargs={
@@ -380,6 +421,7 @@ class ExtractionQueueService:
         - Finds runs where status IN ('submitted', 'running')
         - Checks if last_activity_at is older than the activity timeout
         - Jobs actively reporting progress will not be timed out
+        - Parent jobs with active children are NOT timed out (they're waiting for children)
 
         This applies to ALL running jobs, not just extractions.
 
@@ -389,13 +431,32 @@ class ExtractionQueueService:
         Returns:
             Dict with timeout check statistics
         """
+        from ..database.models import RunGroup
+
         now = datetime.utcnow()
         activity_timeout = settings.run_activity_timeout_seconds
         cutoff = now - timedelta(seconds=activity_timeout)
 
+        # Find parent run IDs that have active children (should not be timed out)
+        # A parent should not timeout while its children are still queued or running
+        parent_runs_with_active_children_subquery = (
+            select(Run.id)
+            .where(
+                Run.is_group_parent == True,
+                Run.group_id.isnot(None),
+                Run.group_id.in_(
+                    select(RunGroup.id).where(
+                        # Group has children that haven't all finished
+                        RunGroup.completed_children + RunGroup.failed_children < RunGroup.total_children
+                    )
+                )
+            )
+        )
+
         # Find stale runs (no activity within timeout window)
-        # Includes most run types, but excludes SharePoint syncs which have
-        # their own Celery time limits and can be blocked by PostgreSQL I/O
+        # Includes most run types, but excludes:
+        # 1. SharePoint syncs - they have Celery time limits and can be blocked by PostgreSQL I/O
+        # 2. Parent jobs with active children - they're waiting for children to complete
         result = await session.execute(
             select(Run)
             .where(and_(
@@ -403,6 +464,8 @@ class ExtractionQueueService:
                 # Exclude SharePoint syncs - they have Celery time limits and can
                 # be blocked by database I/O during large syncs (4000+ files)
                 ~Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
+                # Exclude parent jobs that have active children
+                Run.id.notin_(parent_runs_with_active_children_subquery),
                 or_(
                     # No activity recorded - use submitted_to_celery_at or started_at as fallback
                     and_(
@@ -805,9 +868,10 @@ class ExtractionQueueService:
         self,
         session: AsyncSession,
         asset_id: UUID,
-        priority: int = 0,
+        priority: Optional[int] = None,
         user_id: Optional[UUID] = None,
         skip_content_type_check: bool = False,
+        group_id: Optional[UUID] = None,
     ) -> Tuple[Optional[Run], Optional[ExtractionResult], str]:
         """
         Queue extraction for an asset if needed.
@@ -821,12 +885,20 @@ class ExtractionQueueService:
         - Duplicate prevention
         - Queue management
 
+        Priority is auto-determined based on context when not specified:
+        - 0: SharePoint sync extractions (background)
+        - 1: SAM.gov/Scrape extractions (background)
+        - 2: Pipeline extractions (workflow)
+        - 3: User upload extractions (default)
+        - 4: User boosted (manually prioritized)
+
         Args:
             session: Database session
             asset_id: Asset UUID
-            priority: Queue priority (0=normal, 1=high)
+            priority: Queue priority (None = auto-determine based on group_type)
             user_id: User UUID if user-initiated
             skip_content_type_check: Skip HTML/inline check (for re-extraction)
+            group_id: Optional group UUID to link this extraction to (for parent-child tracking)
 
         Returns:
             Tuple of (Run, ExtractionResult, status_message)
@@ -869,6 +941,7 @@ class ExtractionQueueService:
                 origin=origin,
                 priority=priority,
                 user_id=user_id,
+                group_id=group_id,
             )
             return run, extraction, status
         except Exception as e:

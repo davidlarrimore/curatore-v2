@@ -20,7 +20,6 @@ from ....services.run_service import run_service
 from ....services.extraction_result_service import extraction_result_service
 from ....services.upload_integration_service import upload_integration_service
 from ....services.extraction_queue_service import extraction_queue_service
-from ....services.queue_registry import queue_registry
 from ..models import (
     AssetResponse,
     AssetWithExtractionResponse,
@@ -354,15 +353,6 @@ async def get_runs_for_asset(
                 pos_info = await extraction_queue_service.get_queue_position(session, r.id)
                 queue_position = pos_info.get("queue_position")
 
-            # Check if run can be boosted
-            queue_def = queue_registry.get(r.run_type)
-            can_boost = (
-                queue_def is not None
-                and queue_def.can_boost
-                and r.status == "pending"
-                and (r.queue_priority or 0) == 0
-            )
-
             responses.append(
                 RunResponse(
                     id=str(r.id),
@@ -381,7 +371,6 @@ async def get_runs_for_asset(
                     created_by=str(r.created_by) if r.created_by else None,
                     queue_position=queue_position,
                     queue_priority=r.queue_priority,
-                    can_boost=can_boost,
                 )
             )
 
@@ -1543,51 +1532,6 @@ async def compare_metadata(
 # =============================================================================
 # Priority Boost Endpoint
 # =============================================================================
-
-
-@router.post(
-    "/{asset_id}/boost",
-    summary="Boost extraction priority",
-    description="Boost extraction priority for this asset. "
-                "Moves pending extraction to high-priority queue.",
-)
-async def boost_asset_extraction(
-    asset_id: UUID,
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Boost extraction priority for this asset.
-
-    Use this when waiting for a specific document to be processed.
-    The extraction will be moved to the high-priority queue.
-    """
-    from ....services.priority_queue_service import (
-        priority_queue_service,
-        BoostReason,
-    )
-
-    async with database_service.get_session() as session:
-        # Verify asset belongs to user's organization
-        asset = await asset_service.get_asset(session=session, asset_id=asset_id)
-        if not asset:
-            raise HTTPException(status_code=404, detail="Asset not found")
-        if asset.organization_id != current_user.organization_id:
-            raise HTTPException(status_code=403, detail="Access denied")
-
-        result = await priority_queue_service.boost_extraction(
-            session=session,
-            asset_id=asset_id,
-            reason=BoostReason.USER_REQUESTED,
-            organization_id=current_user.organization_id,
-        )
-
-        if result["status"] == "rate_limited":
-            raise HTTPException(
-                status_code=429,
-                detail=result["message"]
-            )
-
-        return result
 
 
 @router.get(

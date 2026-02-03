@@ -26,7 +26,9 @@ import {
   Users,
   UserPlus,
   Wrench,
+  Link2,
 } from 'lucide-react'
+import ConnectionsTab from '@/components/connections/ConnectionsTab'
 
 interface UserData {
   id: string
@@ -58,8 +60,8 @@ function SettingsAdminContent() {
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
   const searchParams = useSearchParams()
-  const initialTab = searchParams.get('tab') as 'organization' | 'user' | 'infrastructure' | 'users' | 'maintenance' | null
-  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'infrastructure' | 'users' | 'maintenance'>(initialTab || 'organization')
+  const initialTab = searchParams.get('tab') as 'organization' | 'user' | 'infrastructure' | 'users' | 'maintenance' | 'connections' | null
+  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'infrastructure' | 'users' | 'maintenance' | 'connections'>(initialTab || 'organization')
   const [showMergedPreview, setShowMergedPreview] = useState(false)
 
   // Users management state
@@ -395,6 +397,17 @@ function SettingsAdminContent() {
                 <Wrench className="w-4 h-4 mr-2" />
                 Maintenance
               </button>
+              <button
+                onClick={() => setActiveTab('connections')}
+                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'connections'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                <Link2 className="w-4 h-4 mr-2" />
+                Connections
+              </button>
             </nav>
           </div>
 
@@ -684,6 +697,10 @@ function SettingsAdminContent() {
 
             {activeTab === 'maintenance' && (
               <SystemMaintenanceTab onError={(msg) => setError(msg)} />
+            )}
+
+            {activeTab === 'connections' && (
+              <ConnectionsTab onError={(msg) => setError(msg)} />
             )}
           </div>
 

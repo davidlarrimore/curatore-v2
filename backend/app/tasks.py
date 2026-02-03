@@ -1116,6 +1116,13 @@ async def _execute_scheduled_task(
             run.error_message = "Task already running (locked)"
             run.completed_at = datetime.utcnow()
 
+            # Still advance next_run_at to prevent duplicate runs
+            from .services.scheduled_task_service import scheduled_task_service
+            if task.enabled:
+                task.next_run_at = scheduled_task_service._calculate_next_run(
+                    task.schedule_expression
+                )
+
             log_event = RunLogEvent(
                 id=uuid.uuid4(),
                 run_id=run.id,
@@ -1183,6 +1190,14 @@ async def _execute_scheduled_task(
             task.last_run_id = run.id
             task.last_run_at = datetime.utcnow()
             task.last_run_status = "failed"
+
+            # IMPORTANT: Still advance next_run_at to prevent duplicate runs
+            # Without this, failed tasks keep getting triggered every minute
+            from .services.scheduled_task_service import scheduled_task_service
+            if task.enabled:
+                task.next_run_at = scheduled_task_service._calculate_next_run(
+                    task.schedule_expression
+                )
 
             # Log the error
             log_event = RunLogEvent(
@@ -1283,7 +1298,8 @@ def sam_pull_task(
     """
     from .services.sam_pull_service import sam_pull_service
     from .services.sam_service import sam_service
-    from .database.models import Run
+    from .services.run_group_service import run_group_service
+    from .database.models import Run, SamSearch
     from sqlalchemy import select
 
     logger = logging.getLogger("curatore.sam")
@@ -1335,6 +1351,38 @@ def sam_pull_task(
                         search.last_pull_run_id = run.id
                         await session.commit()
 
+                # Get search config for automation settings
+                search = await sam_service.get_search(session, uuid.UUID(search_id))
+                automation_config = (search.automation_config or {}) if search else {}
+
+                # Create a group to track child extraction jobs
+                group = None
+                group_id = None
+                if auto_download_attachments:
+                    # Build group config from automation settings
+                    group_config = {
+                        "search_id": search_id,
+                        "search_name": search.name if search else None,
+                    }
+
+                    # Add after_procedure configuration if specified
+                    after_procedure = automation_config.get("after_procedure_slug")
+                    if after_procedure:
+                        group_config["after_procedure_slug"] = after_procedure
+                        group_config["after_procedure_params"] = automation_config.get(
+                            "after_procedure_params", {}
+                        )
+
+                    group = await run_group_service.create_group(
+                        session=session,
+                        organization_id=uuid.UUID(organization_id),
+                        group_type="sam_pull",
+                        parent_run_id=run_uuid,
+                        config=group_config,
+                    )
+                    group_id = group.id
+                    logger.info(f"Created group {group_id} for SAM pull task")
+
                 # Perform the pull
                 result = await sam_pull_service.pull_opportunities(
                     session=session,
@@ -1344,7 +1392,13 @@ def sam_pull_task(
                     page_size=page_size,
                     auto_download_attachments=auto_download_attachments,
                     run_id=run_uuid,
+                    group_id=group_id,
                 )
+
+                # Finalize group after pull completes (handles case where all children complete fast)
+                if group:
+                    await run_group_service.finalize_group(session, group.id)
+                    logger.info(f"Finalized group {group.id} for SAM pull task")
 
                 # Log completion summary
                 from .services.run_log_service import run_log_service
@@ -1388,6 +1442,28 @@ def sam_pull_task(
                 elif result.get("errors"):
                     run.error_message = "; ".join(str(e) for e in result["errors"][:5])
                 await session.commit()
+
+                # Emit event for completed SAM pull
+                if status == "completed":
+                    from .services.event_service import event_service
+                    try:
+                        await event_service.emit(
+                            session=session,
+                            event_name="sam_pull.completed",
+                            organization_id=uuid.UUID(organization_id),
+                            payload={
+                                "search_id": search_id,
+                                "run_id": str(run_uuid),
+                                "total_fetched": total_fetched,
+                                "new_solicitations": new_solicitations,
+                                "updated_solicitations": updated_solicitations,
+                                "new_notices": new_notices,
+                                "new_attachments": new_attachments,
+                            },
+                            source_run_id=run_uuid,
+                        )
+                    except Exception as event_error:
+                        logger.warning(f"Failed to emit sam_pull.completed event: {event_error}")
 
                 return result
 
@@ -2744,18 +2820,44 @@ async def _sharepoint_sync_async(
 ) -> Dict[str, Any]:
     """
     Async implementation of SharePoint sync.
+
+    Creates a RunGroup to track child extraction jobs and supports:
+    - Priority-based extraction queueing (SharePoint = lowest priority)
+    - Parent-child job tracking for timeout and cancellation
+    - Post-sync procedure triggers via group completion events
     """
     from .services.sharepoint_sync_service import sharepoint_sync_service
     from .services.run_service import run_service
     from .services.run_log_service import run_log_service
-    from .services.upload_integration_service import upload_integration_service
-    from .database.models import SharePointSyncedDocument, Asset
+    from .services.extraction_queue_service import extraction_queue_service
+    from .services.run_group_service import run_group_service
+    from .services.queue_registry import QueuePriority
+    from .database.models import SharePointSyncedDocument, Asset, SharePointSyncConfig
 
     logger = logging.getLogger("curatore.tasks.sharepoint_sync")
 
     async with database_service.get_session() as session:
         # Start the run
         await run_service.start_run(session, run_id)
+
+        # Get sync config for automation settings
+        config = await session.get(SharePointSyncConfig, sync_config_id)
+        automation_config = config.automation_config if config else {}
+
+        # Create RunGroup for tracking child extractions
+        group = await run_group_service.create_group(
+            session=session,
+            organization_id=organization_id,
+            group_type="sharepoint_sync",
+            parent_run_id=run_id,
+            config={
+                "config_id": str(sync_config_id),
+                "config_name": config.name if config else "Unknown",
+                "after_procedure_slug": automation_config.get("after_procedure_slug"),
+                "after_procedure_params": automation_config.get("after_procedure_params", {}),
+            },
+        )
+        group_id = group.id
 
         # Determine sync mode for logging
         if full_sync:
@@ -2771,7 +2873,12 @@ async def _sharepoint_sync_async(
             level="INFO",
             event_type="start",
             message=f"Starting SharePoint sync: {sync_mode}",
-            context={"full_sync": full_sync, "use_delta": use_delta, "sync_mode": sync_mode},
+            context={
+                "full_sync": full_sync,
+                "use_delta": use_delta,
+                "sync_mode": sync_mode,
+                "group_id": str(group_id),
+            },
         )
         await session.commit()
 
@@ -2795,33 +2902,72 @@ async def _sharepoint_sync_async(
             )
             new_docs = list(new_docs_result.scalars().all())
 
-            # Trigger extraction for new/updated assets
+            # Check if we should still spawn children (group not cancelled/failed)
+            should_spawn = await run_group_service.should_spawn_children(session, group_id)
+
+            # Trigger extraction for new/updated assets with SharePoint priority (lowest)
             extraction_count = 0
             for doc in new_docs:
+                if not should_spawn:
+                    logger.info(f"Skipping extraction for asset {doc.asset_id} - group cancelled/failed")
+                    break
+
                 asset_result = await session.execute(
                     select(Asset).where(Asset.id == doc.asset_id)
                 )
                 asset = asset_result.scalar_one_or_none()
                 if asset and asset.status == "pending":
                     try:
-                        await upload_integration_service.trigger_extraction(
+                        # Queue extraction with SharePoint priority (0 = lowest)
+                        # and link to group for parent-child tracking
+                        await extraction_queue_service.queue_extraction(
                             session=session,
                             asset_id=asset.id,
+                            organization_id=organization_id,
+                            origin="sharepoint_sync",
+                            priority=QueuePriority.SHAREPOINT_SYNC,  # 0 = lowest
+                            group_id=group_id,
                         )
                         extraction_count += 1
                     except Exception as e:
-                        logger.warning(f"Failed to trigger extraction for asset {asset.id}: {e}")
+                        logger.warning(f"Failed to queue extraction for asset {asset.id}: {e}")
 
             await run_log_service.log_event(
                 session=session,
                 run_id=run_id,
                 level="INFO",
                 event_type="progress",
-                message=f"Triggered extraction for {extraction_count} assets",
+                message=f"Queued extraction for {extraction_count} assets (priority: SharePoint sync)",
+                context={"extraction_count": extraction_count, "group_id": str(group_id)},
             )
+
+            # Finalize the group (handles case where children complete before parent finishes)
+            await run_group_service.finalize_group(session, group_id)
 
             # Note: run is already completed by sharepoint_sync_service.execute_sync()
             await session.commit()
+
+            # Emit event for completed SharePoint sync
+            from .services.event_service import event_service
+            try:
+                await event_service.emit(
+                    session=session,
+                    event_name="sharepoint_sync.completed",
+                    organization_id=organization_id,
+                    payload={
+                        "sync_config_id": str(sync_config_id),
+                        "run_id": str(run_id),
+                        "sync_mode": result.get("sync_mode", "full"),
+                        "files_synced": result.get("files_synced", 0),
+                        "files_added": result.get("files_added", 0),
+                        "files_updated": result.get("files_updated", 0),
+                        "files_deleted": result.get("files_deleted", 0),
+                        "extractions_triggered": extraction_count,
+                    },
+                    source_run_id=run_id,
+                )
+            except Exception as event_error:
+                logger.warning(f"Failed to emit sharepoint_sync.completed event: {event_error}")
 
             return result
 
@@ -2835,6 +2981,10 @@ async def _sharepoint_sync_async(
                 message=str(e),
             )
             await run_service.fail_run(session, run_id, str(e))
+
+            # Mark the group as failed (prevents post-job triggers)
+            await run_group_service.mark_group_failed(session, group_id, str(e))
+
             await session.commit()
             raise
 
@@ -4017,14 +4167,39 @@ async def _scrape_crawl_async(
 ) -> Dict[str, Any]:
     """
     Async implementation of web scraping crawl.
+
+    Creates a RunGroup to track child extraction jobs and supports:
+    - Priority-based extraction queueing (Scrape = SAM_SCRAPE priority)
+    - Parent-child job tracking for timeout and cancellation
+    - Post-crawl procedure triggers via group completion events
     """
     from .services.crawl_service import crawl_service
     from .services.run_service import run_service
     from .services.run_log_service import run_log_service
+    from .services.run_group_service import run_group_service
+    from .database.models import ScrapeCollection
 
     logger = logging.getLogger("curatore.tasks.scrape_crawl")
 
     async with database_service.get_session() as session:
+        # Get collection for config
+        collection = await session.get(ScrapeCollection, collection_id)
+        collection_name = collection.name if collection else "Unknown"
+
+        # Create RunGroup for tracking child extractions
+        group = await run_group_service.create_group(
+            session=session,
+            organization_id=organization_id,
+            group_type="scrape",
+            parent_run_id=run_id,
+            config={
+                "collection_id": str(collection_id),
+                "collection_name": collection_name,
+                "max_pages": max_pages,
+            },
+        )
+        group_id = group.id
+
         # Log start
         await run_log_service.log_event(
             session=session,
@@ -4032,18 +4207,24 @@ async def _scrape_crawl_async(
             level="INFO",
             event_type="start",
             message=f"Starting web scrape (max_pages={max_pages})",
+            context={"group_id": str(group_id)},
         )
         await session.commit()
 
         try:
             # Execute crawl - this handles run state transitions internally
+            # Pass group_id for child extraction tracking
             result = await crawl_service.crawl_collection(
                 session=session,
                 collection_id=collection_id,
                 user_id=user_id,
                 max_pages=max_pages,
-                run_id=run_id,  # Pass existing run ID
+                run_id=run_id,
+                group_id=group_id,  # Pass group_id for child extraction tracking
             )
+
+            # Finalize the group (handles case where children complete before parent finishes)
+            await run_group_service.finalize_group(session, group_id)
 
             await run_log_service.log_summary(
                 session=session,
@@ -4061,6 +4242,7 @@ async def _scrape_crawl_async(
                     "pages_updated": result.get("pages_updated", 0),
                     "pages_failed": result.get("pages_failed", 0),
                     "documents_discovered": result.get("documents_discovered", 0),
+                    "group_id": str(group_id),
                 },
             )
             await session.commit()
@@ -4077,6 +4259,10 @@ async def _scrape_crawl_async(
                 message=str(e),
             )
             await run_service.fail_run(session, run_id, str(e))
+
+            # Mark the group as failed (prevents post-job triggers)
+            await run_group_service.mark_group_failed(session, group_id, str(e))
+
             await session.commit()
             raise
 
@@ -4517,3 +4703,257 @@ async def _async_delete_scrape_collection(
         )
 
         return stats
+
+
+# ============================================================================
+# PHASE 8: PROCEDURE & PIPELINE TASKS
+# ============================================================================
+
+
+@celery_app.task(bind=True, name="app.tasks.execute_procedure_task")
+def execute_procedure_task(
+    self,
+    run_id: str,
+    organization_id: str,
+    procedure_slug: str,
+    params: Dict[str, Any] = None,
+    user_id: str = None,
+) -> Dict[str, Any]:
+    """
+    Execute a procedure asynchronously.
+
+    This task runs a procedure (sequence of function calls) and tracks
+    the execution through a Run record.
+
+    Args:
+        run_id: Run UUID string for tracking
+        organization_id: Organization UUID string
+        procedure_slug: Slug of the procedure to execute
+        params: Parameters to pass to the procedure
+        user_id: Optional user UUID who triggered the execution
+
+    Returns:
+        Dict with procedure execution results
+    """
+    logger = logging.getLogger("curatore.tasks.procedure")
+    logger.info(f"Starting procedure task: {procedure_slug} (run_id={run_id})")
+
+    try:
+        result = asyncio.run(
+            _execute_procedure_async(
+                run_id=uuid.UUID(run_id),
+                organization_id=uuid.UUID(organization_id),
+                procedure_slug=procedure_slug,
+                params=params or {},
+                user_id=uuid.UUID(user_id) if user_id else None,
+            )
+        )
+
+        logger.info(f"Procedure {procedure_slug} completed: {result.get('status')}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Procedure task failed for {procedure_slug}: {e}", exc_info=True)
+        # Mark run as failed
+        asyncio.run(_fail_procedure_run(uuid.UUID(run_id), str(e)))
+        raise
+
+
+async def _execute_procedure_async(
+    run_id,
+    organization_id,
+    procedure_slug: str,
+    params: Dict[str, Any],
+    user_id,
+) -> Dict[str, Any]:
+    """Async implementation of procedure execution."""
+    from .procedures import procedure_executor
+    from .services.run_service import run_service
+
+    async with database_service.get_session() as session:
+        # Start the run
+        await run_service.start_run(session, run_id)
+        await session.commit()
+
+        # Execute the procedure
+        result = await procedure_executor.execute(
+            session=session,
+            organization_id=organization_id,
+            procedure_slug=procedure_slug,
+            params=params,
+            user_id=user_id,
+            run_id=run_id,
+        )
+
+        # Complete or fail the run based on result
+        if result.get("status") == "completed":
+            await run_service.complete_run(
+                session=session,
+                run_id=run_id,
+                results_summary=result,
+            )
+        else:
+            await run_service.fail_run(
+                session=session,
+                run_id=run_id,
+                error_message=result.get("error", "Procedure failed"),
+            )
+
+        await session.commit()
+        return result
+
+
+async def _fail_procedure_run(run_id, error: str) -> None:
+    """Mark a procedure run as failed."""
+    from .services.run_service import run_service
+
+    async with database_service.get_session() as session:
+        await run_service.fail_run(session, run_id, error)
+        await session.commit()
+
+
+@celery_app.task(bind=True, name="app.tasks.execute_pipeline_task")
+def execute_pipeline_task(
+    self,
+    run_id: str,
+    pipeline_run_id: str,
+    organization_id: str,
+    pipeline_slug: str,
+    params: Dict[str, Any] = None,
+    user_id: str = None,
+    resume_from_stage: int = 0,
+) -> Dict[str, Any]:
+    """
+    Execute a pipeline asynchronously.
+
+    This task runs a pipeline (multi-stage document processing) and tracks
+    both the Run and PipelineRun records.
+
+    Args:
+        run_id: Run UUID string for tracking
+        pipeline_run_id: PipelineRun UUID string for stage tracking
+        organization_id: Organization UUID string
+        pipeline_slug: Slug of the pipeline to execute
+        params: Parameters to pass to the pipeline
+        user_id: Optional user UUID who triggered the execution
+        resume_from_stage: Stage index to resume from (for failed pipelines)
+
+    Returns:
+        Dict with pipeline execution results
+    """
+    logger = logging.getLogger("curatore.tasks.pipeline")
+    logger.info(f"Starting pipeline task: {pipeline_slug} (run_id={run_id})")
+
+    try:
+        result = asyncio.run(
+            _execute_pipeline_async(
+                run_id=uuid.UUID(run_id),
+                pipeline_run_id=uuid.UUID(pipeline_run_id),
+                organization_id=uuid.UUID(organization_id),
+                pipeline_slug=pipeline_slug,
+                params=params or {},
+                user_id=uuid.UUID(user_id) if user_id else None,
+                resume_from_stage=resume_from_stage,
+            )
+        )
+
+        logger.info(f"Pipeline {pipeline_slug} completed: {result.get('status')}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Pipeline task failed for {pipeline_slug}: {e}", exc_info=True)
+        # Mark run as failed
+        asyncio.run(_fail_pipeline_run(uuid.UUID(run_id), uuid.UUID(pipeline_run_id), str(e)))
+        raise
+
+
+async def _execute_pipeline_async(
+    run_id,
+    pipeline_run_id,
+    organization_id,
+    pipeline_slug: str,
+    params: Dict[str, Any],
+    user_id,
+    resume_from_stage: int,
+) -> Dict[str, Any]:
+    """Async implementation of pipeline execution."""
+    from .pipelines import pipeline_executor
+    from .services.run_service import run_service
+    from .database.procedures import PipelineRun
+    from sqlalchemy import select
+
+    async with database_service.get_session() as session:
+        # Start the run
+        await run_service.start_run(session, run_id)
+
+        # Update pipeline run status
+        query = select(PipelineRun).where(PipelineRun.id == pipeline_run_id)
+        result = await session.execute(query)
+        pipeline_run = result.scalar_one_or_none()
+        if pipeline_run:
+            pipeline_run.status = "running"
+            pipeline_run.started_at = datetime.utcnow()
+
+        await session.commit()
+
+        # Execute the pipeline
+        result = await pipeline_executor.execute(
+            session=session,
+            organization_id=organization_id,
+            pipeline_slug=pipeline_slug,
+            params=params,
+            user_id=user_id,
+            run_id=run_id,
+            pipeline_run_id=pipeline_run_id,
+            resume_from_stage=resume_from_stage,
+        )
+
+        # Update pipeline run with results
+        if pipeline_run:
+            pipeline_run.status = result.get("status", "completed")
+            pipeline_run.completed_at = datetime.utcnow()
+            pipeline_run.stage_results = result.get("stage_results", {})
+            pipeline_run.items_processed = result.get("items_processed", 0)
+
+        # Complete or fail the run based on result
+        if result.get("status") == "completed":
+            await run_service.complete_run(
+                session=session,
+                run_id=run_id,
+                results_summary=result,
+            )
+        elif result.get("status") == "partial":
+            await run_service.complete_run(
+                session=session,
+                run_id=run_id,
+                results_summary=result,
+            )
+        else:
+            await run_service.fail_run(
+                session=session,
+                run_id=run_id,
+                error_message=result.get("error", "Pipeline failed"),
+            )
+
+        await session.commit()
+        return result
+
+
+async def _fail_pipeline_run(run_id, pipeline_run_id, error: str) -> None:
+    """Mark a pipeline run as failed."""
+    from .services.run_service import run_service
+    from .database.procedures import PipelineRun
+    from sqlalchemy import select
+
+    async with database_service.get_session() as session:
+        # Update pipeline run
+        query = select(PipelineRun).where(PipelineRun.id == pipeline_run_id)
+        result = await session.execute(query)
+        pipeline_run = result.scalar_one_or_none()
+        if pipeline_run:
+            pipeline_run.status = "failed"
+            pipeline_run.completed_at = datetime.utcnow()
+            pipeline_run.error_message = error
+
+        await run_service.fail_run(session, run_id, error)
+        await session.commit()

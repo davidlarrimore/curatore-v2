@@ -1,0 +1,154 @@
+# SAM.gov Weekly Digest Procedure
+#
+# Generates a weekly digest of SAM.gov opportunities based on configured
+# search criteria. Summarizes new solicitations and sends notifications.
+#
+# Triggers:
+# - Cron: Sunday at 6 PM
+# - Event: After a SAM pull completes (sam_pull.completed)
+
+name: SAM.gov Weekly Digest
+slug: sam_weekly_digest
+description: >
+  Generate a weekly digest of federal contracting opportunities from SAM.gov.
+  Queries solicitations from the past 7 days, generates AI summaries, and
+  creates a formatted report.
+
+version: "1.0.0"
+is_system: true
+tags:
+  - sam
+  - digest
+  - weekly
+  - automation
+
+parameters:
+  - name: naics_codes
+    type: list
+    description: NAICS codes to filter opportunities
+    required: false
+    default: []
+
+  - name: set_asides
+    type: list
+    description: Set-aside types to filter (e.g., SBA, 8(a))
+    required: false
+    default: []
+
+  - name: posted_within_days
+    type: int
+    description: Only include opportunities posted within N days
+    required: false
+    default: 7
+
+  - name: include_summaries
+    type: bool
+    description: Generate AI summaries for each opportunity
+    required: false
+    default: true
+
+  - name: max_opportunities
+    type: int
+    description: Maximum opportunities to include in digest
+    required: false
+    default: 50
+
+triggers:
+  - type: cron
+    cron_expression: "0 18 * * 0"  # 6 PM Sunday
+
+  - type: event
+    event_name: sam_pull.completed
+    event_filter:
+      status: completed
+
+steps:
+  - name: query_opportunities
+    function: query_solicitations
+    description: Query recent SAM.gov opportunities
+    params:
+      naics_codes: "{{ params.naics_codes }}"
+      set_asides: "{{ params.set_asides }}"
+      posted_within_days: "{{ params.posted_within_days }}"
+      response_deadline_after: "today"
+      limit: "{{ params.max_opportunities }}"
+    on_error: fail
+
+  - name: summarize_opportunities
+    function: summarize
+    description: Generate a summary of all opportunities
+    condition: "steps.query_opportunities and len(steps.query_opportunities) > 0"
+    params:
+      text: >
+        {% for opp in steps.query_opportunities %}
+        ## {{ opp.title }}
+        - Notice ID: {{ opp.notice_id }}
+        - Type: {{ opp.type }}
+        - Posted: {{ opp.posted_date }}
+        - Deadline: {{ opp.response_deadline }}
+        - NAICS: {{ opp.naics_code or 'N/A' }}
+        - Set-Aside: {{ opp.set_aside_code or 'None' }}
+        - Description: {{ opp.description[:500] if opp.description else 'N/A' }}...
+
+        {% endfor %}
+      style: bullets
+      focus: key requirements and deadlines
+      max_length: 1000
+    on_error: continue
+
+  - name: generate_digest
+    function: generate
+    description: Generate the formatted daily digest
+    params:
+      system_prompt: >
+        You are a federal contracting analyst creating a weekly digest for
+        a business development team. Be concise and highlight the most
+        actionable opportunities.
+      prompt: >
+        Create a weekly digest email for the week ending {{ now().strftime('%B %d, %Y') }}.
+
+        Total opportunities found: {{ steps.query_opportunities | length if steps.query_opportunities else 0 }}
+
+        {% if steps.summarize_opportunities %}
+        Summary: {{ steps.summarize_opportunities }}
+        {% endif %}
+
+        {% if steps.query_opportunities %}
+        Opportunities:
+        {% for opp in steps.query_opportunities[:10] %}
+        - {{ opp.title }} ({{ opp.notice_id }})
+          Deadline: {{ opp.response_deadline }}
+          {{ opp.sam_url }}
+        {% endfor %}
+        {% else %}
+        No new opportunities matching your criteria today.
+        {% endif %}
+
+        Format as a professional email digest with sections for:
+        1. Executive Summary (2-3 sentences)
+        2. Key Opportunities (top 5 by relevance)
+        3. All Opportunities (brief list with deadlines)
+        4. Next Steps
+
+      max_tokens: 2000
+    on_error: fail
+
+  - name: save_digest
+    function: create_artifact
+    description: Save digest to object storage
+    params:
+      content: "{{ steps.generate_digest }}"
+      filename: "sam_weekly_digest_{{ now().strftime('%Y%m%d') }}.md"
+      content_type: text/markdown
+      folder: digests/sam
+    on_error: continue
+
+outputs:
+  - type: result
+    config:
+      include_steps:
+        - query_opportunities
+        - generate_digest
+        - save_digest
+
+on_error: fail

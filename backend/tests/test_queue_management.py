@@ -39,7 +39,6 @@ class TestQueueDefinition:
         assert queue.queue_type == "test"
         assert queue.celery_queue == "test_queue"
         assert queue.can_cancel is False
-        assert queue.can_boost is False
         assert queue.can_retry is False
         assert queue.default_max_concurrent is None
         assert queue.default_timeout_seconds == 600
@@ -51,11 +50,9 @@ class TestQueueDefinition:
             queue_type="test",
             celery_queue="test_queue",
             can_cancel=True,
-            can_boost=True,
             can_retry=True,
         )
         assert queue.can_cancel is True
-        assert queue.can_boost is True
         assert queue.can_retry is True
 
     def test_queue_definition_with_throttling(self):
@@ -177,19 +174,17 @@ class TestQueueRegistry:
         registry = QueueRegistry()
         registry.initialize()
 
-        # Extraction supports all capabilities
+        # Extraction supports cancel and retry
         assert registry.can_cancel("extraction") is True
-        assert registry.can_boost("extraction") is True
         assert registry.can_retry("extraction") is True
 
         # SAM doesn't support any
         assert registry.can_cancel("sam") is False
-        assert registry.can_boost("sam") is False
         assert registry.can_retry("sam") is False
 
-        # SharePoint can cancel but not boost/retry
+        # SharePoint can cancel but not retry
         assert registry.can_cancel("sharepoint") is True
-        assert registry.can_boost("sharepoint") is False
+        assert registry.can_retry("sharepoint") is False
 
     def test_registry_get_celery_queue(self):
         """Test getting Celery queue name."""
@@ -295,7 +290,6 @@ class TestExtractionQueue:
         assert queue.queue_type == "extraction"
         assert queue.celery_queue == "extraction"
         assert queue.can_cancel is True
-        assert queue.can_boost is True
         assert queue.can_retry is True
         assert queue.default_max_concurrent == 10
         assert queue.label == "Extraction"
@@ -318,7 +312,6 @@ class TestSamQueue:
         assert queue.queue_type == "sam"
         assert queue.celery_queue == "sam"
         assert queue.can_cancel is False
-        assert queue.can_boost is False
         assert queue.can_retry is False
         assert queue.default_max_concurrent is None
         assert "sam_pull" in queue.run_type_aliases
@@ -341,7 +334,6 @@ class TestScrapeQueue:
         assert queue.queue_type == "scrape"
         assert queue.celery_queue == "scrape"
         assert queue.can_cancel is True
-        assert queue.can_boost is False
         assert queue.can_retry is False
         assert "scrape_crawl" in queue.run_type_aliases
         assert "scrape_delete" in queue.run_type_aliases
@@ -359,7 +351,6 @@ class TestSharePointQueue:
         assert queue.queue_type == "sharepoint"
         assert queue.celery_queue == "sharepoint"
         assert queue.can_cancel is True
-        assert queue.can_boost is False
         assert queue.can_retry is False
         assert "sharepoint_sync" in queue.run_type_aliases
         assert "sharepoint_import" in queue.run_type_aliases
@@ -378,7 +369,6 @@ class TestMaintenanceQueue:
         assert queue.queue_type == "maintenance"
         assert queue.celery_queue == "maintenance"
         assert queue.can_cancel is False
-        assert queue.can_boost is False
         assert queue.can_retry is False
         assert queue.default_max_concurrent == 1  # Always serialized
         assert "system_maintenance" in queue.run_type_aliases
@@ -460,17 +450,6 @@ class TestQueueCapabilityMatrix:
 
         for qt in non_cancellable:
             assert not registry.can_cancel(qt), f"{qt} should not be cancellable"
-
-    def test_boostable_queues(self, registry):
-        """Test which queues support priority boosting."""
-        boostable = ["extraction"]
-        non_boostable = ["sam", "scrape", "sharepoint", "maintenance"]
-
-        for qt in boostable:
-            assert registry.can_boost(qt), f"{qt} should be boostable"
-
-        for qt in non_boostable:
-            assert not registry.can_boost(qt), f"{qt} should not be boostable"
 
     def test_retryable_queues(self, registry):
         """Test which queues support retry."""
@@ -554,14 +533,12 @@ class TestConfigurationOverrides:
         registry.initialize({
             "sam": {
                 "can_cancel": True,  # Should be ignored
-                "can_boost": True,   # Should be ignored
             },
         })
 
         sam = registry.get("sam")
         # Capabilities should remain as defined in code
         assert sam.can_cancel is False
-        assert sam.can_boost is False
 
 
 # =============================================================================
@@ -586,7 +563,6 @@ class TestEdgeCases:
         registry.initialize()
 
         assert registry.can_cancel("nonexistent") is False
-        assert registry.can_boost("nonexistent") is False
         assert registry.can_retry("nonexistent") is False
 
     def test_double_initialization(self):

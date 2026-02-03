@@ -623,6 +623,7 @@ class SamPullService:
         check_rate_limit: bool = True,
         auto_download_attachments: bool = True,
         run_id: Optional[UUID] = None,
+        group_id: Optional[UUID] = None,
     ) -> Dict[str, Any]:
         """
         Pull opportunities for a search and update database.
@@ -893,6 +894,7 @@ class SamPullService:
                         session=session,
                         solicitation_id=UUID(sol_id),
                         organization_id=organization_id,
+                        group_id=group_id,
                     )
                     results["attachment_downloads"]["total"] += download_result["total"]
                     results["attachment_downloads"]["downloaded"] += download_result["downloaded"]
@@ -1400,6 +1402,7 @@ class SamPullService:
         organization_id: UUID,
         minio_service=None,
         check_rate_limit: bool = True,
+        group_id: Optional[UUID] = None,
     ) -> Optional[Asset]:
         """
         Download an attachment and create an Asset.
@@ -1410,6 +1413,7 @@ class SamPullService:
             organization_id: Organization UUID
             minio_service: MinIO service instance (optional)
             check_rate_limit: Whether to check/record API rate limits
+            group_id: Optional group UUID to link extraction to (for parent-child tracking)
 
         Returns:
             Created Asset or None on failure
@@ -1604,6 +1608,7 @@ class SamPullService:
                     file_size=len(file_content),
                     raw_bucket=bucket,
                     raw_object_key=object_key,
+                    group_id=group_id,  # Link child extraction to group for completion tracking
                     # auto_extract=True is default, extraction queued automatically
                 )
 
@@ -1649,6 +1654,7 @@ class SamPullService:
         solicitation_id: UUID,
         organization_id: UUID,
         minio_service=None,
+        group_id: Optional[UUID] = None,
     ) -> Dict[str, Any]:
         """
         Download all pending attachments for a solicitation.
@@ -1658,6 +1664,7 @@ class SamPullService:
             solicitation_id: SamSolicitation UUID
             organization_id: Organization UUID
             minio_service: MinIO service instance (optional)
+            group_id: Optional group UUID to link child extractions to
 
         Returns:
             Download results summary
@@ -1686,6 +1693,7 @@ class SamPullService:
                     organization_id=organization_id,
                     minio_service=minio_service,
                     check_rate_limit=True,
+                    group_id=group_id,
                 )
                 if asset:
                     results["downloaded"] += 1

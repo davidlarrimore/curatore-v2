@@ -5,7 +5,6 @@ Provides administrative endpoints for monitoring and managing all job queues:
 - Queue statistics (pending, submitted, running counts)
 - Active job listing (extractions, SAM pulls, scrapes, SharePoint syncs, maintenance)
 - Individual job cancellation (where supported by queue type)
-- Priority boosting (where supported by queue type)
 - Queue registry configuration
 
 These endpoints power the unified Job Manager UI and provide visibility
@@ -17,7 +16,7 @@ from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Response
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import select, and_, func, or_
 
@@ -50,6 +49,10 @@ ALL_RUN_TYPES = [
     "sharepoint_import",
     "sharepoint_delete",
     "system_maintenance",
+    "procedure",
+    "procedure_run",
+    "pipeline",
+    "pipeline_run",
 ]
 
 
@@ -93,6 +96,18 @@ class ActiveExtractionsResponse(BaseModel):
     total: int
 
 
+class ChildJobStats(BaseModel):
+    """Statistics about child jobs for a parent job."""
+    total: int = 0
+    pending: int = 0
+    submitted: int = 0
+    running: int = 0
+    completed: int = 0
+    failed: int = 0
+    cancelled: int = 0
+    timed_out: int = 0
+
+
 class ActiveJobItem(BaseModel):
     """Individual active job item for unified Job Manager."""
     run_id: str
@@ -123,8 +138,13 @@ class ActiveJobItem(BaseModel):
 
     # Capabilities (from queue_registry)
     can_cancel: bool
-    can_boost: bool
     can_retry: bool
+
+    # Parent-child relationship info
+    is_parent_job: bool = False
+    group_id: Optional[str] = None
+    parent_run_id: Optional[str] = None  # For child jobs, reference to parent
+    child_stats: Optional[ChildJobStats] = None  # For parent jobs, stats about children
 
 
 class ActiveJobsResponse(BaseModel):
@@ -143,7 +163,6 @@ class QueueDefinitionResponse(BaseModel):
     icon: str
     color: str
     can_cancel: bool
-    can_boost: bool
     can_retry: bool
     max_concurrent: Optional[int]
     timeout_seconds: int
@@ -162,14 +181,8 @@ class CancelResponse(BaseModel):
     status: str
     run_id: str
     reason: Optional[str]
-
-
-class BoostResponse(BaseModel):
-    """Boost response."""
-    status: str
-    run_id: str
-    old_priority: Optional[int]
-    new_priority: Optional[int]
+    children_cancelled: int = 0
+    children_skipped: int = 0
 
 
 # ============================================================================
@@ -586,67 +599,6 @@ async def cancel_extractions_bulk(
     )
 
 
-@router.post(
-    "/{run_id}/boost",
-    response_model=BoostResponse,
-    summary="Boost extraction priority (Deprecated)",
-    description="Boost a pending extraction to high priority. "
-                "DEPRECATED: Use POST /api/v1/assets/{asset_id}/boost instead.",
-    deprecated=True,
-)
-async def boost_extraction(
-    run_id: UUID,
-    response: Response,
-    current_user: User = Depends(get_current_user),
-):
-    """
-    Boost a pending extraction to high priority.
-
-    Only works for extractions that are still pending (not yet submitted to Celery).
-    High priority extractions are processed before normal priority ones.
-
-    DEPRECATED: Use POST /api/v1/assets/{asset_id}/boost instead for a cleaner API.
-    """
-    # Add deprecation headers
-    response.headers["Deprecation"] = "true"
-    response.headers["Sunset"] = "2026-06-01"
-    response.headers["Link"] = '</api/v1/assets/{asset_id}/boost>; rel="successor-version"'
-
-    async with database_service.get_session() as session:
-        # Verify run belongs to user's organization
-        run = await session.get(Run, run_id)
-        if not run:
-            raise HTTPException(status_code=404, detail="Run not found")
-
-        if run.organization_id != current_user.organization_id:
-            raise HTTPException(status_code=403, detail="Access denied")
-
-        if run.run_type != "extraction":
-            raise HTTPException(status_code=400, detail="Not an extraction run")
-
-        # Boost via queue service
-        result = await extraction_queue_service.boost_extraction(
-            session=session,
-            run_id=run_id,
-        )
-
-        if result["status"] == "not_found":
-            raise HTTPException(status_code=404, detail="Run not found")
-
-        if result["status"] == "not_boostable":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Cannot boost run in '{result.get('current_status')}' status"
-            )
-
-        return BoostResponse(
-            status=result["status"],
-            run_id=str(run_id),
-            old_priority=result.get("old_priority"),
-            new_priority=result.get("new_priority"),
-        )
-
-
 @router.get(
     "/config",
     summary="Get queue configuration",
@@ -692,7 +644,7 @@ async def get_queue_registry(
 
     Returns all queue type definitions with their:
     - Display metadata (label, icon, color)
-    - Capabilities (can_cancel, can_boost, can_retry)
+    - Capabilities (can_cancel, can_retry)
     - Configuration (max_concurrent, timeout_seconds)
     - Run type mappings (e.g., sam_pull -> sam)
 
@@ -806,7 +758,6 @@ async def list_active_jobs(
             # Get queue definition for capabilities
             queue_def = queue_registry.get(run.run_type)
             can_cancel = queue_def.can_cancel if queue_def else False
-            can_boost = queue_def.can_boost if queue_def else False
             can_retry = queue_def.can_retry if queue_def else False
 
             # Build display fields based on run_type
@@ -920,10 +871,71 @@ async def list_active_jobs(
                 task_type = config.get("task_type")
                 display_context = task_type if task_type else None
 
+            elif run.run_type in ("procedure", "procedure_run"):
+                # Procedure run - display procedure name
+                config = run.config or {}
+                procedure_slug = config.get("procedure_slug", "Unknown Procedure")
+                display_name = procedure_slug.replace("_", " ").replace("-", " ").title()
+                params = config.get("params", {})
+                if params:
+                    display_context = f"{len(params)} param(s)"
+                else:
+                    display_context = None
+
+            elif run.run_type in ("pipeline", "pipeline_run"):
+                # Pipeline run - display pipeline name
+                config = run.config or {}
+                pipeline_slug = config.get("pipeline_slug", "Unknown Pipeline")
+                display_name = pipeline_slug.replace("_", " ").replace("-", " ").title()
+                params = config.get("params", {})
+                if params:
+                    display_context = f"{len(params)} param(s)"
+                else:
+                    display_context = None
+
             else:
                 # Unknown type - use run_type as display name
                 display_name = run.run_type
                 display_context = None
+
+            # Get parent-child relationship info
+            is_parent_job = run.is_group_parent if hasattr(run, 'is_group_parent') else False
+            group_id_str = str(run.group_id) if run.group_id else None
+            parent_run_id_str = None
+            child_stats_obj = None
+
+            # For parent jobs, get child stats
+            if is_parent_job and run.group_id:
+                from ....database.models import RunGroup
+                group = await session.get(RunGroup, run.group_id)
+                if group:
+                    # Get detailed child stats by status
+                    child_stats_query = await session.execute(
+                        select(Run.status, func.count(Run.id))
+                        .where(and_(
+                            Run.group_id == run.group_id,
+                            Run.is_group_parent == False,
+                        ))
+                        .group_by(Run.status)
+                    )
+                    stats_by_status = {status: count for status, count in child_stats_query.all()}
+                    child_stats_obj = ChildJobStats(
+                        total=sum(stats_by_status.values()),
+                        pending=stats_by_status.get("pending", 0),
+                        submitted=stats_by_status.get("submitted", 0),
+                        running=stats_by_status.get("running", 0),
+                        completed=stats_by_status.get("completed", 0),
+                        failed=stats_by_status.get("failed", 0),
+                        cancelled=stats_by_status.get("cancelled", 0),
+                        timed_out=stats_by_status.get("timed_out", 0),
+                    )
+
+            # For child jobs, get parent run ID
+            elif run.group_id and not is_parent_job:
+                from ....database.models import RunGroup
+                group = await session.get(RunGroup, run.group_id)
+                if group and group.parent_run_id:
+                    parent_run_id_str = str(group.parent_run_id)
 
             items.append(ActiveJobItem(
                 run_id=str(run.id),
@@ -946,8 +958,11 @@ async def list_active_jobs(
                 config=run.config,
                 progress=run.progress,
                 can_cancel=can_cancel and run.status in ["pending", "submitted", "running"],
-                can_boost=can_boost and run.status == "pending" and (run.queue_priority or 0) == 0,
                 can_retry=can_retry and run.status in ["failed", "timed_out"],
+                is_parent_job=is_parent_job,
+                group_id=group_id_str,
+                parent_run_id=parent_run_id_str,
+                child_stats=child_stats_obj,
             ))
 
         # Get total count
@@ -968,25 +983,135 @@ async def list_active_jobs(
         )
 
 
+@router.get(
+    "/jobs/{run_id}/children",
+    response_model=ActiveJobsResponse,
+    summary="Get child jobs for a parent job",
+    description="Get all child jobs (e.g., extractions) for a parent job (e.g., SharePoint sync).",
+)
+async def get_child_jobs(
+    run_id: UUID,
+    current_user: User = Depends(get_current_user),
+    limit: int = Query(default=100, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """
+    Get child jobs for a parent job.
+
+    Returns all child jobs linked to the parent job's group, with their status and details.
+    """
+    async with database_service.get_session() as session:
+        from ....database.models import RunGroup
+
+        # Verify parent run exists and belongs to user's organization
+        parent_run = await session.get(Run, run_id)
+        if not parent_run:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        if parent_run.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        if not parent_run.group_id:
+            return ActiveJobsResponse(items=[], total=0, run_types=[])
+
+        # Get child runs
+        result = await session.execute(
+            select(Run)
+            .where(and_(
+                Run.group_id == parent_run.group_id,
+                Run.is_group_parent == False,
+            ))
+            .order_by(Run.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+        )
+        child_runs = list(result.scalars().all())
+
+        # Get total count
+        count_result = await session.execute(
+            select(func.count(Run.id))
+            .where(and_(
+                Run.group_id == parent_run.group_id,
+                Run.is_group_parent == False,
+            ))
+        )
+        total = count_result.scalar() or 0
+
+        # Build items (simplified for children)
+        items = []
+        run_types_found = set()
+
+        for run in child_runs:
+            run_types_found.add(run.run_type)
+            queue_def = queue_registry.get(run.run_type)
+
+            # Get display name from config
+            display_name = "Unknown"
+            if run.run_type == "extraction" and run.config:
+                display_name = run.config.get("filename", "Unknown document")
+
+            items.append(ActiveJobItem(
+                run_id=str(run.id),
+                run_type=run.run_type,
+                status=run.status,
+                queue_priority=run.queue_priority or 0,
+                created_at=run.created_at.isoformat() if run.created_at else "",
+                started_at=run.started_at.isoformat() if run.started_at else None,
+                submitted_at=run.submitted_to_celery_at.isoformat() if run.submitted_to_celery_at else None,
+                completed_at=run.completed_at.isoformat() if run.completed_at else None,
+                timeout_at=run.timeout_at.isoformat() if run.timeout_at else None,
+                last_activity_at=run.last_activity_at.isoformat() if run.last_activity_at else None,
+                display_name=display_name,
+                display_context=None,
+                asset_id=run.input_asset_ids[0] if run.input_asset_ids else None,
+                filename=run.config.get("filename") if run.config else None,
+                source_type=None,
+                extractor_version=run.config.get("extractor_version") if run.config else None,
+                queue_position=None,
+                config=run.config,
+                progress=run.progress,
+                can_cancel=queue_def.can_cancel if queue_def else False,
+                can_retry=queue_def.can_retry if queue_def else False,
+                is_parent_job=False,
+                group_id=str(run.group_id) if run.group_id else None,
+                parent_run_id=str(run_id),
+            ))
+
+        return ActiveJobsResponse(
+            items=items,
+            total=total,
+            run_types=sorted(list(run_types_found)),
+        )
+
+
 @router.post(
     "/jobs/{run_id}/cancel",
     response_model=CancelResponse,
     summary="Cancel a job",
-    description="Cancel a pending, submitted, or running job (if cancellation is supported for the job type).",
+    description="Cancel a pending, submitted, or running job (if cancellation is supported for the job type). "
+                "For parent jobs, this will also cancel child jobs based on the job type's cascade mode.",
 )
 async def cancel_job(
     run_id: UUID,
     current_user: User = Depends(get_current_user),
 ):
     """
-    Cancel a job by run ID.
+    Cancel a job by run ID with cascade cancellation for parent jobs.
 
     This unified endpoint supports cancelling any job type where cancellation
     is supported (based on queue_registry capabilities).
 
-    Currently supported:
-    - extraction: Can cancel pending, submitted, or running extractions
-    - sharepoint_sync: Can cancel running syncs
+    Cascade behavior:
+    - SharePoint Sync: Cancel queued child extractions (running ones complete)
+    - SAM.gov Pull: Cancel queued child extractions (running ones complete)
+    - Web Scrape: Cancel queued child extractions (running ones complete)
+    - Pipeline: Cancel ALL child jobs (atomicity)
+    - Extraction: Cancel single extraction
+
+    Returns:
+    - status: "cancelled" if successful
+    - children_cancelled: Number of child jobs that were cancelled
+    - children_skipped: Number of child jobs that were skipped (already completed/running)
     """
     async with database_service.get_session() as session:
         # Verify run exists and belongs to user's organization
@@ -1011,8 +1136,8 @@ async def cancel_job(
                 detail=f"Cannot cancel job in '{run.status}' status"
             )
 
-        # For extractions, use the extraction queue service
-        if run.run_type == "extraction":
+        # For standalone extractions, use the extraction queue service
+        if run.run_type == "extraction" and not run.is_group_parent:
             result = await extraction_queue_service.cancel_extraction(
                 session=session,
                 run_id=run_id,
@@ -1034,17 +1159,25 @@ async def cancel_job(
                 reason=result.get("reason"),
             )
 
-        # For other job types, perform generic cancellation
-        # Update run status directly
-        run.status = "cancelled"
-        run.error_message = f"Cancelled by user {current_user.email}"
-        run.completed_at = datetime.utcnow()
-        await session.commit()
+        # For parent jobs and other job types, use cascade cancellation service
+        from ....services.job_cancellation_service import job_cancellation_service
 
-        # TODO: Revoke Celery task if celery_task_id is set
+        result = await job_cancellation_service.cancel_parent_job(
+            session=session,
+            run_id=run_id,
+            reason=f"Cancelled by user {current_user.email}",
+        )
+
+        if not result.get("success"):
+            raise HTTPException(
+                status_code=400,
+                detail=result.get("error", "Cancellation failed")
+            )
 
         return CancelResponse(
             status="cancelled",
             run_id=str(run_id),
             reason=f"Cancelled by user {current_user.email}",
+            children_cancelled=result.get("children_cancelled", 0),
+            children_skipped=result.get("children_skipped", 0),
         )

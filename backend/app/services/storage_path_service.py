@@ -480,5 +480,147 @@ class StoragePathService:
         return sharepoint_sync_path(org_id, sync_slug, relative_path, filename, file_type)
 
 
+def sam_attachment_path(
+    org_id: str,
+    agency: str,
+    bureau: str,
+    notice_id: str,
+    filename: str,
+    file_type: str = "raw",
+) -> str:
+    """
+    Generate storage path for a SAM.gov attachment.
+
+    Preserves the SAM folder structure for organized browsing.
+
+    Args:
+        org_id: Organization UUID string
+        agency: Contracting agency name (e.g., "DEPT OF DEFENSE")
+        bureau: Bureau/sub-agency name (e.g., "ARMY")
+        notice_id: SAM.gov solicitation number (e.g., "W123ABC")
+        filename: Original filename
+        file_type: "raw" for original, "extracted" for markdown
+
+    Returns:
+        Storage path like: {org_id}/sam/{agency}/{bureau}/solicitations/{notice_id}/attachments/{filename}
+    """
+    # Slugify agency names to be safe for paths
+    safe_agency = slugify(agency) if agency else "unknown-agency"
+    safe_bureau = slugify(bureau) if bureau else safe_agency
+    safe_notice_id = slugify(notice_id) if notice_id else "unknown-notice"
+
+    # Sanitize filename
+    safe_filename = slugify_filename(filename)
+
+    if file_type == "extracted":
+        base, _ = safe_filename.rsplit(".", 1) if "." in safe_filename else (safe_filename, "")
+        safe_filename = f"{base}.md"
+
+    return f"{org_id}/sam/{safe_agency}/{safe_bureau}/solicitations/{safe_notice_id}/attachments/{safe_filename}"
+
+
+# Convenience class for organized access
+class StoragePathService:
+    """
+    Service for generating storage paths.
+
+    Usage:
+        from app.services.storage_path_service import storage_paths
+
+        # Scrape paths
+        raw_path = storage_paths.scrape_page(org_id, "amivero", url)
+        md_path = storage_paths.scrape_page(org_id, "amivero", url, extracted=True)
+        doc_path = storage_paths.scrape_document(org_id, "amivero", "report.pdf")
+
+        # Upload paths
+        path = storage_paths.upload(org_id, asset_id, "document.pdf")
+
+        # SharePoint paths
+        path = storage_paths.sharepoint(org_id, "MySite", "Documents/Reports", "q4.xlsx")
+
+        # SAM.gov paths
+        path = storage_paths.sam_attachment(org_id, "dept-of-defense", "army", "W123ABC", "rfp.pdf")
+    """
+
+    def scrape_page(
+        self,
+        org_id: str,
+        collection_slug: str,
+        url: str,
+        extracted: bool = False,
+    ) -> str:
+        """Generate path for scraped page."""
+        file_type = "extracted" if extracted else "raw"
+        return scrape_page_path(org_id, collection_slug, url, file_type)
+
+    def scrape_document(
+        self,
+        org_id: str,
+        collection_slug: str,
+        filename: str,
+        extracted: bool = False,
+    ) -> str:
+        """Generate path for scraped document."""
+        file_type = "extracted" if extracted else "raw"
+        return scrape_document_path(org_id, collection_slug, filename, file_type)
+
+    def upload(
+        self,
+        org_id: str,
+        asset_id: str,
+        filename: str,
+        extracted: bool = False,
+    ) -> str:
+        """Generate path for uploaded file."""
+        file_type = "extracted" if extracted else "raw"
+        return upload_path(org_id, asset_id, filename, file_type)
+
+    def sharepoint(
+        self,
+        org_id: str,
+        site_name: str,
+        folder_path: str,
+        filename: str,
+        extracted: bool = False,
+    ) -> str:
+        """Generate path for SharePoint file."""
+        file_type = "extracted" if extracted else "raw"
+        return sharepoint_path(org_id, site_name, folder_path, filename, file_type)
+
+    def temp(
+        self,
+        org_id: str,
+        content_hash: str,
+        filename: str,
+    ) -> str:
+        """Generate temporary path."""
+        return temp_path(org_id, content_hash, filename)
+
+    def sharepoint_sync(
+        self,
+        org_id: str,
+        sync_slug: str,
+        relative_path: str,
+        filename: str,
+        extracted: bool = False,
+    ) -> str:
+        """Generate path for SharePoint synced file."""
+        file_type = "extracted" if extracted else "raw"
+        return sharepoint_sync_path(org_id, sync_slug, relative_path, filename, file_type)
+
+    def sam_attachment(
+        self,
+        org_id: str,
+        agency: str,
+        bureau: str,
+        notice_id: str,
+        filename: str,
+        extracted: bool = False,
+    ) -> str:
+        """Generate path for SAM.gov attachment."""
+        file_type = "extracted" if extracted else "raw"
+        return sam_attachment_path(org_id, agency, bureau, notice_id, filename, file_type)
+
+
 # Singleton instance
 storage_paths = StoragePathService()

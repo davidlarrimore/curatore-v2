@@ -579,7 +579,6 @@ export default function JobDetailPage() {
                 </h3>
                 <div className="space-y-2">
                   <CapabilityBadge label="Cancel" enabled={queueDefinition.can_cancel} />
-                  <CapabilityBadge label="Boost Priority" enabled={queueDefinition.can_boost} />
                   <CapabilityBadge label="Retry" enabled={queueDefinition.can_retry} />
                   <CapabilityBadge label="Throttled" enabled={queueDefinition.is_throttled} />
                 </div>
