@@ -129,8 +129,10 @@ frontend/
 │       └── pipelines/      # Pipeline management
 ├── components/             # React components
 └── lib/
-    ├── api.ts              # API client
-    ├── active-jobs-context.tsx   # Parent job tracking
+    ├── api.ts                    # API client
+    ├── unified-jobs-context.tsx  # WebSocket-based job tracking
+    ├── websocket-client.ts       # WebSocket client with reconnection
+    ├── context-shims.ts          # Backward-compatible hooks
     └── job-type-config.ts        # Job type configuration
 
 extraction-service/         # Document conversion microservice
@@ -715,8 +717,8 @@ User clicks Delete → Confirmation Dialog → POST /delete
                                     └─────────────────────┘
                                                 ↓
                                     ┌─────────────────────┐
-                                    │ DeletionJobsProvider│
-                                    │ polls Run status    │
+                                    │ UnifiedJobsProvider │
+                                    │ WebSocket updates   │
                                     │ Shows toast on done │
                                     └─────────────────────┘
 ```
@@ -741,9 +743,10 @@ def my_delete_task(config_id, run_id):
 ```
 
 **Frontend Implementation:**
-1. Add `DeletionJobsProvider` to app layout (already done)
-2. Use `useDeletionJobs()` hook in components:
+1. Use `useDeletionJobs()` hook from context-shims (wraps unified context):
 ```tsx
+import { useDeletionJobs } from '@/lib/context-shims'
+
 const { addJob, isDeleting } = useDeletionJobs()
 
 const handleDelete = async () => {
@@ -753,7 +756,7 @@ const handleDelete = async () => {
 }
 ```
 
-3. Show "Deleting..." state in list views:
+2. Show "Deleting..." state in list views:
 ```tsx
 {config.status === 'deleting' || isDeleting(config.id) ? (
   <Badge>Deleting...</Badge>
@@ -762,7 +765,8 @@ const handleDelete = async () => {
 
 **Key Files:**
 - `backend/app/tasks.py` - `async_delete_sync_config_task`
-- `frontend/lib/deletion-jobs-context.tsx` - Global job tracking
+- `frontend/lib/unified-jobs-context.tsx` - Global job tracking with WebSocket
+- `frontend/lib/context-shims.ts` - Backward-compatible hooks
 - `frontend/components/ui/ConfirmDeleteDialog.tsx` - Reusable dialog
 
 ### Parent-Child Job Pattern (Run Groups)
@@ -1033,12 +1037,32 @@ See `frontend/app/connections/page.tsx` as reference implementation.
 
 **Dark Mode**: All components use `dark:` prefix
 
-### Active Jobs Tracking Pattern
+### Real-Time Job Tracking (WebSocket)
 
-For tracking long-running parent jobs (SAM pull, SharePoint sync, pipelines) across page navigation:
+Curatore uses WebSocket for real-time job status updates with automatic fallback to polling.
 
+**Architecture:**
+```
+┌─────────────────┐     ┌─────────────────────────────────────────────┐
+│   Frontend      │     │                 Backend                      │
+│                 │     │                                              │
+│ UnifiedJobs     │◀────┼──  WebSocket (/api/v1/ws/jobs)              │
+│   Context       │     │       ▲                                      │
+│                 │     │       │                                      │
+│ StatusBar shows │     │  Redis Pub/Sub  ◀── run_service updates     │
+│ connection state│     │                                              │
+└─────────────────┘     └──────────────────────────────────────────────┘
+```
+
+**Connection States** (shown in StatusBar):
+- **Live** (green) - WebSocket connected, real-time updates
+- **Polling** (amber) - Fallback mode, polling every 5-10 seconds
+- **Reconnecting** (amber) - Attempting to reconnect
+- **Offline** (red) - Disconnected
+
+**Usage - Track Jobs:**
 ```tsx
-import { useActiveJobs } from '@/lib/active-jobs-context'
+import { useActiveJobs } from '@/lib/context-shims'
 import { RunningJobBanner } from '@/components/ui/RunningJobBanner'
 
 function MyPage() {
@@ -1067,10 +1091,30 @@ function MyPage() {
 }
 ```
 
+**Usage - Direct Access to Unified Context:**
+```tsx
+import { useUnifiedJobs } from '@/lib/unified-jobs-context'
+
+function MyComponent() {
+  const {
+    jobs,              // All tracked jobs
+    queueStats,        // Queue statistics
+    connectionStatus,  // 'connected' | 'polling' | 'disconnected' | etc.
+    addJob,
+    removeJob,
+  } = useUnifiedJobs()
+}
+```
+
 **Key Files:**
-- `frontend/lib/active-jobs-context.tsx` - Global job tracking context
+- `frontend/lib/unified-jobs-context.tsx` - WebSocket-based job tracking
+- `frontend/lib/websocket-client.ts` - WebSocket client with reconnection
+- `frontend/lib/context-shims.ts` - Backward-compatible hooks (`useActiveJobs`, `useDeletionJobs`, `useQueue`)
 - `frontend/lib/job-type-config.ts` - Job type icons, colors, labels
 - `frontend/components/ui/RunningJobBanner.tsx` - Reusable job banner
+- `frontend/components/ui/ConnectionStatusIndicator.tsx` - Connection state display
+- `backend/app/api/v1/routers/websocket.py` - WebSocket endpoint
+- `backend/app/services/pubsub_service.py` - Redis pub/sub for broadcasting
 
 ---
 

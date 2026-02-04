@@ -29,6 +29,7 @@ import { LeftSidebar } from './LeftSidebar'
 import { StatusBar } from './StatusBar'
 import { systemApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
+import { useUnifiedJobs } from '@/lib/unified-jobs-context'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import toast, { Toaster } from 'react-hot-toast'
 import { HealthUnavailableOverlay } from '@/components/system/HealthUnavailableOverlay'
@@ -49,6 +50,7 @@ interface AppLayoutProps {
 export function AppLayout({ children }: AppLayoutProps) {
   const pathname = usePathname()
   const { isAuthenticated } = useAuth()
+  const { connectionStatus } = useUnifiedJobs()
   const [sidebarOpen, setSidebarOpen] = useState(false)
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false)
   const [systemStatus, setSystemStatus] = useState<SystemStatus>({
@@ -70,18 +72,33 @@ export function AppLayout({ children }: AppLayoutProps) {
    * This provides a clean, minimal experience for the login page only.
    */
   const showNavigation = pathname !== '/login'
-  const isSystemUnavailable = !systemStatus.isLoading && systemStatus.health !== 'healthy'
+
+  // System is unavailable only when:
+  // 1. Health check failed AND we're not connected via WebSocket
+  // 2. If WebSocket is connected or polling is working, the backend is reachable
+  const isSystemUnavailable =
+    !systemStatus.isLoading &&
+    systemStatus.health !== 'healthy' &&
+    connectionStatus === 'disconnected'
 
   // Load system status on mount and set up refresh interval
+  // When WebSocket is connected, we know the backend is healthy, so we can poll less frequently
   useEffect(() => {
     if (!isAuthenticated) return
 
     loadSystemStatus()
 
-    // Refresh system status every 30 seconds
-    const interval = setInterval(loadSystemStatus, 30000)
+    // Refresh system status every 60 seconds (WebSocket provides real-time connectivity info)
+    const interval = setInterval(() => {
+      // Skip health check if WebSocket is connected - we know backend is reachable
+      if (connectionStatus === 'connected') {
+        setSystemStatus(prev => ({ ...prev, health: 'healthy', isLoading: false }))
+        return
+      }
+      loadSystemStatus()
+    }, 60000)
     return () => clearInterval(interval)
-  }, [isAuthenticated])
+  }, [isAuthenticated, connectionStatus])
 
   const loadSystemStatus = async () => {
     const [healthResult, formatsResult] = await Promise.allSettled([

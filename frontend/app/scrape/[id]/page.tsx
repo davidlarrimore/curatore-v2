@@ -3,7 +3,7 @@
 import { useState, useEffect, use, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { useDeletionJobs } from '@/lib/deletion-jobs-context'
+import { useDeletionJobs } from '@/lib/context-shims'
 import { scrapeApi, ScrapeCollection, ScrapedAsset, PathTreeNode, CrawlStatus } from '@/lib/api'
 import { formatCompact } from '@/lib/date-utils'
 import Link from 'next/link'

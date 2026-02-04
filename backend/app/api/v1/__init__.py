@@ -24,6 +24,7 @@ from .routers import (
     procedures,
     pipelines,
     webhooks,
+    websocket,
 )
 
 api_router = APIRouter()
@@ -58,5 +59,7 @@ api_router.include_router(functions.router)
 api_router.include_router(procedures.router)
 api_router.include_router(pipelines.router)
 api_router.include_router(webhooks.router)
+# WebSocket endpoints for real-time job updates
+api_router.include_router(websocket.router)
 
 __all__ = ["api_router"]

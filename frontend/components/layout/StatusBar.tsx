@@ -6,8 +6,10 @@ import { useRouter } from 'next/navigation'
 import { Activity, Clock, ChevronRight, CheckCircle, XCircle, Loader2 } from 'lucide-react'
 import { API_PATH_VERSION } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
-import { useQueue } from '@/lib/queue-context'
+import { useQueue } from '@/lib/context-shims'
+import { useUnifiedJobs } from '@/lib/unified-jobs-context'
 import { formatCurrentTime, DISPLAY_TIMEZONE_ABBR } from '@/lib/date-utils'
+import { ConnectionStatusIndicator } from '@/components/ui/ConnectionStatusIndicator'
 import clsx from 'clsx'
 
 interface SystemStatus {
@@ -27,7 +29,14 @@ interface StatusBarProps {
 export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
   const router = useRouter()
   const { isAuthenticated } = useAuth()
-  const { stats, activeCount } = useQueue()
+  // Use both legacy and unified context during migration
+  const { stats: legacyStats, activeCount: legacyActiveCount } = useQueue()
+  const { queueStats, activeCount: unifiedActiveCount, connectionStatus, hasActiveJobs } = useUnifiedJobs()
+
+  // Prefer unified context stats, fall back to legacy
+  const stats = queueStats || legacyStats
+  const activeCount = unifiedActiveCount || legacyActiveCount
+
   const rootRef = useRef<HTMLDivElement | null>(null)
   const [currentTime, setCurrentTime] = useState<Date | null>(null)
   const [isClient, setIsClient] = useState(false)
@@ -108,6 +117,9 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
           <span className="hidden sm:inline">API</span>
           <span>{systemStatus.health === 'healthy' ? 'Healthy' : 'Error'}</span>
         </div>
+
+        {/* Connection Status Indicator */}
+        <ConnectionStatusIndicator status={connectionStatus} variant="compact" />
 
         {/* Divider */}
         <div className="hidden lg:block w-px h-4 bg-gray-200 dark:bg-gray-700"></div>

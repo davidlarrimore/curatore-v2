@@ -12,6 +12,7 @@ import {
   Upload,
   Workflow,
   Zap,
+  Trash2,
   LucideIcon,
 } from 'lucide-react'
 
@@ -24,12 +25,13 @@ export type JobType =
   | 'upload'
   | 'pipeline'
   | 'procedure'
+  | 'deletion'
 
 // Configuration for a single job type
 export interface JobTypeConfig {
   label: string
   icon: LucideIcon
-  color: 'purple' | 'blue' | 'emerald' | 'indigo' | 'amber' | 'cyan'
+  color: 'purple' | 'blue' | 'emerald' | 'indigo' | 'amber' | 'cyan' | 'red'
   resourceType: string
   hasChildJobs: boolean
   phases: string[]
@@ -109,6 +111,16 @@ export const JOB_TYPE_CONFIG: Record<JobType, JobTypeConfig> = {
     completedToast: (name) => `Procedure completed: ${name}`,
     failedToast: (name, error) => `Procedure failed: ${name}${error ? ` - ${error}` : ''}`,
   },
+  deletion: {
+    label: 'Deletion',
+    icon: Trash2,
+    color: 'red',
+    resourceType: 'deletion',
+    hasChildJobs: false,
+    phases: ['preparing', 'deleting', 'cleaning_up'],
+    completedToast: (name) => `"${name}" deleted`,
+    failedToast: (name, error) => `Failed to delete "${name}"${error ? `: ${error}` : ''}`,
+  },
 }
 
 // Get job type from run_type string
@@ -122,6 +134,7 @@ export function getJobTypeFromRunType(runType: string): JobType | null {
     upload: 'upload',
     pipeline: 'pipeline',
     procedure: 'procedure',
+    deletion: 'deletion',
   }
 
   if (directMap[runType]) {
@@ -133,6 +146,8 @@ export function getJobTypeFromRunType(runType: string): JobType | null {
   if (runType.startsWith('sam_')) return 'sam_pull'
   if (runType.startsWith('scrape_')) return 'scrape'
   if (runType.startsWith('sharepoint_')) return 'sharepoint_sync'
+  // Deletion aliases (e.g., sharepoint_delete, sam_delete)
+  if (runType.endsWith('_delete')) return 'deletion'
 
   return null
 }

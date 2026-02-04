@@ -33,8 +33,18 @@ Usage:
         run_id=run.id,
         results_summary={"processed": 10, "failed": 0},
     )
+
+WebSocket Integration:
+    The run service automatically publishes status and progress updates to
+    Redis pub/sub for real-time WebSocket notifications. Events are published
+    to the organization's channel: curatore:org:{org_id}:jobs
+
+    Event types:
+    - run_status: Published on status changes (pending, running, completed, failed, etc.)
+    - run_progress: Published on progress updates
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any
@@ -48,6 +58,56 @@ from ..database.models import Run, Asset, ExtractionResult, RunLogEvent
 from ..config import settings
 
 logger = logging.getLogger("curatore.run_service")
+
+
+async def _publish_run_event(
+    organization_id: UUID,
+    event_type: str,
+    run: "Run",
+    extra_data: Optional[Dict[str, Any]] = None,
+) -> None:
+    """
+    Publish a run event to Redis pub/sub for WebSocket clients.
+
+    This is a fire-and-forget operation - failures are logged but don't
+    affect the run service operation.
+
+    Args:
+        organization_id: Organization UUID for channel routing
+        event_type: Event type ('run_status' or 'run_progress')
+        run: The Run instance to publish
+        extra_data: Additional data to include in the payload
+    """
+    try:
+        # Import here to avoid circular imports
+        from .pubsub_service import pubsub_service
+
+        payload = {
+            "run_id": str(run.id),
+            "run_type": run.run_type,
+            "status": run.status,
+            "progress": run.progress,
+            "results_summary": run.results_summary,
+            "error_message": run.error_message,
+            "created_at": run.created_at.isoformat() if run.created_at else None,
+            "started_at": run.started_at.isoformat() if run.started_at else None,
+            "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+        }
+
+        if extra_data:
+            payload.update(extra_data)
+
+        # Fire and forget - don't wait for the publish to complete
+        asyncio.create_task(
+            pubsub_service.publish_job_update(
+                organization_id=organization_id,
+                event_type=event_type,
+                payload=payload,
+            )
+        )
+    except Exception as e:
+        # Log but don't fail the run service operation
+        logger.debug(f"Failed to publish run event: {e}")
 
 
 class RunService:
@@ -396,6 +456,13 @@ class RunService:
 
         logger.info(f"Updated run {run_id} status: {old_status} → {status}")
 
+        # Publish status change to WebSocket clients
+        await _publish_run_event(
+            organization_id=run.organization_id,
+            event_type="run_status",
+            run=run,
+        )
+
         return run
 
     async def update_run_progress(
@@ -473,6 +540,13 @@ class RunService:
 
         await session.commit()
         await session.refresh(run)
+
+        # Publish progress update to WebSocket clients
+        await _publish_run_event(
+            organization_id=run.organization_id,
+            event_type="run_progress",
+            run=run,
+        )
 
         return run
 

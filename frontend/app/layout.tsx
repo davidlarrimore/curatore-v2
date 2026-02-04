@@ -3,9 +3,7 @@ import '../styles/globals.css'
 import { ReactNode, Suspense } from 'react'
 import { AppLayout } from '@/components/layout/AppLayout'
 import { AuthProvider } from '@/lib/auth-context'
-import { QueueProvider } from '@/lib/queue-context'
-import { DeletionJobsProvider } from '@/lib/deletion-jobs-context'
-import { ActiveJobsProvider } from '@/lib/active-jobs-context'
+import { UnifiedJobsProvider } from '@/lib/unified-jobs-context'
 import { LoadingBar } from '@/components/LoadingBar'
 
 export const metadata = {
@@ -26,15 +24,12 @@ export default function RootLayout({ children }: RootLayoutProps) {
           <LoadingBar />
         </Suspense>
         <AuthProvider>
-          <QueueProvider>
-            <DeletionJobsProvider>
-              <ActiveJobsProvider>
-                <AppLayout>
-                  {children}
-                </AppLayout>
-              </ActiveJobsProvider>
-            </DeletionJobsProvider>
-          </QueueProvider>
+          {/* Unified jobs provider with WebSocket + polling fallback */}
+          <UnifiedJobsProvider>
+            <AppLayout>
+              {children}
+            </AppLayout>
+          </UnifiedJobsProvider>
         </AuthProvider>
       </body>
     </html>

@@ -9,7 +9,7 @@
 
 import { Loader2, ExternalLink } from 'lucide-react'
 import Link from 'next/link'
-import { ActiveJob, JobProgress } from '@/lib/active-jobs-context'
+import { ActiveJob, JobProgress } from '@/lib/context-shims'
 import { JOB_TYPE_CONFIG, JobType } from '@/lib/job-type-config'
 import { formatTimeAgo } from '@/lib/date-utils'
 
@@ -59,6 +59,12 @@ const colorClasses: Record<string, { bg: string; border: string; text: string; p
     text: 'text-cyan-600 dark:text-cyan-400',
     progressBg: 'bg-cyan-500',
   },
+  red: {
+    bg: 'bg-red-50 dark:bg-red-900/20',
+    border: 'border-red-100 dark:border-red-900/50',
+    text: 'text-red-600 dark:text-red-400',
+    progressBg: 'bg-red-500',
+  },
 }
 
 export function RunningJobBanner({
@@ -74,8 +80,8 @@ export function RunningJobBanner({
 
   // Calculate progress percentage
   const progressPercent =
-    job.progress?.total && job.progress?.processed
-      ? Math.round((job.progress.processed / job.progress.total) * 100)
+    job.progress?.total && job.progress?.current
+      ? Math.round((job.progress.current / job.progress.total) * 100)
       : null
 
   // Calculate child job progress
@@ -160,7 +166,7 @@ export function RunningJobBanner({
         <div className="mt-4">
           <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
             <span>
-              {job.progress?.processed?.toLocaleString()} /{' '}
+              {job.progress?.current?.toLocaleString()} /{' '}
               {job.progress?.total?.toLocaleString()} items
             </span>
             <span>{progressPercent}%</span>

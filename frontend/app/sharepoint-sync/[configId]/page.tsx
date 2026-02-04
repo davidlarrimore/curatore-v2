@@ -8,7 +8,7 @@ import { sharepointSyncApi, SharePointSyncConfig, SharePointSyncedDocument } fro
 import { formatDateTime, formatDuration } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import { ConfirmDeleteDialog } from '@/components/ui/ConfirmDeleteDialog'
-import { useDeletionJobs } from '@/lib/deletion-jobs-context'
+import { useDeletionJobs } from '@/lib/context-shims'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import toast from 'react-hot-toast'
 import {

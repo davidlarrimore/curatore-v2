@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
-import { useQueue } from '@/lib/queue-context'
+import { useQueue } from '@/lib/context-shims'
 import {
   queueAdminApi,
   type ActiveJob,
