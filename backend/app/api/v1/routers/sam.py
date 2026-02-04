@@ -1876,6 +1876,19 @@ async def refresh_notice(
                 )
                 results["notice_updated"] = True
                 logger.info(f"Updated standalone notice {notice_id} with full SAM.gov metadata")
+
+                # Trigger auto-summary generation if summary is pending
+                if notice.summary_status in ("pending", None):
+                    notice.summary_status = "generating"
+                    await session.commit()
+
+                    from app.tasks import sam_auto_summarize_notice_task
+                    sam_auto_summarize_notice_task.delay(
+                        notice_id=str(notice_id),
+                        organization_id=str(current_user.organization_id),
+                    )
+                    results["summary_triggered"] = True
+                    logger.info(f"Triggered auto-summary for standalone notice {notice_id}")
             else:
                 # Fallback: just fetch description if search returns no results
                 description = await sam_pull_service.fetch_notice_description(

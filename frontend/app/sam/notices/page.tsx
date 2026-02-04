@@ -5,7 +5,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { functionsApi, connectionsApi, FunctionExecuteResult } from '@/lib/api'
-import { formatDate as formatDateUtil, formatCompact } from '@/lib/date-utils'
+import { formatDate as formatDateUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamNavigation from '@/components/sam/SamNavigation'
 import SamConnectionRequired from '@/components/sam/SamConnectionRequired'
@@ -405,13 +405,8 @@ function SamNoticesContent() {
     return <SamConnectionRequired />
   }
 
-  // Use formatDate from date-utils for consistent EST display
+  // Use formatDate from date-utils for consistent display
   const formatDate = (dateStr: string | null) => formatDateUtil(dateStr)
-  // Format posted date with time (HH:MM AM/PM EST)
-  const formatPostedDate = (dateStr: string | null) => {
-    const compact = formatCompact(dateStr)
-    return compact === '-' ? '-' : `${compact} EST`
-  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
@@ -803,7 +798,7 @@ function SamNoticesContent() {
                         </td>
                         <td className="px-4 py-3">
                           <p className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">
-                            {formatPostedDate(notice.posted_date)}
+                            {formatDate(notice.posted_date)}
                           </p>
                         </td>
                         <td className="px-4 py-3">
