@@ -61,7 +61,7 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from pydantic import BaseModel, Field
 from sqlalchemy import select, desc
 
-from app.tasks import sam_pull_task, sam_refresh_solicitation_task
+from app.tasks import sam_pull_task, sam_refresh_solicitation_task, sam_refresh_notice_task
 from app.services.run_service import run_service
 from app.database.models import (
     Run,
@@ -1819,92 +1819,37 @@ async def refresh_notice(
                     "error": refresh_results.get("error"),
                 }
 
-            # Standalone notice - search by notice ID to get full metadata
-            results = {
-                "notice_id": str(notice_id),
-                "notice_updated": False,
-                "solicitation_updated": False,
-                "opportunities_found": 0,
-            }
-
-            # Search SAM.gov by notice ID to get full opportunity data
-            search_config = {
-                "notice_id": notice.sam_notice_id,
-                "active_only": False,  # Get even inactive notices
-            }
-
-            opportunities, total = await sam_pull_service.search_opportunities(
-                search_config,
-                limit=10,
-                session=session,
+            # Standalone notice - create a job to refresh from SAM.gov
+            # Create Run record for tracking
+            run = Run(
                 organization_id=current_user.organization_id,
+                run_type="sam_refresh",
+                origin="user",
+                status="pending",
+                config={
+                    "notice_id": str(notice_id),
+                    "sam_notice_id": notice.sam_notice_id,
+                },
+                created_by=current_user.id,
+            )
+            session.add(run)
+            await session.commit()
+
+            # Dispatch the Celery task
+            task = sam_refresh_notice_task.delay(
+                notice_id=str(notice_id),
+                organization_id=str(current_user.organization_id),
+                run_id=str(run.id),
             )
 
-            results["opportunities_found"] = len(opportunities)
+            logger.info(f"Queued SAM notice refresh task {task.id} for notice {notice_id} (run_id={run.id})")
 
-            if opportunities:
-                opp = opportunities[0]
-
-                # Fetch full description
-                description = opp.get("description")
-                description_url = None
-                if description and description.startswith("http"):
-                    description_url = description
-                    full_description = await sam_pull_service.fetch_notice_description(
-                        notice.sam_notice_id, session, current_user.organization_id
-                    )
-                    if full_description:
-                        description = full_description
-
-                # Update notice with all metadata from SAM.gov
-                await sam_service.update_notice(
-                    session,
-                    notice_id=notice_id,
-                    title=opp.get("title"),
-                    description=description,
-                    description_url=description_url,
-                    response_deadline=opp.get("response_deadline"),
-                    raw_data=opp.get("raw_data"),
-                    full_parent_path=opp.get("full_parent_path"),
-                    agency_name=opp.get("agency_name"),
-                    bureau_name=opp.get("bureau_name"),
-                    office_name=opp.get("office_name"),
-                    naics_code=opp.get("naics_code"),
-                    psc_code=opp.get("psc_code"),
-                    set_aside_code=opp.get("set_aside_code"),
-                    ui_link=opp.get("ui_link"),
-                )
-                results["notice_updated"] = True
-                logger.info(f"Updated standalone notice {notice_id} with full SAM.gov metadata")
-
-                # Trigger auto-summary generation if summary is pending
-                if notice.summary_status in ("pending", None):
-                    notice.summary_status = "generating"
-                    await session.commit()
-
-                    from app.tasks import sam_auto_summarize_notice_task
-                    sam_auto_summarize_notice_task.delay(
-                        notice_id=str(notice_id),
-                        organization_id=str(current_user.organization_id),
-                    )
-                    results["summary_triggered"] = True
-                    logger.info(f"Triggered auto-summary for standalone notice {notice_id}")
-            else:
-                # Fallback: just fetch description if search returns no results
-                description = await sam_pull_service.fetch_notice_description(
-                    notice.sam_notice_id, session, current_user.organization_id
-                )
-                if description and description != notice.description:
-                    await sam_service.update_notice(
-                        session,
-                        notice_id=notice_id,
-                        description=description,
-                    )
-                    results["notice_updated"] = True
-                    results["description_updated"] = True
-                    logger.info(f"Updated standalone notice {notice_id} description only (no SAM.gov search results)")
-
-            return results
+            return {
+                "notice_id": str(notice_id),
+                "run_id": str(run.id),
+                "status": "queued",
+                "message": "Refresh task queued. Check the job monitor for progress.",
+            }
 
         except Exception as e:
             logger.error(f"Error refreshing notice {notice_id}: {e}")

@@ -303,6 +303,14 @@ class MicrosoftGraphConfig(BaseModel):
         le=10,
         description="Maximum retry attempts"
     )
+    enable_email: bool = Field(
+        default=False,
+        description="Enable email sending via Microsoft Graph API. Requires Mail.Send permission."
+    )
+    email_sender_user_id: Optional[str] = Field(
+        default=None,
+        description="User ID or UPN for sending emails (e.g., noreply@domain.com). Required when enable_email is True."
+    )
 
 
 class SMTPConfig(BaseModel):
@@ -369,11 +377,11 @@ class EmailConfig(BaseModel):
     """
     Email service configuration.
 
-    Supports console (dev), SMTP, SendGrid, and AWS SES backends.
+    Supports console (dev), SMTP, SendGrid, AWS SES, and Microsoft Graph backends.
     """
     model_config = ConfigDict(extra='forbid')
 
-    backend: Literal["console", "smtp", "sendgrid", "ses"] = Field(
+    backend: Literal["console", "smtp", "sendgrid", "ses", "microsoft_graph"] = Field(
         description="Email backend to use"
     )
     from_address: str = Field(

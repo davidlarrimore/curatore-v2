@@ -138,7 +138,17 @@ class SendEmailFunction(BaseFunction):
                     html=html,
                     cc=cc,
                     attachments=attachments,
+                    session=ctx.session,
+                    organization_id=ctx.organization_id,
                 )
+
+                # Check if the send was actually successful
+                if not result.get("success", False):
+                    return FunctionResult.failed_result(
+                        error=result.get("error", "Email send failed"),
+                        message=f"Failed to send email: {result.get('error', 'Unknown error')}",
+                        data=result,
+                    )
 
                 return FunctionResult.success_result(
                     data=result,

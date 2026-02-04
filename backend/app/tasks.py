@@ -1691,6 +1691,249 @@ def sam_refresh_solicitation_task(
         raise
 
 
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def sam_refresh_notice_task(
+    self,
+    notice_id: str,
+    organization_id: str,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Celery task to refresh a standalone notice from SAM.gov.
+
+    Searches SAM.gov by notice ID to get full metadata and updates the notice.
+    Also triggers auto-summary generation if the summary is pending.
+
+    Args:
+        notice_id: SamNotice UUID string
+        organization_id: Organization UUID string
+        run_id: Pre-created Run UUID string
+
+    Returns:
+        Dict containing:
+            - notice_id: The notice UUID
+            - status: success or failed
+            - notice_updated: Whether notice was updated
+            - summary_triggered: Whether summary generation was triggered
+            - error: Error message (if failed)
+    """
+    from .services.sam_pull_service import sam_pull_service
+    from .services.sam_service import sam_service
+    from .services.run_log_service import run_log_service
+    from .database.models import Run, SamNotice
+
+    logger = logging.getLogger("curatore.sam")
+    logger.info(f"Starting SAM refresh task for notice {notice_id}")
+
+    run_uuid = uuid.UUID(run_id) if run_id else None
+
+    try:
+        async def _execute_refresh():
+            nonlocal run_uuid
+            async with database_service.get_session() as session:
+                # Get existing Run or create new one
+                if run_uuid:
+                    run_result = await session.execute(
+                        select(Run).where(Run.id == run_uuid)
+                    )
+                    run = run_result.scalar_one_or_none()
+                    if not run:
+                        raise ValueError(f"Run not found: {run_uuid}")
+                    run.status = "running"
+                    run.started_at = datetime.utcnow()
+                else:
+                    run = Run(
+                        organization_id=uuid.UUID(organization_id),
+                        run_type="sam_refresh",
+                        origin="user",
+                        status="running",
+                        config={
+                            "notice_id": notice_id,
+                        },
+                        started_at=datetime.utcnow(),
+                    )
+                    session.add(run)
+                    await session.flush()
+                    run_uuid = run.id
+                await session.commit()
+
+                # Get the notice
+                notice = await sam_service.get_notice(session, uuid.UUID(notice_id))
+                if not notice:
+                    raise ValueError(f"Notice not found: {notice_id}")
+
+                # Log start
+                await run_log_service.log_start(
+                    session=session,
+                    run_id=run_uuid,
+                    message=f"Starting refresh for notice: {notice.title or notice.sam_notice_id}",
+                    context={"notice_id": notice_id, "sam_notice_id": notice.sam_notice_id},
+                )
+                await session.commit()
+
+                result = {
+                    "notice_id": notice_id,
+                    "notice_updated": False,
+                    "summary_triggered": False,
+                    "opportunities_found": 0,
+                }
+
+                # Search SAM.gov by notice ID
+                search_config = {
+                    "notice_id": notice.sam_notice_id,
+                    "active_only": False,
+                }
+
+                await run_log_service.log_event(
+                    session=session,
+                    run_id=run_uuid,
+                    level="INFO",
+                    event_type="progress",
+                    message=f"Searching SAM.gov for notice {notice.sam_notice_id}",
+                    context={"phase": "searching"},
+                )
+                await session.commit()
+
+                opportunities, total = await sam_pull_service.search_opportunities(
+                    search_config,
+                    limit=10,
+                    session=session,
+                    organization_id=uuid.UUID(organization_id),
+                )
+
+                result["opportunities_found"] = len(opportunities)
+
+                if opportunities:
+                    opp = opportunities[0]
+
+                    # Fetch full description
+                    description = opp.get("description")
+                    description_url = None
+                    if description and description.startswith("http"):
+                        description_url = description
+                        full_description = await sam_pull_service.fetch_notice_description(
+                            notice.sam_notice_id, session, uuid.UUID(organization_id)
+                        )
+                        if full_description:
+                            description = full_description
+
+                    # Update notice with all metadata
+                    await sam_service.update_notice(
+                        session,
+                        notice_id=uuid.UUID(notice_id),
+                        title=opp.get("title"),
+                        description=description,
+                        description_url=description_url,
+                        response_deadline=opp.get("response_deadline"),
+                        raw_data=opp.get("raw_data"),
+                        full_parent_path=opp.get("full_parent_path"),
+                        agency_name=opp.get("agency_name"),
+                        bureau_name=opp.get("bureau_name"),
+                        office_name=opp.get("office_name"),
+                        naics_code=opp.get("naics_code"),
+                        psc_code=opp.get("psc_code"),
+                        set_aside_code=opp.get("set_aside_code"),
+                        ui_link=opp.get("ui_link"),
+                    )
+                    result["notice_updated"] = True
+
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_uuid,
+                        level="INFO",
+                        event_type="progress",
+                        message="Updated notice with SAM.gov metadata",
+                        context={"agency": opp.get("agency_name"), "has_description": bool(description)},
+                    )
+                    await session.commit()
+
+                    # Trigger auto-summary if pending
+                    # Re-fetch notice to get current state
+                    notice = await sam_service.get_notice(session, uuid.UUID(notice_id))
+                    if notice and notice.summary_status in ("pending", None):
+                        notice.summary_status = "generating"
+                        await session.commit()
+
+                        sam_auto_summarize_notice_task.delay(
+                            notice_id=notice_id,
+                            organization_id=organization_id,
+                        )
+                        result["summary_triggered"] = True
+
+                        await run_log_service.log_event(
+                            session=session,
+                            run_id=run_uuid,
+                            level="INFO",
+                            event_type="progress",
+                            message="Triggered auto-summary generation",
+                            context={"phase": "summary"},
+                        )
+                        await session.commit()
+                else:
+                    # No results from SAM.gov search
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_uuid,
+                        level="WARN",
+                        event_type="progress",
+                        message="No results found from SAM.gov search",
+                        context={"sam_notice_id": notice.sam_notice_id},
+                    )
+                    await session.commit()
+
+                # Log summary
+                status = "completed"
+                summary_msg = "Notice updated" if result["notice_updated"] else "No changes"
+                if result["summary_triggered"]:
+                    summary_msg += ", summary generation triggered"
+
+                await run_log_service.log_summary(
+                    session=session,
+                    run_id=run_uuid,
+                    message=f"Refresh {status}: {summary_msg}",
+                    context={"status": status, **result},
+                )
+
+                # Update Run
+                run_result = await session.execute(
+                    select(Run).where(Run.id == run_uuid)
+                )
+                run = run_result.scalar_one()
+                run.status = status
+                run.completed_at = datetime.utcnow()
+                run.results_summary = result
+                await session.commit()
+
+                return result
+
+        result = asyncio.run(_execute_refresh())
+        logger.info(f"SAM refresh completed for notice {notice_id}")
+        return result
+
+    except Exception as e:
+        logger.error(f"SAM notice refresh task failed: {e}")
+
+        # Update Run to failed
+        if run_uuid:
+            try:
+                async def _mark_failed():
+                    async with database_service.get_session() as session:
+                        run_result = await session.execute(
+                            select(Run).where(Run.id == run_uuid)
+                        )
+                        run = run_result.scalar_one_or_none()
+                        if run:
+                            run.status = "failed"
+                            run.completed_at = datetime.utcnow()
+                            run.error_message = str(e)
+                            await session.commit()
+                asyncio.run(_mark_failed())
+            except Exception as inner_e:
+                logger.error(f"Failed to update run status: {inner_e}")
+
+        raise
+
+
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
 def sam_download_attachment_task(
     self,

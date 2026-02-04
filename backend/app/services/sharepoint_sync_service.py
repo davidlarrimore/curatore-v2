@@ -1690,11 +1690,17 @@ class SharePointSyncService:
         )
 
         # =================================================================
-        # CAPTURE DELTA TOKEN (if delta enabled and successful)
+        # CAPTURE DELTA TOKEN (auto-enable on successful full sync)
         # =================================================================
-        # After a successful full sync, capture delta token for future incremental syncs
-        if config.delta_enabled and results["failed_files"] == 0:
+        # After a successful full sync with no failures, automatically enable delta
+        # and capture the token for future incremental syncs
+        if results["failed_files"] == 0:
             try:
+                # Auto-enable delta on first successful full sync
+                if not config.delta_enabled:
+                    config.delta_enabled = True
+                    logger.info(f"Auto-enabled delta for config {config.id} after successful full sync")
+
                 await self._capture_initial_delta_token(
                     session=session,
                     config=config,

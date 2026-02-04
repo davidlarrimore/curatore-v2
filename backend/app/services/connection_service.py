@@ -209,6 +209,11 @@ class MicrosoftGraphConnectionType(BaseConnectionType):
                     "title": "OAuth Scope",
                     "description": "OAuth scope for Graph API access",
                     "default": "https://graph.microsoft.com/.default"
+                },
+                "email_sender_user_id": {
+                    "type": "string",
+                    "title": "Email Sender User ID",
+                    "description": "User ID or UPN for sending emails via Graph API (e.g., noreply@domain.com). Required if using Microsoft Graph for email."
                 }
             },
             "required": ["tenant_id", "client_id", "client_secret"]

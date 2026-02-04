@@ -137,7 +137,7 @@ class Settings(BaseSettings):
     # =========================================================================
     email_backend: str = Field(
         default="console",
-        description="Email backend: console (dev), smtp, sendgrid, ses",
+        description="Email backend: console (dev), smtp, sendgrid, ses, microsoft_graph",
     )
     email_from_address: str = Field(
         default="noreply@curatore.app", description="From email address"

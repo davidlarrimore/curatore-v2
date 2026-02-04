@@ -75,6 +75,7 @@ app.conf.update(
         # =================================================================
         "app.tasks.sam_pull_task": {"queue": "sam"},
         "app.tasks.sam_refresh_solicitation_task": {"queue": "sam"},
+        "app.tasks.sam_refresh_notice_task": {"queue": "sam"},
         "app.tasks.sam_auto_summarize_task": {"queue": "sam"},
         "app.tasks.sam_auto_summarize_notice_task": {"queue": "sam"},
 

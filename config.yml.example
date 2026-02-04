@@ -398,6 +398,16 @@ microsoft_graph:
   # Maximum retry attempts (optional, default: 3)
   max_retries: 3
 
+  # Enable email sending via Microsoft Graph API (optional, default: false)
+  # When enabled, emails are sent via Graph API instead of SMTP/SendGrid/SES.
+  # Requires Mail.Send application permission in Azure AD.
+  enable_email: false
+
+  # Email sender user ID or UPN (required when enable_email is true)
+  # This must be a valid mailbox in your Microsoft 365 tenant.
+  # Example: noreply@yourdomain.com
+  email_sender_user_id: ${MS_EMAIL_SENDER_USER_ID}
+
 
 # ============================================================================
 # Email Service Configuration (optional)
