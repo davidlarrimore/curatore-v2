@@ -359,7 +359,7 @@ class Connection(Base):
         organization_id: Organization that owns this connection
         name: Human-readable connection name
         description: Optional description
-        connection_type: Type of connection (sharepoint, llm, extraction, s3, etc.)
+        connection_type: Type of connection (microsoft_graph, llm, extraction, s3, etc.)
         config: JSONB field for type-specific configuration
         is_active: Whether connection is active
         is_default: Whether this is the default connection for its type
@@ -1454,6 +1454,13 @@ class ScrapeCollection(Base):
     stats = Column(JSON, nullable=False, default=dict, server_default="{}")
     # stats may include: page_count, record_count, total_size, last_updated
 
+    # Automation config (procedures/pipelines to run after crawl)
+    # Example: {
+    #   "after_procedure_slug": "scrape-digest",
+    #   "after_procedure_params": {"include_summaries": true}
+    # }
+    automation_config = Column(JSONB, nullable=False, default=dict, server_default="{}")
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
@@ -1916,9 +1923,9 @@ class SamAgency(Base):
     __tablename__ = "sam_agencies"
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
-    code = Column(String(50), nullable=False, unique=True, index=True)
+    code = Column(String(255), nullable=False, unique=True, index=True)
     name = Column(String(500), nullable=False)
-    abbreviation = Column(String(50), nullable=True)
+    abbreviation = Column(String(100), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
 
     # Timestamps
@@ -1964,9 +1971,9 @@ class SamSubAgency(Base):
     agency_id = Column(
         UUID(), ForeignKey("sam_agencies.id", ondelete="CASCADE"), nullable=False, index=True
     )
-    code = Column(String(50), nullable=False, index=True)
+    code = Column(String(255), nullable=False, index=True)
     name = Column(String(500), nullable=False)
-    abbreviation = Column(String(50), nullable=True)
+    abbreviation = Column(String(100), nullable=True)
     is_active = Column(Boolean, nullable=False, default=True)
 
     # Timestamps
@@ -2093,6 +2100,9 @@ class SamSolicitation(Base):
     # Place of performance (JSONB)
     place_of_performance = Column(JSON, nullable=True)
 
+    # Raw SAM.gov API response (for audit/debugging)
+    raw_data = Column(JSON, nullable=True)
+
     # Denormalized counts
     notice_count = Column(Integer, nullable=False, default=1)
     attachment_count = Column(Integer, nullable=False, default=0)
@@ -2195,6 +2205,7 @@ class SamNotice(Base):
     # Snapshot of data at this version
     title = Column(Text, nullable=True)
     description = Column(Text, nullable=True)
+    description_url = Column(String(1000), nullable=True)  # SAM.gov API URL for full description
     posted_date = Column(DateTime, nullable=True)
     response_deadline = Column(DateTime, nullable=True)
 
@@ -2207,13 +2218,17 @@ class SamNotice(Base):
     agency_name = Column(String(500), nullable=True)
     bureau_name = Column(String(500), nullable=True)
     office_name = Column(String(500), nullable=True)
+    full_parent_path = Column(String(1000), nullable=True)  # Original fullParentPathName
 
     # Links
     ui_link = Column(String(500), nullable=True)
 
-    # Raw API response storage
+    # Raw API response storage (legacy - in object storage)
     raw_json_bucket = Column(String(255), nullable=True)
     raw_json_key = Column(String(500), nullable=True)
+
+    # Raw SAM.gov API response (JSONB for direct access)
+    raw_data = Column(JSON, nullable=True)
 
     # Change tracking
     changes_summary = Column(Text, nullable=True)  # AI-generated or manual
@@ -2690,6 +2705,13 @@ class SharePointSyncConfig(Base):
     # Statistics
     stats = Column(JSON, nullable=False, default=dict, server_default="{}")
     # Example: {"total_files": 50, "synced_files": 48, "deleted_count": 2, "total_size_bytes": 12345678}
+
+    # Automation config (procedures/pipelines to run after sync)
+    # Example: {
+    #   "after_procedure_slug": "sharepoint-digest",
+    #   "after_procedure_params": {"include_summaries": true}
+    # }
+    automation_config = Column(JSONB, nullable=False, default=dict, server_default="{}")
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

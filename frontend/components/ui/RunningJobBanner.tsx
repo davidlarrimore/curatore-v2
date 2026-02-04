@@ -104,7 +104,7 @@ export function RunningJobBanner({
           </span>
         )}
         <Link
-          href={`/admin/queue?run=${job.runId}`}
+          href={`/admin/queue/${job.runId}`}
           className={`text-xs ${colors.text} hover:underline ml-auto`}
           onClick={onViewJob}
         >
@@ -146,7 +146,7 @@ export function RunningJobBanner({
         </div>
 
         <Link
-          href={`/admin/queue?run=${job.runId}`}
+          href={`/admin/queue/${job.runId}`}
           className={`flex items-center gap-1 text-sm ${colors.text} hover:underline`}
           onClick={onViewJob}
         >

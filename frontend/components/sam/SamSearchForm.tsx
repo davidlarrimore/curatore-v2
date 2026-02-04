@@ -3,6 +3,7 @@
 import { useState, FormEvent, useEffect, useRef } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { samApi, SamSearch, SamPreviewResult } from '@/lib/api'
+import { parseCommaSeparated, trimQuotes } from '@/lib/parse-utils'
 import { Button } from '../ui/Button'
 import {
   AlertTriangle,
@@ -58,9 +59,10 @@ export default function SamSearchForm({
   const [dateRange, setDateRange] = useState(
     search?.search_config?.date_range || 'last_30_days'
   )
-  const [department, setDepartment] = useState(
-    search?.search_config?.department || ''
+  const [departments, setDepartments] = useState<string[]>(
+    search?.search_config?.departments || []
   )
+  const [newDepartment, setNewDepartment] = useState('')
 
   // Date range options
   const dateRangeOptions = [
@@ -120,7 +122,7 @@ export default function SamSearchForm({
     activeOnly,
     downloadAttachments,
     dateRange,
-    department,
+    departments,
   ])
 
   // Notice type options (SAM.gov API ptype values)
@@ -158,14 +160,17 @@ export default function SamSearchForm({
     active_only: activeOnly,
     download_attachments: downloadAttachments,
     date_range: dateRange,
-    department: department || undefined,
+    departments: departments.length > 0 ? departments : undefined,
   })
 
-  // Add NAICS code
+  // Add NAICS code(s) - supports comma-separated list
   const addNaicsCode = () => {
-    const code = newNaics.trim()
-    if (code && !naicsCodes.includes(code)) {
-      setNaicsCodes([...naicsCodes, code])
+    const codes = newNaics
+      .split(',')
+      .map((c) => trimQuotes(c))
+      .filter((c) => c && !naicsCodes.includes(c))
+    if (codes.length > 0) {
+      setNaicsCodes([...naicsCodes, ...codes])
       setNewNaics('')
     }
   }
@@ -175,11 +180,14 @@ export default function SamSearchForm({
     setNaicsCodes(naicsCodes.filter((c) => c !== code))
   }
 
-  // Add PSC code
+  // Add PSC code(s) - supports comma-separated list
   const addPscCode = () => {
-    const code = newPsc.trim().toUpperCase()
-    if (code && !pscCodes.includes(code)) {
-      setPscCodes([...pscCodes, code])
+    const codes = newPsc
+      .split(',')
+      .map((c) => trimQuotes(c).toUpperCase())
+      .filter((c) => c && !pscCodes.includes(c))
+    if (codes.length > 0) {
+      setPscCodes([...pscCodes, ...codes])
       setNewPsc('')
     }
   }
@@ -187,6 +195,23 @@ export default function SamSearchForm({
   // Remove PSC code
   const removePscCode = (code: string) => {
     setPscCodes(pscCodes.filter((c) => c !== code))
+  }
+
+  // Add department(s) - supports comma-separated list, respects quoted strings
+  // e.g., "DEPT OF DEFENSE", "HEALTH, EDUCATION, AND WELFARE" -> two entries
+  const addDepartment = () => {
+    const depts = parseCommaSeparated(newDepartment).filter(
+      (d) => d && !departments.includes(d)
+    )
+    if (depts.length > 0) {
+      setDepartments([...departments, ...depts])
+      setNewDepartment('')
+    }
+  }
+
+  // Remove department
+  const removeDepartment = (dept: string) => {
+    setDepartments(departments.filter((d) => d !== dept))
   }
 
   // Toggle notice type
@@ -394,6 +419,48 @@ export default function SamSearchForm({
                 Search Filters
               </h3>
 
+              {/* Departments / Agencies */}
+              <div className="space-y-2">
+                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                  Departments / Agencies
+                </label>
+                <div className="flex gap-2">
+                  <input
+                    type="text"
+                    value={newDepartment}
+                    onChange={(e) => setNewDepartment(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addDepartment())}
+                    placeholder='e.g., DEPT OF DEFENSE or "HEALTH, EDUCATION, AND WELFARE"'
+                    className="flex-1 px-4 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
+                  />
+                  <Button type="button" variant="secondary" onClick={addDepartment}>
+                    <Plus className="w-4 h-4" />
+                  </Button>
+                </div>
+                {departments.length > 0 && (
+                  <div className="flex flex-wrap gap-2">
+                    {departments.map((dept) => (
+                      <span
+                        key={dept}
+                        className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300"
+                      >
+                        {dept}
+                        <button
+                          type="button"
+                          onClick={() => removeDepartment(dept)}
+                          className="ml-1 hover:text-indigo-900 dark:hover:text-indigo-100"
+                        >
+                          <X className="w-3 h-3" />
+                        </button>
+                      </span>
+                    ))}
+                  </div>
+                )}
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Add one or more departments. Use quotes for names with commas (e.g., &quot;HEALTH, EDUCATION, AND WELFARE&quot;).
+                </p>
+              </div>
+
               {/* NAICS Codes */}
               <div className="space-y-2">
                 <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -405,7 +472,7 @@ export default function SamSearchForm({
                     value={newNaics}
                     onChange={(e) => setNewNaics(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addNaicsCode())}
-                    placeholder="e.g., 541512"
+                    placeholder="e.g., 541512 or 541512, 541511, 541519"
                     className="flex-1 px-4 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
                   />
                   <Button type="button" variant="secondary" onClick={addNaicsCode}>
@@ -444,7 +511,7 @@ export default function SamSearchForm({
                     value={newPsc}
                     onChange={(e) => setNewPsc(e.target.value)}
                     onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), addPscCode())}
-                    placeholder="e.g., D302"
+                    placeholder="e.g., D302 or D302, D306, D399"
                     className="flex-1 px-4 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
                   />
                   <Button type="button" variant="secondary" onClick={addPscCode}>
@@ -484,23 +551,6 @@ export default function SamSearchForm({
                   placeholder="e.g., software development"
                   className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
                 />
-              </div>
-
-              {/* Department / Agency */}
-              <div className="space-y-1.5">
-                <label className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Department / Agency
-                </label>
-                <input
-                  type="text"
-                  value={department}
-                  onChange={(e) => setDepartment(e.target.value)}
-                  placeholder="e.g., HOMELAND SECURITY, DEPARTMENT OF"
-                  className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500"
-                />
-                <p className="text-xs text-gray-500 dark:text-gray-400">
-                  Filter by organization name (partial match supported)
-                </p>
               </div>
 
               {/* Date Range */}

@@ -224,16 +224,16 @@ def test_service_connectivity(config: AppConfig, skip_connectivity: bool = False
             except Exception as e:
                 warnings.append(f"Extraction service '{service.name}' unreachable: {e}")
 
-    # Test SharePoint connectivity
-    if config.sharepoint and config.sharepoint.enabled:
+    # Test Microsoft Graph connectivity
+    if config.microsoft_graph and config.microsoft_graph.enabled:
         try:
             # Just check if the Graph API endpoint is reachable
             import httpx
             response = httpx.get(
-                config.sharepoint.graph_base_url,
+                config.microsoft_graph.graph_base_url,
                 timeout=5
             )
-            print_success(f"Microsoft Graph API reachable: {config.sharepoint.graph_base_url}")
+            print_success(f"Microsoft Graph API reachable: {config.microsoft_graph.graph_base_url}")
         except Exception as e:
             warnings.append(f"Microsoft Graph API unreachable: {e}")
 
@@ -325,8 +325,8 @@ def main():
         if config.extraction:
             enabled_services = [s.name for s in config.extraction.services if s.enabled]
             print(f"  Extraction: {', '.join(enabled_services)}")
-        if config.sharepoint and config.sharepoint.enabled:
-            print(f"  SharePoint: Enabled")
+        if config.microsoft_graph and config.microsoft_graph.enabled:
+            print(f"  Microsoft Graph: Enabled")
         if config.email:
             print(f"  Email: {config.email.backend}")
         print(f"  Storage: Hierarchical={config.storage.hierarchical}, Dedup={config.storage.deduplication.enabled}")

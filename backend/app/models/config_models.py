@@ -261,17 +261,18 @@ class ExtractionConfig(BaseModel):
         return v
 
 
-class SharePointConfig(BaseModel):
+class MicrosoftGraphConfig(BaseModel):
     """
-    Microsoft SharePoint / Graph API configuration.
+    Microsoft Graph API configuration.
 
     Uses Azure AD app-only authentication (client credentials flow).
+    Supports SharePoint, OneDrive, and other Microsoft 365 services.
     """
     model_config = ConfigDict(extra='forbid')
 
     enabled: bool = Field(
         default=True,
-        description="Enable SharePoint integration"
+        description="Enable Microsoft Graph integration"
     )
     tenant_id: str = Field(
         description="Azure AD tenant ID (GUID)"
@@ -738,9 +739,9 @@ class AppConfig(BaseModel):
         default=None,
         description="Playwright rendering service configuration"
     )
-    sharepoint: Optional[SharePointConfig] = Field(
+    microsoft_graph: Optional[MicrosoftGraphConfig] = Field(
         default=None,
-        description="SharePoint / Microsoft Graph configuration"
+        description="Microsoft Graph API configuration"
     )
     email: Optional[EmailConfig] = Field(
         default=None,

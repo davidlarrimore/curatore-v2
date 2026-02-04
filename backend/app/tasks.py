@@ -1508,6 +1508,189 @@ def sam_pull_task(
         raise
 
 
+@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+def sam_refresh_solicitation_task(
+    self,
+    solicitation_id: str,
+    organization_id: str,
+    download_attachments: bool = True,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Celery task to refresh a solicitation from SAM.gov.
+
+    Re-fetches solicitation data from SAM.gov API, updates notices and descriptions,
+    and optionally downloads pending attachments.
+
+    Args:
+        solicitation_id: SamSolicitation UUID string
+        organization_id: Organization UUID string
+        download_attachments: Whether to download pending attachments (default True)
+        run_id: Pre-created Run UUID string
+
+    Returns:
+        Dict containing:
+            - solicitation_id: The solicitation UUID
+            - status: success or failed
+            - opportunities_found: Number of opportunities found
+            - notices_created: New notices created
+            - notices_updated: Notices updated
+            - description_updated: Whether description was updated
+            - attachments_downloaded: Number of attachments downloaded (if enabled)
+            - error: Error message (if failed)
+    """
+    from .services.sam_pull_service import sam_pull_service
+    from .services.sam_service import sam_service
+    from .services.run_log_service import run_log_service
+    from .database.models import Run
+
+    logger = logging.getLogger("curatore.sam")
+    logger.info(f"Starting SAM refresh task for solicitation {solicitation_id}")
+
+    run_uuid = uuid.UUID(run_id) if run_id else None
+
+    try:
+        async def _execute_refresh():
+            nonlocal run_uuid
+            async with database_service.get_session() as session:
+                # Get existing Run or create new one
+                if run_uuid:
+                    run_result = await session.execute(
+                        select(Run).where(Run.id == run_uuid)
+                    )
+                    run = run_result.scalar_one_or_none()
+                    if not run:
+                        raise ValueError(f"Run not found: {run_uuid}")
+                    run.status = "running"
+                    run.started_at = datetime.utcnow()
+                else:
+                    run = Run(
+                        organization_id=uuid.UUID(organization_id),
+                        run_type="sam_refresh",
+                        origin="user",
+                        status="running",
+                        config={
+                            "solicitation_id": solicitation_id,
+                            "download_attachments": download_attachments,
+                        },
+                        started_at=datetime.utcnow(),
+                    )
+                    session.add(run)
+                    await session.flush()
+                    run_uuid = run.id
+                await session.commit()
+
+                # Log start
+                await run_log_service.log_start(
+                    session=session,
+                    run_id=run_uuid,
+                    message=f"Starting refresh for solicitation {solicitation_id}",
+                    context={"download_attachments": download_attachments},
+                )
+
+                # Perform the refresh
+                result = await sam_pull_service.refresh_solicitation(
+                    session=session,
+                    solicitation_id=uuid.UUID(solicitation_id),
+                    organization_id=uuid.UUID(organization_id),
+                )
+
+                # Download attachments if requested and no errors
+                attachments_downloaded = 0
+                if download_attachments and not result.get("error"):
+                    await run_log_service.log_event(
+                        session=session,
+                        run_id=run_uuid,
+                        level="INFO",
+                        event_type="progress",
+                        message="Downloading pending attachments",
+                        context={"phase": "downloading"},
+                    )
+                    download_result = await sam_pull_service.download_all_attachments(
+                        session=session,
+                        solicitation_id=uuid.UUID(solicitation_id),
+                        organization_id=uuid.UUID(organization_id),
+                    )
+                    attachments_downloaded = download_result.get("downloaded", 0)
+                    result["attachments_downloaded"] = attachments_downloaded
+                    result["attachments_failed"] = download_result.get("failed", 0)
+
+                # Determine status
+                status = "failed" if result.get("error") else "completed"
+
+                # Log summary
+                summary_parts = []
+                if result.get("opportunities_found", 0) > 0:
+                    summary_parts.append(f"{result['opportunities_found']} opportunities found")
+                if result.get("notices_created", 0) > 0:
+                    summary_parts.append(f"{result['notices_created']} new notices")
+                if result.get("notices_updated", 0) > 0:
+                    summary_parts.append(f"{result['notices_updated']} notices updated")
+                if result.get("description_updated"):
+                    summary_parts.append("description updated")
+                if attachments_downloaded > 0:
+                    summary_parts.append(f"{attachments_downloaded} attachments downloaded")
+
+                summary_msg = ", ".join(summary_parts) if summary_parts else "No changes"
+
+                await run_log_service.log_summary(
+                    session=session,
+                    run_id=run_uuid,
+                    message=f"Refresh {status}: {summary_msg}",
+                    context={
+                        "status": status,
+                        **result,
+                    },
+                )
+
+                # Update Run
+                run_result = await session.execute(
+                    select(Run).where(Run.id == run_uuid)
+                )
+                run = run_result.scalar_one()
+                run.status = status
+                run.completed_at = datetime.utcnow()
+                run.results_summary = {
+                    "opportunities_found": result.get("opportunities_found", 0),
+                    "notices_created": result.get("notices_created", 0),
+                    "notices_updated": result.get("notices_updated", 0),
+                    "description_updated": result.get("description_updated", False),
+                    "attachments_downloaded": attachments_downloaded,
+                }
+                if result.get("error"):
+                    run.error_message = result["error"]
+                await session.commit()
+
+                return result
+
+        result = asyncio.run(_execute_refresh())
+        logger.info(f"SAM refresh completed for solicitation {solicitation_id}")
+        return result
+
+    except Exception as e:
+        logger.error(f"SAM refresh task failed: {e}")
+
+        # Update Run to failed
+        if run_uuid:
+            try:
+                async def _mark_failed():
+                    async with database_service.get_session() as session:
+                        run_result = await session.execute(
+                            select(Run).where(Run.id == run_uuid)
+                        )
+                        run = run_result.scalar_one_or_none()
+                        if run:
+                            run.status = "failed"
+                            run.completed_at = datetime.utcnow()
+                            run.error_message = str(e)
+                            await session.commit()
+                asyncio.run(_mark_failed())
+            except Exception as inner_e:
+                logger.error(f"Failed to update run status: {inner_e}")
+
+        raise
+
+
 @shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
 def sam_download_attachment_task(
     self,
@@ -1983,7 +2166,7 @@ def sam_auto_summarize_notice_task(
                                     "_retry_count": _retry_count + 1,
                                 },
                                 countdown=30,
-                                queue="processing_priority",
+                                queue="sam",
                             )
                             return {"notice_id": notice_id, "status": "waiting_for_assets"}
 
@@ -2842,7 +3025,7 @@ async def _sharepoint_sync_async(
 
         # Get sync config for automation settings
         config = await session.get(SharePointSyncConfig, sync_config_id)
-        automation_config = config.automation_config if config else {}
+        automation_config = getattr(config, 'automation_config', {}) or {} if config else {}
 
         # Create RunGroup for tracking child extractions
         group = await run_group_service.create_group(
@@ -4185,6 +4368,7 @@ async def _scrape_crawl_async(
         # Get collection for config
         collection = await session.get(ScrapeCollection, collection_id)
         collection_name = collection.name if collection else "Unknown"
+        automation_config = getattr(collection, 'automation_config', {}) or {} if collection else {}
 
         # Create RunGroup for tracking child extractions
         group = await run_group_service.create_group(
@@ -4196,6 +4380,8 @@ async def _scrape_crawl_async(
                 "collection_id": str(collection_id),
                 "collection_name": collection_name,
                 "max_pages": max_pages,
+                "after_procedure_slug": automation_config.get("after_procedure_slug"),
+                "after_procedure_params": automation_config.get("after_procedure_params", {}),
             },
         )
         group_id = group.id

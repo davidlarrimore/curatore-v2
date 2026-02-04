@@ -31,7 +31,7 @@ from app.models.config_models import (
     ExtractionConfig,
     ExtractionEngineConfig,
     PlaywrightConfig,
-    SharePointConfig,
+    MicrosoftGraphConfig,
     EmailConfig,
     QueueConfig,
     MinIOConfig,
@@ -256,12 +256,12 @@ class ConfigLoader:
             return None
         return config.extraction
 
-    def get_sharepoint_config(self) -> Optional[SharePointConfig]:
+    def get_microsoft_graph_config(self) -> Optional[MicrosoftGraphConfig]:
         """
-        Get typed SharePoint configuration.
+        Get typed Microsoft Graph API configuration.
 
         Returns:
-            SharePointConfig instance or None if not configured
+            MicrosoftGraphConfig instance or None if not configured
 
         Raises:
             ValueError: If configuration is invalid
@@ -269,7 +269,7 @@ class ConfigLoader:
         config = self.get_config()
         if config is None:
             return None
-        return config.sharepoint
+        return config.microsoft_graph
 
     def get_email_config(self) -> Optional[EmailConfig]:
         """
@@ -419,9 +419,9 @@ class ConfigLoader:
         """Check if extraction configuration is available."""
         return self.get_extraction_config() is not None
 
-    def has_sharepoint_config(self) -> bool:
-        """Check if SharePoint configuration is available."""
-        return self.get_sharepoint_config() is not None
+    def has_microsoft_graph_config(self) -> bool:
+        """Check if Microsoft Graph configuration is available."""
+        return self.get_microsoft_graph_config() is not None
 
     def has_email_config(self) -> bool:
         """Check if email configuration is available."""

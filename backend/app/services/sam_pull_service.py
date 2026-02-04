@@ -204,6 +204,38 @@ class SamPullService:
         if timeout:
             self.timeout = timeout
 
+    async def _is_run_cancelled(
+        self,
+        session,
+        run_id: Optional[UUID],
+    ) -> bool:
+        """
+        Check if a run has been cancelled.
+
+        This allows long-running SAM pulls to be stopped gracefully when the user
+        cancels the job. The check should be performed periodically during pagination.
+
+        Args:
+            session: Database session
+            run_id: Run UUID to check
+
+        Returns:
+            True if run is cancelled, False otherwise
+        """
+        if not run_id:
+            return False
+
+        try:
+            # Refresh the run from database to get current status
+            run = await session.get(Run, run_id)
+            if run and run.status == "cancelled":
+                logger.info(f"SAM pull {run_id} has been cancelled, stopping")
+                return True
+        except Exception as e:
+            logger.warning(f"Error checking run cancellation status: {e}")
+
+        return False
+
     def _sanitize_path_component(self, value: str) -> str:
         """
         Sanitize a string for use as a path component.
@@ -300,6 +332,7 @@ class SamPullService:
         search_config: Dict[str, Any],
         limit: int = 100,
         offset: int = 0,
+        department_override: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Build API query parameters from search configuration.
@@ -308,6 +341,7 @@ class SamPullService:
             search_config: Search configuration from SamSearch.search_config
             limit: Number of results per page
             offset: Offset for pagination
+            department_override: If provided, use this department instead of search_config
 
         Returns:
             Query parameters dict for API request
@@ -395,8 +429,16 @@ class SamPullService:
             params["organizationId"] = search_config["organization_id"]
 
         # Organization/Agency filter by name (department)
-        if search_config.get("department"):
-            params["organizationName"] = search_config["department"]
+        # department_override is used when iterating through departments array in multi-department mode
+        # For single-department mode, use the department directly from search_config
+        if department_override:
+            params["organizationName"] = department_override
+        else:
+            # Check for single department in search_config
+            departments = search_config.get("departments", [])
+            if len(departments) == 1:
+                params["organizationName"] = departments[0]
+                logger.debug(f"Using single department filter: {departments[0]}")
 
         # Solicitation number filter (exact match)
         if search_config.get("solicitation_number"):
@@ -580,6 +622,208 @@ class SamPullService:
             logger.error(f"SAM.gov API error: {type(e).__name__}: {e}")
             raise
 
+    async def _fetch_all_for_department(
+        self,
+        search_config: Dict[str, Any],
+        department: str,
+        session,
+        organization_id: UUID,
+        max_pages: int,
+        page_size: int,
+        run_id: Optional[UUID] = None,
+        department_index: int = 0,
+        total_departments: int = 1,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Fetch all opportunities for a single department, paginating through results.
+
+        Args:
+            search_config: Search configuration
+            department: Department name to search for
+            session: Database session
+            organization_id: Organization UUID
+            max_pages: Maximum pages to fetch per department
+            page_size: Results per page
+            run_id: Optional Run UUID for activity logging
+            department_index: 0-based index of this department in the list
+            total_departments: Total number of departments being searched
+
+        Returns:
+            Tuple of (opportunities list, stats dict)
+        """
+        opportunities = []
+        stats = {
+            "department": department,
+            "api_calls": 0,
+            "total_fetched": 0,
+            "pages_fetched": 0,
+        }
+
+        offset = 0
+        pages_fetched = 0
+
+        # Log department search start
+        if run_id:
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="department_search_start",
+                message=f"Searching department {department_index + 1}/{total_departments}: {department}",
+                context={
+                    "department": department,
+                    "index": department_index,
+                    "total": total_departments,
+                },
+            )
+            await session.commit()
+
+        while pages_fetched < max_pages:
+            # Build params with department override
+            params = self._build_search_params(
+                search_config,
+                limit=page_size,
+                offset=offset,
+                department_override=department,
+            )
+
+            try:
+                response = await self._make_request(
+                    "/search", params, session=session, organization_id=organization_id
+                )
+                stats["api_calls"] += 1
+
+                # Check for cancellation after each API call
+                if await self._is_run_cancelled(session, run_id):
+                    stats["cancelled"] = True
+                    break
+
+                total = response.get("totalRecords", 0)
+                page_opportunities = []
+
+                for opp_data in response.get("opportunitiesData", []):
+                    parsed = self._parse_opportunity(opp_data)
+                    page_opportunities.append(parsed)
+
+                opportunities.extend(page_opportunities)
+                stats["total_fetched"] += len(page_opportunities)
+                pages_fetched += 1
+                stats["pages_fetched"] = pages_fetched
+
+                if not page_opportunities or offset + page_size >= total:
+                    break
+
+                offset += page_size
+                await asyncio.sleep(self.rate_limit_delay)
+
+            except Exception as e:
+                logger.error(f"Error fetching department {department} at offset {offset}: {e}")
+                raise
+
+        # Log department search complete (if not cancelled)
+        if run_id:
+            await run_log_service.log_event(
+                session=session,
+                run_id=run_id,
+                level="INFO",
+                event_type="department_search_complete",
+                message=f"Completed department {department}: {stats['total_fetched']} opportunities, {stats['api_calls']} API calls",
+                context={
+                    "department": department,
+                    "fetched": stats["total_fetched"],
+                    "api_calls": stats["api_calls"],
+                    "pages": stats["pages_fetched"],
+                },
+            )
+            await session.commit()
+
+        return opportunities, stats
+
+    async def _fetch_opportunities_multi_department(
+        self,
+        search_config: Dict[str, Any],
+        departments: List[str],
+        session,
+        organization_id: UUID,
+        max_pages: int,
+        page_size: int,
+        run_id: Optional[UUID] = None,
+    ) -> Tuple[List[Dict[str, Any]], Dict[str, Any]]:
+        """
+        Fetch opportunities from multiple departments and deduplicate by notice_id.
+
+        Args:
+            search_config: Search configuration
+            departments: List of department names to search
+            session: Database session
+            organization_id: Organization UUID
+            max_pages: Maximum pages to fetch per department
+            page_size: Results per page
+            run_id: Optional Run UUID for activity logging
+
+        Returns:
+            Tuple of (deduplicated opportunities list, aggregate stats dict)
+        """
+        all_opportunities = []
+        department_stats = []
+        seen_notice_ids: set = set()
+        total_api_calls = 0
+        total_fetched = 0
+        duplicates_removed = 0
+
+        for idx, department in enumerate(departments):
+            # Check for cancellation before starting each department
+            if await self._is_run_cancelled(session, run_id):
+                logger.info(f"SAM pull cancelled before department {idx + 1}/{len(departments)}")
+                break
+
+            dept_opportunities, stats = await self._fetch_all_for_department(
+                search_config=search_config,
+                department=department,
+                session=session,
+                organization_id=organization_id,
+                max_pages=max_pages,
+                page_size=page_size,
+                run_id=run_id,
+                department_index=idx,
+                total_departments=len(departments),
+            )
+
+            # Check if department fetch was cancelled
+            if stats.get("cancelled"):
+                logger.info(f"SAM pull cancelled during department {department}")
+                break
+
+            # Deduplicate by notice_id
+            unique_for_dept = 0
+            duplicates_for_dept = 0
+            for opp in dept_opportunities:
+                notice_id = opp.get("notice_id")
+                if notice_id and notice_id not in seen_notice_ids:
+                    seen_notice_ids.add(notice_id)
+                    all_opportunities.append(opp)
+                    unique_for_dept += 1
+                else:
+                    duplicates_for_dept += 1
+                    duplicates_removed += 1
+
+            stats["unique"] = unique_for_dept
+            stats["duplicates"] = duplicates_for_dept
+            department_stats.append(stats)
+            total_api_calls += stats["api_calls"]
+            total_fetched += stats["total_fetched"]
+
+        aggregate_stats = {
+            "departments_searched": len(departments),
+            "total_api_calls": total_api_calls,
+            "total_fetched": total_fetched,
+            "unique_opportunities": len(all_opportunities),
+            "duplicates_removed": duplicates_removed,
+            "department_breakdown": department_stats,
+        }
+
+        return all_opportunities, aggregate_stats
+
     async def get_opportunity_details(
         self,
         notice_id: str,
@@ -587,7 +831,10 @@ class SamPullService:
         organization_id: Optional[UUID] = None,
     ) -> Optional[Dict[str, Any]]:
         """
-        Get detailed information for a specific opportunity.
+        Get detailed information for a specific opportunity by searching SAM.gov.
+
+        Uses the search API with a noticeId filter since SAM.gov doesn't have
+        a direct endpoint for individual opportunities.
 
         Args:
             notice_id: SAM.gov notice ID
@@ -598,20 +845,35 @@ class SamPullService:
             Parsed opportunity data or None if not found
         """
         try:
+            # SAM.gov doesn't have a direct endpoint for individual opportunities.
+            # Use the search endpoint with noticeId filter instead.
+            params = {
+                "noticeId": notice_id,
+                "limit": 1,
+            }
+
             response = await self._make_request(
-                f"/opportunities/{notice_id}",
+                "/search",
+                params=params,
                 session=session,
                 organization_id=organization_id,
             )
 
-            if response:
-                return self._parse_opportunity(response)
+            opportunities_data = response.get("opportunitiesData", [])
+            if opportunities_data:
+                return self._parse_opportunity(opportunities_data[0])
+
+            logger.warning(f"No opportunity found for notice_id: {notice_id}")
             return None
 
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
                 return None
+            logger.error(f"Error fetching opportunity {notice_id}: {e}")
             raise
+        except Exception as e:
+            logger.error(f"Error fetching opportunity {notice_id}: {e}")
+            return None
 
     async def pull_opportunities(
         self,
@@ -718,91 +980,69 @@ class SamPullService:
                 results["rate_limit_remaining"] = remaining
                 return results
 
-        offset = 0
-        pages_fetched = 0
+        # Determine department search strategy
+        departments = search_config.get("departments", [])
+
+        # Log department strategy
+        if len(departments) > 1:
+            logger.info(
+                f"Starting pull for search {search_id}: Multi-department mode for {len(departments)} departments"
+            )
+        elif len(departments) == 1:
+            logger.info(f"Starting pull for search {search_id}: Single department: {departments[0]}")
 
         try:
-            while pages_fetched < max_pages:
-                # Check rate limit before each page (if enabled)
-                if check_rate_limit:
-                    can_call, remaining = await sam_api_usage_service.check_limit(
-                        session, organization_id
-                    )
-                    if not can_call:
-                        logger.warning(f"Rate limit reached mid-pull. Stopping at page {pages_fetched}")
-                        results["rate_limit_hit"] = True
-                        results["rate_limit_remaining"] = remaining
-                        break
-
-                # Fetch page of opportunities
-                opportunities, total = await self.search_opportunities(
-                    search_config,
-                    limit=page_size,
-                    offset=offset,
+            # Multi-department path: fetch from each, deduplicate, then process
+            if len(departments) > 1:
+                all_opportunities, multi_dept_stats = await self._fetch_opportunities_multi_department(
+                    search_config=search_config,
+                    departments=departments,
                     session=session,
                     organization_id=organization_id,
+                    max_pages=max_pages,
+                    page_size=page_size,
+                    run_id=run_id,
                 )
 
-                # Record the API call (if enabled)
+                results["total_fetched"] = multi_dept_stats["total_fetched"]
+                results["api_calls_made"] = multi_dept_stats["total_api_calls"]
+                results["duplicates_removed"] = multi_dept_stats["duplicates_removed"]
+                results["department_breakdown"] = multi_dept_stats["department_breakdown"]
+
+                # Record API calls for rate limiting
                 if check_rate_limit:
-                    await sam_api_usage_service.record_call(
-                        session, organization_id, "search"
-                    )
-                    results["api_calls_made"] += 1
-
-                if not opportunities:
-                    if run_id and pages_fetched == 0:
-                        await run_log_service.log_event(
-                            session=session,
-                            run_id=run_id,
-                            level="INFO",
-                            event_type="progress",
-                            message="No opportunities found matching search criteria",
-                            context={"pages_fetched": pages_fetched},
+                    for _ in range(multi_dept_stats["total_api_calls"]):
+                        await sam_api_usage_service.record_call(
+                            session, organization_id, "search"
                         )
-                        await session.commit()
-                    break
 
-                results["total_fetched"] += len(opportunities)
-
-                # Log page fetch progress
+                # Log multi-department fetch completion
                 if run_id:
                     await run_log_service.log_event(
                         session=session,
                         run_id=run_id,
                         level="INFO",
                         event_type="progress",
-                        message=f"Fetched page {pages_fetched + 1}: {len(opportunities)} opportunities (total: {results['total_fetched']})",
+                        message=f"Multi-department fetch complete: {multi_dept_stats['total_fetched']} total, {multi_dept_stats['unique_opportunities']} unique, {multi_dept_stats['duplicates_removed']} duplicates removed",
                         context={
-                            "page": pages_fetched + 1,
-                            "page_count": len(opportunities),
-                            "total_fetched": results["total_fetched"],
-                            "total_available": total,
+                            "departments": len(departments),
+                            "total_fetched": multi_dept_stats["total_fetched"],
+                            "unique": multi_dept_stats["unique_opportunities"],
+                            "duplicates_removed": multi_dept_stats["duplicates_removed"],
+                            "api_calls": multi_dept_stats["total_api_calls"],
                         },
                     )
                     await session.commit()
 
-                # Local NAICS filtering - always applied when NAICS codes are configured
-                # This serves as a safety check even when API filter is used (single NAICS),
-                # and is required when multiple NAICS codes are configured (API only supports one)
+                # Apply NAICS filtering and process all opportunities
                 configured_naics = search_config.get("naics_codes", [])
-                if configured_naics:
-                    # Filter opportunities to only include those matching configured NAICS
-                    original_count = len(opportunities)
-                    opportunities = [
-                        opp for opp in opportunities
-                        if opp.get("naics_code") in configured_naics
-                    ]
-                    filtered_count = original_count - len(opportunities)
-                    if filtered_count > 0:
-                        logger.info(
-                            f"Filtered {filtered_count} opportunities not matching "
-                            f"configured NAICS codes ({configured_naics}). {len(opportunities)} remaining."
-                        )
-                    results["filtered_by_naics"] += filtered_count
+                for opp in all_opportunities:
+                    # NAICS filter
+                    if configured_naics and opp.get("naics_code") not in configured_naics:
+                        results["filtered_by_naics"] += 1
+                        continue
 
-                # Process each opportunity (those that passed NAICS filter)
-                for opp in opportunities:
+                    # Process opportunity
                     try:
                         await self._process_opportunity(
                             session=session,
@@ -819,15 +1059,132 @@ class SamPullService:
                             "error": str(e),
                         })
 
-                # Check if we've fetched all results
-                offset += page_size
-                pages_fetched += 1
+            else:
+                # Single/no department path: use existing efficient pagination
+                offset = 0
+                pages_fetched = 0
 
-                if offset >= total:
-                    break
+                while pages_fetched < max_pages:
+                    # Check for cancellation before each page
+                    if await self._is_run_cancelled(session, run_id):
+                        results["cancelled"] = True
+                        if run_id:
+                            await run_log_service.log_event(
+                                session=session,
+                                run_id=run_id,
+                                level="INFO",
+                                event_type="cancelled",
+                                message=f"SAM pull cancelled after {pages_fetched} pages",
+                                context={"pages_fetched": pages_fetched},
+                            )
+                            await session.commit()
+                        break
 
-                # Rate limiting delay
-                await asyncio.sleep(self.rate_limit_delay)
+                    # Check rate limit before each page (if enabled)
+                    if check_rate_limit:
+                        can_call, remaining = await sam_api_usage_service.check_limit(
+                            session, organization_id
+                        )
+                        if not can_call:
+                            logger.warning(f"Rate limit reached mid-pull. Stopping at page {pages_fetched}")
+                            results["rate_limit_hit"] = True
+                            results["rate_limit_remaining"] = remaining
+                            break
+
+                    # Fetch page of opportunities
+                    opportunities, total = await self.search_opportunities(
+                        search_config,
+                        limit=page_size,
+                        offset=offset,
+                        session=session,
+                        organization_id=organization_id,
+                    )
+
+                    # Record the API call (if enabled)
+                    if check_rate_limit:
+                        await sam_api_usage_service.record_call(
+                            session, organization_id, "search"
+                        )
+                        results["api_calls_made"] += 1
+
+                    if not opportunities:
+                        if run_id and pages_fetched == 0:
+                            await run_log_service.log_event(
+                                session=session,
+                                run_id=run_id,
+                                level="INFO",
+                                event_type="progress",
+                                message="No opportunities found matching search criteria",
+                                context={"pages_fetched": pages_fetched},
+                            )
+                            await session.commit()
+                        break
+
+                    results["total_fetched"] += len(opportunities)
+
+                    # Log page fetch progress
+                    if run_id:
+                        await run_log_service.log_event(
+                            session=session,
+                            run_id=run_id,
+                            level="INFO",
+                            event_type="progress",
+                            message=f"Fetched page {pages_fetched + 1}: {len(opportunities)} opportunities (total: {results['total_fetched']})",
+                            context={
+                                "page": pages_fetched + 1,
+                                "page_count": len(opportunities),
+                                "total_fetched": results["total_fetched"],
+                                "total_available": total,
+                            },
+                        )
+                        await session.commit()
+
+                    # Local NAICS filtering - always applied when NAICS codes are configured
+                    # This serves as a safety check even when API filter is used (single NAICS),
+                    # and is required when multiple NAICS codes are configured (API only supports one)
+                    configured_naics = search_config.get("naics_codes", [])
+                    if configured_naics:
+                        # Filter opportunities to only include those matching configured NAICS
+                        original_count = len(opportunities)
+                        opportunities = [
+                            opp for opp in opportunities
+                            if opp.get("naics_code") in configured_naics
+                        ]
+                        filtered_count = original_count - len(opportunities)
+                        if filtered_count > 0:
+                            logger.info(
+                                f"Filtered {filtered_count} opportunities not matching "
+                                f"configured NAICS codes ({configured_naics}). {len(opportunities)} remaining."
+                            )
+                        results["filtered_by_naics"] += filtered_count
+
+                    # Process each opportunity (those that passed NAICS filter)
+                    for opp in opportunities:
+                        try:
+                            await self._process_opportunity(
+                                session=session,
+                                organization_id=organization_id,
+                                opportunity=opp,
+                                results=results,
+                                search_config=search_config,
+                            )
+                            results["processed"] += 1
+                        except Exception as e:
+                            logger.error(f"Error processing opportunity {opp.get('notice_id')}: {e}")
+                            results["errors"].append({
+                                "notice_id": opp.get("notice_id"),
+                                "error": str(e),
+                            })
+
+                    # Check if we've fetched all results
+                    offset += page_size
+                    pages_fetched += 1
+
+                    if offset >= total:
+                        break
+
+                    # Rate limiting delay
+                    await asyncio.sleep(self.rate_limit_delay)
 
             # Update search status
             await sam_service.update_search_pull_status(
@@ -854,6 +1211,8 @@ class SamPullService:
                         "new_notices": results["new_notices"],
                         "new_attachments": results["new_attachments"],
                         "errors": len(results["errors"]),
+                        "duplicates_removed": results.get("duplicates_removed", 0),
+                        "department_breakdown": results.get("department_breakdown"),
                     },
                 )
                 await session.commit()
@@ -978,8 +1337,10 @@ class SamPullService:
         # Fetch full HTML description from the notice description API
         # The search API returns a URL in the description field, not the actual description
         description = opportunity.get("description")
+        description_url = None
         if description and description.startswith("http"):
-            # The description field is a URL - fetch the actual description
+            # The description field is a URL - capture it before fetching actual content
+            description_url = description
             logger.debug(f"Fetching full description for notice {notice_id}")
             full_description = await self.fetch_notice_description(
                 notice_id, session, organization_id
@@ -992,7 +1353,7 @@ class SamPullService:
         # Special Notices are standalone - no solicitation record
         if notice_type == "Special Notice":
             await self._process_standalone_notice(
-                session, organization_id, opportunity, description, results
+                session, organization_id, opportunity, description, description_url, results
             )
             return
 
@@ -1007,13 +1368,24 @@ class SamPullService:
             )
 
         if existing:
-            # Update existing solicitation
+            # Update existing solicitation with all available fields
             await sam_service.update_solicitation(
                 session,
                 solicitation_id=existing.id,
                 title=opportunity.get("title"),
                 description=description,
                 response_deadline=opportunity.get("response_deadline"),
+                agency_name=opportunity.get("agency_name"),
+                bureau_name=opportunity.get("bureau_name"),
+                office_name=opportunity.get("office_name"),
+                full_parent_path=opportunity.get("full_parent_path"),
+                naics_code=opportunity.get("naics_code"),
+                psc_code=opportunity.get("psc_code"),
+                set_aside_code=opportunity.get("set_aside_code"),
+                ui_link=opportunity.get("ui_link"),
+                contact_info=opportunity.get("contact_info"),
+                place_of_performance=opportunity.get("place_of_performance"),
+                raw_data=opportunity.get("raw_data"),
             )
             results["updated_solicitations"] += 1
             solicitation = existing
@@ -1043,6 +1415,7 @@ class SamPullService:
                 bureau_name=opportunity.get("bureau_name"),
                 office_name=opportunity.get("office_name"),
                 full_parent_path=opportunity.get("full_parent_path"),
+                raw_data=opportunity.get("raw_data"),
             )
             results["new_solicitations"] += 1
 
@@ -1073,6 +1446,7 @@ class SamPullService:
                 version_number=version_number,
                 title=opportunity.get("title"),
                 description=description,  # Use fetched HTML description
+                description_url=description_url,  # Store the original SAM.gov API URL
                 posted_date=opportunity.get("posted_date"),
                 response_deadline=opportunity.get("response_deadline"),
             )
@@ -1137,6 +1511,7 @@ class SamPullService:
         organization_id: UUID,
         opportunity: Dict[str, Any],
         description: Optional[str],
+        description_url: Optional[str],
         results: Dict[str, Any],
     ):
         """
@@ -1150,6 +1525,7 @@ class SamPullService:
             organization_id: Organization UUID
             opportunity: Parsed opportunity data
             description: Fetched description (already resolved from URL)
+            description_url: Original SAM.gov API URL for the description
             results: Results dict to update
         """
         notice_id = opportunity.get("notice_id")
@@ -1166,6 +1542,7 @@ class SamPullService:
                 notice_id=existing_notice.id,
                 title=opportunity.get("title"),
                 description=description,
+                description_url=description_url,
                 response_deadline=opportunity.get("response_deadline"),
             )
             results["updated_notices"] = results.get("updated_notices", 0) + 1
@@ -1182,6 +1559,7 @@ class SamPullService:
                 version_number=1,
                 title=opportunity.get("title", "Untitled"),
                 description=description,
+                description_url=description_url,  # Store the original SAM.gov API URL
                 posted_date=opportunity.get("posted_date"),
                 response_deadline=opportunity.get("response_deadline"),
                 naics_code=opportunity.get("naics_code"),
@@ -1525,24 +1903,40 @@ class SamPullService:
                 from .minio_service import get_minio_service
                 minio_service = get_minio_service()
 
-            # Get solicitation for path building
-            solicitation = await sam_service.get_solicitation(
-                session, attachment.solicitation_id
-            )
-
-            # Build storage path following the SAM storage structure
-            # Format: {org_id}/sam/{agency_code}/{subagency_code}/solicitations/{number}/attachments/{filename}
-            sol_number = solicitation.solicitation_number or solicitation.notice_id
-            safe_sol_number = sol_number.replace("/", "_").replace("\\", "_")
-
-            # Build agency path if available
-            agency_code = self._sanitize_path_component(solicitation.agency_name or "unknown")
-            bureau_code = self._sanitize_path_component(solicitation.bureau_name or "general")
-
-            # Safe filename
+            # Build storage path - handle both solicitation-linked and standalone notice attachments
+            # SAM.gov returns notices; we create solicitation records when notices have solicitation numbers.
+            # Standalone notices (e.g., Special Notices) don't have solicitation records.
             safe_filename = self._sanitize_path_component(real_filename)
 
-            object_key = f"{organization_id}/sam/{agency_code}/{bureau_code}/solicitations/{safe_sol_number}/attachments/{safe_filename}"
+            if attachment.solicitation_id:
+                # Solicitation-linked attachment - use solicitation info for path
+                solicitation = await sam_service.get_solicitation(
+                    session, attachment.solicitation_id
+                )
+                # Format: {org_id}/sam/{agency_code}/{bureau_code}/solicitations/{number}/attachments/{filename}
+                sol_number = solicitation.solicitation_number or solicitation.notice_id
+                safe_sol_number = sol_number.replace("/", "_").replace("\\", "_")
+                agency_code = self._sanitize_path_component(solicitation.agency_name or "unknown")
+                bureau_code = self._sanitize_path_component(solicitation.bureau_name or "general")
+                object_key = f"{organization_id}/sam/{agency_code}/{bureau_code}/solicitations/{safe_sol_number}/attachments/{safe_filename}"
+                # Store for metadata later
+                path_agency = solicitation.agency_name
+                path_bureau = solicitation.bureau_name
+                path_sol_number = sol_number
+            else:
+                # Standalone notice attachment - use notice info for path
+                # Format: {org_id}/sam/{agency_code}/{bureau_code}/notices/{notice_id}/attachments/{filename}
+                notice = await sam_service.get_notice(session, attachment.notice_id)
+                if not notice:
+                    raise ValueError(f"Notice not found for attachment {attachment_id}")
+                safe_notice_id = notice.sam_notice_id.replace("/", "_").replace("\\", "_")
+                agency_code = self._sanitize_path_component(notice.agency_name or "unknown")
+                bureau_code = self._sanitize_path_component(notice.bureau_name or "general")
+                object_key = f"{organization_id}/sam/{agency_code}/{bureau_code}/notices/{safe_notice_id}/attachments/{safe_filename}"
+                # Store for metadata later
+                path_agency = notice.agency_name
+                path_bureau = notice.bureau_name
+                path_sol_number = None  # Standalone notices don't have solicitation numbers
 
             # Upload to MinIO
             bucket = getattr(settings, "minio_bucket_uploads", "curatore-uploads")
@@ -1594,14 +1988,15 @@ class SamPullService:
                     source_type="sam_gov",
                     source_metadata={
                         "attachment_id": str(attachment_id),
-                        "solicitation_id": str(attachment.solicitation_id),
+                        "solicitation_id": str(attachment.solicitation_id) if attachment.solicitation_id else None,
                         "notice_id": str(attachment.notice_id) if attachment.notice_id else None,
                         "resource_id": attachment.resource_id,
                         "download_url": attachment.download_url,
                         "downloaded_at": datetime.utcnow().isoformat(),
-                        "agency": solicitation.agency_name,
-                        "bureau": solicitation.bureau_name,
-                        "solicitation_number": sol_number,
+                        "agency": path_agency,
+                        "bureau": path_bureau,
+                        "solicitation_number": path_sol_number,
+                        "is_standalone_notice": attachment.solicitation_id is None,
                     },
                     original_filename=real_filename,
                     content_type=content_type,
@@ -1686,6 +2081,68 @@ class SamPullService:
 
         for attachment in attachments:
             logger.info(f"Downloading attachment {attachment.id}: {attachment.filename}")
+            try:
+                asset = await self.download_attachment(
+                    session=session,
+                    attachment_id=attachment.id,
+                    organization_id=organization_id,
+                    minio_service=minio_service,
+                    check_rate_limit=True,
+                    group_id=group_id,
+                )
+                if asset:
+                    results["downloaded"] += 1
+                else:
+                    results["failed"] += 1
+            except Exception as e:
+                results["failed"] += 1
+                results["errors"].append({
+                    "attachment_id": str(attachment.id),
+                    "error": str(e),
+                })
+
+            # Rate limiting
+            await asyncio.sleep(0.5)
+
+        return results
+
+    async def download_all_notice_attachments(
+        self,
+        session,  # AsyncSession
+        notice_id: UUID,
+        organization_id: UUID,
+        minio_service=None,
+        group_id: Optional[UUID] = None,
+    ) -> Dict[str, Any]:
+        """
+        Download all pending attachments for a standalone notice.
+
+        This is the equivalent of download_all_attachments but for standalone
+        notices (e.g., Special Notices) that don't have a parent solicitation.
+
+        Args:
+            session: Database session
+            notice_id: SamNotice UUID
+            organization_id: Organization UUID
+            minio_service: MinIO service instance (optional)
+            group_id: Optional group UUID to link child extractions to
+
+        Returns:
+            Download results summary
+        """
+        attachments = await sam_service.list_notice_attachments(
+            session, notice_id, download_status="pending"
+        )
+
+        results = {
+            "total": len(attachments),
+            "downloaded": 0,
+            "failed": 0,
+            "errors": [],
+        }
+
+        for attachment in attachments:
+            logger.info(f"Downloading notice attachment {attachment.id}: {attachment.filename}")
             try:
                 asset = await self.download_attachment(
                     session=session,
@@ -1819,17 +2276,64 @@ class SamPullService:
                 }
 
         try:
-            # Fetch sample opportunities
-            opportunities, total = await self.search_opportunities(
-                search_config, limit=limit, offset=0,
-                session=session, organization_id=organization_id,
-            )
+            # Determine department search strategy
+            departments = search_config.get("departments", [])
+            api_calls = 0
 
-            # Record the API call (if enabled)
-            if check_rate_limit:
-                await sam_api_usage_service.record_call(
-                    session, organization_id, "search"
+            if len(departments) > 1:
+                # Multi-department preview: sample from each department
+                all_opportunities = []
+                seen_notice_ids: set = set()
+                total_estimate = 0
+                samples_per_dept = max(1, limit // len(departments))
+
+                for dept in departments:
+                    # Create config with department override
+                    params = self._build_search_params(
+                        search_config,
+                        limit=samples_per_dept,
+                        offset=0,
+                        department_override=dept,
+                    )
+
+                    response = await self._make_request(
+                        "/search", params, session=session, organization_id=organization_id
+                    )
+                    api_calls += 1
+
+                    dept_total = response.get("totalRecords", 0)
+                    total_estimate += dept_total
+
+                    for opp_data in response.get("opportunitiesData", []):
+                        parsed = self._parse_opportunity(opp_data)
+                        notice_id = parsed.get("notice_id")
+                        if notice_id and notice_id not in seen_notice_ids:
+                            seen_notice_ids.add(notice_id)
+                            all_opportunities.append(parsed)
+
+                    # Rate limiting between departments
+                    await asyncio.sleep(self.rate_limit_delay)
+
+                opportunities = all_opportunities[:limit]
+                # Note: total_estimate may include duplicates
+                total = total_estimate
+                is_multi_dept = True
+
+            else:
+                # Single/no department: use existing path
+                opportunities, total = await self.search_opportunities(
+                    search_config, limit=limit, offset=0,
+                    session=session, organization_id=organization_id,
                 )
+                api_calls = 1
+                is_multi_dept = False
+
+            # Record the API calls (if enabled)
+            if check_rate_limit:
+                for _ in range(api_calls):
+                    await sam_api_usage_service.record_call(
+                        session, organization_id, "search"
+                    )
 
             # Build preview response
             preview_results = []
@@ -1849,13 +2353,21 @@ class SamPullService:
                     "attachments_count": len(opp.get("attachments") or []),
                 })
 
+            # Build message based on mode
+            if is_multi_dept:
+                message = f"Found approximately {total} opportunities across {len(departments)} departments (may include duplicates). Showing {len(preview_results)} unique samples."
+            else:
+                message = f"Found {total} matching opportunities. Showing {len(preview_results)} samples."
+
             return {
                 "success": True,
                 "total_matching": total,
                 "sample_count": len(preview_results),
                 "sample_results": preview_results,
                 "search_config": search_config,
-                "message": f"Found {total} matching opportunities. Showing {len(preview_results)} samples.",
+                "message": message,
+                "is_multi_department": is_multi_dept,
+                "departments_searched": len(departments) if is_multi_dept else None,
             }
 
         except httpx.TimeoutException as e:
@@ -2063,9 +2575,11 @@ class SamPullService:
                 if not opp_notice_id:
                     continue
 
-                # Fetch full description
+                # Fetch full description - capture URL before fetching content
                 description = opp.get("description")
+                description_url = None
                 if description and description.startswith("http"):
+                    description_url = description  # Store the original URL
                     logger.debug(f"Fetching full description for notice {opp_notice_id}")
                     full_description = await self.fetch_notice_description(
                         opp_notice_id, session, organization_id
@@ -2081,6 +2595,7 @@ class SamPullService:
                     latest_posted_date = posted_date
                     latest_opportunity = opp
                     latest_opportunity["_fetched_description"] = description
+                    latest_opportunity["_description_url"] = description_url
 
                 # Check if notice already exists
                 if opp_notice_id in existing_notice_ids:
@@ -2089,22 +2604,27 @@ class SamPullService:
                         (n for n in existing_notices if n.sam_notice_id == opp_notice_id), None
                     )
                     if existing_notice:
-                        # Update if description was a URL or is different
-                        needs_update = (
+                        # Update if description was a URL, is different, or description_url is missing
+                        needs_description_update = (
                             existing_notice.description and
                             (existing_notice.description.startswith("http") or
                              existing_notice.description != description)
                         )
-                        if needs_update and description:
+                        needs_url_update = (
+                            description_url and
+                            not getattr(existing_notice, 'description_url', None)
+                        )
+                        if (needs_description_update and description) or needs_url_update:
                             await sam_service.update_notice(
                                 session,
                                 notice_id=existing_notice.id,
                                 title=opp.get("title"),
-                                description=description,
+                                description=description if needs_description_update else None,
+                                description_url=description_url,
                                 response_deadline=opp.get("response_deadline"),
                             )
                             results["notices_updated"] += 1
-                            logger.debug(f"Updated notice {existing_notice.id} with fresh description")
+                            logger.debug(f"Updated notice {existing_notice.id} with fresh description/url")
                 else:
                     # Create new notice (historical data we didn't have)
                     version_number = len(existing_notices) + results["notices_created"] + 1
@@ -2116,28 +2636,40 @@ class SamPullService:
                         version_number=version_number,
                         title=opp.get("title"),
                         description=description,
+                        description_url=description_url,
                         posted_date=opp.get("posted_date"),
                         response_deadline=opp.get("response_deadline"),
                     )
                     results["notices_created"] += 1
                     logger.info(f"Created new notice {opp_notice_id} (version {version_number})")
 
-            # Update solicitation with latest opportunity's description
+            # Update solicitation with latest opportunity's data (description, agency info, metadata)
             if latest_opportunity:
                 latest_description = latest_opportunity.get("_fetched_description")
+                # Always update agency/metadata info, even if description unchanged
+                await sam_service.update_solicitation(
+                    session,
+                    solicitation_id=solicitation.id,
+                    title=latest_opportunity.get("title") or solicitation.title,
+                    description=latest_description if latest_description else None,
+                    response_deadline=latest_opportunity.get("response_deadline"),
+                    agency_name=latest_opportunity.get("agency_name"),
+                    bureau_name=latest_opportunity.get("bureau_name"),
+                    office_name=latest_opportunity.get("office_name"),
+                    full_parent_path=latest_opportunity.get("full_parent_path"),
+                    naics_code=latest_opportunity.get("naics_code"),
+                    psc_code=latest_opportunity.get("psc_code"),
+                    set_aside_code=latest_opportunity.get("set_aside_code"),
+                    ui_link=latest_opportunity.get("ui_link"),
+                    contact_info=latest_opportunity.get("contact_info"),
+                    place_of_performance=latest_opportunity.get("place_of_performance"),
+                    raw_data=latest_opportunity.get("raw_data"),
+                )
                 if latest_description and latest_description != solicitation.description:
-                    await sam_service.update_solicitation(
-                        session,
-                        solicitation_id=solicitation.id,
-                        title=latest_opportunity.get("title") or solicitation.title,
-                        description=latest_description,
-                        response_deadline=latest_opportunity.get("response_deadline"),
-                    )
                     results["description_updated"] = True
-                    logger.info(
-                        f"Updated solicitation {solicitation_id} with latest description "
-                        f"({len(latest_description)} chars)"
-                    )
+                logger.info(
+                    f"Updated solicitation {solicitation_id} with latest data from SAM.gov"
+                )
 
             await session.commit()
             logger.info(f"Refresh completed for solicitation {solicitation_id}: {results}")

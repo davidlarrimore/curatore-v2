@@ -116,7 +116,7 @@ export default function ConnectionCard({
       return null
     }
 
-    if (connection_type === 'sharepoint') {
+    if (connection_type === 'microsoft_graph') {
       return 'https://learn.microsoft.com/en-us/graph/api/overview'
     }
 
@@ -146,7 +146,7 @@ export default function ConnectionCard({
       ]
     }
 
-    if (connection_type === 'sharepoint') {
+    if (connection_type === 'microsoft_graph') {
       return [
         { label: 'Tenant', value: config.tenant_id ? `${config.tenant_id.substring(0, 8)}...` : 'Not set' },
         { label: 'Client', value: config.client_id ? `${config.client_id.substring(0, 8)}...` : 'Not set' }

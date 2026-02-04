@@ -3224,6 +3224,8 @@ export interface SamSolicitation {
   // Phase 7.6: Auto-summary status
   summary_status?: 'pending' | 'generating' | 'ready' | 'failed' | 'no_llm' | null
   summary_generated_at?: string | null
+  // Raw SAM.gov API response (for metadata tab)
+  raw_data?: Record<string, any> | null
 }
 
 // Phase 7.6: Dashboard stats
@@ -3266,13 +3268,13 @@ export interface SamNoticeListResponse {
 
 // Phase 7.6: Notice filter params
 export interface SamNoticeListParams {
-  keyword?: string
+  keyword?: string  // Search by title, description, or solicitation number
   agency?: string
   sub_agency?: string
   office?: string
   notice_type?: string
-  posted_from?: string
-  posted_to?: string
+  posted_from?: string  // ISO date string
+  posted_to?: string    // ISO date string
   limit?: number
   offset?: number
 }
@@ -3286,6 +3288,7 @@ export interface SamNotice {
   version_number: number
   title: string | null
   description: string | null
+  description_url: string | null  // SAM.gov API URL for full description
   posted_date: string | null
   response_deadline: string | null
   changes_summary: string | null
@@ -3298,6 +3301,7 @@ export interface SamNotice {
   agency_name: string | null
   bureau_name: string | null
   office_name: string | null
+  full_parent_path: string | null
   // UI link for standalone notices
   ui_link: string | null
   // Summary fields for standalone notices
@@ -3305,6 +3309,8 @@ export interface SamNotice {
   summary_generated_at: string | null
   // Is this a standalone notice?
   is_standalone: boolean
+  // Raw SAM.gov API response (for metadata tab)
+  raw_data?: Record<string, any> | null
 }
 
 export interface SamAttachment {
@@ -3403,6 +3409,7 @@ export const samApi = {
     params?: SamNoticeListParams
   ): Promise<SamNoticeListResponse> {
     const searchParams = new URLSearchParams()
+    if (params?.keyword) searchParams.append('keyword', params.keyword)
     if (params?.agency) searchParams.append('agency', params.agency)
     if (params?.sub_agency) searchParams.append('sub_agency', params.sub_agency)
     if (params?.office) searchParams.append('office', params.office)
@@ -3610,28 +3617,27 @@ export const samApi = {
     return handleJson(res)
   },
 
-  async refreshSolicitation(token: string | undefined, solicitationId: string): Promise<{
+  async refreshSolicitation(token: string | undefined, solicitationId: string, options?: {
+    downloadAttachments?: boolean
+  }): Promise<{
+    run_id: string
+    status: string
     solicitation_id: string
-    solicitation_number: string
-    opportunities_found: number
-    notices_created: number
-    notices_updated: number
-    description_updated: boolean
-    error?: string
+    download_attachments: boolean
   }> {
-    console.log('[SAM API] refreshSolicitation - Request:', { solicitationId })
-    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/refresh`), {
+    const downloadAttachments = options?.downloadAttachments ?? true
+    console.log('[SAM API] refreshSolicitation - Request:', { solicitationId, downloadAttachments })
+    const params = new URLSearchParams()
+    params.append('download_attachments', String(downloadAttachments))
+    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/refresh?${params.toString()}`), {
       method: 'POST',
       headers: authHeaders(token),
     })
     type RefreshResponse = {
+      run_id: string
+      status: string
       solicitation_id: string
-      solicitation_number: string
-      opportunities_found: number
-      notices_created: number
-      notices_updated: number
-      description_updated: boolean
-      error?: string
+      download_attachments: boolean
     }
     const result = await handleJson(res) as RefreshResponse
     console.log('[SAM API] refreshSolicitation - Response:', result)
@@ -3698,8 +3704,13 @@ export const samApi = {
 
   // ========== Notices ==========
 
-  async getNotice(token: string | undefined, noticeId: string): Promise<SamNotice> {
-    const res = await fetch(apiUrl(`/sam/notices/${noticeId}`), {
+  async getNotice(token: string | undefined, noticeId: string, options?: {
+    includeMetadata?: boolean
+  }): Promise<SamNotice> {
+    const params = new URLSearchParams()
+    if (options?.includeMetadata) params.append('include_metadata', 'true')
+    const url = apiUrl(`/sam/notices/${noticeId}${params.toString() ? '?' + params.toString() : ''}`)
+    const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -3742,6 +3753,19 @@ export const samApi = {
     message: string
   }> {
     const res = await fetch(apiUrl(`/sam/notices/${noticeId}/regenerate-summary`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  async downloadNoticeAttachments(token: string | undefined, noticeId: string): Promise<{
+    total: number
+    downloaded: number
+    failed: number
+    errors: Array<{ attachment_id: string; error: string }>
+  }> {
+    const res = await fetch(apiUrl(`/sam/notices/${noticeId}/download-attachments`), {
       method: 'POST',
       headers: authHeaders(token),
     })

@@ -360,9 +360,9 @@ playwright:
 
 
 # ============================================================================
-# Microsoft SharePoint Configuration (optional)
+# Microsoft Graph API Configuration (optional)
 # ============================================================================
-# Microsoft Graph API integration for SharePoint document retrieval
+# Microsoft Graph API integration for SharePoint, OneDrive, and other M365 services
 #
 # Requires:
 #   - Azure AD app registration with client credentials
@@ -371,8 +371,8 @@ playwright:
 #
 # If not configured here, falls back to MS_* environment variables
 
-sharepoint:
-  # Enable SharePoint integration (optional, default: true)
+microsoft_graph:
+  # Enable Microsoft Graph integration (optional, default: true)
   enabled: true
 
   # Azure AD tenant ID (GUID format)

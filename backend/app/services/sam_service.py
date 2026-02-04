@@ -332,6 +332,7 @@ class SamService:
         bureau_name: Optional[str] = None,
         office_name: Optional[str] = None,
         full_parent_path: Optional[str] = None,
+        raw_data: Optional[Dict[str, Any]] = None,
     ) -> SamSolicitation:
         """
         Create a new solicitation.
@@ -383,6 +384,7 @@ class SamService:
             bureau_name=bureau_name,
             office_name=office_name,
             full_parent_path=full_parent_path,
+            raw_data=raw_data,
         )
 
         session.add(solicitation)
@@ -539,6 +541,17 @@ class SamService:
         status: Optional[str] = None,
         response_deadline: Optional[datetime] = None,
         archive_date: Optional[datetime] = None,
+        agency_name: Optional[str] = None,
+        bureau_name: Optional[str] = None,
+        office_name: Optional[str] = None,
+        full_parent_path: Optional[str] = None,
+        naics_code: Optional[str] = None,
+        psc_code: Optional[str] = None,
+        set_aside_code: Optional[str] = None,
+        ui_link: Optional[str] = None,
+        contact_info: Optional[Dict] = None,
+        place_of_performance: Optional[Dict] = None,
+        raw_data: Optional[Dict] = None,
     ) -> Optional[SamSolicitation]:
         """Update solicitation properties."""
         solicitation = await self.get_solicitation(session, solicitation_id)
@@ -555,6 +568,28 @@ class SamService:
             solicitation.response_deadline = response_deadline
         if archive_date is not None:
             solicitation.archive_date = archive_date
+        if agency_name is not None:
+            solicitation.agency_name = agency_name
+        if bureau_name is not None:
+            solicitation.bureau_name = bureau_name
+        if office_name is not None:
+            solicitation.office_name = office_name
+        if full_parent_path is not None:
+            solicitation.full_parent_path = full_parent_path
+        if naics_code is not None:
+            solicitation.naics_code = naics_code
+        if psc_code is not None:
+            solicitation.psc_code = psc_code
+        if set_aside_code is not None:
+            solicitation.set_aside_code = set_aside_code
+        if ui_link is not None:
+            solicitation.ui_link = ui_link
+        if contact_info is not None:
+            solicitation.contact_info = contact_info
+        if place_of_performance is not None:
+            solicitation.place_of_performance = place_of_performance
+        if raw_data is not None:
+            solicitation.raw_data = raw_data
 
         await session.commit()
         await session.refresh(solicitation)
@@ -605,6 +640,7 @@ class SamService:
         version_number: int = 1,
         title: Optional[str] = None,
         description: Optional[str] = None,
+        description_url: Optional[str] = None,
         posted_date: Optional[datetime] = None,
         response_deadline: Optional[datetime] = None,
         raw_json_bucket: Optional[str] = None,
@@ -634,6 +670,7 @@ class SamService:
             version_number: Version number (1=original, 2+=amendments)
             title: Title at this version
             description: Description at this version
+            description_url: SAM.gov API URL for full description
             posted_date: When this version was posted
             response_deadline: Deadline at this version
             raw_json_bucket: MinIO bucket for raw JSON
@@ -658,6 +695,7 @@ class SamService:
             version_number=version_number,
             title=title,
             description=description,
+            description_url=description_url,
             posted_date=posted_date,
             response_deadline=response_deadline,
             raw_json_bucket=raw_json_bucket,
@@ -778,7 +816,10 @@ class SamService:
         notice_id: UUID,
         title: Optional[str] = None,
         description: Optional[str] = None,
+        description_url: Optional[str] = None,
         response_deadline: Optional[datetime] = None,
+        raw_data: Optional[Dict[str, Any]] = None,
+        full_parent_path: Optional[str] = None,
     ) -> Optional[SamNotice]:
         """
         Update a notice with new data.
@@ -788,7 +829,10 @@ class SamService:
             notice_id: Notice UUID
             title: New title (optional)
             description: New description (optional)
+            description_url: SAM.gov API URL for full description (optional)
             response_deadline: New response deadline (optional)
+            raw_data: Raw SAM.gov API response (optional)
+            full_parent_path: Full organization hierarchy (optional)
 
         Returns:
             Updated notice or None if not found
@@ -801,8 +845,14 @@ class SamService:
             notice.title = title
         if description is not None:
             notice.description = description
+        if description_url is not None:
+            notice.description_url = description_url
         if response_deadline is not None:
             notice.response_deadline = response_deadline
+        if raw_data is not None:
+            notice.raw_data = raw_data
+        if full_parent_path is not None:
+            notice.full_parent_path = full_parent_path
 
         await session.commit()
         await session.refresh(notice)
@@ -1420,69 +1470,122 @@ class SamService:
         notice_type: Optional[str] = None,
         posted_from: Optional[datetime] = None,
         posted_to: Optional[datetime] = None,
+        keyword: Optional[str] = None,
         limit: int = 50,
         offset: int = 0,
     ) -> Tuple[List[SamNotice], int]:
         """
         List all notices for an organization with filters.
 
-        This queries across all solicitations in the organization,
-        not limited to a single search.
+        Includes both solicitation-linked notices and standalone notices.
+        Supports keyword search across title, description, and solicitation number.
 
         Returns:
             Tuple of (notices list, total count)
         """
-        # Build base query with organization filter via solicitation join
-        query = (
+        # Helper to apply common notice filters
+        def apply_notice_filters(query, is_standalone: bool = False):
+            if notice_type:
+                query = query.where(SamNotice.notice_type == notice_type)
+            if posted_from:
+                query = query.where(SamNotice.posted_date >= posted_from)
+            if posted_to:
+                query = query.where(SamNotice.posted_date <= posted_to)
+            return query
+
+        # Query for solicitation-linked notices (with LEFT OUTER JOIN for keyword search)
+        sol_linked_query = (
             select(SamNotice)
-            .join(SamSolicitation)
+            .join(SamSolicitation, SamNotice.solicitation_id == SamSolicitation.id)
             .where(SamSolicitation.organization_id == organization_id)
         )
 
-        # Apply filters
+        # Apply agency/office filters (from solicitation for linked notices)
         if agency:
-            query = query.where(SamSolicitation.agency_name.ilike(f"%{agency}%"))
+            sol_linked_query = sol_linked_query.where(
+                SamSolicitation.agency_name.ilike(f"%{agency}%")
+            )
         if sub_agency:
-            query = query.where(SamSolicitation.bureau_name.ilike(f"%{sub_agency}%"))
+            sol_linked_query = sol_linked_query.where(
+                SamSolicitation.bureau_name.ilike(f"%{sub_agency}%")
+            )
         if office:
-            query = query.where(SamSolicitation.office_name.ilike(f"%{office}%"))
-        if notice_type:
-            query = query.where(SamNotice.notice_type == notice_type)
-        if posted_from:
-            query = query.where(SamNotice.posted_date >= posted_from)
-        if posted_to:
-            query = query.where(SamNotice.posted_date <= posted_to)
+            sol_linked_query = sol_linked_query.where(
+                SamSolicitation.office_name.ilike(f"%{office}%")
+            )
 
-        # Build count query with same filters
-        count_query = (
-            select(func.count(SamNotice.id))
-            .join(SamSolicitation)
-            .where(SamSolicitation.organization_id == organization_id)
+        # Apply keyword filter (includes solicitation_number for linked notices)
+        if keyword:
+            keyword_filter = f"%{keyword}%"
+            sol_linked_query = sol_linked_query.where(
+                or_(
+                    SamNotice.title.ilike(keyword_filter),
+                    SamNotice.description.ilike(keyword_filter),
+                    SamSolicitation.solicitation_number.ilike(keyword_filter),
+                )
+            )
+
+        sol_linked_query = apply_notice_filters(sol_linked_query)
+
+        # Query for standalone notices (organization_id on notice itself)
+        standalone_query = (
+            select(SamNotice)
+            .where(SamNotice.organization_id == organization_id)
+            .where(SamNotice.solicitation_id.is_(None))
         )
+
+        # Apply agency/office filters (from notice for standalone)
         if agency:
-            count_query = count_query.where(SamSolicitation.agency_name.ilike(f"%{agency}%"))
+            standalone_query = standalone_query.where(
+                SamNotice.agency_name.ilike(f"%{agency}%")
+            )
         if sub_agency:
-            count_query = count_query.where(SamSolicitation.bureau_name.ilike(f"%{sub_agency}%"))
+            standalone_query = standalone_query.where(
+                SamNotice.bureau_name.ilike(f"%{sub_agency}%")
+            )
         if office:
-            count_query = count_query.where(SamSolicitation.office_name.ilike(f"%{office}%"))
-        if notice_type:
-            count_query = count_query.where(SamNotice.notice_type == notice_type)
-        if posted_from:
-            count_query = count_query.where(SamNotice.posted_date >= posted_from)
-        if posted_to:
-            count_query = count_query.where(SamNotice.posted_date <= posted_to)
+            standalone_query = standalone_query.where(
+                SamNotice.office_name.ilike(f"%{office}%")
+            )
 
-        count_result = await session.execute(count_query)
-        total = count_result.scalar_one()
+        # Apply keyword filter (no solicitation_number for standalone)
+        if keyword:
+            keyword_filter = f"%{keyword}%"
+            standalone_query = standalone_query.where(
+                or_(
+                    SamNotice.title.ilike(keyword_filter),
+                    SamNotice.description.ilike(keyword_filter),
+                )
+            )
 
-        # Get paginated results ordered by posted date descending
-        query = query.order_by(SamNotice.posted_date.desc().nullslast())
-        query = query.limit(limit).offset(offset)
+        standalone_query = apply_notice_filters(standalone_query, is_standalone=True)
 
-        result = await session.execute(query)
-        notices = list(result.scalars().all())
+        # Execute both queries
+        sol_result = await session.execute(sol_linked_query)
+        sol_notices = list(sol_result.scalars().all())
 
-        return notices, total
+        standalone_result = await session.execute(standalone_query)
+        standalone_notices = list(standalone_result.scalars().all())
+
+        # Combine and deduplicate (by ID, in case of overlap)
+        all_notices_dict = {n.id: n for n in sol_notices}
+        for n in standalone_notices:
+            if n.id not in all_notices_dict:
+                all_notices_dict[n.id] = n
+
+        all_notices = list(all_notices_dict.values())
+
+        # Sort by posted_date descending
+        all_notices.sort(
+            key=lambda n: n.posted_date or datetime.min,
+            reverse=True
+        )
+
+        # Get total and apply pagination
+        total = len(all_notices)
+        paginated_notices = all_notices[offset:offset + limit]
+
+        return paginated_notices, total
 
     async def update_solicitation_summary_status(
         self,

@@ -39,7 +39,7 @@ class ConnectionResponse(BaseModel):
     organization_id: str = Field(..., description="Organization UUID")
     name: str = Field(..., description="Connection name")
     description: Optional[str] = Field(None, description="Connection description")
-    connection_type: str = Field(..., description="Connection type (sharepoint, llm, extraction)")
+    connection_type: str = Field(..., description="Connection type (microsoft_graph, llm, extraction)")
     config: Dict[str, Any] = Field(..., description="Connection configuration")
     is_active: bool = Field(..., description="Whether connection is active")
     is_default: bool = Field(..., description="Whether this is the default connection for its type")
@@ -87,7 +87,7 @@ class ConnectionCreateRequest(BaseModel):
     """Request to create a new connection."""
     name: str = Field(..., min_length=1, max_length=255, description="Connection name")
     description: Optional[str] = Field(None, max_length=500, description="Connection description")
-    connection_type: str = Field(..., description="Connection type (sharepoint, llm, extraction)")
+    connection_type: str = Field(..., description="Connection type (microsoft_graph, llm, extraction)")
     config: Dict[str, Any] = Field(..., description="Type-specific configuration")
     is_default: bool = Field(default=False, description="Set as default for this type")
     scope: str = Field(default="organization", description="Connection scope (organization, user)")

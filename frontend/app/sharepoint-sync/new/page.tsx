@@ -80,7 +80,7 @@ function NewSharePointSyncContent() {
     try {
       const response = await connectionsApi.listConnections(token)
       const spConnections = response.connections.filter(
-        (c: Connection) => c.connection_type === 'sharepoint' && c.is_active
+        (c: Connection) => c.connection_type === 'microsoft_graph' && c.is_active
       )
       setConnections(spConnections)
     } catch (err: any) {

@@ -169,15 +169,15 @@ class SharePointConfigSchema(BaseModel):
     )
 
 
-class SharePointConnectionType(BaseConnectionType):
-    """SharePoint connection type using Microsoft Graph API."""
+class MicrosoftGraphConnectionType(BaseConnectionType):
+    """Microsoft Graph API connection type for SharePoint, OneDrive, and other Microsoft 365 services."""
 
-    connection_type = "sharepoint"
-    display_name = "Microsoft SharePoint"
-    description = "Connect to SharePoint for document inventory and downloads"
+    connection_type = "microsoft_graph"
+    display_name = "Microsoft Graph API"
+    description = "Connect to Microsoft 365 services (SharePoint, OneDrive, etc.) via Graph API"
 
     def get_config_schema(self) -> Dict[str, Any]:
-        """Get JSON schema for SharePoint configuration."""
+        """Get JSON schema for Microsoft Graph API configuration."""
         return {
             "type": "object",
             "properties": {
@@ -215,15 +215,15 @@ class SharePointConnectionType(BaseConnectionType):
         }
 
     def validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate SharePoint configuration."""
+        """Validate Microsoft Graph API configuration."""
         try:
             validated = SharePointConfigSchema(**config)
             return validated.model_dump()
         except ValidationError as e:
-            raise ValueError(f"Invalid SharePoint configuration: {e}")
+            raise ValueError(f"Invalid Microsoft Graph configuration: {e}")
 
     async def test_connection(self, config: Dict[str, Any]) -> ConnectionTestResult:
-        """Test SharePoint connection by authenticating with Graph API."""
+        """Test Microsoft Graph API connection by authenticating with Graph API."""
         try:
             tenant_id = config["tenant_id"]
             client_id = config["client_id"]
@@ -1083,7 +1083,7 @@ class ConnectionService:
         self._registry = ConnectionTypeRegistry()
 
         # Register built-in connection types
-        self._registry.register(SharePointConnectionType())
+        self._registry.register(MicrosoftGraphConnectionType())
         self._registry.register(LLMConnectionType())
         self._registry.register(ExtractionConnectionType())
         self._registry.register(PlaywrightConnectionType())
@@ -1256,11 +1256,11 @@ async def sync_default_connections_from_env(
                 ),
             }
 
-            # Query for existing managed SharePoint connection
+            # Query for existing managed Microsoft Graph connection
             result = await session.execute(
                 select(Connection).where(
                     Connection.organization_id == organization_id,
-                    Connection.connection_type == "sharepoint",
+                    Connection.connection_type == "microsoft_graph",
                     Connection.is_managed == True,
                 )
             )
@@ -1272,17 +1272,17 @@ async def sync_default_connections_from_env(
                     existing.config = config
                     existing.updated_at = datetime.utcnow()
                     await session.commit()
-                    results["sharepoint"] = "updated"
-                    logger.info("Updated managed SharePoint connection")
+                    results["microsoft_graph"] = "updated"
+                    logger.info("Updated managed Microsoft Graph connection")
                 else:
-                    results["sharepoint"] = "unchanged"
+                    results["microsoft_graph"] = "unchanged"
             else:
                 # Create new managed connection
                 new_connection = Connection(
                     organization_id=organization_id,
-                    name="Default SharePoint",
-                    description="Auto-managed SharePoint connection from environment variables",
-                    connection_type="sharepoint",
+                    name="Default Microsoft Graph",
+                    description="Auto-managed Microsoft Graph API connection from environment variables",
+                    connection_type="microsoft_graph",
                     config=config,
                     is_active=True,
                     is_default=True,
@@ -1292,17 +1292,17 @@ async def sync_default_connections_from_env(
                 )
                 session.add(new_connection)
                 await session.commit()
-                results["sharepoint"] = "created"
-                logger.info("Created managed SharePoint connection")
+                results["microsoft_graph"] = "created"
+                logger.info("Created managed Microsoft Graph connection")
         else:
-            results["sharepoint"] = "skipped"
+            results["microsoft_graph"] = "skipped"
             logger.debug(
-                "Skipping SharePoint connection sync - missing required env vars"
+                "Skipping Microsoft Graph connection sync - missing required env vars"
             )
 
     except Exception as e:
-        results["sharepoint"] = "error"
-        logger.error(f"Failed to sync SharePoint connection: {e}")
+        results["microsoft_graph"] = "error"
+        logger.error(f"Failed to sync Microsoft Graph connection: {e}")
 
     # -------------------------------------------------------------------------
     # LLM Connection

@@ -6,7 +6,8 @@ import { connectionsApi } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import { RefreshCw, Plus, Link2, Zap, FolderSync, FileText } from 'lucide-react'
 import ConnectionForm from '@/components/connections/ConnectionForm'
-import ConnectionCard from '@/components/connections/ConnectionCard'
+import ConnectionRow from '@/components/connections/ConnectionRow'
+import ConnectionViewModal from '@/components/connections/ConnectionViewModal'
 
 interface Connection {
   id: string
@@ -35,6 +36,7 @@ export default function ConnectionsTab({ onError }: ConnectionsTabProps) {
   const [error, setError] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [editingConnection, setEditingConnection] = useState<Connection | null>(null)
+  const [viewingConnection, setViewingConnection] = useState<Connection | null>(null)
   const [checkingConnections, setCheckingConnections] = useState<Set<string>>(new Set())
   const [isRefreshingAll, setIsRefreshingAll] = useState(false)
 
@@ -155,6 +157,10 @@ export default function ConnectionsTab({ onError }: ConnectionsTabProps) {
     setShowForm(true)
   }
 
+  const handleViewConnection = (connection: Connection) => {
+    setViewingConnection(connection)
+  }
+
   const handleDeleteConnection = async (connectionId: string) => {
     if (!token) return
     if (!confirm('Are you sure you want to delete this connection?')) return
@@ -209,9 +215,9 @@ export default function ConnectionsTab({ onError }: ConnectionsTabProps) {
       icon: <Zap className="w-4 h-4" />,
       gradient: 'from-violet-500 to-purple-600'
     },
-    sharepoint: {
-      name: 'SharePoint',
-      description: 'Microsoft SharePoint document libraries',
+    microsoft_graph: {
+      name: 'Microsoft Graph API',
+      description: 'Microsoft 365 services (SharePoint, OneDrive, etc.)',
       icon: <FolderSync className="w-4 h-4" />,
       gradient: 'from-blue-500 to-cyan-500'
     },
@@ -262,7 +268,7 @@ export default function ConnectionsTab({ onError }: ConnectionsTabProps) {
               disabled={isRefreshingAll || checkingConnections.size > 0}
             >
               <RefreshCw className={`w-4 h-4 ${isRefreshingAll || checkingConnections.size > 0 ? 'animate-spin' : ''}`} />
-              <span className="hidden sm:inline ml-1.5">Refresh</span>
+              <span className="hidden sm:inline ml-1.5">Refresh All</span>
             </Button>
           )}
           <Button size="sm" onClick={handleCreateConnection}>
@@ -314,6 +320,14 @@ export default function ConnectionsTab({ onError }: ConnectionsTabProps) {
         </div>
       )}
 
+      {/* View Modal */}
+      {viewingConnection && (
+        <ConnectionViewModal
+          connection={viewingConnection}
+          onClose={() => setViewingConnection(null)}
+        />
+      )}
+
       {/* Content */}
       {connections.length === 0 && !showForm ? (
         /* Empty State */
@@ -325,7 +339,7 @@ export default function ConnectionsTab({ onError }: ConnectionsTabProps) {
             No connections configured
           </h3>
           <p className="text-sm text-gray-500 dark:text-gray-400 max-w-sm mx-auto mb-6">
-            Connect your LLM providers, SharePoint, and extraction services.
+            Connect your LLM providers, Microsoft Graph, and extraction services.
           </p>
           <Button onClick={handleCreateConnection} size="sm">
             <Plus className="w-4 h-4 mr-1.5" />
@@ -359,17 +373,21 @@ export default function ConnectionsTab({ onError }: ConnectionsTabProps) {
                         {conns.length}
                       </span>
                     </div>
+                    {config.description && (
+                      <p className="text-xs text-gray-500 dark:text-gray-400">{config.description}</p>
+                    )}
                   </div>
                 </div>
 
-                {/* Connection Cards Grid */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {/* Connection Rows - Full Width Stacking */}
+                <div className="space-y-2">
                   {conns.map((connection) => (
-                    <ConnectionCard
+                    <ConnectionRow
                       key={connection.id}
                       connection={connection}
                       isChecking={checkingConnections.has(connection.id)}
                       onEdit={() => handleEditConnection(connection)}
+                      onView={() => handleViewConnection(connection)}
                       onDelete={() => handleDeleteConnection(connection.id)}
                       onTest={() => handleTestConnection(connection.id)}
                       onSetDefault={() => handleSetDefault(connection.id)}

@@ -242,7 +242,7 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
     switch (type) {
       case 'llm':
         return <Zap className="w-6 h-6" />
-      case 'sharepoint':
+      case 'microsoft_graph':
         return <FolderSync className="w-6 h-6" />
       case 'extraction':
         return <FileText className="w-6 h-6" />
@@ -255,7 +255,7 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
     switch (type) {
       case 'llm':
         return 'from-violet-500 to-purple-600'
-      case 'sharepoint':
+      case 'microsoft_graph':
         return 'from-blue-500 to-cyan-500'
       case 'extraction':
         return 'from-emerald-500 to-teal-500'
@@ -715,7 +715,7 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
               type="text"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="e.g., Primary SharePoint"
+              placeholder="e.g., Production Microsoft Graph"
               required
               className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
             />

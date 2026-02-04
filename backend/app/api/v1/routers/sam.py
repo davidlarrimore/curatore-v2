@@ -27,6 +27,11 @@ Endpoints:
 
     Notices:
         GET /sam/notices/{id} - Get notice details
+        GET /sam/notices/{id}/attachments - List notice attachments
+        POST /sam/notices/{id}/download-attachments - Download all notice attachments
+        GET /sam/notices/{id}/description - Get full description
+        POST /sam/notices/{id}/regenerate-summary - Regenerate AI summary
+        POST /sam/notices/{id}/refresh - Refresh from SAM.gov
         GET /sam/notices/{id}/changes - Get change summary
 
     Attachments:
@@ -56,7 +61,8 @@ from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, s
 from pydantic import BaseModel, Field
 from sqlalchemy import select, desc
 
-from app.tasks import sam_pull_task
+from app.tasks import sam_pull_task, sam_refresh_solicitation_task
+from app.services.run_service import run_service
 from app.database.models import (
     Run,
     SamAttachment,
@@ -194,6 +200,7 @@ class SamNoticeResponse(BaseModel):
     version_number: int
     title: Optional[str]
     description: Optional[str]
+    description_url: Optional[str] = None  # SAM.gov API URL for full description
     posted_date: Optional[datetime]
     response_deadline: Optional[datetime]
     changes_summary: Optional[str]
@@ -206,6 +213,7 @@ class SamNoticeResponse(BaseModel):
     agency_name: Optional[str] = None
     bureau_name: Optional[str] = None
     office_name: Optional[str] = None
+    full_parent_path: Optional[str] = None
     # UI link for standalone notices
     ui_link: Optional[str] = None
     # Summary fields for standalone notices
@@ -213,6 +221,8 @@ class SamNoticeResponse(BaseModel):
     summary_generated_at: Optional[datetime] = None
     # Is this a standalone notice?
     is_standalone: bool = False
+    # Raw SAM.gov API response (for metadata tab)
+    raw_data: Optional[Dict[str, Any]] = None
 
 
 class SamAttachmentResponse(BaseModel):
@@ -412,6 +422,8 @@ class PreviewSearchResponse(BaseModel):
     message: str
     error: Optional[str] = None
     remaining_calls: Optional[int] = None
+    is_multi_department: Optional[bool] = None
+    departments_searched: Optional[int] = None
 
 
 class SamDashboardStatsResponse(BaseModel):
@@ -429,7 +441,7 @@ class SamNoticeWithSolicitationResponse(BaseModel):
     """SAM notice response with solicitation context for org-wide listing."""
 
     id: str
-    solicitation_id: str
+    solicitation_id: Optional[str]  # Nullable for standalone notices (e.g., Special Notices)
     sam_notice_id: str
     notice_type: str
     version_number: int
@@ -531,7 +543,7 @@ def _solicitation_to_response(sol: SamSolicitation) -> SamSolicitationResponse:
     )
 
 
-def _notice_to_response(notice: SamNotice) -> SamNoticeResponse:
+def _notice_to_response(notice: SamNotice, include_raw_data: bool = False) -> SamNoticeResponse:
     """Convert SamNotice model to response.
 
     Handles both solicitation-linked and standalone notices.
@@ -548,6 +560,7 @@ def _notice_to_response(notice: SamNotice) -> SamNoticeResponse:
         version_number=notice.version_number,
         title=notice.title,
         description=notice.description[:500] if notice.description else None,
+        description_url=getattr(notice, 'description_url', None),
         posted_date=notice.posted_date,
         response_deadline=notice.response_deadline,
         changes_summary=notice.changes_summary,
@@ -560,6 +573,7 @@ def _notice_to_response(notice: SamNotice) -> SamNoticeResponse:
         agency_name=notice.agency_name,
         bureau_name=notice.bureau_name,
         office_name=notice.office_name,
+        full_parent_path=getattr(notice, 'full_parent_path', None),
         # UI link
         ui_link=notice.ui_link,
         # Summary fields
@@ -567,6 +581,8 @@ def _notice_to_response(notice: SamNotice) -> SamNoticeResponse:
         summary_generated_at=notice.summary_generated_at,
         # Standalone flag
         is_standalone=is_standalone,
+        # Raw data (only when requested)
+        raw_data=notice.raw_data if include_raw_data else None,
     )
 
 
@@ -763,6 +779,7 @@ async def list_all_notices(
     notice_type: Optional[str] = Query(None, description="Filter by notice type (o, p, k, r, s, a)"),
     posted_from: Optional[datetime] = Query(None, description="Filter by posted date from"),
     posted_to: Optional[datetime] = Query(None, description="Filter by posted date to"),
+    keyword: Optional[str] = Query(None, description="Search by title, description, or solicitation number"),
     limit: int = Query(50, ge=1, le=100, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     current_user: User = Depends(get_current_user),
@@ -771,7 +788,10 @@ async def list_all_notices(
     List all notices across all SAM searches for the organization.
 
     Returns notices with solicitation context (agency, solicitation number, etc.)
-    for display in an org-wide notices table.
+    for display in an org-wide notices table. Includes both solicitation-linked
+    notices and standalone notices (e.g., Special Notices).
+
+    Supports keyword search across title, description, and solicitation number.
     """
     async with database_service.get_session() as session:
         notices, total = await sam_service.list_all_notices(
@@ -783,16 +803,38 @@ async def list_all_notices(
             notice_type=notice_type,
             posted_from=posted_from,
             posted_to=posted_to,
+            keyword=keyword,
             limit=limit,
             offset=offset,
         )
 
-        # Get solicitation info for each notice
+        # Get solicitation info for each notice (or use notice's own fields for standalone)
         items = []
         for notice in notices:
-            solicitation = await sam_service.get_solicitation(session, notice.solicitation_id)
-            if solicitation:
-                items.append(_notice_with_solicitation_to_response(notice, solicitation))
+            if notice.solicitation_id:
+                # Notice with parent solicitation
+                solicitation = await sam_service.get_solicitation(session, notice.solicitation_id)
+                if solicitation:
+                    items.append(_notice_with_solicitation_to_response(notice, solicitation))
+            else:
+                # Standalone notice (e.g., Special Notice) - use notice's own fields
+                items.append(SamNoticeWithSolicitationResponse(
+                    id=str(notice.id),
+                    solicitation_id=None,
+                    sam_notice_id=notice.sam_notice_id,
+                    notice_type=notice.notice_type,
+                    version_number=notice.version_number,
+                    title=notice.title,
+                    description=notice.description[:500] if notice.description else None,
+                    posted_date=notice.posted_date,
+                    response_deadline=notice.response_deadline,
+                    changes_summary=notice.changes_summary,
+                    created_at=notice.created_at,
+                    solicitation_number=None,  # Standalone notices don't have solicitation numbers
+                    agency_name=notice.agency_name,
+                    bureau_name=notice.bureau_name,
+                    office_name=notice.office_name,
+                ))
 
         return SamNoticeListResponse(
             items=items,
@@ -870,6 +912,8 @@ async def preview_search(
             sample_results=sample_results,
             search_config=result.get("search_config"),
             message=result.get("message", "Preview successful"),
+            is_multi_department=result.get("is_multi_department"),
+            departments_searched=result.get("departments_searched"),
         )
 
 
@@ -1370,37 +1414,65 @@ async def get_solicitation(
 @router.post(
     "/solicitations/{solicitation_id}/refresh",
     summary="Refresh solicitation from SAM.gov",
-    description="Re-fetch solicitation data from SAM.gov API to update descriptions and other fields.",
+    description="Re-fetch solicitation data from SAM.gov API to update descriptions and other fields. Queues a background job.",
 )
 async def refresh_solicitation(
     solicitation_id: UUID,
+    download_attachments: bool = Query(True, description="Download attachments after refresh"),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
     Refresh a solicitation by re-fetching data from SAM.gov.
 
-    This is useful for fixing solicitations with missing or outdated data,
-    particularly descriptions that may have been stored as URLs instead of content.
+    This queues a background job to refresh solicitation data and optionally
+    download attachments. Returns a run_id that can be used to track progress.
     """
     async with database_service.get_session() as session:
-        try:
-            result = await sam_pull_service.refresh_solicitation(
-                session=session,
-                solicitation_id=solicitation_id,
-                organization_id=current_user.organization_id,
-            )
-            return result
-        except ValueError as e:
+        # Verify solicitation exists and belongs to user's org
+        sol = await sam_service.get_solicitation(session, solicitation_id)
+        if not sol:
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=str(e),
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Solicitation not found",
             )
-        except Exception as e:
-            logger.error(f"Error refreshing solicitation {solicitation_id}: {e}")
+        if sol.organization_id != current_user.organization_id:
             raise HTTPException(
-                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to refresh solicitation: {str(e)}",
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Access denied",
             )
+
+        # Create Run record for tracking
+        run = await run_service.create_run(
+            session=session,
+            run_type="sam_refresh",
+            organization_id=current_user.organization_id,
+            config={
+                "solicitation_id": str(solicitation_id),
+                "solicitation_number": sol.solicitation_number,
+                "download_attachments": download_attachments,
+            },
+        )
+        await session.commit()
+
+        # Queue the background task
+        sam_refresh_solicitation_task.delay(
+            solicitation_id=str(solicitation_id),
+            organization_id=str(current_user.organization_id),
+            download_attachments=download_attachments,
+            run_id=str(run.id),
+        )
+
+        logger.info(
+            f"Queued SAM refresh job for solicitation {sol.solicitation_number} "
+            f"(run_id={run.id}, download_attachments={download_attachments})"
+        )
+
+        return {
+            "run_id": str(run.id),
+            "status": "queued",
+            "solicitation_id": str(solicitation_id),
+            "download_attachments": download_attachments,
+        }
 
 
 @router.get(
@@ -1642,6 +1714,7 @@ async def download_solicitation_attachments(
 )
 async def get_notice(
     notice_id: UUID,
+    include_metadata: bool = Query(False, description="Include raw SAM.gov API response"),
     current_user: User = Depends(get_current_user),
 ) -> SamNoticeResponse:
     """Get notice by ID."""
@@ -1662,6 +1735,15 @@ async def get_notice(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied",
                 )
+            # For non-standalone notices, get agency info from solicitation if not on notice
+            if not notice.agency_name and sol.agency_name:
+                notice.agency_name = sol.agency_name
+                notice.bureau_name = sol.bureau_name
+                notice.office_name = sol.office_name
+                notice.full_parent_path = sol.full_parent_path
+            # Get raw_data from solicitation if not on notice
+            if include_metadata and not notice.raw_data and sol.raw_data:
+                notice.raw_data = sol.raw_data
         elif notice.organization_id:
             # Standalone notice - check organization directly
             if notice.organization_id != current_user.organization_id:
@@ -1675,13 +1757,13 @@ async def get_notice(
                 detail="Access denied - notice has no associated organization",
             )
 
-        return _notice_to_response(notice)
+        return _notice_to_response(notice, include_raw_data=include_metadata)
 
 
 @router.post(
     "/notices/{notice_id}/refresh",
     summary="Refresh notice from SAM.gov",
-    description="Re-fetch notice data from SAM.gov API to update description.",
+    description="Re-fetch notice data from SAM.gov API to update description and metadata.",
 )
 async def refresh_notice(
     notice_id: UUID,
@@ -1690,7 +1772,11 @@ async def refresh_notice(
     """
     Refresh a notice by re-fetching data from SAM.gov.
 
-    Useful for fixing notices with missing or URL-only descriptions.
+    For notices with a parent solicitation, uses the solicitation refresh which
+    searches by solicitation number to get full opportunity data including
+    agency info and raw metadata.
+
+    For standalone notices (e.g., Special Notices), fetches description only.
     """
     async with database_service.get_session() as session:
         notice = await sam_service.get_notice(session, notice_id)
@@ -1703,9 +1789,10 @@ async def refresh_notice(
 
         # Check access
         org_id = notice.organization_id
+        solicitation = None
         if notice.solicitation_id:
-            sol = await sam_service.get_solicitation(session, notice.solicitation_id)
-            org_id = sol.organization_id
+            solicitation = await sam_service.get_solicitation(session, notice.solicitation_id)
+            org_id = solicitation.organization_id
 
         if org_id != current_user.organization_id:
             raise HTTPException(
@@ -1713,37 +1800,45 @@ async def refresh_notice(
                 detail="Access denied",
             )
 
-        # Fetch fresh description from SAM.gov
         try:
+            # For notices with a parent solicitation, use the solicitation refresh
+            # which searches by solicitation number and gets full metadata
+            if solicitation:
+                refresh_results = await sam_pull_service.refresh_solicitation(
+                    session=session,
+                    solicitation_id=solicitation.id,
+                    organization_id=current_user.organization_id,
+                )
+
+                return {
+                    "notice_id": str(notice_id),
+                    "solicitation_id": str(solicitation.id),
+                    "notice_updated": refresh_results.get("notices_updated", 0) > 0 or refresh_results.get("notices_created", 0) > 0,
+                    "solicitation_updated": refresh_results.get("description_updated", False),
+                    "opportunities_found": refresh_results.get("opportunities_found", 0),
+                    "error": refresh_results.get("error"),
+                }
+
+            # Standalone notice - just fetch description
+            results = {
+                "notice_id": str(notice_id),
+                "notice_updated": False,
+                "solicitation_updated": False,
+            }
+
             description = await sam_pull_service.fetch_notice_description(
                 notice.sam_notice_id, session, current_user.organization_id
             )
-
-            if not description:
-                return {
-                    "notice_id": str(notice_id),
-                    "description_updated": False,
-                    "error": "Could not fetch description from SAM.gov",
-                }
-
-            # Update notice description
-            if description != notice.description:
+            if description and description != notice.description:
                 await sam_service.update_notice(
                     session,
                     notice_id=notice_id,
                     description=description,
                 )
-                return {
-                    "notice_id": str(notice_id),
-                    "description_updated": True,
-                    "description_length": len(description),
-                }
-            else:
-                return {
-                    "notice_id": str(notice_id),
-                    "description_updated": False,
-                    "message": "Description already up to date",
-                }
+                results["notice_updated"] = True
+                results["description_updated"] = True
+
+            return results
 
         except Exception as e:
             logger.error(f"Error refreshing notice {notice_id}: {e}")
@@ -1856,6 +1951,53 @@ async def list_notice_attachments(
             session, notice_id, download_status
         )
         return [_attachment_to_response(a) for a in attachments]
+
+
+@router.post(
+    "/notices/{notice_id}/download-attachments",
+    summary="Download all notice attachments",
+    description="Download all pending attachments for a notice (standalone or solicitation-linked).",
+)
+async def download_notice_attachments(
+    notice_id: UUID,
+    current_user: User = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Download all pending attachments for a notice.
+
+    Works for both standalone notices and solicitation-linked notices.
+    """
+    async with database_service.get_session() as session:
+        notice = await sam_service.get_notice(session, notice_id)
+
+        if not notice:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Notice not found",
+            )
+
+        # Check access - either via solicitation or organization for standalone
+        if notice.solicitation_id:
+            sol = await sam_service.get_solicitation(session, notice.solicitation_id)
+            if sol.organization_id != current_user.organization_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied",
+                )
+        else:
+            # Standalone notice - check organization_id directly
+            if notice.organization_id != current_user.organization_id:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Access denied",
+                )
+
+        result = await sam_pull_service.download_all_notice_attachments(
+            session=session,
+            notice_id=notice_id,
+            organization_id=current_user.organization_id,
+        )
+
+        return result
 
 
 @router.get(

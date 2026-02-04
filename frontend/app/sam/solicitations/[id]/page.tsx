@@ -4,7 +4,9 @@ import { useState, useEffect, use, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
+import { useActiveJobs } from '@/lib/active-jobs-context'
 import { samApi, SamSolicitation, SamNotice, SamAttachment } from '@/lib/api'
+import { RunningJobBanner } from '@/components/ui/RunningJobBanner'
 import { formatDate as formatDateUtil, formatDateTime as formatDateTimeUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamBreadcrumbs from '@/components/sam/SamBreadcrumbs'
@@ -47,6 +49,7 @@ function SolicitationDetailContent({ params }: PageProps) {
   const solicitationId = resolvedParams.id
   const router = useRouter()
   const { token } = useAuth()
+  const { addJob, getJobsForResource } = useActiveJobs()
 
   // State
   const [solicitation, setSolicitation] = useState<SamSolicitation | null>(null)
@@ -54,6 +57,7 @@ function SolicitationDetailContent({ params }: PageProps) {
   const [attachments, setAttachments] = useState<SamAttachment[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
+  const [successMessage, setSuccessMessage] = useState('')
   const [activeTab, setActiveTab] = useState<'notices' | 'attachments'>('notices')
   const [isRegenerating, setIsRegenerating] = useState(false)
   const [isRefreshingFromSam, setIsRefreshingFromSam] = useState(false)
@@ -105,27 +109,49 @@ function SolicitationDetailContent({ params }: PageProps) {
     }
   }, [solicitation?.summary_status, loadSolicitation])
 
+  // Get active refresh jobs for this solicitation
+  const activeRefreshJobs = getJobsForResource('sam_solicitation', solicitationId)
+
   // Handle refresh from SAM.gov
   const handleRefreshFromSam = async () => {
-    if (!token) return
+    if (!token || !solicitation) return
 
     setIsRefreshingFromSam(true)
     setError('')
+    setSuccessMessage('')
 
     try {
-      const result = await samApi.refreshSolicitation(token, solicitationId)
-      if (result.error) {
-        setError(result.error)
-      } else {
-        // Reload data to show updated content
-        await loadData()
-      }
+      const result = await samApi.refreshSolicitation(token, solicitationId, {
+        downloadAttachments: true,
+      })
+
+      // Track the background job
+      addJob({
+        runId: result.run_id,
+        jobType: 'sam_refresh',
+        displayName: `Refresh ${solicitation.solicitation_number}`,
+        resourceId: solicitationId,
+        resourceType: 'sam_solicitation',
+      })
+
+      setSuccessMessage('Refresh job started. Attachments will be downloaded in the background.')
+      setTimeout(() => setSuccessMessage(''), 5000)
     } catch (err: any) {
-      setError(err.message || 'Failed to refresh from SAM.gov')
+      setError(err.message || 'Failed to start refresh from SAM.gov')
     } finally {
       setIsRefreshingFromSam(false)
     }
   }
+
+  // Poll for data updates while there's an active refresh job
+  useEffect(() => {
+    if (activeRefreshJobs.length > 0 && token) {
+      const interval = setInterval(() => {
+        loadData()
+      }, 5000)
+      return () => clearInterval(interval)
+    }
+  }, [activeRefreshJobs.length, token, loadData])
 
   // Handle regenerate summary
   const handleRegenerateSummary = async () => {
@@ -358,6 +384,15 @@ function SolicitationDetailContent({ params }: PageProps) {
           ]}
         />
 
+        {/* Active Refresh Jobs */}
+        {activeRefreshJobs.length > 0 && (
+          <div className="mb-4">
+            {activeRefreshJobs.map(job => (
+              <RunningJobBanner key={job.runId} job={job} />
+            ))}
+          </div>
+        )}
+
         {/* Header */}
         <div className="mb-8">
           <div className="flex flex-col lg:flex-row lg:items-start lg:justify-between gap-4">
@@ -396,11 +431,11 @@ function SolicitationDetailContent({ params }: PageProps) {
               <Button
                 variant="secondary"
                 onClick={handleRefreshFromSam}
-                disabled={isRefreshingFromSam}
+                disabled={isRefreshingFromSam || activeRefreshJobs.length > 0}
                 className="gap-2"
                 title="Re-fetch data from SAM.gov API"
               >
-                {isRefreshingFromSam ? (
+                {isRefreshingFromSam || activeRefreshJobs.length > 0 ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <Download className="w-4 h-4" />
@@ -421,6 +456,16 @@ function SolicitationDetailContent({ params }: PageProps) {
             </div>
           </div>
         </div>
+
+        {/* Success Message */}
+        {successMessage && (
+          <div className="mb-6 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/50 p-4">
+            <div className="flex items-center gap-3">
+              <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+              <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">{successMessage}</p>
+            </div>
+          </div>
+        )}
 
         {/* Error */}
         {error && (

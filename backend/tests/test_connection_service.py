@@ -15,7 +15,7 @@ from app.services.connection_service import (
     ConnectionService,
     ConnectionTypeRegistry,
     BaseConnectionType,
-    SharePointConnectionType,
+    MicrosoftGraphConnectionType,
     LLMConnectionType,
     ExtractionConnectionType,
     ConnectionTestResult,
@@ -63,25 +63,25 @@ class TestConnectionTypeRegistry:
 
     def test_register_connection_type(self, registry_instance):
         """Test registering a connection type."""
-        sp_type = SharePointConnectionType()
-        registry_instance.register(sp_type)
+        ms_type = MicrosoftGraphConnectionType()
+        registry_instance.register(ms_type)
 
-        retrieved = registry_instance.get("sharepoint")
+        retrieved = registry_instance.get("microsoft_graph")
         assert retrieved is not None
-        assert retrieved.connection_type == "sharepoint"
+        assert retrieved.connection_type == "microsoft_graph"
 
     def test_register_duplicate_type_overwrites(self, registry_instance):
         """Test that registering duplicate type overwrites."""
-        sp_type1 = SharePointConnectionType()
-        sp_type2 = SharePointConnectionType()
+        ms_type1 = MicrosoftGraphConnectionType()
+        ms_type2 = MicrosoftGraphConnectionType()
 
-        registry_instance.register(sp_type1)
-        registry_instance.register(sp_type2)
+        registry_instance.register(ms_type1)
+        registry_instance.register(ms_type2)
 
         # Should still have only one
         types = registry_instance.list_types()
-        sharepoint_types = [t for t in types if t["type"] == "sharepoint"]
-        assert len(sharepoint_types) == 1
+        ms_graph_types = [t for t in types if t["type"] == "microsoft_graph"]
+        assert len(ms_graph_types) == 1
 
     def test_get_nonexistent_type(self, registry_instance):
         """Test getting non-existent connection type."""
@@ -90,46 +90,46 @@ class TestConnectionTypeRegistry:
 
     def test_list_types(self, registry_instance):
         """Test listing all connection types."""
-        sp_type = SharePointConnectionType()
+        ms_type = MicrosoftGraphConnectionType()
         llm_type = LLMConnectionType()
 
-        registry_instance.register(sp_type)
+        registry_instance.register(ms_type)
         registry_instance.register(llm_type)
 
         types = registry_instance.list_types()
 
         assert len(types) == 2
         type_names = [t["type"] for t in types]
-        assert "sharepoint" in type_names
+        assert "microsoft_graph" in type_names
         assert "llm" in type_names
 
     def test_list_types_includes_schema(self, registry_instance):
         """Test that list_types includes config schema."""
-        sp_type = SharePointConnectionType()
-        registry_instance.register(sp_type)
+        ms_type = MicrosoftGraphConnectionType()
+        registry_instance.register(ms_type)
 
         types = registry_instance.list_types()
 
-        sp_info = next(t for t in types if t["type"] == "sharepoint")
-        assert "schema" in sp_info
-        assert "properties" in sp_info["schema"]
+        ms_info = next(t for t in types if t["type"] == "microsoft_graph")
+        assert "schema" in ms_info
+        assert "properties" in ms_info["schema"]
 
 
-class TestSharePointConnectionType:
-    """Test SharePointConnectionType."""
+class TestMicrosoftGraphConnectionType:
+    """Test MicrosoftGraphConnectionType."""
 
     def test_connection_type_attributes(self):
-        """Test SharePoint connection type attributes."""
-        sp_type = SharePointConnectionType()
+        """Test Microsoft Graph connection type attributes."""
+        ms_type = MicrosoftGraphConnectionType()
 
-        assert sp_type.connection_type == "sharepoint"
-        assert sp_type.display_name == "Microsoft SharePoint"
-        assert len(sp_type.description) > 0
+        assert ms_type.connection_type == "microsoft_graph"
+        assert ms_type.display_name == "Microsoft Graph API"
+        assert len(ms_type.description) > 0
 
     def test_get_config_schema(self):
-        """Test getting SharePoint config schema."""
-        sp_type = SharePointConnectionType()
-        schema = sp_type.get_config_schema()
+        """Test getting Microsoft Graph config schema."""
+        ms_type = MicrosoftGraphConnectionType()
+        schema = ms_type.get_config_schema()
 
         assert schema["type"] == "object"
         assert "properties" in schema

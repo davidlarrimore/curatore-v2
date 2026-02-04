@@ -18,6 +18,7 @@ import {
 // Job type identifiers
 export type JobType =
   | 'sam_pull'
+  | 'sam_refresh'
   | 'sharepoint_sync'
   | 'scrape'
   | 'upload'
@@ -47,6 +48,16 @@ export const JOB_TYPE_CONFIG: Record<JobType, JobTypeConfig> = {
     phases: ['fetching', 'downloading', 'extracting'],
     completedToast: (name) => `SAM pull completed: ${name}`,
     failedToast: (name, error) => `SAM pull failed: ${name}${error ? ` - ${error}` : ''}`,
+  },
+  sam_refresh: {
+    label: 'SAM.gov Refresh',
+    icon: Search,
+    color: 'purple',
+    resourceType: 'sam_solicitation',
+    hasChildJobs: false,
+    phases: ['refreshing', 'downloading'],
+    completedToast: (name) => `SAM refresh completed: ${name}`,
+    failedToast: (name, error) => `SAM refresh failed: ${name}${error ? ` - ${error}` : ''}`,
   },
   sharepoint_sync: {
     label: 'SharePoint Sync',
@@ -105,6 +116,7 @@ export function getJobTypeFromRunType(runType: string): JobType | null {
   // Direct mappings
   const directMap: Record<string, JobType> = {
     sam_pull: 'sam_pull',
+    sam_refresh: 'sam_refresh',
     sharepoint_sync: 'sharepoint_sync',
     scrape: 'scrape',
     upload: 'upload',

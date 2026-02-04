@@ -36,7 +36,9 @@ All background jobs are managed through the Queue Registry system:
 | `RunGroup` | Parent-child job tracking for group completion |
 | `RunLogEvent` | Structured logging for runs |
 | `ScrapeCollection` | Web scraping project with seed URLs |
-| `SamSearch/SamSolicitation` | SAM.gov federal opportunity tracking |
+| `SamSearch` | SAM.gov saved search configuration |
+| `SamSolicitation` | Groups SAM.gov notices with same solicitation number |
+| `SamNotice` | Individual SAM.gov notice (standalone or linked to solicitation) |
 | `SharePointSyncConfig` | SharePoint folder sync configuration |
 | `ScheduledTask` | Database-backed scheduled maintenance |
 | `Procedure` | Reusable workflow definitions (scheduled, event-driven) |
@@ -178,6 +180,95 @@ playwright-service/         # Browser rendering microservice
 | `procedures.py` | Procedure CRUD, triggers, execution |
 | `pipelines.py` | Pipeline CRUD, triggers, runs, item states |
 | `webhooks.py` | Webhook triggers for procedures/pipelines |
+
+---
+
+## SAM.gov Data Model
+
+Curatore integrates with SAM.gov (System for Award Management) to track federal contracting opportunities. Understanding the data model is critical for working with SAM.gov features.
+
+### Key Concept: Notices vs Solicitations
+
+**SAM.gov API returns Notices, not Solicitations.** A "notice" is the fundamental unit from the SAM.gov API - it represents a single posting (opportunity, amendment, special notice, etc.).
+
+**Solicitations are our abstraction.** When a notice has a `solicitation_number`, we create a `SamSolicitation` record to group related notices together. Multiple notices (original + amendments) can belong to the same solicitation.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           SAM.GOV DATA MODEL                                     │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+  SAM.gov API                    Curatore Database
+      │
+      ▼
+┌─────────────┐
+│   Notice    │─────────┐
+│ (has solnum)│         │
+└─────────────┘         │     ┌─────────────────┐
+                        ├────▶│  SamSolicitation │◀──── Groups notices with same solnum
+┌─────────────┐         │     │  (our grouping)  │
+│   Notice    │─────────┘     └─────────────────┘
+│ (amendment) │                        │
+└─────────────┘                        │
+                                       ▼
+┌─────────────┐               ┌─────────────────┐
+│   Notice    │──────────────▶│   SamNotice     │◀──── Each notice becomes a SamNotice
+│ (Special)   │               │  solicitation_id│       - With solnum: linked to solicitation
+└─────────────┘               │  = NULL for     │       - Without solnum: standalone
+  No solnum!                  │  standalone     │
+                              └─────────────────┘
+```
+
+### Notice Types
+
+| Type Code | Name | Has Solicitation Number? |
+|-----------|------|-------------------------|
+| `o` | Combined Synopsis/Solicitation | Yes (usually) |
+| `p` | Presolicitation | Yes (usually) |
+| `k` | Sources Sought | Maybe |
+| `r` | Special Notice | **No** - always standalone |
+| `s` | Sale of Surplus Property | Maybe |
+| `g` | Grant Notice | Maybe |
+| `a` | Award Notice | Yes (usually) |
+| `u` | Justification | Yes (usually) |
+| `i` | Intent to Bundle | Maybe |
+
+### Standalone Notices
+
+**Special Notices (type "r")** are informational and don't have solicitation numbers. They are stored as:
+- `SamNotice` with `solicitation_id = NULL`
+- `organization_id` set on the notice itself (not inherited from solicitation)
+- Agency info stored directly on the notice (`agency_name`, `bureau_name`, `office_name`)
+- Attachments linked to notice via `notice_id` (not `solicitation_id`)
+
+### Storage Paths
+
+```
+# Solicitation-linked attachments
+{org_id}/sam/{agency}/{bureau}/solicitations/{sol_number}/attachments/{filename}
+
+# Standalone notice attachments
+{org_id}/sam/{agency}/{bureau}/notices/{notice_id}/attachments/{filename}
+```
+
+### Database Models
+
+| Model | Purpose |
+|-------|---------|
+| `SamSearch` | Saved search configuration (NAICS codes, PSC codes, departments, etc.) |
+| `SamSolicitation` | Groups related notices with same solicitation_number |
+| `SamNotice` | Individual notice from SAM.gov (can be standalone or linked to solicitation) |
+| `SamAttachment` | File attachment (linked to solicitation and/or notice) |
+| `SamAgency` / `SamSubAgency` | Agency hierarchy cache |
+
+### Key Service Files
+
+| File | Purpose |
+|------|---------|
+| `sam_service.py` | Database operations for SAM entities |
+| `sam_pull_service.py` | SAM.gov API integration and data sync |
+| `sam_api_usage_service.py` | Rate limiting and API quota tracking |
+| `sam_summarization_service.py` | LLM-powered summary generation |
 
 ---
 
@@ -484,7 +575,9 @@ curatore-uploads/{org_id}/
 ├── scrape/{collection}/pages/           # Scraped web pages
 ├── scrape/{collection}/documents/       # Downloaded documents
 ├── sharepoint/{site}/{path}/            # SharePoint files
-└── sam/solicitations/{number}/          # SAM.gov attachments
+└── sam/
+    ├── {agency}/{bureau}/solicitations/{number}/attachments/  # Solicitation attachments
+    └── {agency}/{bureau}/notices/{notice_id}/attachments/     # Standalone notice attachments
 
 curatore-processed/{org_id}/             # Extracted markdown (mirrors structure)
 curatore-temp/{org_id}/                  # Temporary files

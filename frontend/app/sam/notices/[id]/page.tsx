@@ -27,6 +27,8 @@ import {
   Eye,
   CheckCircle,
   XCircle,
+  Code,
+  Hash,
 } from 'lucide-react'
 
 interface PageProps {
@@ -56,7 +58,8 @@ function SamNoticeDetailContent({ params }: PageProps) {
   const [error, setError] = useState('')
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [isRegenerating, setIsRegenerating] = useState(false)
-  const [activeTab, setActiveTab] = useState<'summary' | 'description' | 'attachments'>('summary')
+  const [isDownloadingAttachments, setIsDownloadingAttachments] = useState(false)
+  const [activeTab, setActiveTab] = useState<'summary' | 'description' | 'attachments' | 'metadata'>('summary')
 
   // Load notice details
   const loadNotice = useCallback(async () => {
@@ -66,7 +69,7 @@ function SamNoticeDetailContent({ params }: PageProps) {
     setError('')
 
     try {
-      const noticeData = await samApi.getNotice(token, noticeId)
+      const noticeData = await samApi.getNotice(token, noticeId, { includeMetadata: true })
       setNotice(noticeData)
 
       // Load full description
@@ -145,6 +148,26 @@ function SamNoticeDetailContent({ params }: PageProps) {
     }
   }
 
+  // Handle download all attachments
+  const handleDownloadAttachments = async () => {
+    if (!token) return
+
+    setIsDownloadingAttachments(true)
+    setError('')
+
+    try {
+      const result = await samApi.downloadNoticeAttachments(token, noticeId)
+      // Reload attachments to show updated status
+      await loadNotice()
+      if (result.failed > 0) {
+        setError(`Downloaded ${result.downloaded} of ${result.total} attachments. ${result.failed} failed.`)
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to download attachments')
+    } finally {
+      setIsDownloadingAttachments(false)
+    }
+  }
 
   // Use date utilities for consistent EST display
   const formatDate = (dateStr: string | null) => formatDateUtil(dateStr)
@@ -346,6 +369,7 @@ function SamNoticeDetailContent({ params }: PageProps) {
       { id: 'summary', label: 'Summary', icon: Sparkles, count: null },
       { id: 'description', label: 'Description', icon: FileText, count: null },
       { id: 'attachments', label: 'Attachments', icon: Paperclip, count: attachments.length },
+      { id: 'metadata', label: 'Metadata', icon: Code, count: null },
     ] as const
 
     return (
@@ -392,13 +416,30 @@ function SamNoticeDetailContent({ params }: PageProps) {
     }
 
     if (activeTab === 'description') {
-      return fullDescription ? (
-        <div
-          className="prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300"
-          dangerouslySetInnerHTML={{ __html: fullDescription }}
-        />
-      ) : (
-        <p className="text-gray-500 dark:text-gray-400 italic">No description available.</p>
+      return (
+        <div className="space-y-4">
+          {fullDescription ? (
+            <div
+              className="prose prose-sm dark:prose-invert max-w-none text-gray-700 dark:text-gray-300"
+              dangerouslySetInnerHTML={{ __html: fullDescription }}
+            />
+          ) : (
+            <p className="text-gray-500 dark:text-gray-400 italic">No description available.</p>
+          )}
+          {notice?.description_url && (
+            <div className="pt-4 border-t border-gray-200 dark:border-gray-700">
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Full Description API</p>
+              <a
+                href={notice.description_url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline break-all"
+              >
+                {notice.description_url}
+              </a>
+            </div>
+          )}
+        </div>
       )
     }
 
@@ -521,6 +562,35 @@ function SamNoticeDetailContent({ params }: PageProps) {
       )
     }
 
+    if (activeTab === 'metadata') {
+      // Get metadata from notice or solicitation
+      const metadata = notice?.raw_data || solicitation?.raw_data
+
+      if (!metadata) {
+        return (
+          <div className="text-center py-8">
+            <Code className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+            <p className="text-sm text-gray-500 dark:text-gray-400">
+              No metadata available. Run a refresh from SAM.gov to populate metadata.
+            </p>
+          </div>
+        )
+      }
+
+      return (
+        <div className="space-y-4">
+          <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+            Raw SAM.gov API response data
+          </p>
+          <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 overflow-auto max-h-[600px]">
+            <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
+              {JSON.stringify(metadata, null, 2)}
+            </pre>
+          </div>
+        </div>
+      )
+    }
+
     return null
   }
 
@@ -614,63 +684,68 @@ function SamNoticeDetailContent({ params }: PageProps) {
                     {formatDateTime(notice.response_deadline)}
                   </p>
                 </div>
-                {notice.agency_name && (
+                {/* Agency - from notice or solicitation */}
+                {(notice.agency_name || solicitation?.agency_name) && (
                   <div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Agency</p>
                     <p className="text-sm font-medium text-gray-900 dark:text-white flex items-center gap-1.5">
                       <Building2 className="w-4 h-4 text-gray-400" />
-                      {notice.agency_name}
+                      {notice.agency_name || solicitation?.agency_name}
                     </p>
                   </div>
                 )}
-                {notice.naics_code && (
+                {/* NAICS Code - from notice or solicitation */}
+                {(notice.naics_code || solicitation?.naics_code) && (
                   <div>
                     <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">NAICS Code</p>
                     <p className="text-sm font-medium text-gray-900 dark:text-white flex items-center gap-1.5">
-                      <Tag className="w-4 h-4 text-gray-400" />
-                      {notice.naics_code}
+                      <Hash className="w-4 h-4 text-gray-400" />
+                      {notice.naics_code || solicitation?.naics_code}
                     </p>
                   </div>
                 )}
               </div>
 
-              {/* Additional metadata for standalone notices */}
-              {notice.is_standalone && (
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
-                  {notice.set_aside_code && (
-                    <div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Set-Aside</p>
-                      <p className="text-sm font-medium text-gray-900 dark:text-white">
-                        {notice.set_aside_code}
-                      </p>
-                    </div>
-                  )}
-                  {notice.psc_code && (
-                    <div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">PSC Code</p>
-                      <p className="text-sm font-medium text-gray-900 dark:text-white">
-                        {notice.psc_code}
-                      </p>
-                    </div>
-                  )}
-                  {notice.bureau_name && (
-                    <div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Bureau</p>
-                      <p className="text-sm font-medium text-gray-900 dark:text-white">
-                        {notice.bureau_name}
-                      </p>
-                    </div>
-                  )}
-                  {notice.office_name && (
-                    <div>
-                      <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Office</p>
-                      <p className="text-sm font-medium text-gray-900 dark:text-white">
-                        {notice.office_name}
-                      </p>
-                    </div>
-                  )}
-                </div>
-              )}
+              {/* Additional metadata row - Bureau, Office, PSC, Set-Aside */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mt-4">
+                {/* Bureau - from notice or solicitation */}
+                {(notice.bureau_name || solicitation?.bureau_name) && (
+                  <div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Bureau</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">
+                      {notice.bureau_name || solicitation?.bureau_name}
+                    </p>
+                  </div>
+                )}
+                {/* Office - from notice or solicitation */}
+                {(notice.office_name || solicitation?.office_name) && (
+                  <div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Office</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">
+                      {notice.office_name || solicitation?.office_name}
+                    </p>
+                  </div>
+                )}
+                {/* PSC Code - from notice or solicitation */}
+                {(notice.psc_code || solicitation?.psc_code) && (
+                  <div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">PSC Code</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white flex items-center gap-1.5">
+                      <Tag className="w-4 h-4 text-gray-400" />
+                      {notice.psc_code || solicitation?.psc_code}
+                    </p>
+                  </div>
+                )}
+                {/* Set-Aside - from notice or solicitation */}
+                {(notice.set_aside_code || solicitation?.set_aside_code) && (
+                  <div>
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-1">Set-Aside</p>
+                    <p className="text-sm font-medium text-gray-900 dark:text-white">
+                      {notice.set_aside_code || solicitation?.set_aside_code}
+                    </p>
+                  </div>
+                )}
+              </div>
             </div>
 
             {/* Parent Solicitation Link (for non-standalone notices) */}
@@ -728,6 +803,22 @@ function SamNoticeDetailContent({ params }: PageProps) {
                       <Sparkles className="w-4 h-4" />
                     )}
                     Regenerate Summary
+                  </Button>
+                )}
+                {activeTab === 'attachments' && attachments.some(a => a.download_status === 'pending') && (
+                  <Button
+                    variant="secondary"
+                    size="sm"
+                    onClick={handleDownloadAttachments}
+                    disabled={isDownloadingAttachments}
+                    className="gap-2"
+                  >
+                    {isDownloadingAttachments ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
+                    Download All
                   </Button>
                 )}
               </div>
