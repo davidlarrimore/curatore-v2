@@ -444,6 +444,10 @@ class SamPullService:
         if search_config.get("solicitation_number"):
             params["solnum"] = search_config["solicitation_number"]
 
+        # Notice ID filter (exact match for standalone notices)
+        if search_config.get("notice_id"):
+            params["noticeid"] = search_config["notice_id"]
+
         return params
 
     def _parse_opportunity(
@@ -1449,6 +1453,15 @@ class SamPullService:
                 description_url=description_url,  # Store the original SAM.gov API URL
                 posted_date=opportunity.get("posted_date"),
                 response_deadline=opportunity.get("response_deadline"),
+                raw_data=opportunity.get("raw_data"),
+                full_parent_path=opportunity.get("full_parent_path"),
+                agency_name=opportunity.get("agency_name"),
+                bureau_name=opportunity.get("bureau_name"),
+                office_name=opportunity.get("office_name"),
+                naics_code=opportunity.get("naics_code"),
+                psc_code=opportunity.get("psc_code"),
+                set_aside_code=opportunity.get("set_aside_code"),
+                ui_link=opportunity.get("ui_link"),
             )
             results["new_notices"] += 1
             is_new_notice = True
@@ -2599,12 +2612,12 @@ class SamPullService:
 
                 # Check if notice already exists
                 if opp_notice_id in existing_notice_ids:
-                    # Update existing notice
+                    # Update existing notice with all available metadata
                     existing_notice = next(
                         (n for n in existing_notices if n.sam_notice_id == opp_notice_id), None
                     )
                     if existing_notice:
-                        # Update if description was a URL, is different, or description_url is missing
+                        # Check what needs updating
                         needs_description_update = (
                             existing_notice.description and
                             (existing_notice.description.startswith("http") or
@@ -2614,7 +2627,15 @@ class SamPullService:
                             description_url and
                             not getattr(existing_notice, 'description_url', None)
                         )
-                        if (needs_description_update and description) or needs_url_update:
+                        # Check if any metadata is missing
+                        needs_metadata_update = (
+                            not existing_notice.agency_name or
+                            not existing_notice.raw_data or
+                            not existing_notice.full_parent_path
+                        )
+
+                        # Always update if description, url, or metadata needs updating
+                        if (needs_description_update and description) or needs_url_update or needs_metadata_update:
                             await sam_service.update_notice(
                                 session,
                                 notice_id=existing_notice.id,
@@ -2622,9 +2643,18 @@ class SamPullService:
                                 description=description if needs_description_update else None,
                                 description_url=description_url,
                                 response_deadline=opp.get("response_deadline"),
+                                raw_data=opp.get("raw_data"),
+                                full_parent_path=opp.get("full_parent_path"),
+                                agency_name=opp.get("agency_name"),
+                                bureau_name=opp.get("bureau_name"),
+                                office_name=opp.get("office_name"),
+                                naics_code=opp.get("naics_code"),
+                                psc_code=opp.get("psc_code"),
+                                set_aside_code=opp.get("set_aside_code"),
+                                ui_link=opp.get("ui_link"),
                             )
                             results["notices_updated"] += 1
-                            logger.debug(f"Updated notice {existing_notice.id} with fresh description/url")
+                            logger.debug(f"Updated notice {existing_notice.id} with fresh data from SAM.gov")
                 else:
                     # Create new notice (historical data we didn't have)
                     version_number = len(existing_notices) + results["notices_created"] + 1
@@ -2639,6 +2669,15 @@ class SamPullService:
                         description_url=description_url,
                         posted_date=opp.get("posted_date"),
                         response_deadline=opp.get("response_deadline"),
+                        raw_data=opp.get("raw_data"),
+                        full_parent_path=opp.get("full_parent_path"),
+                        agency_name=opp.get("agency_name"),
+                        bureau_name=opp.get("bureau_name"),
+                        office_name=opp.get("office_name"),
+                        naics_code=opp.get("naics_code"),
+                        psc_code=opp.get("psc_code"),
+                        set_aside_code=opp.get("set_aside_code"),
+                        ui_link=opp.get("ui_link"),
                     )
                     results["notices_created"] += 1
                     logger.info(f"Created new notice {opp_notice_id} (version {version_number})")

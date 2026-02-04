@@ -653,7 +653,9 @@ class SamService:
         agency_name: Optional[str] = None,
         bureau_name: Optional[str] = None,
         office_name: Optional[str] = None,
+        full_parent_path: Optional[str] = None,
         ui_link: Optional[str] = None,
+        raw_data: Optional[Dict[str, Any]] = None,
     ) -> SamNotice:
         """
         Create a new notice.
@@ -682,7 +684,9 @@ class SamService:
             agency_name: Agency name (for standalone notices)
             bureau_name: Bureau name (for standalone notices)
             office_name: Office name (for standalone notices)
+            full_parent_path: Full organization hierarchy
             ui_link: SAM.gov UI link
+            raw_data: Raw SAM.gov API response
 
         Returns:
             Created SamNotice instance
@@ -706,7 +710,9 @@ class SamService:
             agency_name=agency_name,
             bureau_name=bureau_name,
             office_name=office_name,
+            full_parent_path=full_parent_path,
             ui_link=ui_link,
+            raw_data=raw_data,
             summary_status="pending" if solicitation_id is None else None,
         )
 
@@ -820,6 +826,13 @@ class SamService:
         response_deadline: Optional[datetime] = None,
         raw_data: Optional[Dict[str, Any]] = None,
         full_parent_path: Optional[str] = None,
+        agency_name: Optional[str] = None,
+        bureau_name: Optional[str] = None,
+        office_name: Optional[str] = None,
+        naics_code: Optional[str] = None,
+        psc_code: Optional[str] = None,
+        set_aside_code: Optional[str] = None,
+        ui_link: Optional[str] = None,
     ) -> Optional[SamNotice]:
         """
         Update a notice with new data.
@@ -833,6 +846,13 @@ class SamService:
             response_deadline: New response deadline (optional)
             raw_data: Raw SAM.gov API response (optional)
             full_parent_path: Full organization hierarchy (optional)
+            agency_name: Agency name (optional)
+            bureau_name: Bureau name (optional)
+            office_name: Office name (optional)
+            naics_code: NAICS code (optional)
+            psc_code: PSC code (optional)
+            set_aside_code: Set-aside code (optional)
+            ui_link: SAM.gov UI link (optional)
 
         Returns:
             Updated notice or None if not found
@@ -853,6 +873,20 @@ class SamService:
             notice.raw_data = raw_data
         if full_parent_path is not None:
             notice.full_parent_path = full_parent_path
+        if agency_name is not None:
+            notice.agency_name = agency_name
+        if bureau_name is not None:
+            notice.bureau_name = bureau_name
+        if office_name is not None:
+            notice.office_name = office_name
+        if naics_code is not None:
+            notice.naics_code = naics_code
+        if psc_code is not None:
+            notice.psc_code = psc_code
+        if set_aside_code is not None:
+            notice.set_aside_code = set_aside_code
+        if ui_link is not None:
+            notice.ui_link = ui_link
 
         await session.commit()
         await session.refresh(notice)

@@ -1,4 +1,5 @@
 """Add automation_config field to sharepoint_sync_configs and scrape_collections tables.
+
 Revision ID: 20260203_add_automation_config
 Revises: 20260203_add_spawned_by_parent
 Create Date: 2026-02-03 20:00:00.000000

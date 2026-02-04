@@ -1819,24 +1819,77 @@ async def refresh_notice(
                     "error": refresh_results.get("error"),
                 }
 
-            # Standalone notice - just fetch description
+            # Standalone notice - search by notice ID to get full metadata
             results = {
                 "notice_id": str(notice_id),
                 "notice_updated": False,
                 "solicitation_updated": False,
+                "opportunities_found": 0,
             }
 
-            description = await sam_pull_service.fetch_notice_description(
-                notice.sam_notice_id, session, current_user.organization_id
+            # Search SAM.gov by notice ID to get full opportunity data
+            search_config = {
+                "notice_id": notice.sam_notice_id,
+                "active_only": False,  # Get even inactive notices
+            }
+
+            opportunities, total = await sam_pull_service.search_opportunities(
+                search_config,
+                limit=10,
+                session=session,
+                organization_id=current_user.organization_id,
             )
-            if description and description != notice.description:
+
+            results["opportunities_found"] = len(opportunities)
+
+            if opportunities:
+                opp = opportunities[0]
+
+                # Fetch full description
+                description = opp.get("description")
+                description_url = None
+                if description and description.startswith("http"):
+                    description_url = description
+                    full_description = await sam_pull_service.fetch_notice_description(
+                        notice.sam_notice_id, session, current_user.organization_id
+                    )
+                    if full_description:
+                        description = full_description
+
+                # Update notice with all metadata from SAM.gov
                 await sam_service.update_notice(
                     session,
                     notice_id=notice_id,
+                    title=opp.get("title"),
                     description=description,
+                    description_url=description_url,
+                    response_deadline=opp.get("response_deadline"),
+                    raw_data=opp.get("raw_data"),
+                    full_parent_path=opp.get("full_parent_path"),
+                    agency_name=opp.get("agency_name"),
+                    bureau_name=opp.get("bureau_name"),
+                    office_name=opp.get("office_name"),
+                    naics_code=opp.get("naics_code"),
+                    psc_code=opp.get("psc_code"),
+                    set_aside_code=opp.get("set_aside_code"),
+                    ui_link=opp.get("ui_link"),
                 )
                 results["notice_updated"] = True
-                results["description_updated"] = True
+                logger.info(f"Updated standalone notice {notice_id} with full SAM.gov metadata")
+            else:
+                # Fallback: just fetch description if search returns no results
+                description = await sam_pull_service.fetch_notice_description(
+                    notice.sam_notice_id, session, current_user.organization_id
+                )
+                if description and description != notice.description:
+                    await sam_service.update_notice(
+                        session,
+                        notice_id=notice_id,
+                        description=description,
+                    )
+                    results["notice_updated"] = True
+                    results["description_updated"] = True
+                    logger.info(f"Updated standalone notice {notice_id} description only (no SAM.gov search results)")
 
             return results
 
