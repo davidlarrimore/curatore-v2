@@ -100,6 +100,8 @@ export interface WebSocketClientConfig {
   onConnectionChange: (status: ConnectionStatus) => void
   /** Callback when WebSocket fails and needs fallback to polling */
   onFallbackToPolling?: () => void
+  /** Callback when WebSocket receives an authentication error (e.g., expired token) */
+  onAuthError?: () => void
   /** Whether WebSocket is enabled (can be disabled via env var) */
   enabled?: boolean
 }
@@ -134,7 +136,7 @@ export interface WebSocketClient {
  * @returns WebSocket client instance
  */
 export function createWebSocketClient(config: WebSocketClientConfig): WebSocketClient {
-  const { token, onMessage, onConnectionChange, onFallbackToPolling, enabled = true } = config
+  const { token, onMessage, onConnectionChange, onFallbackToPolling, onAuthError, enabled = true } = config
 
   let ws: WebSocket | null = null
   let status: ConnectionStatus = 'disconnected'
@@ -284,9 +286,10 @@ export function createWebSocketClient(config: WebSocketClientConfig): WebSocketC
 
           // Don't retry if we got an auth error
           if (event.code === 4001) {
-            console.warn('WebSocket: Authentication failed, not retrying')
-            setStatus('polling')
-            onFallbackToPolling?.()
+            console.warn('WebSocket: Authentication failed (token expired or invalid)')
+            setStatus('disconnected')
+            // Notify about auth error so the app can redirect to login
+            onAuthError?.()
           } else {
             scheduleReconnect()
           }

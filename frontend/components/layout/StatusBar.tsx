@@ -3,7 +3,7 @@
 
 import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
-import { Activity, Clock, ChevronRight, CheckCircle, XCircle, Loader2 } from 'lucide-react'
+import { Activity, Clock, ChevronRight, CheckCircle, XCircle } from 'lucide-react'
 import { API_PATH_VERSION } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
 import { useQueue } from '@/lib/context-shims'
@@ -103,20 +103,27 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
     >
       {/* Left section */}
       <div className="flex items-center gap-4">
-        {/* API Status */}
-        <div className={clsx(
-          "flex items-center gap-2 px-3 py-1 rounded-lg text-xs font-medium transition-colors",
-          systemStatus.health === 'healthy'
-            ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400"
-            : "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400"
-        )}>
+        {/* API Status - Links to Infrastructure settings */}
+        <button
+          onClick={() => router.push('/settings-admin?tab=infrastructure')}
+          className={clsx(
+            "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
+            systemStatus.health === 'healthy'
+              ? "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/30"
+              : "bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30"
+          )}
+          title="View infrastructure status"
+        >
           <span className={clsx(
-            "w-1.5 h-1.5 rounded-full",
-            systemStatus.health === 'healthy' ? 'bg-emerald-500' : 'bg-red-500'
+            "w-2 h-2 rounded-full",
+            systemStatus.health === 'healthy' ? 'bg-emerald-500' : 'bg-red-500',
+            systemStatus.isLoading && 'animate-pulse'
           )} />
-          <span className="hidden sm:inline">API</span>
-          <span>{systemStatus.health === 'healthy' ? 'Healthy' : 'Error'}</span>
-        </div>
+          <span className="hidden sm:inline">
+            {systemStatus.health === 'healthy' ? 'Healthy' : 'Unhealthy'}
+          </span>
+          <Activity className={clsx("w-3.5 h-3.5", systemStatus.isLoading && 'animate-spin')} />
+        </button>
 
         {/* Connection Status Indicator */}
         <ConnectionStatusIndicator status={connectionStatus} variant="compact" />

@@ -7,7 +7,6 @@ import {
   Menu,
   RotateCcw,
   HelpCircle,
-  Activity,
   AlertTriangle,
   Github,
   Link as LinkIcon,
@@ -22,23 +21,13 @@ import { useAuth } from '@/lib/auth-context'
 import Image from 'next/image'
 import toast from 'react-hot-toast'
 
-interface SystemStatus {
-  health: string
-  llmConnected: boolean
-  isLoading: boolean
-}
-
 interface TopNavigationProps {
   onMenuClick: () => void
-  systemStatus: SystemStatus
-  onStatusRefresh: () => void
   sidebarCollapsed: boolean
 }
 
 export function TopNavigation({
   onMenuClick,
-  systemStatus,
-  onStatusRefresh,
   sidebarCollapsed
 }: TopNavigationProps) {
   const pathname = usePathname()
@@ -159,29 +148,6 @@ export function TopNavigation({
 
         {/* Right side controls */}
         <div className="flex items-center gap-1">
-          {/* Status indicator */}
-          <button
-            onClick={onStatusRefresh}
-            disabled={systemStatus.isLoading}
-            className={`hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
-              systemStatus.health === 'healthy'
-                ? 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/30'
-                : 'bg-red-50 dark:bg-red-900/20 text-red-700 dark:text-red-400 hover:bg-red-100 dark:hover:bg-red-900/30'
-            }`}
-            title="Click to refresh status"
-          >
-            <span className={`w-2 h-2 rounded-full ${
-              systemStatus.health === 'healthy' ? 'bg-emerald-500' : 'bg-red-500'
-            } ${systemStatus.isLoading ? 'animate-pulse' : ''}`}></span>
-            <span className="hidden md:inline">
-              {systemStatus.health === 'healthy' ? 'Healthy' : 'Unhealthy'}
-            </span>
-            <Activity className={`w-3.5 h-3.5 ${systemStatus.isLoading ? 'animate-spin' : ''}`} />
-          </button>
-
-          {/* Divider */}
-          <div className="hidden sm:block w-px h-6 bg-gray-200 dark:bg-gray-700 mx-2"></div>
-
           {/* Quick actions */}
           <div className="flex items-center gap-1">
             <button

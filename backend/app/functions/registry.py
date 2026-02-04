@@ -162,11 +162,13 @@ class FunctionRegistry:
         try:
             from .search.query_model import QueryModelFunction
             from .search.get_content import GetContentFunction
+            from .search.get_asset import GetAssetFunction
             from .search.search_assets import SearchAssetsFunction
             from .search.query_solicitations import QuerySolicitationsFunction
             from .search.query_notifications import QueryNotificationsFunction
             self.register(QueryModelFunction)
             self.register(GetContentFunction)
+            self.register(GetAssetFunction)
             self.register(SearchAssetsFunction)
             self.register(QuerySolicitationsFunction)
             self.register(QueryNotificationsFunction)

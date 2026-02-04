@@ -189,7 +189,7 @@ const UnifiedJobsContext = createContext<UnifiedJobsContextValue | undefined>(un
 // ============================================================================
 
 export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
-  const { token, isAuthenticated } = useAuth()
+  const { token, isAuthenticated, handleUnauthorized } = useAuth()
 
   // State
   const [jobs, setJobs] = useState<UnifiedJob[]>([])
@@ -413,6 +413,13 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
     startPolling()
   }, [])
 
+  // Handle WebSocket auth error (token expired)
+  // This triggers the auth context to redirect to login
+  const handleWebSocketAuthError = useCallback(() => {
+    console.log('WebSocket auth error - triggering session expiration')
+    handleUnauthorized()
+  }, [handleUnauthorized])
+
   // ============================================================================
   // Polling (Fallback)
   // ============================================================================
@@ -521,6 +528,7 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
         onMessage: handleWebSocketMessage,
         onConnectionChange: handleConnectionChange,
         onFallbackToPolling: handleFallbackToPolling,
+        onAuthError: handleWebSocketAuthError,
         enabled: true,
       })
     } catch (err) {
@@ -534,7 +542,7 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
       wsClientRef.current = null
       stopPolling()
     }
-  }, [token, isAuthenticated, handleWebSocketMessage, handleConnectionChange, handleFallbackToPolling, startPolling, stopPolling])
+  }, [token, isAuthenticated, handleWebSocketMessage, handleConnectionChange, handleFallbackToPolling, handleWebSocketAuthError, startPolling, stopPolling])
 
   // Start polling when in polling mode
   useEffect(() => {
@@ -620,10 +628,19 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
   // ============================================================================
 
   const hasActiveJobs = jobs.length > 0
+  // Count active jobs across ALL queues, not just extraction
   const activeCount = queueStats
-    ? queueStats.extraction_queue.pending +
-      queueStats.extraction_queue.submitted +
-      queueStats.extraction_queue.running
+    ? (
+        // Extraction queue (pending + submitted + running)
+        queueStats.extraction_queue.pending +
+        queueStats.extraction_queue.submitted +
+        queueStats.extraction_queue.running +
+        // Other Celery queues (these show queued tasks, which are active)
+        queueStats.celery_queues.sharepoint +
+        queueStats.celery_queues.sam +
+        queueStats.celery_queues.scrape +
+        queueStats.celery_queues.maintenance
+      )
     : 0
 
   // ============================================================================

@@ -71,6 +71,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const isRedirecting = useRef(false)
   const warningTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
   const logoutTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const warningToastId = useRef<string | null>(null)
 
   const getTokenExpiry = (accessToken: string): number | null => {
     try {
@@ -93,6 +94,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       clearTimeout(logoutTimeoutRef.current)
       logoutTimeoutRef.current = null
     }
+    // Dismiss any active warning toast
+    if (warningToastId.current) {
+      toast.dismiss(warningToastId.current)
+      warningToastId.current = null
+    }
+    // Also dismiss by ID in case of any edge cases
+    toast.dismiss('session-expiring-warning')
   }, [])
 
   // Load user data from token
@@ -278,8 +286,14 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const warningDelay = Math.max(timeUntilExpiry - SESSION_WARNING_THRESHOLD, 0)
 
-    warningTimeoutRef.current = setTimeout(() => {
-      toast((toastInstance) => (
+    // Helper to show the session warning toast
+    const showSessionWarningToast = () => {
+      // Dismiss any existing warning toast first
+      if (warningToastId.current) {
+        toast.dismiss(warningToastId.current)
+      }
+
+      warningToastId.current = toast((toastInstance) => (
         <div className="flex flex-col gap-3">
           <div>
             <p className="text-sm font-medium text-slate-900">Session expiring soon</p>
@@ -290,6 +304,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
               className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
               onClick={async () => {
                 toast.dismiss(toastInstance.id)
+                warningToastId.current = null
                 const success = await extendSession()
                 if (success) {
                   toast.success('Session extended')
@@ -303,7 +318,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             </button>
             <button
               className="px-3 py-1.5 text-xs font-medium text-slate-600 rounded-md hover:text-slate-900 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 focus-visible:ring-offset-2"
-              onClick={() => toast.dismiss(toastInstance.id)}
+              onClick={() => {
+                toast.dismiss(toastInstance.id)
+                warningToastId.current = null
+              }}
               type="button"
             >
               Dismiss
@@ -312,9 +330,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         </div>
       ), {
         icon: '⚠️',
-        duration: 8000,
+        duration: Infinity, // Don't auto-dismiss - let user interact or let logout timer handle it
+        id: 'session-expiring-warning', // Use consistent ID for easy dismissal
       })
-    }, warningDelay)
+    }
+
+    warningTimeoutRef.current = setTimeout(showSessionWarningToast, warningDelay)
 
     logoutTimeoutRef.current = setTimeout(() => {
       logout('session_expired')
@@ -353,6 +374,81 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     window.addEventListener('auth:unauthorized', handleUnauthorizedEvent)
     return () => window.removeEventListener('auth:unauthorized', handleUnauthorizedEvent)
   }, [handleUnauthorized])
+
+  // Visibility change detection - check token expiry when tab becomes visible
+  // This handles the case where JavaScript timers were throttled while the tab was in background
+  useEffect(() => {
+    const handleVisibilityChange = () => {
+      if (document.visibilityState !== 'visible' || !token) return
+
+      const expiry = getTokenExpiry(token)
+      if (!expiry) return
+
+      const timeUntilExpiry = expiry - Date.now()
+
+      if (timeUntilExpiry <= 0) {
+        // Token has already expired - logout immediately
+        console.log('Token expired while tab was inactive - logging out')
+        // Dismiss any stale warning toast
+        if (warningToastId.current) {
+          toast.dismiss(warningToastId.current)
+          warningToastId.current = null
+        }
+        logout('session_expired')
+      } else if (timeUntilExpiry <= SESSION_WARNING_THRESHOLD) {
+        // Token is about to expire - show warning toast if not already shown
+        // The existing timers may have been throttled, so show it now
+        if (!warningToastId.current) {
+          // Dismiss any existing warning toast first
+          toast.dismiss('session-expiring-warning')
+
+          warningToastId.current = toast((toastInstance) => (
+            <div className="flex flex-col gap-3">
+              <div>
+                <p className="text-sm font-medium text-slate-900">Session expiring soon</p>
+                <p className="text-sm text-slate-600">Your session will expire soon. Save your work or extend it.</p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  className="px-3 py-1.5 text-xs font-medium text-white bg-blue-600 rounded-md shadow-sm hover:bg-blue-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                  onClick={async () => {
+                    toast.dismiss(toastInstance.id)
+                    warningToastId.current = null
+                    const success = await extendSession()
+                    if (success) {
+                      toast.success('Session extended')
+                    } else {
+                      toast.error('Unable to extend session')
+                    }
+                  }}
+                  type="button"
+                >
+                  Extend session
+                </button>
+                <button
+                  className="px-3 py-1.5 text-xs font-medium text-slate-600 rounded-md hover:text-slate-900 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 focus-visible:ring-offset-2"
+                  onClick={() => {
+                    toast.dismiss(toastInstance.id)
+                    warningToastId.current = null
+                  }}
+                  type="button"
+                >
+                  Dismiss
+                </button>
+              </div>
+            </div>
+          ), {
+            icon: '⚠️',
+            duration: Infinity,
+            id: 'session-expiring-warning',
+          })
+        }
+      }
+    }
+
+    document.addEventListener('visibilitychange', handleVisibilityChange)
+    return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
+  }, [token, logout, extendSession])
 
   const refreshUserData = async () => {
     if (!token) return

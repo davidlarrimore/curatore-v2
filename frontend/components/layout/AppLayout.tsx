@@ -303,9 +303,7 @@ export function AppLayout({ children }: AppLayoutProps) {
         {/* Top Navigation - Pass sidebar state */}
         <TopNavigation
           onMenuClick={() => setSidebarOpen(true)}
-          systemStatus={systemStatus}
-          onStatusRefresh={loadSystemStatus}
-          sidebarCollapsed={sidebarCollapsed} // Pass sidebar state
+          sidebarCollapsed={sidebarCollapsed}
         />
 
         <div className="flex-1 flex overflow-hidden">

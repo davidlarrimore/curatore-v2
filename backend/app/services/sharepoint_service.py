@@ -1023,6 +1023,36 @@ async def sharepoint_download(
     }
 
 
+def _extract_relative_path_from_parent_ref(path: str) -> str:
+    """
+    Extract relative folder path from Microsoft Graph parentReference.path.
+
+    Microsoft Graph returns paths in the format:
+    - /drive/root:/path/to/folder
+    - /drives/{drive_id}/root:/path/to/folder
+
+    This function extracts just the relative path after '/root:'.
+
+    Args:
+        path: Full parentReference.path from Microsoft Graph
+
+    Returns:
+        Relative path (e.g., "Opportunities/GSA/TTS/Project")
+    """
+    if not path:
+        return ""
+
+    # Find /root: and take everything after it
+    root_marker = "/root:"
+    if root_marker in path:
+        # Extract everything after /root:
+        relative_path = path.split(root_marker, 1)[1]
+        return relative_path.strip("/")
+
+    # Fallback: strip leading/trailing slashes
+    return path.strip("/")
+
+
 async def sharepoint_delta_query(
     drive_id: str,
     item_id: str,
@@ -1130,7 +1160,7 @@ async def sharepoint_delta_query(
                         "id": item.get("id"),
                         "name": item.get("name", ""),
                         "type": "file",
-                        "folder": parent_ref.get("path", "").replace("/drive/root:", "").strip("/"),
+                        "folder": _extract_relative_path_from_parent_ref(parent_ref.get("path", "")),
                         "size": item.get("size"),
                         "mime": file_info.get("mimeType"),
                         "file_type": file_info.get("mimeType"),
@@ -1153,7 +1183,7 @@ async def sharepoint_delta_query(
                         "id": item.get("id"),
                         "name": item.get("name", ""),
                         "type": "folder",
-                        "folder": parent_ref.get("path", "").replace("/drive/root:", "").strip("/"),
+                        "folder": _extract_relative_path_from_parent_ref(parent_ref.get("path", "")),
                         "web_url": item.get("webUrl"),
                         "drive_id": parent_ref.get("driveId") or drive_id,
                         "_change_type": item["_change_type"],
