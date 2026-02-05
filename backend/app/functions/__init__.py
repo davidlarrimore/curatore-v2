@@ -39,6 +39,13 @@ from .registry import (
     list_functions,
     initialize_functions,
 )
+from .content import (
+    ContentItem,
+    ContentService,
+    ContentTypeRegistry,
+    content_service,
+    content_type_registry,
+)
 
 
 class FunctionNamespace:
@@ -108,6 +115,12 @@ __all__ = [
     "get_function",
     "list_functions",
     "initialize_functions",
+    # Content
+    "ContentItem",
+    "ContentService",
+    "ContentTypeRegistry",
+    "content_service",
+    "content_type_registry",
     # Namespace
     "fn",
 ]

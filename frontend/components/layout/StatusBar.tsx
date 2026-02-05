@@ -1,9 +1,9 @@
 // components/layout/StatusBar.tsx
 'use client'
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect, useRef, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
-import { Activity, Clock, ChevronRight, CheckCircle, XCircle } from 'lucide-react'
+import { Activity, Clock, ChevronRight, CheckCircle, XCircle, Layers, Play, AlertCircle } from 'lucide-react'
 import { API_PATH_VERSION } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
 import { useQueue } from '@/lib/context-shims'
@@ -31,7 +31,7 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
   const { isAuthenticated } = useAuth()
   // Use both legacy and unified context during migration
   const { stats: legacyStats, activeCount: legacyActiveCount } = useQueue()
-  const { queueStats, activeCount: unifiedActiveCount, connectionStatus, hasActiveJobs } = useUnifiedJobs()
+  const { queueStats, activeCount: unifiedActiveCount, connectionStatus, hasActiveJobs, jobs } = useUnifiedJobs()
 
   // Prefer unified context stats, fall back to legacy
   const stats = queueStats || legacyStats
@@ -41,10 +41,56 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
   const [currentTime, setCurrentTime] = useState<Date | null>(null)
   const [isClient, setIsClient] = useState(false)
 
-  // Derive stats from queue context
-  const completedRuns24h = stats?.recent_24h.completed || 0
-  const failedRuns24h = stats?.recent_24h.failed || 0
-  const totalRuns24h = completedRuns24h + failedRuns24h + (stats?.recent_24h.timed_out || 0)
+  // Track previous values for animations
+  const prevActiveCount = useRef(activeCount)
+  const [activeCountChanged, setActiveCountChanged] = useState(false)
+
+  // Calculate job counts
+  const jobCounts = useMemo(() => {
+    const queued = stats ? (
+      stats.celery_queues.extraction +
+      stats.celery_queues.sam +
+      stats.celery_queues.scrape +
+      stats.celery_queues.sharepoint +
+      stats.celery_queues.maintenance +
+      stats.celery_queues.processing_priority
+    ) : 0
+
+    const pending = stats?.extraction_queue.pending || 0
+    const submitted = stats?.extraction_queue.submitted || 0
+    const running = Math.max(
+      (stats?.extraction_queue.running || 0) + (stats?.workers.tasks_running || 0),
+      jobs.length // Include tracked jobs
+    )
+
+    return { queued, pending, submitted, running }
+  }, [stats, jobs.length])
+
+  // Calculate recent stats (5 min)
+  const recentStats = useMemo(() => {
+    const completed = stats?.recent_5m?.completed || 0
+    const failed = stats?.recent_5m?.failed || 0
+    const timedOut = stats?.recent_5m?.timed_out || 0
+    const total = completed + failed + timedOut
+    const failureRate = total > 0 ? (failed + timedOut) / total : 0
+
+    // Determine health status
+    let health: 'good' | 'warning' | 'error' = 'good'
+    if (failureRate >= 0.2) health = 'error'
+    else if (failureRate > 0) health = 'warning'
+
+    return { completed, failed, timedOut, total, failureRate, health }
+  }, [stats])
+
+  // Animate on active count change
+  useEffect(() => {
+    if (activeCount !== prevActiveCount.current) {
+      setActiveCountChanged(true)
+      const timer = setTimeout(() => setActiveCountChanged(false), 1000)
+      prevActiveCount.current = activeCount
+      return () => clearTimeout(timer)
+    }
+  }, [activeCount])
 
   // Fix hydration issue by only showing time after client-side hydration
   useEffect(() => {
@@ -131,61 +177,91 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
         {/* Divider */}
         <div className="hidden lg:block w-px h-4 bg-gray-200 dark:bg-gray-700"></div>
 
-        {/* Processing Button - Links to Queue Admin */}
+        {/* Jobs Status - Links to Queue Admin */}
         <button
           onClick={() => router.push('/admin/queue')}
           className={clsx(
-            "hidden lg:flex items-center gap-3 px-3 py-1.5 rounded-lg transition-all group",
-            activeCount > 0
-              ? "bg-indigo-50 dark:bg-indigo-900/20 hover:bg-indigo-100 dark:hover:bg-indigo-900/30"
-              : "hover:bg-gray-100 dark:hover:bg-gray-800"
+            "hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all group",
+            "hover:bg-gray-100 dark:hover:bg-gray-800",
+            activeCountChanged && "ring-2 ring-indigo-400 ring-opacity-50"
           )}
+          title="View job queue"
         >
-          <div className="flex items-center gap-2">
-            <Activity className={clsx(
-              "w-4 h-4",
-              activeCount > 0 ? 'text-indigo-600 dark:text-indigo-400' : 'text-gray-500 dark:text-gray-400'
-            )} />
-            <span className={clsx(
-              "text-xs font-medium",
-              activeCount > 0 ? 'text-indigo-700 dark:text-indigo-300' : 'text-gray-700 dark:text-gray-300'
-            )}>
-              Processing
-            </span>
-          </div>
+          {/* Active jobs indicator */}
+          {jobCounts.running > 0 && (
+            <div className="flex items-center gap-1.5 px-2 py-0.5 rounded-md bg-indigo-100 dark:bg-indigo-900/30">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+              </span>
+              <span className="font-mono text-xs font-medium text-indigo-700 dark:text-indigo-300">
+                {jobCounts.running}
+              </span>
+              <Play className="w-3 h-3 text-indigo-600 dark:text-indigo-400" />
+            </div>
+          )}
 
-          {/* Run stats */}
-          <div className="flex items-center gap-2 text-xs">
-            {activeCount > 0 ? (
-              <div className="flex items-center gap-1.5 text-indigo-600 dark:text-indigo-400">
-                <span className="relative flex h-2 w-2">
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-indigo-400 opacity-75"></span>
-                  <span className="relative inline-flex rounded-full h-2 w-2 bg-indigo-500"></span>
+          {/* Queued jobs indicator */}
+          {jobCounts.queued > 0 && (
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-amber-100 dark:bg-amber-900/30">
+              <span className="font-mono text-xs font-medium text-amber-700 dark:text-amber-300">
+                {jobCounts.queued}
+              </span>
+              <Layers className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+            </div>
+          )}
+
+          {/* Pending jobs indicator */}
+          {jobCounts.pending > 0 && (
+            <div className="flex items-center gap-1 px-2 py-0.5 rounded-md bg-gray-100 dark:bg-gray-700">
+              <span className="font-mono text-xs font-medium text-gray-600 dark:text-gray-300">
+                {jobCounts.pending}
+              </span>
+              <Clock className="w-3 h-3 text-gray-500 dark:text-gray-400" />
+            </div>
+          )}
+
+          {/* Divider when there's activity */}
+          {(jobCounts.running > 0 || jobCounts.queued > 0 || jobCounts.pending > 0) && recentStats.total > 0 && (
+            <div className="w-px h-4 bg-gray-200 dark:bg-gray-700"></div>
+          )}
+
+          {/* Recent completions (5 min) with health indicator */}
+          {recentStats.total > 0 ? (
+            <div className={clsx(
+              "flex items-center gap-1 px-2 py-0.5 rounded-md",
+              recentStats.health === 'good' && "bg-emerald-100 dark:bg-emerald-900/30",
+              recentStats.health === 'warning' && "bg-amber-100 dark:bg-amber-900/30",
+              recentStats.health === 'error' && "bg-red-100 dark:bg-red-900/30",
+            )}>
+              <span className={clsx(
+                "font-mono text-xs font-medium",
+                recentStats.health === 'good' && "text-emerald-700 dark:text-emerald-300",
+                recentStats.health === 'warning' && "text-amber-700 dark:text-amber-300",
+                recentStats.health === 'error' && "text-red-700 dark:text-red-300",
+              )}>
+                {recentStats.completed}
+              </span>
+              {recentStats.health === 'good' ? (
+                <CheckCircle className="w-3 h-3 text-emerald-600 dark:text-emerald-400" />
+              ) : recentStats.health === 'warning' ? (
+                <AlertCircle className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+              ) : (
+                <XCircle className="w-3 h-3 text-red-600 dark:text-red-400" />
+              )}
+              {(recentStats.failed + recentStats.timedOut) > 0 && (
+                <span className={clsx(
+                  "font-mono text-xs",
+                  recentStats.health === 'warning' && "text-amber-600 dark:text-amber-400",
+                  recentStats.health === 'error' && "text-red-600 dark:text-red-400",
+                )}>
+                  /{recentStats.failed + recentStats.timedOut}
                 </span>
-                <span className="font-mono font-medium">{activeCount}</span>
-                <span className="text-indigo-500 dark:text-indigo-400">active</span>
-              </div>
-            ) : totalRuns24h > 0 ? (
-              <div className="flex items-center gap-2 text-gray-500 dark:text-gray-400">
-                <div className="flex items-center gap-1">
-                  <CheckCircle className="w-3 h-3 text-emerald-500" />
-                  <span className="font-mono text-emerald-600 dark:text-emerald-400">{completedRuns24h}</span>
-                </div>
-                {failedRuns24h > 0 && (
-                  <>
-                    <span className="text-gray-300 dark:text-gray-600">|</span>
-                    <div className="flex items-center gap-1">
-                      <XCircle className="w-3 h-3 text-red-500" />
-                      <span className="font-mono text-red-600 dark:text-red-400">{failedRuns24h}</span>
-                    </div>
-                  </>
-                )}
-                <span className="text-gray-400">today</span>
-              </div>
-            ) : (
-              <span className="text-gray-400 dark:text-gray-500">No recent activity</span>
-            )}
-          </div>
+              )}
+            </div>
+          ) : (jobCounts.running === 0 && jobCounts.queued === 0 && jobCounts.pending === 0) && (
+            <span className="text-xs text-gray-400 dark:text-gray-500">No activity</span>
+          )}
 
           <ChevronRight className="w-3.5 h-3.5 text-gray-400 group-hover:text-gray-600 dark:group-hover:text-gray-300 transition-colors" />
         </button>

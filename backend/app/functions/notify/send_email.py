@@ -5,7 +5,7 @@ Send Email function - Send email notifications.
 Sends emails using configured email service.
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union
 import logging
 
 from ..base import (
@@ -41,8 +41,8 @@ class SendEmailFunction(BaseFunction):
         parameters=[
             ParameterDoc(
                 name="to",
-                type="list[str]",
-                description="Recipient email addresses",
+                type="list[str] | str",
+                description="Recipient email addresses (list, single email, or comma-separated string)",
                 required=True,
             ),
             ParameterDoc(
@@ -66,8 +66,8 @@ class SendEmailFunction(BaseFunction):
             ),
             ParameterDoc(
                 name="cc",
-                type="list[str]",
-                description="CC recipients",
+                type="list[str] | str",
+                description="CC recipients (list, single email, or comma-separated string)",
                 required=False,
                 default=None,
             ),
@@ -94,13 +94,55 @@ class SendEmailFunction(BaseFunction):
         ],
     )
 
+    def _normalize_recipients(self, recipients: Any) -> List[str]:
+        """
+        Normalize recipients to a list of email addresses.
+
+        Handles:
+        - Single email string: "user@example.com"
+        - Comma-separated string: "a@example.com, b@example.com"
+        - List of emails: ["a@example.com", "b@example.com"]
+        - String representation of list: "['a@example.com']"
+        """
+        if not recipients:
+            return []
+
+        # Already a list
+        if isinstance(recipients, list):
+            return [r.strip() for r in recipients if r and isinstance(r, str)]
+
+        # String handling
+        if isinstance(recipients, str):
+            # Handle string representation of list: "['email@example.com']"
+            if recipients.startswith("[") and recipients.endswith("]"):
+                # Parse as a simple list - strip brackets and quotes
+                inner = recipients[1:-1].strip()
+                if not inner:
+                    return []
+                # Split by comma, strip quotes and whitespace
+                parts = inner.split(",")
+                return [
+                    p.strip().strip("'").strip('"').strip()
+                    for p in parts
+                    if p.strip().strip("'").strip('"').strip()
+                ]
+
+            # Comma-separated string
+            if "," in recipients:
+                return [r.strip() for r in recipients.split(",") if r.strip()]
+
+            # Single email
+            return [recipients.strip()] if recipients.strip() else []
+
+        return []
+
     async def execute(self, ctx: FunctionContext, **params) -> FunctionResult:
         """Send email."""
-        to = params["to"]
+        to = self._normalize_recipients(params["to"])
         subject = params["subject"]
         body = params["body"]
         html = params.get("html", False)
-        cc = params.get("cc") or []
+        cc = self._normalize_recipients(params.get("cc"))
         attachments = params.get("attachments") or []
 
         if not to:

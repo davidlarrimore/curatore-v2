@@ -31,11 +31,15 @@ import {
   CheckCircle,
   Award,
   XCircle,
+  Type,
 } from 'lucide-react'
 
 // Sort types
 type SortColumn = 'solicitation_number' | 'title' | 'agency' | 'type' | 'status' | 'deadline'
 type SortDirection = 'asc' | 'desc'
+
+// Search mode
+type SearchMode = 'keyword' | 'semantic'
 
 // Timeframe options
 type TimeframeFilter = 'all' | '24h' | '7d' | '30d'
@@ -124,12 +128,17 @@ function SamSolicitationsContent() {
 
   // Filters and Search
   const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '')
+  const [searchMode, setSearchMode] = useState<SearchMode>('keyword')
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set())
   const [selectedNoticeTypes, setSelectedNoticeTypes] = useState<Set<string>>(new Set())
   const [selectedAgencies, setSelectedAgencies] = useState<Set<string>>(new Set())
   const [timeframeFilter, setTimeframeFilter] = useState<TimeframeFilter>('all')
   const [page, setPage] = useState(1)
   const pageSize = 25
+
+  // Semantic search results (separate from all solicitations for faceting)
+  const [semanticResults, setSemanticResults] = useState<SamSolicitation[]>([])
+  const [isSemanticSearch, setIsSemanticSearch] = useState(false)
 
   // Sorting
   const [sortColumn, setSortColumn] = useState<SortColumn>('deadline')
@@ -166,24 +175,55 @@ function SamSolicitationsContent() {
 
     setIsLoading(true)
     setError('')
+    setIsSemanticSearch(false)
 
     try {
-      // Fetch more solicitations to compute accurate facet counts
+      // Always load base solicitations for facet counts
       const params: any = {
         limit: 500,
         offset: 0,
       }
-      if (searchQuery) params.keyword = searchQuery
+      // Only use keyword filter in keyword mode
+      if (searchQuery && searchMode === 'keyword') {
+        params.keyword = searchQuery
+      }
 
       const data = await samApi.listSolicitations(token, params)
       setAllSolicitations(data.items)
       setTotal(data.total)
+
+      // If semantic mode with a query, also do semantic search
+      if (searchMode === 'semantic' && searchQuery.trim()) {
+        setIsSemanticSearch(true)
+        const semanticData = await samApi.searchSam(token, {
+          query: searchQuery,
+          source_types: ['sam_solicitation'],
+          limit: 100,
+        })
+
+        // Convert semantic results to solicitation format for display
+        // The semantic API returns asset_id which is the solicitation ID
+        const solIds = new Set(semanticData.hits.map(h => h.asset_id))
+
+        // Sort by semantic score (preserve order from semantic results)
+        const orderedSolicitations: SamSolicitation[] = []
+        for (const hit of semanticData.hits) {
+          const sol = data.items.find(s => s.id === hit.asset_id)
+          if (sol) {
+            orderedSolicitations.push(sol)
+          }
+        }
+
+        setSemanticResults(orderedSolicitations)
+      } else {
+        setSemanticResults([])
+      }
     } catch (err: any) {
       setError(err.message || 'Failed to load solicitations')
     } finally {
       setIsLoading(false)
     }
-  }, [token, searchQuery])
+  }, [token, searchQuery, searchMode])
 
   useEffect(() => {
     if (token) {
@@ -254,7 +294,10 @@ function SamSolicitationsContent() {
 
   // Filter and sort solicitations
   const filteredAndSortedSolicitations = useMemo(() => {
-    let result = [...allSolicitations]
+    // Use semantic results if in semantic search mode with results
+    let result = isSemanticSearch && semanticResults.length > 0
+      ? [...semanticResults]
+      : [...allSolicitations]
 
     // Filter by selected statuses
     if (selectedStatuses.size > 0) {
@@ -276,39 +319,41 @@ function SamSolicitationsContent() {
       result = result.filter(s => isDeadlineWithinTimeframe(s.response_deadline, timeframeFilter))
     }
 
-    // Sort
-    result.sort((a, b) => {
-      let comparison = 0
+    // Sort (skip sorting for semantic results to preserve relevance order)
+    if (!isSemanticSearch || semanticResults.length === 0) {
+      result.sort((a, b) => {
+        let comparison = 0
 
-      switch (sortColumn) {
-        case 'solicitation_number':
-          comparison = (a.solicitation_number || '').localeCompare(b.solicitation_number || '')
-          break
-        case 'title':
-          comparison = (a.title || '').localeCompare(b.title || '')
-          break
-        case 'agency':
-          comparison = (a.agency_name || '').localeCompare(b.agency_name || '')
-          break
-        case 'type':
-          comparison = (a.notice_type || '').localeCompare(b.notice_type || '')
-          break
-        case 'status':
-          comparison = (a.status || '').localeCompare(b.status || '')
-          break
-        case 'deadline': {
-          const aDate = a.response_deadline ? new Date(a.response_deadline).getTime() : 0
-          const bDate = b.response_deadline ? new Date(b.response_deadline).getTime() : 0
-          comparison = aDate - bDate
-          break
+        switch (sortColumn) {
+          case 'solicitation_number':
+            comparison = (a.solicitation_number || '').localeCompare(b.solicitation_number || '')
+            break
+          case 'title':
+            comparison = (a.title || '').localeCompare(b.title || '')
+            break
+          case 'agency':
+            comparison = (a.agency_name || '').localeCompare(b.agency_name || '')
+            break
+          case 'type':
+            comparison = (a.notice_type || '').localeCompare(b.notice_type || '')
+            break
+          case 'status':
+            comparison = (a.status || '').localeCompare(b.status || '')
+            break
+          case 'deadline': {
+            const aDate = a.response_deadline ? new Date(a.response_deadline).getTime() : 0
+            const bDate = b.response_deadline ? new Date(b.response_deadline).getTime() : 0
+            comparison = aDate - bDate
+            break
+          }
         }
-      }
 
-      return sortDirection === 'asc' ? comparison : -comparison
-    })
+        return sortDirection === 'asc' ? comparison : -comparison
+      })
+    }
 
     return result
-  }, [allSolicitations, selectedStatuses, selectedNoticeTypes, selectedAgencies, timeframeFilter, sortColumn, sortDirection])
+  }, [allSolicitations, semanticResults, isSemanticSearch, selectedStatuses, selectedNoticeTypes, selectedAgencies, timeframeFilter, sortColumn, sortDirection])
 
   // Paginate
   const paginatedSolicitations = useMemo(() => {
@@ -444,8 +489,40 @@ function SamSolicitationsContent() {
         {/* Search Bar */}
         <div className="mb-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
           <div className="flex gap-4">
+            {/* Search Mode Toggle */}
+            <div className="flex items-center bg-gray-100 dark:bg-gray-700 rounded-lg p-1">
+              <button
+                onClick={() => setSearchMode('keyword')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  searchMode === 'keyword'
+                    ? 'bg-white dark:bg-gray-600 text-gray-900 dark:text-white shadow-sm'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                }`}
+                title="Keyword search - exact text matching"
+              >
+                <Type className="w-4 h-4" />
+                <span className="hidden sm:inline">Keyword</span>
+              </button>
+              <button
+                onClick={() => setSearchMode('semantic')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                  searchMode === 'semantic'
+                    ? 'bg-purple-100 dark:bg-purple-900/50 text-purple-700 dark:text-purple-300 shadow-sm'
+                    : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white'
+                }`}
+                title="Semantic search - AI-powered meaning-based search"
+              >
+                <Sparkles className="w-4 h-4" />
+                <span className="hidden sm:inline">Semantic</span>
+              </button>
+            </div>
+
             <div className="flex-1 relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              {searchMode === 'semantic' ? (
+                <Sparkles className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-purple-500" />
+              ) : (
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+              )}
               <input
                 type="text"
                 value={searchQuery}
@@ -453,8 +530,15 @@ function SamSolicitationsContent() {
                   setSearchQuery(e.target.value)
                   setPage(1)
                 }}
-                placeholder="Search by title, solicitation number, or description..."
-                className="w-full pl-10 pr-4 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
+                placeholder={searchMode === 'semantic'
+                  ? "Search by meaning... e.g., 'IT modernization for federal agencies'"
+                  : "Search by title, solicitation number, or description..."
+                }
+                className={`w-full pl-10 pr-4 py-2 text-sm border rounded-lg focus:outline-none focus:ring-2 bg-white dark:bg-gray-900 text-gray-900 dark:text-white ${
+                  searchMode === 'semantic'
+                    ? 'border-purple-300 dark:border-purple-700 focus:ring-purple-500'
+                    : 'border-gray-200 dark:border-gray-700 focus:ring-indigo-500'
+                }`}
               />
             </div>
             {hasFilters && (
@@ -468,6 +552,12 @@ function SamSolicitationsContent() {
               </Button>
             )}
           </div>
+          {searchMode === 'semantic' && (
+            <p className="mt-2 text-xs text-purple-600 dark:text-purple-400">
+              <Sparkles className="w-3 h-3 inline mr-1" />
+              Semantic search finds related content even without exact keyword matches
+            </p>
+          )}
         </div>
 
         {/* Quick Filter Panels */}

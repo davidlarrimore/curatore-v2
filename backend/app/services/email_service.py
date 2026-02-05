@@ -530,12 +530,28 @@ class MicrosoftGraphEmailBackend(EmailBackend):
             if attachments:
                 graph_attachments = []
                 for att in attachments:
-                    # Content should be base64 encoded
+                    # Content can be: raw bytes, raw string, or already base64-encoded string
                     content = att.get("content", "")
+                    is_base64 = att.get("is_base64", False)
+
                     if isinstance(content, bytes):
+                        # Raw bytes - encode to base64
                         content_b64 = base64.b64encode(content).decode("utf-8")
+                    elif is_base64:
+                        # Explicitly marked as base64 - use as-is
+                        content_b64 = content
+                    elif isinstance(content, str):
+                        # Check if it looks like base64 (e.g., from generate_document)
+                        # Base64 for binary files: long string of alphanumeric + /+ with = padding
+                        import re
+                        if len(content) > 100 and re.match(r'^[A-Za-z0-9+/]+=*$', content.replace('\n', '').replace('\r', '')):
+                            # Likely already base64 encoded - use as-is
+                            content_b64 = content.replace('\n', '').replace('\r', '')
+                        else:
+                            # Raw string - encode to base64
+                            content_b64 = base64.b64encode(content.encode("utf-8")).decode("utf-8")
                     else:
-                        content_b64 = base64.b64encode(content.encode("utf-8")).decode("utf-8")
+                        content_b64 = base64.b64encode(str(content).encode("utf-8")).decode("utf-8")
 
                     graph_attachments.append({
                         "@odata.type": "#microsoft.graph.fileAttachment",

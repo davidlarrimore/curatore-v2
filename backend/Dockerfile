@@ -17,12 +17,19 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /app
 
 # System deps (add/remove as needed for OCR/PDF/image support)
+# WeasyPrint requires: libcairo2, libpango, libgdk-pixbuf, libffi
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     curl \
     ghostscript \
     poppler-utils \
     tesseract-ocr \
+    libcairo2 \
+    libpango-1.0-0 \
+    libpangocairo-1.0-0 \
+    libgdk-pixbuf-2.0-0 \
+    libffi-dev \
+    shared-mime-info \
  && rm -rf /var/lib/apt/lists/*
 
 # Python deps

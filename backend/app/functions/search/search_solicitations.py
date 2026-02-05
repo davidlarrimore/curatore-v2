@@ -1,8 +1,9 @@
-# backend/app/functions/search/query_solicitations.py
+# backend/app/functions/search/search_solicitations.py
 """
-Query Solicitations function - Query SAM.gov solicitations.
+Search Solicitations function - Search SAM.gov solicitations.
 
-Query and filter SAM.gov solicitations from the database.
+Search and filter SAM.gov solicitations from the database.
+Returns results as ContentItem instances for unified handling.
 """
 
 from typing import Any, Dict, List, Optional
@@ -20,18 +21,20 @@ from ..base import (
     ParameterDoc,
 )
 from ..context import FunctionContext
+from ..content import ContentItem
 
-logger = logging.getLogger("curatore.functions.search.query_solicitations")
+logger = logging.getLogger("curatore.functions.search.search_solicitations")
 
 
-class QuerySolicitationsFunction(BaseFunction):
+class SearchSolicitationsFunction(BaseFunction):
     """
-    Query SAM.gov solicitations from the database.
+    Search SAM.gov solicitations from the database.
 
     Filters and retrieves federal contract opportunities.
+    Returns ContentItem instances for unified handling.
 
     Example:
-        result = await fn.query_solicitations(ctx,
+        result = await fn.search_solicitations(ctx,
             naics_codes=["541512", "541519"],
             posted_within_days=7,
             response_deadline_after="today",
@@ -39,9 +42,9 @@ class QuerySolicitationsFunction(BaseFunction):
     """
 
     meta = FunctionMeta(
-        name="query_solicitations",
+        name="search_solicitations",
         category=FunctionCategory.SEARCH,
-        description="Query SAM.gov solicitations with filters",
+        description="Search SAM.gov solicitations with filters, returns ContentItem list",
         parameters=[
             ParameterDoc(
                 name="naics_codes",
@@ -129,8 +132,8 @@ class QuerySolicitationsFunction(BaseFunction):
                 default=50,
             ),
         ],
-        returns="list[dict]: Matching solicitations",
-        tags=["search", "sam", "solicitations"],
+        returns="list[ContentItem]: Matching solicitations as ContentItem instances",
+        tags=["search", "sam", "solicitations", "content"],
         requires_llm=False,
         examples=[
             {
@@ -192,13 +195,16 @@ class QuerySolicitationsFunction(BaseFunction):
                 if set_aside_conditions:
                     conditions.append(or_(*set_aside_conditions))
 
-            # Type filter
+            # Type filter (notice_type)
             if types:
-                conditions.append(SamSolicitation.type.in_(types))
+                conditions.append(SamSolicitation.notice_type.in_(types))
 
             # Posted date filter
+            # Use start of day (midnight) for cutoff to handle SAM.gov date-only timestamps
             if posted_within_days:
-                cutoff_date = datetime.utcnow() - timedelta(days=posted_within_days)
+                cutoff_date = (datetime.utcnow() - timedelta(days=posted_within_days)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
                 conditions.append(SamSolicitation.posted_date >= cutoff_date)
 
             # Response deadline filter
@@ -254,29 +260,46 @@ class QuerySolicitationsFunction(BaseFunction):
             result = await ctx.session.execute(query)
             solicitations = result.scalars().all()
 
-            # Format results
+            # Format results as ContentItem instances
             results = []
             for sol in solicitations:
-                results.append({
-                    "id": str(sol.id),
-                    "notice_id": sol.notice_id,
-                    "title": sol.title,
-                    "type": sol.type,
-                    "posted_date": sol.posted_date.isoformat() if sol.posted_date else None,
-                    "response_deadline": sol.response_deadline.isoformat() if sol.response_deadline else None,
-                    "naics_code": sol.naics_code,
-                    "psc_code": sol.psc_code,
-                    "set_aside_code": sol.set_aside_code,
-                    "contracting_office": sol.contracting_office,
-                    "place_of_performance": sol.place_of_performance,
-                    "description": sol.description[:500] + "..." if sol.description and len(sol.description) > 500 else sol.description,
-                    "has_summary": sol.summary is not None,
-                    "summary": sol.summary,
-                    "sam_url": f"https://sam.gov/opp/{sol.notice_id}/view" if sol.notice_id else None,
-                })
+                item = ContentItem(
+                    id=str(sol.id),
+                    type="solicitation",
+                    display_type="Opportunity",
+                    title=sol.title,
+                    text=None,  # Text not loaded by default for search results
+                    text_format="json",
+                    fields={
+                        "notice_id": sol.notice_id,
+                        "solicitation_number": sol.solicitation_number,
+                        "notice_type": sol.notice_type,
+                        "posted_date": sol.posted_date.isoformat() if sol.posted_date else None,
+                        "response_deadline": sol.response_deadline.isoformat() if sol.response_deadline else None,
+                        "naics_code": sol.naics_code,
+                        "psc_code": sol.psc_code,
+                        "set_aside_code": sol.set_aside_code,
+                        "agency_name": sol.agency_name,
+                        "bureau_name": sol.bureau_name,
+                        "office_name": sol.office_name,
+                        "status": sol.status,
+                        "notice_count": sol.notice_count,
+                        "attachment_count": sol.attachment_count,
+                        "summary_status": sol.summary_status,
+                    },
+                    metadata={
+                        "description_preview": sol.description[:500] + "..." if sol.description and len(sol.description) > 500 else sol.description,
+                        "has_summary": sol.summary_status == "ready",
+                        "sam_url": f"https://sam.gov/opp/{sol.notice_id}/view" if sol.notice_id else None,
+                        "ui_link": sol.ui_link,
+                        "place_of_performance": sol.place_of_performance,
+                    },
+                )
+                results.append(item)
 
+            # Return both ContentItem list and dict representations
             return FunctionResult.success_result(
-                data=results,
+                data=results,  # List of ContentItem
                 message=f"Found {len(results)} solicitations",
                 metadata={
                     "filters": {
@@ -289,6 +312,7 @@ class QuerySolicitationsFunction(BaseFunction):
                         "has_summary": has_summary,
                     },
                     "total_found": len(results),
+                    "result_type": "ContentItem",
                 },
                 items_processed=len(results),
             )

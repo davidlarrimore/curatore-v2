@@ -203,8 +203,11 @@ class SearchNoticesFunction(BaseFunction):
                 conditions.append(SamNotice.notice_type.in_(notice_types))
 
             # Posted date filter
+            # Use start of day (midnight) for cutoff to handle SAM.gov date-only timestamps
             if posted_within_days:
-                cutoff_date = datetime.utcnow() - timedelta(days=posted_within_days)
+                cutoff_date = (datetime.utcnow() - timedelta(days=posted_within_days)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
                 conditions.append(SamNotice.posted_date >= cutoff_date)
 
             # Keyword search

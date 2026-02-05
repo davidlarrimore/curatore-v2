@@ -55,9 +55,10 @@ minio>=7.2.0  # MinIO Python SDK for S3-compatible storage
 pgvector>=0.3.0  # PostgreSQL vector similarity extension
 # Embeddings generated via OpenAI API (text-embedding-3-small) - no local models needed
 
-# PDF Generation (for SAM.gov summaries)
+# Document Generation (PDF, DOCX, CSV)
 markdown>=3.5.0  # Markdown to HTML conversion
 weasyprint>=60.0  # HTML to PDF conversion
+python-docx>=1.1.0  # DOCX generation
 
 # Document Extraction Engines (Triage System)
 pymupdf>=1.24.0  # Fast PDF text extraction and analysis

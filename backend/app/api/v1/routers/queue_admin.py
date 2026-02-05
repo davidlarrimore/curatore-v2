@@ -30,6 +30,7 @@ from ..models import (
     ExtractionQueueInfo,
     CeleryQueuesInfo,
     ThroughputInfo,
+    Recent5mInfo,
     Recent24hInfo,
     WorkersInfo,
 )
@@ -275,7 +276,21 @@ async def get_unified_queue_stats(
             organization_id=current_user.organization_id,
         )
 
-        # Get 24h statistics
+        # Get 5-minute statistics (all job types)
+        five_min_ago = datetime.utcnow() - timedelta(minutes=5)
+        recent_5m_stats = {}
+        for status in ["completed", "failed", "timed_out"]:
+            result = await session.execute(
+                select(func.count(Run.id))
+                .where(and_(
+                    Run.organization_id == current_user.organization_id,
+                    Run.status == status,
+                    Run.completed_at >= five_min_ago,
+                ))
+            )
+            recent_5m_stats[status] = result.scalar() or 0
+
+        # Get 24h statistics (extraction only for backwards compat)
         day_ago = datetime.utcnow() - timedelta(hours=24)
         recent_stats = {}
         for status in ["completed", "failed", "timed_out"]:
@@ -337,6 +352,11 @@ async def get_unified_queue_stats(
             throughput=ThroughputInfo(
                 per_minute=stats.get("throughput_per_minute", 0.0),
                 avg_extraction_seconds=stats.get("avg_extraction_time_seconds"),
+            ),
+            recent_5m=Recent5mInfo(
+                completed=recent_5m_stats.get("completed", 0),
+                failed=recent_5m_stats.get("failed", 0),
+                timed_out=recent_5m_stats.get("timed_out", 0),
             ),
             recent_24h=Recent24hInfo(
                 completed=recent_stats.get("completed", 0),

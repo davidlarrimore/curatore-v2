@@ -780,7 +780,7 @@ async def list_all_notices(
     posted_from: Optional[datetime] = Query(None, description="Filter by posted date from"),
     posted_to: Optional[datetime] = Query(None, description="Filter by posted date to"),
     keyword: Optional[str] = Query(None, description="Search by title, description, or solicitation number"),
-    limit: int = Query(50, ge=1, le=100, description="Maximum results"),
+    limit: int = Query(50, ge=1, le=500, description="Maximum results (up to 500 for facet counting)"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     current_user: User = Depends(get_current_user),
 ) -> SamNoticeListResponse:
@@ -1355,7 +1355,7 @@ async def list_solicitations(
     notice_type: Optional[str] = Query(None, description="Filter by notice type"),
     naics_code: Optional[str] = Query(None, description="Filter by NAICS code"),
     keyword: Optional[str] = Query(None, description="Search keyword"),
-    limit: int = Query(50, ge=1, le=100, description="Maximum results"),
+    limit: int = Query(50, ge=1, le=500, description="Maximum results (up to 500 for facet counting)"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
     current_user: User = Depends(get_current_user),
 ) -> SamSolicitationListResponse:

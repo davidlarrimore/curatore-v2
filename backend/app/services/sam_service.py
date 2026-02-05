@@ -491,6 +491,11 @@ class SamService:
                 or_(
                     SamSolicitation.title.ilike(keyword_filter),
                     SamSolicitation.description.ilike(keyword_filter),
+                    SamSolicitation.solicitation_number.ilike(keyword_filter),
+                    SamSolicitation.naics_code.ilike(keyword_filter),
+                    SamSolicitation.agency_name.ilike(keyword_filter),
+                    SamSolicitation.bureau_name.ilike(keyword_filter),
+                    SamSolicitation.office_name.ilike(keyword_filter),
                 )
             )
         if deadline_before:
@@ -513,6 +518,11 @@ class SamService:
                 or_(
                     SamSolicitation.title.ilike(keyword_filter),
                     SamSolicitation.description.ilike(keyword_filter),
+                    SamSolicitation.solicitation_number.ilike(keyword_filter),
+                    SamSolicitation.naics_code.ilike(keyword_filter),
+                    SamSolicitation.agency_name.ilike(keyword_filter),
+                    SamSolicitation.bureau_name.ilike(keyword_filter),
+                    SamSolicitation.office_name.ilike(keyword_filter),
                 )
             )
         if deadline_before:
@@ -1559,6 +1569,10 @@ class SamService:
                     SamNotice.description.ilike(keyword_filter),
                     SamSolicitation.solicitation_number.ilike(keyword_filter),
                     SamNotice.sam_notice_id.ilike(keyword_filter),
+                    SamSolicitation.naics_code.ilike(keyword_filter),
+                    SamSolicitation.agency_name.ilike(keyword_filter),
+                    SamSolicitation.bureau_name.ilike(keyword_filter),
+                    SamSolicitation.office_name.ilike(keyword_filter),
                 )
             )
 
@@ -1594,6 +1608,10 @@ class SamService:
                     SamNotice.description.ilike(keyword_filter),
                     SamNotice.solicitation_number.ilike(keyword_filter),
                     SamNotice.sam_notice_id.ilike(keyword_filter),
+                    SamNotice.naics_code.ilike(keyword_filter),
+                    SamNotice.agency_name.ilike(keyword_filter),
+                    SamNotice.bureau_name.ilike(keyword_filter),
+                    SamNotice.office_name.ilike(keyword_filter),
                 )
             )
 

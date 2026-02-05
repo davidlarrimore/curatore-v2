@@ -3,6 +3,7 @@
 Search Assets function - Full-text and semantic search for assets.
 
 Wraps the pg_search_service to search assets using hybrid search.
+Returns results as ContentItem instances for unified handling.
 """
 
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,7 @@ from ..base import (
     ParameterDoc,
 )
 from ..context import FunctionContext
+from ..content import ContentItem
 
 logger = logging.getLogger("curatore.functions.search.search_assets")
 
@@ -91,8 +93,8 @@ class SearchAssetsFunction(BaseFunction):
                 default=20,
             ),
         ],
-        returns="list[dict]: Search results with scores and snippets",
-        tags=["search", "assets", "hybrid"],
+        returns="list[ContentItem]: Search results as ContentItem instances with scores",
+        tags=["search", "assets", "hybrid", "content"],
         requires_llm=False,
         examples=[
             {
@@ -145,21 +147,32 @@ class SearchAssetsFunction(BaseFunction):
                 **filters,
             )
 
-            # Format results
+            # Format results as ContentItem instances
             results = []
             for sr in search_results.results:
-                results.append({
-                    "asset_id": str(sr.source_id),
-                    "title": sr.title,
-                    "filename": sr.filename,
-                    "score": sr.score,
-                    "snippet": sr.snippet,
-                    "source_type": sr.source_type_filter,
-                    "content_type": sr.content_type,
-                })
+                item = ContentItem(
+                    id=str(sr.source_id),
+                    type="asset",
+                    display_type="Document",
+                    title=sr.title or sr.filename,
+                    text=None,  # Text not loaded by default for search results
+                    text_format="markdown",
+                    fields={
+                        "original_filename": sr.filename,
+                        "content_type": sr.content_type,
+                        "source_type": sr.source_type_filter,
+                        "status": "ready",  # Only indexed assets are searchable
+                    },
+                    metadata={
+                        "score": sr.score,
+                        "snippet": sr.snippet,
+                        "search_mode": search_mode,
+                    },
+                )
+                results.append(item)
 
             return FunctionResult.success_result(
-                data=results,
+                data=results,  # List of ContentItem
                 message=f"Found {len(results)} assets",
                 metadata={
                     "query": query,
@@ -170,6 +183,7 @@ class SearchAssetsFunction(BaseFunction):
                         "collection_id": str(collection_id) if collection_id else None,
                         "sync_config_id": str(sync_config_id) if sync_config_id else None,
                     },
+                    "result_type": "ContentItem",
                 },
                 items_processed=len(results),
             )

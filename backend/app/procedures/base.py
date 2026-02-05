@@ -42,7 +42,14 @@ class StepDefinition:
     Jinja2 templates to reference:
     - {{ params.xxx }}: Procedure parameters
     - {{ steps.step_name.xxx }}: Results from previous steps
+    - {{ item.xxx }}: Current item when using foreach
     - {{ now() }}: Current datetime
+
+    Iteration:
+    - foreach: Template expression that evaluates to a list (or single item)
+    - When foreach is set, the step runs once per item
+    - {{ item }} is available in params during each iteration
+    - Results are collected into a list
     """
     name: str
     function: str
@@ -50,6 +57,7 @@ class StepDefinition:
     on_error: OnErrorPolicy = OnErrorPolicy.FAIL
     condition: Optional[str] = None  # Jinja2 expression that must be true
     description: str = ""
+    foreach: Optional[str] = None  # Template expression for iteration
 
 
 @dataclass
@@ -128,6 +136,7 @@ class ProcedureDefinition:
                     "on_error": s.on_error.value,
                     "condition": s.condition,
                     "description": s.description,
+                    "foreach": s.foreach,
                 }
                 for s in self.steps
             ],
@@ -172,6 +181,7 @@ class ProcedureDefinition:
                 on_error=OnErrorPolicy(s.get("on_error", "fail")),
                 condition=s.get("condition"),
                 description=s.get("description", ""),
+                foreach=s.get("foreach"),
             )
             for s in data.get("steps", [])
         ]

@@ -29,7 +29,7 @@ class FunctionRegistry:
         registry.register(GenerateFunction)
 
         # Get a function by name
-        func = registry.get("generate")
+        func = registry.get("llm_generate")
         result = await func(ctx, prompt="Hello")
 
         # List all functions
@@ -163,15 +163,19 @@ class FunctionRegistry:
             from .search.query_model import QueryModelFunction
             from .search.get_content import GetContentFunction
             from .search.get_asset import GetAssetFunction
+            from .search.get import GetFunction
             from .search.search_assets import SearchAssetsFunction
-            from .search.query_solicitations import QuerySolicitationsFunction
-            from .search.query_notifications import QueryNotificationsFunction
+            from .search.search_solicitations import SearchSolicitationsFunction
+            from .search.search_notices import SearchNoticesFunction
+            from .search.search_scraped_assets import SearchScrapedAssetsFunction
             self.register(QueryModelFunction)
             self.register(GetContentFunction)
             self.register(GetAssetFunction)
+            self.register(GetFunction)
             self.register(SearchAssetsFunction)
-            self.register(QuerySolicitationsFunction)
-            self.register(QueryNotificationsFunction)
+            self.register(SearchSolicitationsFunction)
+            self.register(SearchNoticesFunction)
+            self.register(SearchScrapedAssetsFunction)
         except ImportError as e:
             logger.warning(f"Failed to import search functions: {e}")
 
@@ -180,9 +184,11 @@ class FunctionRegistry:
             from .output.update_metadata import UpdateMetadataFunction
             from .output.bulk_update_metadata import BulkUpdateMetadataFunction
             from .output.create_artifact import CreateArtifactFunction
+            from .output.generate_document import GenerateDocumentFunction
             self.register(UpdateMetadataFunction)
             self.register(BulkUpdateMetadataFunction)
             self.register(CreateArtifactFunction)
+            self.register(GenerateDocumentFunction)
         except ImportError as e:
             logger.warning(f"Failed to import output functions: {e}")
 

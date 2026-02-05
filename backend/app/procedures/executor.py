@@ -116,14 +116,16 @@ class ProcedureExecutor:
             dry_run=dry_run,
         )
 
-        # Log procedure start
+        # Log procedure start with input parameters
         await ctx.log_run_event(
             level="INFO",
             event_type="procedure_start",
             message=f"Starting procedure: {definition.name}",
             context={
                 "procedure_slug": definition.slug,
-                "parameters": list(validated_params.keys()),
+                "procedure_version": definition.version,
+                "input": self._truncate_for_log(validated_params),
+                "steps": [s.name for s in definition.steps],
             },
         )
 
@@ -191,6 +193,15 @@ class ProcedureExecutor:
 
         duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
 
+        # Build step summary for logging
+        step_summary = {}
+        for step_name, step_result in step_results.items():
+            step_summary[step_name] = {
+                "status": step_result.get("status", "skipped" if step_result.get("skipped") else "unknown"),
+                "items_processed": step_result.get("items_processed"),
+                "error": step_result.get("error"),
+            }
+
         # Log procedure completion
         await ctx.log_run_event(
             level="INFO" if status == "completed" else "WARN" if status == "partial" else "ERROR",
@@ -200,8 +211,10 @@ class ProcedureExecutor:
                 "status": status,
                 "total_steps": total_steps,
                 "completed_steps": completed_steps,
+                "skipped_steps": skipped_steps,
                 "failed_steps": failed_steps,
                 "duration_ms": duration_ms,
+                "step_summary": step_summary,
             },
         )
 
@@ -249,64 +262,288 @@ class ProcedureExecutor:
                     for k, v in ctx.variables.items()
                     if k.startswith("steps.")
                 },
+                # Add common Python functions for convenience
+                len=len,
+                str=str,
+                int=int,
+                bool=bool,
             )
             return result.lower() in ("true", "1", "yes")
         except Exception as e:
             logger.warning(f"Failed to evaluate condition '{condition}': {e}")
             return False
 
+    def _serialize_data(self, data: Any) -> Any:
+        """
+        Serialize data for storage and template access.
+        Converts ContentItem objects to dicts so they can be used in Jinja templates.
+        """
+        from ..functions.content import ContentItem
+
+        if data is None:
+            return None
+        if isinstance(data, ContentItem):
+            return data.to_dict()
+        if isinstance(data, (list, tuple)):
+            return [self._serialize_data(item) for item in data]
+        if isinstance(data, dict):
+            return {k: self._serialize_data(v) for k, v in data.items()}
+        # Primitives pass through
+        return data
+
+    def _truncate_for_log(self, data: Any, max_length: int = 2000) -> Any:
+        """Truncate data for logging to avoid huge log entries."""
+        # First serialize ContentItem objects
+        data = self._serialize_data(data)
+
+        if data is None:
+            return None
+        if isinstance(data, str):
+            if len(data) > max_length:
+                return data[:max_length] + f"... [truncated, {len(data)} chars total]"
+            return data
+        if isinstance(data, (list, tuple)):
+            if len(data) > 10:
+                # Show first 5 and last 2 items
+                truncated = list(data[:5]) + [f"... ({len(data) - 7} more items) ..."] + list(data[-2:])
+                return [self._truncate_for_log(item, max_length // 10) for item in truncated]
+            return [self._truncate_for_log(item, max_length // len(data) if data else max_length) for item in data]
+        if isinstance(data, dict):
+            result = {}
+            for key, value in data.items():
+                result[key] = self._truncate_for_log(value, max_length // max(len(data), 1))
+            return result
+        # For other types, convert to string if too long
+        str_repr = str(data)
+        if len(str_repr) > max_length:
+            return str_repr[:max_length] + f"... [truncated]"
+        return data
+
     async def _execute_step(self, ctx: FunctionContext, step: StepDefinition) -> Dict[str, Any]:
-        """Execute a single step."""
+        """Execute a single step (or iterate if foreach is set)."""
         logger.info(f"Executing step: {step.name} (function: {step.function})")
 
-        # Get function
+        # Get function first to validate it exists
         func = fn.get_or_none(step.function)
         if not func:
+            error_msg = f"Function not found: {step.function}"
+            await ctx.log_run_event(
+                level="ERROR",
+                event_type="step_error",
+                message=error_msg,
+                context={
+                    "step": step.name,
+                    "function": step.function,
+                },
+            )
             return {
                 "status": "failed",
-                "error": f"Function not found: {step.function}",
+                "error": error_msg,
             }
 
-        # Render parameters with templates
-        rendered_params = ctx.render_params(step.params)
+        # Check for foreach iteration
+        if step.foreach:
+            return await self._execute_step_foreach(ctx, step, func)
 
-        # Log step start
-        await ctx.log_run_event(
-            level="INFO",
-            event_type="step_start",
-            message=f"Starting step: {step.name}",
-            context={
-                "step": step.name,
-                "function": step.function,
-                "params_keys": list(rendered_params.keys()),
-            },
-        )
+        # Standard single execution
+        return await self._execute_step_single(ctx, step, func)
+
+    async def _execute_step_single(
+        self,
+        ctx: FunctionContext,
+        step: StepDefinition,
+        func: Any,
+        item: Any = None,
+        item_index: int = None,
+    ) -> Dict[str, Any]:
+        """Execute a single function call (optionally with item context)."""
+        # Render parameters with templates, including item if provided
+        rendered_params = ctx.render_params(step.params, item=item)
+
+        # Build log context
+        log_context = {
+            "step": step.name,
+            "function": step.function,
+            "input": self._truncate_for_log(rendered_params),
+        }
+        if item_index is not None:
+            log_context["item_index"] = item_index
+
+        # Log step start (only for non-foreach or first item)
+        if item_index is None or item_index == 0:
+            await ctx.log_run_event(
+                level="INFO",
+                event_type="step_start",
+                message=f"Starting step: {step.name}" + (f" (foreach, {item_index + 1} items)" if item_index == 0 else ""),
+                context=log_context,
+            )
 
         # Execute function
         try:
             result: FunctionResult = await func(ctx, **rendered_params)
 
-            # Log step completion
-            await ctx.log_run_event(
-                level="INFO" if result.success else "ERROR",
-                event_type="step_complete",
-                message=f"Step {step.name}: {result.status.value}",
-                context={
-                    "step": step.name,
-                    "status": result.status.value,
-                    "items_processed": result.items_processed,
-                    "duration_ms": result.duration_ms,
-                },
-            )
+            # Serialize data for storage and template access
+            serialized_data = self._serialize_data(result.data)
 
-            return result.to_dict()
+            # Log step completion (only for non-foreach calls)
+            if item_index is None:
+                await ctx.log_run_event(
+                    level="INFO" if result.success else "ERROR",
+                    event_type="step_complete",
+                    message=f"Step {step.name}: {result.status.value}",
+                    context={
+                        "step": step.name,
+                        "status": result.status.value,
+                        "items_processed": result.items_processed,
+                        "duration_ms": result.duration_ms,
+                        "output": self._truncate_for_log(serialized_data),
+                        "message": result.message,
+                    },
+                )
+
+            # Return dict with full serialized data for subsequent steps
+            return {
+                "status": result.status.value,
+                "data": serialized_data,
+                "message": result.message,
+                "error": result.error,
+                "items_processed": result.items_processed,
+                "items_failed": result.items_failed,
+                "duration_ms": result.duration_ms,
+                "metadata": result.metadata,
+            }
 
         except Exception as e:
             logger.exception(f"Step {step.name} failed: {e}")
+            if item_index is None:
+                await ctx.log_run_event(
+                    level="ERROR",
+                    event_type="step_error",
+                    message=f"Step {step.name} failed with exception: {str(e)}",
+                    context={
+                        "step": step.name,
+                        "function": step.function,
+                        "input": self._truncate_for_log(rendered_params),
+                        "error_type": type(e).__name__,
+                    },
+                )
             return {
                 "status": "failed",
                 "error": str(e),
             }
+
+    async def _execute_step_foreach(
+        self,
+        ctx: FunctionContext,
+        step: StepDefinition,
+        func: Any,
+    ) -> Dict[str, Any]:
+        """Execute a step with foreach iteration."""
+        # Evaluate the foreach expression to get items
+        items = ctx.render_params({"_foreach": step.foreach}).get("_foreach")
+
+        # Normalize to list
+        if items is None:
+            items = []
+        elif not isinstance(items, list):
+            items = [items]  # Single item → list of one
+
+        # Log foreach start
+        await ctx.log_run_event(
+            level="INFO",
+            event_type="step_start",
+            message=f"Starting step: {step.name} (foreach: {len(items)} items)",
+            context={
+                "step": step.name,
+                "function": step.function,
+                "foreach_count": len(items),
+            },
+        )
+
+        if not items:
+            # No items - return empty result
+            await ctx.log_run_event(
+                level="INFO",
+                event_type="step_complete",
+                message=f"Step {step.name}: skipped (no items)",
+                context={
+                    "step": step.name,
+                    "status": "success",
+                    "items_processed": 0,
+                },
+            )
+            return {
+                "status": "success",
+                "data": [],
+                "message": "No items to process",
+                "items_processed": 0,
+                "items_failed": 0,
+            }
+
+        # Execute for each item
+        results = []
+        failed_count = 0
+        total_duration_ms = 0
+        start_time = datetime.utcnow()
+
+        for idx, item in enumerate(items):
+            # Execute function with item in context
+            item_result = await self._execute_step_single(ctx, step, func, item=item, item_index=idx)
+
+            # Extract item ID if available
+            item_id = None
+            if isinstance(item, dict):
+                item_id = item.get("id") or item.get("item_id") or str(idx)
+            else:
+                item_id = str(idx)
+
+            # Collect result
+            results.append({
+                "item_id": item_id,
+                "success": item_result.get("status") == "success",
+                "result": item_result.get("data"),
+                "error": item_result.get("error"),
+            })
+
+            if item_result.get("status") != "success":
+                failed_count += 1
+
+            if item_result.get("duration_ms"):
+                total_duration_ms += item_result.get("duration_ms", 0)
+
+        # Calculate total duration
+        total_duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
+
+        # Determine overall status
+        if failed_count == len(items):
+            status = "failed"
+        elif failed_count > 0:
+            status = "partial"
+        else:
+            status = "success"
+
+        # Log foreach completion
+        await ctx.log_run_event(
+            level="INFO" if status == "success" else "WARN" if status == "partial" else "ERROR",
+            event_type="step_complete",
+            message=f"Step {step.name}: {status} ({len(items) - failed_count}/{len(items)} succeeded)",
+            context={
+                "step": step.name,
+                "status": status,
+                "items_processed": len(items),
+                "items_failed": failed_count,
+                "duration_ms": total_duration_ms,
+            },
+        )
+
+        return {
+            "status": status,
+            "data": results,
+            "message": f"Processed {len(items) - failed_count}/{len(items)} items",
+            "items_processed": len(items),
+            "items_failed": failed_count,
+            "duration_ms": total_duration_ms,
+        }
 
 
 # Global executor instance

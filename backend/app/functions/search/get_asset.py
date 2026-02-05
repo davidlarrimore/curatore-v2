@@ -136,7 +136,7 @@ class GetAssetFunction(BaseFunction):
                 "created_at": asset.created_at.isoformat() if asset.created_at else None,
                 "updated_at": asset.updated_at.isoformat() if asset.updated_at else None,
                 "indexed_at": asset.indexed_at.isoformat() if asset.indexed_at else None,
-                "metadata": asset.metadata or {},
+                "source_metadata": asset.source_metadata or {},
             }
 
             # Return early if metadata only requested

@@ -132,6 +132,14 @@ class FunctionContext:
             self._services["sam"] = SamService()
         return self._services["sam"]
 
+    @property
+    def content_service(self):
+        """Get or create content service for ContentItem operations."""
+        if "content" not in self._services:
+            from .content import content_service
+            self._services["content"] = content_service
+        return self._services["content"]
+
     # =========================================================================
     # VARIABLE MANAGEMENT
     # =========================================================================
@@ -209,51 +217,128 @@ class FunctionContext:
     # TEMPLATE RENDERING
     # =========================================================================
 
-    def render_template(self, template: str) -> str:
+    def render_template(self, template: str, item: Any = None) -> str:
         """
         Render a Jinja2 template string with context variables.
 
         Available variables:
         - params: Procedure/pipeline parameters
         - steps: Results from previous steps
+        - item: Current item when iterating with foreach
         - now(): Current datetime
         - org_id: Organization ID
+
+        Args:
+            template: Jinja2 template string
+            item: Optional item context for foreach iteration
         """
         try:
             from jinja2 import Template
 
             t = Template(template)
-            return t.render(
-                params=self.params,
-                steps={
+            context = {
+                "params": self.params,
+                "steps": {
                     k.replace("steps.", ""): v
                     for k, v in self.variables.items()
                     if k.startswith("steps.")
                 },
-                variables=self.variables,
-                now=datetime.utcnow,
-                org_id=str(self.organization_id),
-            )
+                "variables": self.variables,
+                "now": datetime.utcnow,
+                "org_id": str(self.organization_id),
+            }
+
+            # Add item to context if provided (for foreach iteration)
+            if item is not None:
+                context["item"] = item
+
+            return t.render(**context)
         except Exception as e:
             self._logger.error(f"Template rendering failed: {e}")
             raise ValueError(f"Failed to render template: {e}")
 
-    def render_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
+    def render_params(self, params: Dict[str, Any], item: Any = None) -> Dict[str, Any]:
         """
         Render all string values in a params dict as templates.
 
         Recursively processes nested dicts and lists.
+        When a value is purely a template expression (like "{{ steps.data }}"),
+        preserves the original data type instead of converting to string.
+
+        Args:
+            params: Dictionary of parameters to render
+            item: Optional item context for foreach iteration (makes {{ item.xxx }} available)
         """
         def render_value(value: Any) -> Any:
             if isinstance(value, str) and "{{" in value:
-                return self.render_template(value)
+                # Check if this is a pure template expression (entire string is one {{ }})
+                # that should preserve its data type
+                stripped = value.strip()
+                if stripped.startswith("{{") and stripped.endswith("}}"):
+                    # Extract the expression and evaluate directly to preserve type
+                    inner_expr = stripped[2:-2].strip()
+                    result = self._evaluate_expression(inner_expr, item=item)
+                    if result is not None:
+                        return result
+                # Fall back to string template rendering
+                return self.render_template(value, item=item)
             elif isinstance(value, dict):
                 return {k: render_value(v) for k, v in value.items()}
             elif isinstance(value, list):
-                return [render_value(item) for item in value]
+                return [render_value(i) for i in value]
             return value
 
         return render_value(params)
+
+    def _evaluate_expression(self, expression: str, item: Any = None) -> Any:
+        """
+        Evaluate a Jinja2-like expression and return the actual value (preserving type).
+
+        Supports:
+        - steps.step_name -> step result
+        - params.param_name -> parameter value
+        - item.field -> current item field (in foreach context)
+        - Simple attribute access chains
+
+        Args:
+            expression: The expression to evaluate (without {{ }})
+            item: Optional item context for foreach iteration
+        """
+        try:
+            # Build context for evaluation
+            context = {
+                "params": self.params,
+                "steps": {
+                    k.replace("steps.", ""): v
+                    for k, v in self.variables.items()
+                    if k.startswith("steps.")
+                },
+                "variables": self.variables,
+                "now": datetime.utcnow,
+                "org_id": str(self.organization_id),
+            }
+
+            # Add item to context if provided
+            if item is not None:
+                context["item"] = item
+
+            # Handle simple dot-notation access (e.g., "steps.query_notices")
+            parts = expression.split(".")
+            if parts[0] in context:
+                result = context[parts[0]]
+                for part in parts[1:]:
+                    if isinstance(result, dict):
+                        result = result.get(part)
+                    elif hasattr(result, part):
+                        result = getattr(result, part)
+                    else:
+                        return None
+                return result
+
+            # For complex expressions, fall back to None (will use string rendering)
+            return None
+        except Exception:
+            return None
 
     # =========================================================================
     # CONTEXT CREATION

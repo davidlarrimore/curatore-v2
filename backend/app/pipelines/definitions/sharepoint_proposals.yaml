@@ -74,7 +74,7 @@ stages:
 
   - name: extract_proposal_details
     type: enrich
-    function: extract
+    function: llm_extract
     description: Extract proposal metadata
     batch_size: 5
     on_error: continue

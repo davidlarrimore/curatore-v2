@@ -2201,6 +2201,13 @@ class ThroughputInfo(BaseModel):
     avg_extraction_seconds: Optional[float] = Field(None, description="Average extraction time in seconds")
 
 
+class Recent5mInfo(BaseModel):
+    """Last 5 minutes statistics (all job types)."""
+    completed: int = Field(default=0, description="Jobs completed in last 5 minutes")
+    failed: int = Field(default=0, description="Jobs failed in last 5 minutes")
+    timed_out: int = Field(default=0, description="Jobs timed out in last 5 minutes")
+
+
 class Recent24hInfo(BaseModel):
     """Last 24 hours statistics."""
     completed: int = Field(..., description="Extractions completed in last 24h")
@@ -2222,12 +2229,14 @@ class UnifiedQueueStatsResponse(BaseModel):
     - extraction_queue: Database-tracked queue counts
     - celery_queues: Redis queue lengths
     - throughput: Processing rate metrics
+    - recent_5m: Last 5 minutes statistics (all job types)
     - recent_24h: Last 24 hours statistics
     - workers: Worker status
     """
     extraction_queue: ExtractionQueueInfo
     celery_queues: CeleryQueuesInfo
     throughput: ThroughputInfo
+    recent_5m: Recent5mInfo
     recent_24h: Recent24hInfo
     workers: WorkersInfo
 
