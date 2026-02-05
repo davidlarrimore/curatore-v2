@@ -20,6 +20,7 @@ from typing import Dict, List, Optional
 from uuid import UUID
 from datetime import datetime
 
+from croniter import croniter
 from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,6 +28,28 @@ from .base import ProcedureDefinition
 from .loader import procedure_loader
 
 logger = logging.getLogger("curatore.procedures.discovery")
+
+
+def calculate_next_trigger_at(cron_expression: str, base_time: Optional[datetime] = None) -> Optional[datetime]:
+    """
+    Calculate the next trigger time for a cron expression.
+
+    Args:
+        cron_expression: A valid cron expression (5-field or 6-field)
+        base_time: Base time to calculate from (defaults to now)
+
+    Returns:
+        The next trigger datetime, or None if invalid
+    """
+    if not cron_expression:
+        return None
+    try:
+        base = base_time or datetime.utcnow()
+        cron = croniter(cron_expression, base)
+        return cron.get_next(datetime)
+    except Exception as e:
+        logger.warning(f"Failed to parse cron expression '{cron_expression}': {e}")
+        return None
 
 
 class ProcedureDiscoveryService:
@@ -112,6 +135,11 @@ class ProcedureDiscoveryService:
 
                     # Create triggers
                     for trigger_def in definition.triggers:
+                        # Calculate next trigger time for cron triggers
+                        next_trigger_at = None
+                        if trigger_def.type == "cron" and trigger_def.cron_expression:
+                            next_trigger_at = calculate_next_trigger_at(trigger_def.cron_expression)
+
                         trigger = ProcedureTrigger(
                             procedure_id=procedure.id,
                             organization_id=organization_id,
@@ -120,6 +148,7 @@ class ProcedureDiscoveryService:
                             event_name=trigger_def.event_name,
                             event_filter=trigger_def.event_filter,
                             is_active=True,
+                            next_trigger_at=next_trigger_at,
                         )
                         session.add(trigger)
 
@@ -209,11 +238,19 @@ class ProcedureDiscoveryService:
             key = f"{trigger_def.type}:{trigger_def.cron_expression or trigger_def.event_name or 'webhook'}"
 
             if key in existing_map:
-                # Already exists
+                # Already exists - update next_trigger_at if it's a cron trigger
+                existing_trigger = existing_map[key]
+                if trigger_def.type == "cron" and trigger_def.cron_expression:
+                    existing_trigger.next_trigger_at = calculate_next_trigger_at(trigger_def.cron_expression)
                 unchanged += 1
                 del existing_map[key]
             else:
                 # Create new
+                # Calculate next trigger time for cron triggers
+                next_trigger_at = None
+                if trigger_def.type == "cron" and trigger_def.cron_expression:
+                    next_trigger_at = calculate_next_trigger_at(trigger_def.cron_expression)
+
                 trigger = ProcedureTrigger(
                     procedure_id=procedure.id,
                     organization_id=organization_id,
@@ -222,6 +259,7 @@ class ProcedureDiscoveryService:
                     event_name=trigger_def.event_name,
                     event_filter=trigger_def.event_filter,
                     is_active=True,
+                    next_trigger_at=next_trigger_at,
                 )
                 session.add(trigger)
                 created += 1

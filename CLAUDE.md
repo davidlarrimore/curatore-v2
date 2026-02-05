@@ -32,6 +32,7 @@ All background jobs are managed through the Queue Registry system:
 | `Asset` | Document with provenance, version history, and pipeline status |
 | `AssetVersion` | Individual versions of an asset |
 | `ExtractionResult` | Extracted markdown with triage metadata |
+| `ContentItem` | Universal content wrapper for functions/procedures (in-memory) |
 | `Run` | Universal execution tracking (extraction, crawl, sync) |
 | `RunGroup` | Parent-child job tracking for group completion |
 | `RunLogEvent` | Structured logging for runs |
@@ -432,32 +433,171 @@ Curatore uses PostgreSQL with pgvector for hybrid full-text + semantic search:
 
 ---
 
-## Procedures & Pipelines Framework
+## Functions Engine
 
-Curatore includes a framework for schedulable, event-driven workflows that search content, apply business rules, and execute actions.
+The Functions Engine is Curatore's framework for building LLM-powered workflows. It provides a unified interface for working with all content types (assets, SAM.gov data, web scrapes) through the **ContentItem** abstraction.
 
-### Overview
+### Architecture Overview
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                     PROCEDURES & PIPELINES FRAMEWORK                             │
+│                           FUNCTIONS ENGINE ARCHITECTURE                          │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
-  TRIGGERS                    WORKFLOWS                     OUTPUTS
-      │                           │                            │
-      ▼                           ▼                            ▼
-┌─────────────┐           ┌─────────────┐            ┌─────────────────┐
-│   Schedule  │──────────▶│  PROCEDURE  │───────────▶│  LLM Analysis   │
-│   (cron)    │           │  (steps)    │            │  Notifications  │
-├─────────────┤           └─────────────┘            │  Artifacts      │
-│   Event     │                                      └─────────────────┘
-│   (system)  │──────────▶┌─────────────┐
-├─────────────┤           │  PIPELINE   │───────────▶┌─────────────────┐
-│   Webhook   │           │  (stages)   │            │  Enriched Data  │
-│   (HTTP)    │──────────▶│  [items]    │            │  Classifications│
-└─────────────┘           └─────────────┘            │  Updated Assets │
-                                                     └─────────────────┘
+  DATA SOURCES                  CONTENT LAYER                  FUNCTIONS
+      │                              │                             │
+      ▼                              ▼                             ▼
+┌─────────────┐            ┌─────────────────┐           ┌─────────────────┐
+│   Assets    │───────────▶│   ContentItem   │◀─────────▶│  LLM Functions  │
+│  (files)    │            │  (universal     │           │  (summarize,    │
+├─────────────┤            │   wrapper)      │           │   classify,     │
+│ Solicitations│───────────▶│                 │           │   extract)      │
+│  (SAM.gov)  │            │   • id, type    │           ├─────────────────┤
+├─────────────┤            │   • text        │           │ Search Functions│
+│  Notices    │───────────▶│   • fields      │           │  (search_assets,│
+│  (SAM.gov)  │            │   • metadata    │           │   query_sols)   │
+├─────────────┤            │   • children    │           ├─────────────────┤
+│ Scraped     │───────────▶│                 │           │ Output Functions│
+│   Assets    │            │   ContentService│           │  (update_meta,  │
+└─────────────┘            │   • get()       │           │   create_pdf)   │
+                           │   • search()    │           └─────────────────┘
+                           │   • extract_text()│
+                           └─────────────────┘
+                                    │
+                                    ▼
+                           ┌─────────────────┐
+                           │   Procedures    │
+                           │  (YAML workflows)│
+                           └─────────────────┘
 ```
+
+### ContentItem: Universal Data Wrapper
+
+All data flows through functions as `ContentItem` objects, providing a consistent interface regardless of source.
+
+**Location**: `backend/app/functions/content/content_item.py`
+
+```python
+@dataclass
+class ContentItem:
+    # === Identity ===
+    id: str                              # UUID
+    type: str                            # asset, solicitation, notice, scraped_asset
+    display_type: str                    # Context-aware: "Attachment", "Opportunity", etc.
+
+    # === Primary Content ===
+    text: Optional[str] = None           # Markdown or JSON for LLM consumption
+    text_format: str = "markdown"        # markdown, json
+
+    # === Structured Data ===
+    title: Optional[str] = None
+    fields: Dict[str, Any]               # Type-specific: filename, agency, NAICS, etc.
+    metadata: Dict[str, Any]             # System: source_type, timestamps, etc.
+
+    # === Relationships ===
+    children: List[ContentItem]          # Nested items (notices, attachments)
+    parent_id: Optional[str] = None
+    parent_type: Optional[str] = None
+
+    # === Lazy Loading ===
+    text_ref: Optional[Dict] = None      # {bucket, key} for deferred text loading
+```
+
+**Content Types Supported**:
+
+| Type | Model | Has Text | Children |
+|------|-------|----------|----------|
+| `asset` | Asset | Yes (extraction) | None |
+| `solicitation` | SamSolicitation | Yes (JSON) | notices, assets |
+| `notice` | SamNotice | Yes (JSON) | assets |
+| `scraped_asset` | ScrapedAsset | Yes (extraction) | None |
+| `scrape_collection` | ScrapeCollection | No | scraped_assets |
+
+**fields vs metadata**:
+- **`fields`**: Entity properties (filename, agency, NAICS code, file_size)
+- **`metadata`**: System/provenance info (source_type, synced_at, classified_by)
+
+### ContentService
+
+The ContentService fetches and transforms database records into ContentItems.
+
+**Location**: `backend/app/functions/content/service.py`
+
+```python
+class ContentService:
+    async def get(
+        self, session, org_id, item_type, item_id,
+        include_children=True, include_text=True
+    ) -> ContentItem
+
+    async def search(
+        self, session, org_id, item_type, filters,
+        include_children=False, include_text=True, limit=100
+    ) -> List[ContentItem]
+
+    def extract_text(
+        self, item: ContentItem,
+        include_children=True, max_depth=2
+    ) -> str  # For LLM consumption
+```
+
+### Functions
+
+Functions are the atomic units of work. Each function receives a `FunctionContext` with access to services.
+
+**Base Class** (`backend/app/functions/base.py`):
+
+```python
+class BaseFunction:
+    async def execute(self, ctx: FunctionContext, **params) -> FunctionResult
+
+class FunctionResult:
+    status: FunctionStatus  # SUCCESS, FAILED, PARTIAL, SKIPPED
+    data: Any               # ContentItem or List[ContentItem]
+    message: str
+    metadata: Dict
+```
+
+**FunctionContext** (`backend/app/functions/context.py`):
+
+Provides lazy-loaded services to functions:
+- `ctx.llm_service` - LLM API access
+- `ctx.search_service` - pgvector search
+- `ctx.minio_service` - Object storage
+- `ctx.asset_service` - Asset operations
+- `ctx.content_service` - ContentItem fetching
+- `ctx.run_service` - Run tracking
+
+**Function Categories** (`backend/app/functions/`):
+
+| Category | Functions | Purpose |
+|----------|-----------|---------|
+| **LLM** (`llm/`) | `generate`, `extract`, `summarize`, `classify`, `decide`, `route` | LLM-powered analysis |
+| **Search** (`search/`) | `search_assets`, `search_solicitations`, `search_notices`, `search_scraped_assets`, `get`, `get_content`, `query_model` | Query and retrieve data |
+| **Output** (`output/`) | `update_metadata`, `bulk_update_metadata`, `create_artifact`, `generate_document` | Create/update data |
+| **Notify** (`notify/`) | `send_email`, `webhook` | External notifications |
+| **Compound** (`compound/`) | `analyze_solicitation`, `summarize_solicitations`, `generate_digest`, `classify_document`, `enrich_assets` | Multi-step workflows |
+
+**Function Registry** (`backend/app/functions/registry.py`):
+
+```python
+from app.functions import fn
+
+# Get a function
+func = fn.get("search_assets")
+
+# List all functions
+all_functions = fn.list_all()
+
+# List by category
+llm_functions = fn.list_by_category(FunctionCategory.LLM)
+```
+
+---
+
+## Procedures & Pipelines
+
+Procedures and pipelines orchestrate functions into scheduled, event-driven workflows.
 
 ### Procedures vs Pipelines
 
@@ -468,67 +608,121 @@ Curatore includes a framework for schedulable, event-driven workflows that searc
 | Item State | None | Per-item status and checkpoints |
 | Use Cases | Digests, notifications, reports | Document classification, enrichment |
 
-### Functions
+### Procedure Definition
 
-Functions are the atomic units of work. Located in `backend/app/functions/`:
+Procedures are defined in YAML with Jinja2 templating:
 
-| Category | Functions |
-|----------|-----------|
-| `llm` | `generate`, `extract`, `summarize`, `classify` |
-| `search` | `search_assets`, `query_solicitations`, `get_content` |
-| `output` | `update_metadata`, `bulk_update_metadata`, `create_artifact`, `create_pdf` |
-| `notify` | `send_email`, `webhook` |
-| `compound` | `analyze_solicitation`, `summarize_solicitations`, `generate_digest` |
-
-### YAML Definitions
-
-Procedures and pipelines are defined in YAML with Jinja2 templating:
+**Location**: `backend/app/procedures/definitions/`
 
 ```yaml
-# backend/app/procedures/definitions/sam_weekly_digest.yaml
-name: SAM.gov Weekly Digest
-slug: sam_weekly_digest
+name: SAM.gov Daily Digest
+slug: sam_daily_digest
+description: Generate a daily digest of recent SAM.gov notices
 
 triggers:
   - type: cron
-    cron_expression: "0 18 * * 0"  # Sunday 6 PM
+    cron_expression: "0 8 * * 1-5"  # Weekdays 8 AM
   - type: event
     event_name: sam_pull.completed
+  - type: webhook
+
+params:
+  recipients:
+    type: array
+    items: { type: string }
+    default: ["team@company.com"]
+  lookback_hours:
+    type: integer
+    default: 24
 
 steps:
-  - name: query_opportunities
-    function: query_solicitations
+  - name: query_notices
+    function: search_notices
     params:
-      posted_within_days: "{{ params.posted_within_days }}"
-  - name: generate_digest
-    function: generate
+      posted_within_hours: "{{ params.lookback_hours }}"
+      include_text: true
+
+  - name: summarize_each
+    function: llm_summarize
+    foreach: "{{ steps.query_notices }}"
     params:
-      prompt: "Create digest for {{ steps.query_opportunities | length }} opportunities"
+      item: "{{ item }}"
+      include_children: true
+
+  - name: create_digest
+    function: llm_generate
+    condition: "{{ steps.query_notices | length > 0 }}"
+    params:
+      system_prompt: "Create an executive digest."
+      user_prompt: "Summarize these opportunities: {{ steps.summarize_each }}"
+
+  - name: send_email
+    function: send_email
+    params:
+      to: "{{ params.recipients }}"
+      subject: "SAM.gov Daily Digest - {{ now_et().strftime('%B %d, %Y') }}"
+      body: "{{ steps.create_digest.text }}"
+      html: true
 ```
+
+### Procedure Features
+
+**Triggers**:
+- `cron`: Schedule-based (cron expression + optional timezone)
+- `event`: System event (e.g., `sam_pull.completed`, `sharepoint_sync.group_completed`)
+- `webhook`: HTTP POST to `/api/v1/webhooks/procedures/{slug}`
+
+**Parameters**: Typed inputs with defaults, validation, and enums
+
+**Steps**:
+- `function`: Which function to call
+- `params`: Function parameters with Jinja2 templating
+- `condition`: Skip step if evaluates to false
+- `foreach`: Iterate over a list, `{{ item }}` available in params
+- `on_error`: `fail` (default), `skip`, or `continue`
+
+**Context Variables**:
+| Variable | Description |
+|----------|-------------|
+| `{{ params.* }}` | Input parameters |
+| `{{ steps.step_name }}` | Previous step result |
+| `{{ item }}` | Current item in foreach |
+| `{{ event.* }}` | Event trigger data |
+| `{{ org_id }}` | Organization UUID |
+| `{{ now() }}` | Current UTC timestamp |
+| `{{ now_et() }}` | Current Eastern Time |
 
 ### Event System
 
-Events trigger procedures and pipelines:
+Events trigger procedures and pipelines automatically:
 
-| Event | Trigger |
-|-------|---------|
+| Event | When Emitted |
+|-------|--------------|
 | `sam_pull.completed` | After SAM.gov pull finishes |
+| `sam_pull.group_completed` | After all SAM pull extractions complete |
 | `sharepoint_sync.completed` | After SharePoint sync finishes |
-| `sam_pull.group_completed` | After all extractions from a SAM pull complete |
-| `sharepoint_sync.group_completed` | After all extractions from a sync complete |
+| `sharepoint_sync.group_completed` | After all SharePoint extractions complete |
+| `scrape.group_completed` | After web crawl + extractions complete |
 
 ### Key Files
 
 ```
 backend/app/
 ├── functions/
-│   ├── base.py              # BaseFunction, FunctionResult
-│   ├── context.py           # FunctionContext with services
-│   ├── registry.py          # FunctionRegistry
+│   ├── __init__.py          # fn namespace for clean access
+│   ├── base.py              # BaseFunction, FunctionResult, FunctionMeta
+│   ├── context.py           # FunctionContext with lazy services
+│   ├── registry.py          # FunctionRegistry with auto-discovery
+│   └── content/
+│       ├── content_item.py  # ContentItem dataclass
+│       ├── service.py       # ContentService
+│       └── registry.py      # ContentTypeRegistry
 │   └── llm/, search/, output/, notify/, compound/
 ├── procedures/
+│   ├── base.py              # ProcedureDefinition, StepDefinition
 │   ├── executor.py          # ProcedureExecutor
-│   ├── loader.py            # YAML loader with Jinja2
+│   ├── discovery.py         # YAML auto-discovery
+│   ├── loader.py            # YAML loading with Jinja2
 │   └── definitions/         # YAML procedure definitions
 ├── pipelines/
 │   ├── executor.py          # PipelineExecutor with checkpoints
@@ -543,9 +737,9 @@ backend/app/
 
 | Page | Path | Purpose |
 |------|------|---------|
-| Functions | `/admin/functions` | Browse and test functions |
-| Procedures | `/admin/procedures` | Manage and run procedures |
-| Pipelines | `/admin/pipelines` | Manage pipelines and view runs |
+| Functions | `/admin/functions` | Browse functions, view parameters, test execution |
+| Procedures | `/admin/procedures` | Manage procedures, view runs, trigger manually |
+| Pipelines | `/admin/pipelines` | Manage pipelines, view item states |
 
 ---
 

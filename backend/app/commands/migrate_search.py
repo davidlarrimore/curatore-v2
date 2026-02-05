@@ -204,11 +204,20 @@ async def migrate_sam_data(
                     if len(stats["errors"]) < 20:
                         stats["errors"].append(f"Solicitation {solicitation.id}: {e}")
 
-            # Get notices
+            # Get notices - include both solicitation-linked AND standalone notices
+            # Use outerjoin to get notices that may or may not have a solicitation
+            from sqlalchemy import or_
             notice_query = (
                 select(SamNotice)
-                .join(SamSolicitation)
-                .where(SamSolicitation.organization_id == org.id)
+                .outerjoin(SamSolicitation)
+                .where(
+                    or_(
+                        # Notices linked to solicitations owned by this org
+                        SamSolicitation.organization_id == org.id,
+                        # Standalone notices (e.g., Special Notices) owned directly by this org
+                        SamNotice.organization_id == org.id,
+                    )
+                )
             )
             notice_result = await session.execute(notice_query)
             notices = list(notice_result.scalars().all())

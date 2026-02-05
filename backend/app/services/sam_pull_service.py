@@ -1599,6 +1599,14 @@ class SamPullService:
                 # Task may not exist yet - log and continue
                 logger.warning(f"Could not trigger auto-summary for notice: {e}")
 
+        # Index standalone notice to search (Phase 7.6)
+        await self._index_standalone_notice_to_search(
+            session=session,
+            organization_id=organization_id,
+            notice=notice,
+            opportunity=opportunity,
+        )
+
         # Process attachments for standalone notices
         attachments = opportunity.get("attachments") or []
         for att_data in attachments:
@@ -2488,6 +2496,62 @@ class SamPullService:
         except Exception as e:
             # Don't fail the pull if indexing fails
             logger.warning(f"Failed to index SAM data to search: {e}")
+
+    async def _index_standalone_notice_to_search(
+        self,
+        session,  # AsyncSession
+        organization_id: UUID,
+        notice,  # SamNotice
+        opportunity: Dict[str, Any],
+    ):
+        """
+        Index a standalone notice (e.g., Special Notice) to search.
+
+        Standalone notices don't have a parent solicitation, so we only index
+        the notice itself using information directly from the notice record.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            notice: SamNotice instance
+            opportunity: Raw opportunity data from API
+        """
+        from .config_loader import config_loader
+        from .pg_index_service import pg_index_service
+        from ..config import settings
+
+        # Check if search is enabled
+        search_config = config_loader.get_search_config()
+        if search_config:
+            enabled = search_config.enabled
+        else:
+            enabled = getattr(settings, "search_enabled", True)
+
+        if not enabled:
+            return
+
+        try:
+            # Index the standalone notice (no solicitation to index)
+            await pg_index_service.index_sam_notice(
+                session=session,
+                organization_id=organization_id,
+                notice_id=notice.id,
+                sam_notice_id=notice.sam_notice_id,
+                solicitation_id=None,  # Standalone - no parent solicitation
+                title=notice.title or "",
+                description=notice.description or "",
+                notice_type=notice.notice_type or "Special Notice",
+                agency=notice.agency_name,
+                posted_date=notice.posted_date,
+                response_deadline=notice.response_deadline,
+                url=notice.ui_link,
+            )
+
+            logger.debug(f"Indexed standalone SAM notice {notice.id} to search")
+
+        except Exception as e:
+            # Don't fail the pull if indexing fails
+            logger.warning(f"Failed to index standalone notice to search: {e}")
 
     async def refresh_solicitation(
         self,

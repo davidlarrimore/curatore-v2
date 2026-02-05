@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { useDeletionJobs } from '@/lib/context-shims'
+import { useDeletionJobs, useActiveJobs } from '@/lib/context-shims'
 import { scrapeApi, ScrapeCollection, CrawlStatus } from '@/lib/api'
 import { formatCompact } from '@/lib/date-utils'
 import Link from 'next/link'
@@ -31,7 +31,8 @@ import {
 export default function ScrapeCollectionsPage() {
   const router = useRouter()
   const { token, user } = useAuth()
-  const { isDeleting, addJob } = useDeletionJobs()
+  const { isDeleting, addJob: addDeletionJob } = useDeletionJobs()
+  const { addJob } = useActiveJobs()
   const [collections, setCollections] = useState<ScrapeCollection[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -150,7 +151,7 @@ export default function ScrapeCollectionsPage() {
       const result = await scrapeApi.deleteCollection(token, collection.id)
 
       // Add to global deletion tracking
-      addJob({
+      addDeletionJob({
         runId: result.run_id,
         configId: collection.id,
         configName: collection.name,
@@ -535,6 +536,7 @@ function AddWebsiteModal({
   onCreated: () => void
 }) {
   const { token } = useAuth()
+  const { addJob } = useActiveJobs()
   const [url, setUrl] = useState('')
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
@@ -634,7 +636,18 @@ function AddWebsiteModal({
 
       // Auto-start crawl
       try {
-        await scrapeApi.startCrawl(token, collection.id)
+        const crawlResult = await scrapeApi.startCrawl(token, collection.id)
+
+        // Track the job in the activity monitor
+        if (crawlResult.run_id) {
+          addJob({
+            runId: crawlResult.run_id,
+            jobType: 'scrape',
+            displayName: name || collection.name || 'Web Scrape',
+            resourceId: collection.id,
+            resourceType: 'scrape_collection',
+          })
+        }
       } catch (crawlErr: any) {
         console.error('Failed to auto-start crawl:', crawlErr)
         // Show error but don't fail - collection was created

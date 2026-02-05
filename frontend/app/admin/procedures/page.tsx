@@ -7,7 +7,7 @@ import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { useActiveJobs } from '@/lib/context-shims'
 import { proceduresApi, type ProcedureListItem, type Procedure, type ProcedureTrigger } from '@/lib/api'
-import { formatDateTime, formatTimeAgo } from '@/lib/date-utils'
+import { formatDateTime, formatTimeAgo, formatTimeUntil, formatCompact } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import {
@@ -57,6 +57,50 @@ function getTriggerColor(triggerType: string): string {
     case 'event': return 'amber'
     case 'webhook': return 'purple'
     default: return 'gray'
+  }
+}
+
+// Convert cron expression to human-readable format
+function formatCronExpression(cron: string): string {
+  try {
+    const parts = cron.split(' ')
+    if (parts.length < 5) return cron
+
+    const [minute, hour, dayOfMonth, month, dayOfWeek] = parts
+
+    // Format time
+    const hourNum = parseInt(hour)
+    const minuteNum = parseInt(minute)
+    const ampm = hourNum >= 12 ? 'PM' : 'AM'
+    const hour12 = hourNum === 0 ? 12 : hourNum > 12 ? hourNum - 12 : hourNum
+    const timeStr = `${hour12}:${minuteNum.toString().padStart(2, '0')} ${ampm}`
+
+    // Format day of week
+    const dayNames: Record<string, string> = {
+      '0': 'Sunday', '1': 'Monday', '2': 'Tuesday', '3': 'Wednesday',
+      '4': 'Thursday', '5': 'Friday', '6': 'Saturday', '7': 'Sunday',
+      'SUN': 'Sunday', 'MON': 'Monday', 'TUE': 'Tuesday', 'WED': 'Wednesday',
+      'THU': 'Thursday', 'FRI': 'Friday', 'SAT': 'Saturday',
+    }
+
+    let dayStr = ''
+    if (dayOfWeek === '*' && dayOfMonth === '*') {
+      dayStr = 'every day'
+    } else if (dayOfWeek === '1-5') {
+      dayStr = 'weekdays'
+    } else if (dayOfWeek === '0,6' || dayOfWeek === '6,0') {
+      dayStr = 'weekends'
+    } else if (dayOfWeek !== '*') {
+      // Single day or list
+      const days = dayOfWeek.split(',').map(d => dayNames[d.toUpperCase()] || d)
+      dayStr = days.join(', ')
+    } else if (dayOfMonth !== '*') {
+      dayStr = `day ${dayOfMonth} of month`
+    }
+
+    return `${timeStr}${dayStr ? `, ${dayStr}` : ''}`
+  } catch {
+    return cron // Return raw expression if parsing fails
   }
 }
 
@@ -456,6 +500,16 @@ function ProceduresContent() {
                             {procedure.trigger_count} trigger{procedure.trigger_count !== 1 ? 's' : ''}
                           </span>
                         )}
+
+                        {procedure.next_trigger_at && (
+                          <span
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400"
+                            title={`Next run: ${formatCompact(procedure.next_trigger_at)}`}
+                          >
+                            <Calendar className="w-3 h-3" />
+                            {formatTimeUntil(procedure.next_trigger_at)}
+                          </span>
+                        )}
                       </div>
 
                       {procedure.description && (
@@ -556,8 +610,11 @@ function ProceduresContent() {
                                             {trigger.trigger_type}
                                           </span>
                                           {trigger.cron_expression && (
-                                            <span className="ml-2 text-xs font-mono text-gray-500 dark:text-gray-400">
-                                              {trigger.cron_expression}
+                                            <span
+                                              className="ml-2 text-xs text-gray-500 dark:text-gray-400"
+                                              title={trigger.cron_expression}
+                                            >
+                                              {formatCronExpression(trigger.cron_expression)}
                                             </span>
                                           )}
                                           {trigger.event_name && (
@@ -568,6 +625,11 @@ function ProceduresContent() {
                                         </div>
                                       </div>
                                       <div className="flex items-center gap-4">
+                                        {trigger.next_trigger_at && trigger.trigger_type === 'cron' && (
+                                          <span className="text-xs text-blue-600 dark:text-blue-400" title={formatCompact(trigger.next_trigger_at)}>
+                                            Next: {formatTimeUntil(trigger.next_trigger_at)}
+                                          </span>
+                                        )}
                                         {trigger.last_triggered_at && (
                                           <span className="text-xs text-gray-400 dark:text-gray-500">
                                             Last: {formatTimeAgo(trigger.last_triggered_at)}

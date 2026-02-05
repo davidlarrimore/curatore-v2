@@ -3256,7 +3256,7 @@ export interface SamDashboardStats {
 // Phase 7.6: Notice with solicitation context for org-wide listing
 export interface SamNoticeWithSolicitation {
   id: string
-  solicitation_id: string
+  solicitation_id: string | null  // Nullable for standalone notices (e.g., Special Notices)
   sam_notice_id: string
   notice_type: string
   version_number: number
@@ -4461,6 +4461,7 @@ export interface ProcedureListItem {
   is_system: boolean
   source_type: string
   trigger_count: number
+  next_trigger_at?: string  // Soonest scheduled run time
   tags: string[]
   created_at: string
   updated_at: string

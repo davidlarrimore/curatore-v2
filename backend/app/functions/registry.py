@@ -151,10 +151,14 @@ class FunctionRegistry:
             from .llm.extract import ExtractFunction
             from .llm.summarize import SummarizeFunction
             from .llm.classify import ClassifyFunction
+            from .llm.decide import DecideFunction
+            from .llm.route import RouteFunction
             self.register(GenerateFunction)
             self.register(ExtractFunction)
             self.register(SummarizeFunction)
             self.register(ClassifyFunction)
+            self.register(DecideFunction)
+            self.register(RouteFunction)
         except ImportError as e:
             logger.warning(f"Failed to import LLM functions: {e}")
 

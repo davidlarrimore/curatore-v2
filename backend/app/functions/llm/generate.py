@@ -32,6 +32,31 @@ def _render_item_template(template_str: str, item: Any) -> str:
     return template.render(item=item)
 
 
+def _strip_code_fences(text: str) -> str:
+    """
+    Strip markdown code fences from LLM output.
+
+    Handles patterns like:
+    - ```html\n...\n```
+    - ```\n...\n```
+    - ```json\n...\n```
+    """
+    if not text:
+        return text
+
+    import re
+
+    # Pattern to match code fences with optional language identifier
+    # Matches: ```lang\n content \n``` or ``` content ```
+    pattern = r'^```(?:\w+)?\s*\n?(.*?)\n?```\s*$'
+    match = re.match(pattern, text.strip(), re.DOTALL)
+
+    if match:
+        return match.group(1).strip()
+
+    return text
+
+
 class GenerateFunction(BaseFunction):
     """
     Generate text using an LLM.
@@ -181,6 +206,9 @@ class GenerateFunction(BaseFunction):
 
             generated_text = response.choices[0].message.content
 
+            # Strip markdown code fences if present
+            generated_text = _strip_code_fences(generated_text)
+
             return FunctionResult.success_result(
                 data=generated_text,
                 message=f"Generated {len(generated_text)} characters",
@@ -233,6 +261,10 @@ class GenerateFunction(BaseFunction):
                 )
 
                 generated_text = response.choices[0].message.content
+
+                # Strip markdown code fences if present
+                generated_text = _strip_code_fences(generated_text)
+
                 total_chars += len(generated_text) if generated_text else 0
 
                 # Extract item ID if available

@@ -369,10 +369,10 @@ class PgIndexService:
         organization_id: UUID,
         notice_id: UUID,
         sam_notice_id: str,
-        solicitation_id: UUID,
-        title: str,
-        description: str,
-        notice_type: str,
+        solicitation_id: Optional[UUID] = None,
+        title: str = "",
+        description: str = "",
+        notice_type: str = "",
         agency: Optional[str] = None,
         posted_date: Optional[datetime] = None,
         response_deadline: Optional[datetime] = None,
@@ -386,7 +386,7 @@ class PgIndexService:
             organization_id: Organization UUID
             notice_id: Internal notice UUID
             sam_notice_id: SAM.gov notice identifier
-            solicitation_id: Parent solicitation UUID
+            solicitation_id: Parent solicitation UUID (None for standalone notices)
             title: Notice title
             description: Notice description/content
             notice_type: Type of notice
@@ -411,7 +411,7 @@ class PgIndexService:
             # Build metadata
             metadata = {
                 "sam_notice_id": sam_notice_id,
-                "solicitation_id": str(solicitation_id),
+                "solicitation_id": str(solicitation_id) if solicitation_id else None,
                 "notice_type": notice_type,
                 "agency": agency,
                 "posted_date": posted_date.isoformat() if posted_date else None,

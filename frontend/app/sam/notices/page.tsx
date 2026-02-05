@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
@@ -100,6 +100,11 @@ function SamNoticesContent() {
   const searchParams = useSearchParams()
   const { token } = useAuth()
 
+  // Ref to track latest request and ignore stale responses
+  const loadRequestId = useRef(0)
+  // Debounce timer for search
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // State
   const [allNotices, setAllNotices] = useState<SamNoticeWithSolicitation[]>([]) // All notices for facet counts
   const [total, setTotal] = useState(0)
@@ -109,6 +114,7 @@ function SamNoticesContent() {
 
   // Filters and Search
   const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '')
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState(searchParams.get('q') || '')
   const [searchMode, setSearchMode] = useState<SearchMode>('keyword')
   const [selectedAgencies, setSelectedAgencies] = useState<Set<string>>(new Set())
   const [selectedNoticeTypes, setSelectedNoticeTypes] = useState<Set<string>>(new Set())
@@ -149,9 +155,28 @@ function SamNoticesContent() {
     }
   }, [token])
 
+  // Debounce search query updates
+  useEffect(() => {
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current)
+    }
+    searchDebounceRef.current = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery)
+    }, 300) // 300ms debounce
+
+    return () => {
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current)
+      }
+    }
+  }, [searchQuery])
+
   // Load all notices (for facet counts and filtering)
   const loadNotices = useCallback(async () => {
     if (!token) return
+
+    // Track this request to ignore stale responses
+    const requestId = ++loadRequestId.current
 
     setIsLoading(true)
     setError('')
@@ -164,47 +189,65 @@ function SamNoticesContent() {
         offset: 0,
       }
       // Only use keyword filter in keyword mode
-      if (searchQuery && searchMode === 'keyword') {
-        params.keyword = searchQuery
+      if (debouncedSearchQuery && searchMode === 'keyword') {
+        params.keyword = debouncedSearchQuery
       }
 
       const data = await samApi.listAllNotices(token, params)
+
+      // Ignore stale responses from previous requests
+      if (requestId !== loadRequestId.current) {
+        return
+      }
+
       setAllNotices(data.items)
       setTotal(data.total)
 
       // If semantic mode with a query, also do semantic search
-      if (searchMode === 'semantic' && searchQuery.trim()) {
-        setIsSemanticSearch(true)
+      if (searchMode === 'semantic' && debouncedSearchQuery.trim()) {
         const semanticData = await samApi.searchSam(token, {
-          query: searchQuery,
+          query: debouncedSearchQuery,
           source_types: ['sam_notice'],
           limit: 100,
         })
 
-        // Convert semantic results to notice format for display
-        // The semantic API returns asset_id which is the notice ID
-        const noticeIds = new Set(semanticData.hits.map(h => h.asset_id))
-        const matchedNotices = data.items.filter(n => noticeIds.has(n.id))
+        // Ignore stale responses from previous requests
+        if (requestId !== loadRequestId.current) {
+          return
+        }
 
-        // Sort by semantic score (preserve order from semantic results)
+        // For semantic search, fetch full notice details for each hit
+        // Build a map of notice IDs from the full list for quick lookup
+        const noticeMap = new Map(data.items.map(n => [n.id, n]))
+
+        // Order results by semantic relevance (preserve order from semantic results)
         const orderedNotices: SamNoticeWithSolicitation[] = []
         for (const hit of semanticData.hits) {
-          const notice = data.items.find(n => n.id === hit.asset_id)
+          const notice = noticeMap.get(hit.asset_id)
           if (notice) {
             orderedNotices.push(notice)
           }
         }
 
+        // Set both states together to ensure consistent rendering
+        setIsSemanticSearch(true)
         setSemanticResults(orderedNotices)
       } else {
         setSemanticResults([])
       }
     } catch (err: any) {
+      // Ignore errors from stale requests
+      if (requestId !== loadRequestId.current) {
+        return
+      }
       setError(err.message || 'Failed to load notices')
     } finally {
-      setIsLoading(false)
+      // Only update loading state for current request
+      if (requestId === loadRequestId.current) {
+        setIsLoading(false)
+      }
     }
-  }, [token, searchQuery, searchMode])
+  }, [token, debouncedSearchQuery, searchMode])
 
   useEffect(() => {
     if (token) {
@@ -265,8 +308,8 @@ function SamNoticesContent() {
 
   // Filter and sort notices
   const filteredAndSortedNotices = useMemo(() => {
-    // Use semantic results if in semantic search mode with results
-    let result = isSemanticSearch && semanticResults.length > 0
+    // Use semantic results if in semantic search mode (even if empty - means no matches)
+    let result = isSemanticSearch
       ? [...semanticResults]
       : [...allNotices]
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
@@ -119,6 +119,11 @@ function SamSolicitationsContent() {
   const searchParams = useSearchParams()
   const { token } = useAuth()
 
+  // Ref to track latest request and ignore stale responses
+  const loadRequestId = useRef(0)
+  // Debounce timer for search
+  const searchDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+
   // State
   const [allSolicitations, setAllSolicitations] = useState<SamSolicitation[]>([])
   const [total, setTotal] = useState(0)
@@ -128,6 +133,7 @@ function SamSolicitationsContent() {
 
   // Filters and Search
   const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '')
+  const [debouncedSearchQuery, setDebouncedSearchQuery] = useState(searchParams.get('q') || '')
   const [searchMode, setSearchMode] = useState<SearchMode>('keyword')
   const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set())
   const [selectedNoticeTypes, setSelectedNoticeTypes] = useState<Set<string>>(new Set())
@@ -169,9 +175,28 @@ function SamSolicitationsContent() {
     }
   }, [token])
 
+  // Debounce search query updates
+  useEffect(() => {
+    if (searchDebounceRef.current) {
+      clearTimeout(searchDebounceRef.current)
+    }
+    searchDebounceRef.current = setTimeout(() => {
+      setDebouncedSearchQuery(searchQuery)
+    }, 300) // 300ms debounce
+
+    return () => {
+      if (searchDebounceRef.current) {
+        clearTimeout(searchDebounceRef.current)
+      }
+    }
+  }, [searchQuery])
+
   // Load all solicitations (for facet counts and filtering)
   const loadSolicitations = useCallback(async () => {
     if (!token) return
+
+    // Track this request to ignore stale responses
+    const requestId = ++loadRequestId.current
 
     setIsLoading(true)
     setError('')
@@ -184,46 +209,64 @@ function SamSolicitationsContent() {
         offset: 0,
       }
       // Only use keyword filter in keyword mode
-      if (searchQuery && searchMode === 'keyword') {
-        params.keyword = searchQuery
+      if (debouncedSearchQuery && searchMode === 'keyword') {
+        params.keyword = debouncedSearchQuery
       }
 
       const data = await samApi.listSolicitations(token, params)
+
+      // Ignore stale responses from previous requests
+      if (requestId !== loadRequestId.current) {
+        return
+      }
+
       setAllSolicitations(data.items)
       setTotal(data.total)
 
       // If semantic mode with a query, also do semantic search
-      if (searchMode === 'semantic' && searchQuery.trim()) {
-        setIsSemanticSearch(true)
+      if (searchMode === 'semantic' && debouncedSearchQuery.trim()) {
         const semanticData = await samApi.searchSam(token, {
-          query: searchQuery,
+          query: debouncedSearchQuery,
           source_types: ['sam_solicitation'],
           limit: 100,
         })
 
-        // Convert semantic results to solicitation format for display
-        // The semantic API returns asset_id which is the solicitation ID
-        const solIds = new Set(semanticData.hits.map(h => h.asset_id))
+        // Ignore stale responses from previous requests
+        if (requestId !== loadRequestId.current) {
+          return
+        }
 
-        // Sort by semantic score (preserve order from semantic results)
+        // Build a map for quick lookup
+        const solMap = new Map(data.items.map(s => [s.id, s]))
+
+        // Order results by semantic relevance (preserve order from semantic results)
         const orderedSolicitations: SamSolicitation[] = []
         for (const hit of semanticData.hits) {
-          const sol = data.items.find(s => s.id === hit.asset_id)
+          const sol = solMap.get(hit.asset_id)
           if (sol) {
             orderedSolicitations.push(sol)
           }
         }
 
+        // Set both states together to ensure consistent rendering
+        setIsSemanticSearch(true)
         setSemanticResults(orderedSolicitations)
       } else {
         setSemanticResults([])
       }
     } catch (err: any) {
+      // Ignore errors from stale requests
+      if (requestId !== loadRequestId.current) {
+        return
+      }
       setError(err.message || 'Failed to load solicitations')
     } finally {
-      setIsLoading(false)
+      // Only update loading state for current request
+      if (requestId === loadRequestId.current) {
+        setIsLoading(false)
+      }
     }
-  }, [token, searchQuery, searchMode])
+  }, [token, debouncedSearchQuery, searchMode])
 
   useEffect(() => {
     if (token) {

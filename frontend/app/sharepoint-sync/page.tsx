@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
-import { useDeletionJobs } from '@/lib/context-shims'
+import { useDeletionJobs, useActiveJobs } from '@/lib/context-shims'
 import { sharepointSyncApi, SharePointSyncConfig } from '@/lib/api'
 import { formatDateTime } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
@@ -50,6 +50,7 @@ function SharePointSyncContent() {
   const router = useRouter()
   const { token } = useAuth()
   const { isDeleting } = useDeletionJobs()
+  const { addJob } = useActiveJobs()
 
   const [configs, setConfigs] = useState<SharePointSyncConfig[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -160,7 +161,19 @@ function SharePointSyncContent() {
     addToast('info', `Starting sync for "${configName}"...`, configId)
 
     try {
-      await sharepointSyncApi.triggerSync(token, configId)
+      const result = await sharepointSyncApi.triggerSync(token, configId)
+
+      // Track the job in the activity monitor
+      if (result.run_id) {
+        addJob({
+          runId: result.run_id,
+          jobType: 'sharepoint_sync',
+          displayName: configName,
+          resourceId: configId,
+          resourceType: 'sharepoint_config',
+        })
+      }
+
       // Start polling for status updates
       startPolling()
       // Refresh to show syncing status

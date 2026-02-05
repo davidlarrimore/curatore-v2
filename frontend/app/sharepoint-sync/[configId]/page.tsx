@@ -8,7 +8,7 @@ import { sharepointSyncApi, SharePointSyncConfig, SharePointSyncedDocument } fro
 import { formatDateTime, formatDuration } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import { ConfirmDeleteDialog } from '@/components/ui/ConfirmDeleteDialog'
-import { useDeletionJobs } from '@/lib/context-shims'
+import { useDeletionJobs, useActiveJobs } from '@/lib/context-shims'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import toast from 'react-hot-toast'
 import {
@@ -1059,7 +1059,8 @@ function SharePointSyncConfigContent() {
   const params = useParams()
   const configId = params.configId as string
   const { token } = useAuth()
-  const { addJob } = useDeletionJobs()
+  const { addJob: addDeletionJob } = useDeletionJobs()
+  const { addJob } = useActiveJobs()
 
   const [config, setConfig] = useState<SharePointSyncConfig | null>(null)
   const [documents, setDocuments] = useState<SharePointSyncedDocument[]>([])
@@ -1279,6 +1280,17 @@ function SharePointSyncConfigContent() {
     try {
       const result = await sharepointSyncApi.triggerSync(token, configId, fullSync)
 
+      // Track the job in the activity monitor
+      if (result.run_id) {
+        addJob({
+          runId: result.run_id,
+          jobType: 'sharepoint_sync',
+          displayName: config?.name || 'SharePoint Sync',
+          resourceId: configId,
+          resourceType: 'sharepoint_config',
+        })
+      }
+
       // Start polling for status
       startPolling()
 
@@ -1393,7 +1405,7 @@ function SharePointSyncConfigContent() {
       const response = await sharepointSyncApi.deleteConfig(token, configId)
 
       // Add to global deletion tracking
-      addJob({
+      addDeletionJob({
         runId: response.run_id,
         configId: configId,
         configName: config.name,

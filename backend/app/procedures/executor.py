@@ -218,6 +218,9 @@ class ProcedureExecutor:
             },
         )
 
+        # Update trigger timestamps for cron triggers (regardless of success/failure)
+        await self._update_trigger_timestamps(session, organization_id, definition.slug)
+
         return {
             "status": status,
             "procedure_slug": definition.slug,
@@ -544,6 +547,69 @@ class ProcedureExecutor:
             "items_failed": failed_count,
             "duration_ms": total_duration_ms,
         }
+
+    async def _update_trigger_timestamps(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        procedure_slug: str,
+    ) -> None:
+        """
+        Update trigger timestamps after procedure execution.
+
+        Sets last_triggered_at to now and recalculates next_trigger_at
+        for all active cron triggers of this procedure.
+        """
+        from croniter import croniter
+        from sqlalchemy import select
+        from ..database.procedures import Procedure, ProcedureTrigger
+
+        try:
+            # Find the procedure
+            proc_query = select(Procedure).where(
+                Procedure.organization_id == organization_id,
+                Procedure.slug == procedure_slug,
+            )
+            result = await session.execute(proc_query)
+            procedure = result.scalar_one_or_none()
+
+            if not procedure:
+                logger.debug(f"No procedure found for slug {procedure_slug}, skipping trigger update")
+                return
+
+            # Get active cron triggers
+            trigger_query = select(ProcedureTrigger).where(
+                ProcedureTrigger.procedure_id == procedure.id,
+                ProcedureTrigger.is_active == True,
+                ProcedureTrigger.trigger_type == "cron",
+            )
+            result = await session.execute(trigger_query)
+            triggers = result.scalars().all()
+
+            if not triggers:
+                return
+
+            now = datetime.utcnow()
+
+            for trigger in triggers:
+                # Update last_triggered_at
+                trigger.last_triggered_at = now
+                trigger.trigger_count = (trigger.trigger_count or 0) + 1
+
+                # Calculate next trigger time
+                if trigger.cron_expression:
+                    try:
+                        cron = croniter(trigger.cron_expression, now)
+                        trigger.next_trigger_at = cron.get_next(datetime)
+                    except Exception as e:
+                        logger.warning(f"Failed to calculate next trigger time: {e}")
+
+            await session.commit()
+            logger.debug(f"Updated {len(triggers)} trigger(s) for procedure {procedure_slug}")
+
+        except Exception as e:
+            logger.warning(f"Failed to update trigger timestamps for {procedure_slug}: {e}")
+            # Don't fail the procedure execution due to trigger update failure
 
 
 # Global executor instance

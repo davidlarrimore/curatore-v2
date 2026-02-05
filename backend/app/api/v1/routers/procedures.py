@@ -14,6 +14,7 @@ from uuid import UUID
 from datetime import datetime
 import logging
 
+from croniter import croniter
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from pydantic import BaseModel, Field
 from sqlalchemy import select, and_
@@ -26,6 +27,28 @@ from ....database.procedures import Procedure, ProcedureTrigger
 from ....procedures import procedure_executor, procedure_loader
 
 logger = logging.getLogger("curatore.api.procedures")
+
+
+def calculate_next_trigger_at(cron_expression: str, base_time: Optional[datetime] = None) -> Optional[datetime]:
+    """
+    Calculate the next trigger time for a cron expression.
+
+    Args:
+        cron_expression: A valid cron expression (5-field or 6-field)
+        base_time: Base time to calculate from (defaults to now)
+
+    Returns:
+        The next trigger datetime, or None if invalid
+    """
+    if not cron_expression:
+        return None
+    try:
+        base = base_time or datetime.utcnow()
+        cron = croniter(cron_expression, base)
+        return cron.get_next(datetime)
+    except Exception as e:
+        logger.warning(f"Failed to parse cron expression '{cron_expression}': {e}")
+        return None
 
 router = APIRouter(prefix="/procedures", tags=["Procedures"])
 
@@ -74,6 +97,7 @@ class ProcedureListItem(BaseModel):
     is_system: bool
     source_type: str
     trigger_count: int = 0
+    next_trigger_at: Optional[datetime] = None  # Soonest scheduled run time
     tags: List[str] = []
     created_at: datetime
     updated_at: datetime
@@ -149,13 +173,21 @@ async def list_procedures(
             if tag and tag not in tags:
                 continue
 
-            # Count triggers
+            # Get triggers for count and next_trigger_at
             trigger_query = select(ProcedureTrigger).where(
                 ProcedureTrigger.procedure_id == proc.id,
                 ProcedureTrigger.is_active == True,
             )
             trigger_result = await session.execute(trigger_query)
-            trigger_count = len(trigger_result.scalars().all())
+            triggers = trigger_result.scalars().all()
+            trigger_count = len(triggers)
+
+            # Find soonest next_trigger_at among cron triggers
+            next_trigger_at = None
+            for trigger in triggers:
+                if trigger.trigger_type == "cron" and trigger.next_trigger_at:
+                    if next_trigger_at is None or trigger.next_trigger_at < next_trigger_at:
+                        next_trigger_at = trigger.next_trigger_at
 
             items.append(ProcedureListItem(
                 id=str(proc.id),
@@ -167,6 +199,7 @@ async def list_procedures(
                 is_system=proc.is_system,
                 source_type=proc.source_type,
                 trigger_count=trigger_count,
+                next_trigger_at=next_trigger_at,
                 tags=tags,
                 created_at=proc.created_at,
                 updated_at=proc.updated_at,
@@ -498,6 +531,11 @@ async def create_trigger(
         if request.trigger_type == "event" and not request.event_name:
             raise HTTPException(status_code=400, detail="Event name required for event triggers")
 
+        # Calculate next trigger time for cron triggers
+        next_trigger_at = None
+        if request.trigger_type == "cron" and request.cron_expression:
+            next_trigger_at = calculate_next_trigger_at(request.cron_expression)
+
         # Create trigger
         trigger = ProcedureTrigger(
             procedure_id=procedure.id,
@@ -508,6 +546,7 @@ async def create_trigger(
             event_filter=request.event_filter,
             trigger_params=request.trigger_params,
             is_active=True,
+            next_trigger_at=next_trigger_at,
         )
         session.add(trigger)
         await session.commit()

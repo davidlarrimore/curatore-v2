@@ -225,7 +225,9 @@ class FunctionContext:
         - params: Procedure/pipeline parameters
         - steps: Results from previous steps
         - item: Current item when iterating with foreach
-        - now(): Current datetime
+        - now(): Current datetime (UTC)
+        - now_et(): Current datetime (US Eastern)
+        - today(): Current date string (US Eastern, formatted as 'Month Day, Year')
         - org_id: Organization ID
 
         Args:
@@ -234,6 +236,15 @@ class FunctionContext:
         """
         try:
             from jinja2 import Template
+            from zoneinfo import ZoneInfo
+
+            def now_et():
+                """Return current datetime in US Eastern timezone."""
+                return datetime.now(ZoneInfo("America/New_York"))
+
+            def today():
+                """Return today's date formatted as 'Month Day, Year' in US Eastern."""
+                return datetime.now(ZoneInfo("America/New_York")).strftime("%B %d, %Y")
 
             t = Template(template)
             context = {
@@ -245,6 +256,8 @@ class FunctionContext:
                 },
                 "variables": self.variables,
                 "now": datetime.utcnow,
+                "now_et": now_et,
+                "today": today,
                 "org_id": str(self.organization_id),
             }
 

@@ -302,6 +302,7 @@ class PullResponse(BaseModel):
     search_id: str
     status: str = Field(description="'queued' for async tasks, or final status for sync")
     task_id: Optional[str] = Field(None, description="Celery task ID for tracking")
+    run_id: Optional[str] = Field(None, description="Run ID for job tracking in the UI")
     message: str = Field(default="", description="Human-readable status message")
     # These fields are populated when the task completes (for backwards compat)
     total_fetched: int = 0
@@ -1221,6 +1222,7 @@ async def pull_search(
             search_id=str(search_id),
             status="queued",
             task_id=task.id,
+            run_id=str(run.id),
             message=f"Pull task queued. Task ID: {task.id}. Check the search page for results.",
         )
 

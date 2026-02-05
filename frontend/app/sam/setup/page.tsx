@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
+import { useActiveJobs } from '@/lib/context-shims'
 import { samApi, connectionsApi, SamSearch, SamApiUsage, SamQueueStats } from '@/lib/api'
 import { formatCompact } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
@@ -48,6 +49,7 @@ export default function SamSetupPage() {
 function SamSetupContent() {
   const router = useRouter()
   const { token } = useAuth()
+  const { addJob } = useActiveJobs()
 
   // State
   const [searches, setSearches] = useState<SamSearch[]>([])
@@ -245,6 +247,18 @@ function SamSetupContent() {
 
     try {
       const result = await samApi.triggerPull(token, search.id)
+
+      // Track the job in the activity monitor
+      if (result.run_id) {
+        addJob({
+          runId: result.run_id,
+          jobType: 'sam_pull',
+          displayName: `Pull: ${search.name}`,
+          resourceId: search.id,
+          resourceType: 'sam_search',
+        })
+      }
+
       if (result.status === 'queued') {
         toast.success(`Pull queued for "${search.name}". Results will appear shortly.`)
       } else {

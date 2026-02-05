@@ -196,6 +196,60 @@ export function formatISO(date: string | Date | null | undefined): string {
 }
 
 /**
+ * Format a future date as a relative time string (e.g., "in 5m", "in 2h", "Tomorrow @ 8 AM").
+ */
+export function formatTimeUntil(date: string | Date | null | undefined): string {
+  const d = parseDate(date)
+  if (!d) return '-'
+
+  const now = new Date()
+  const diff = d.getTime() - now.getTime()
+
+  // Past date
+  if (diff < 0) return formatTimeAgo(date)
+
+  const seconds = Math.floor(diff / 1000)
+
+  if (seconds < 60) return 'in < 1m'
+
+  const minutes = Math.floor(seconds / 60)
+  if (minutes < 60) return `in ${minutes}m`
+
+  const hours = Math.floor(minutes / 60)
+  if (hours < 24) return `in ${hours}h`
+
+  const days = Math.floor(hours / 24)
+  if (days === 1) {
+    // Show "Tomorrow @ time"
+    const timeStr = d.toLocaleString('en-US', {
+      timeZone: DISPLAY_TIMEZONE,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+    return `Tomorrow @ ${timeStr}`
+  }
+
+  if (days < 7) {
+    // Show day of week @ time
+    const dayStr = d.toLocaleString('en-US', {
+      timeZone: DISPLAY_TIMEZONE,
+      weekday: 'short',
+    })
+    const timeStr = d.toLocaleString('en-US', {
+      timeZone: DISPLAY_TIMEZONE,
+      hour: 'numeric',
+      minute: '2-digit',
+      hour12: true,
+    })
+    return `${dayStr} @ ${timeStr}`
+  }
+
+  // For dates further out, show the full date
+  return formatCompact(d)
+}
+
+/**
  * Format a date as a short datetime with relative day reference in EST.
  * - Today: "Today @ 5:30 PM EST"
  * - Yesterday: "Yesterday @ 5:30 PM EST"
