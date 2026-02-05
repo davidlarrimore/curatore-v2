@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
-import { functionsApi, connectionsApi, FunctionExecuteResult } from '@/lib/api'
+import { samApi, connectionsApi, SamNoticeWithSolicitation, SamNoticeListParams } from '@/lib/api'
 import { formatDate as formatDateUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamNavigation from '@/components/sam/SamNavigation'
@@ -17,91 +17,69 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
+  Filter,
   X,
   Calendar,
   Building2,
+  ExternalLink,
   Search,
   ChevronUp,
   ChevronDown,
   ArrowUpDown,
-  RotateCcw,
   Clock,
-  Activity,
-  Briefcase,
-  FileSearch,
-  Bell,
-  Award,
-  Scale,
-  Package,
-  Layers,
+  Tag,
+  CheckSquare,
+  Square,
 } from 'lucide-react'
 
-// Notice type from query_notifications function
-interface Notice {
-  id: string
-  sam_notice_id: string
-  notice_type: string
-  notice_type_label: string
-  version_number?: number
-  title: string
-  posted_date: string | null
-  response_deadline: string | null
-  description?: string
-  is_standalone: boolean
-  solicitation_id: string | null
-  has_changes_summary: boolean
-  changes_summary?: string
-  ui_link?: string
-  sam_url?: string
-  // Standalone notice fields
-  naics_code?: string
-  psc_code?: string
-  set_aside_code?: string
-  agency_name?: string
-  bureau_name?: string
-  office_name?: string
-}
-
 // Sort types
-type SortColumn = 'type' | 'title' | 'agency' | 'posted' | 'deadline'
+type SortColumn = 'type' | 'title' | 'agency' | 'solicitation_number' | 'posted' | 'deadline'
 type SortDirection = 'asc' | 'desc'
 
-// Date filter options
-type DateFilter = 'today' | '24h' | '1week' | '30days' | null
+// Timeframe options
+type TimeframeFilter = 'all' | '24h' | '7d' | '30d'
 
-// Notice type tabs with icons (matching Job Manager pattern)
-const NOTICE_TYPE_TABS = [
-  { value: 'all', label: 'All', icon: Activity },
-  { value: 'o', label: 'Solicitation', icon: Briefcase },
-  { value: 'k', label: 'Combined', icon: Layers },
-  { value: 'p', label: 'Presolicitation', icon: FileSearch },
-  { value: 'r', label: 'Sources Sought', icon: Search },
-  { value: 's', label: 'Special', icon: Bell },
-  { value: 'a', label: 'Award', icon: Award },
-  { value: 'u', label: 'J&A', icon: Scale },
-  { value: 'g', label: 'Surplus', icon: Package },
-]
-
-// Get icon for notice type
-function getNoticeTypeIcon(type: string): React.ComponentType<{ className?: string }> {
-  const tab = NOTICE_TYPE_TABS.find(t => t.value === type)
-  return tab?.icon || FileText
+// Notice type display names
+const NOTICE_TYPE_LABELS: Record<string, string> = {
+  'o': 'Solicitation',
+  'p': 'Presolicitation',
+  'k': 'Combined Synopsis/Solicitation',
+  'r': 'Sources Sought',
+  's': 'Special Notice',
+  'g': 'Sale of Surplus Property',
+  'a': 'Award Notice',
+  'u': 'Justification (J&A)',
+  'i': 'Intent to Bundle',
+  'Combined Synopsis/Solicitation': 'Combined Synopsis/Solicitation',
+  'Solicitation': 'Solicitation',
+  'Presolicitation': 'Presolicitation',
+  'Sources Sought': 'Sources Sought',
+  'Special Notice': 'Special Notice',
+  'Award Notice': 'Award Notice',
+  'Sale of Surplus Property': 'Sale of Surplus Property',
+  'Justification': 'Justification (J&A)',
+  'Intent to Bundle': 'Intent to Bundle',
 }
 
-// Check if a date is within range
-function isWithinDays(dateStr: string | null, days: number): boolean {
-  if (!dateStr) return false
+// Helper to normalize notice type for comparison
+function normalizeNoticeType(type: string): string {
+  return NOTICE_TYPE_LABELS[type] || type
+}
+
+// Helper to check if a date is within a timeframe
+function isWithinTimeframe(dateStr: string | null, timeframe: TimeframeFilter): boolean {
+  if (!dateStr || timeframe === 'all') return true
   const date = new Date(dateStr)
   const now = new Date()
   const diff = now.getTime() - date.getTime()
-  return diff >= 0 && diff < days * 24 * 60 * 60 * 1000
-}
+  const hours = diff / (1000 * 60 * 60)
 
-function isToday(dateStr: string | null): boolean {
-  if (!dateStr) return false
-  const date = new Date(dateStr)
-  const now = new Date()
-  return date.toDateString() === now.toDateString()
+  switch (timeframe) {
+    case '24h': return hours <= 24
+    case '7d': return hours <= 24 * 7
+    case '30d': return hours <= 24 * 30
+    default: return true
+  }
 }
 
 export default function SamNoticesPage() {
@@ -118,28 +96,23 @@ function SamNoticesContent() {
   const { token } = useAuth()
 
   // State
-  const [notices, setNotices] = useState<Notice[]>([])
+  const [allNotices, setAllNotices] = useState<SamNoticeWithSolicitation[]>([]) // All notices for facet counts
+  const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
-  const [isRefreshing, setIsRefreshing] = useState(false)
   const [error, setError] = useState('')
   const [hasConnection, setHasConnection] = useState<boolean | null>(null)
 
-  // Search and server-side filters
+  // Filters and Search
   const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '')
-  const [pendingSearch, setPendingSearch] = useState(searchQuery)
-
-  // Client-side filters (quick filters)
-  const [typeFilter, setTypeFilter] = useState('all')
-  const [dateFilter, setDateFilter] = useState<DateFilter>(null)
   const [selectedAgencies, setSelectedAgencies] = useState<Set<string>>(new Set())
+  const [selectedNoticeTypes, setSelectedNoticeTypes] = useState<Set<string>>(new Set())
+  const [timeframeFilter, setTimeframeFilter] = useState<TimeframeFilter>('all')
+  const [page, setPage] = useState(1)
+  const pageSize = 25
 
   // Sorting
   const [sortColumn, setSortColumn] = useState<SortColumn>('posted')
   const [sortDirection, setSortDirection] = useState<SortDirection>('desc')
-
-  // Pagination
-  const [page, setPage] = useState(1)
-  const pageSize = 50
 
   // Sort handler
   const handleSort = (column: SortColumn) => {
@@ -166,48 +139,28 @@ function SamNoticesContent() {
     }
   }, [token])
 
-  // Load notices using the query_notifications function
-  const loadNotices = useCallback(async (silent = false) => {
+  // Load all notices (for facet counts and filtering)
+  const loadNotices = useCallback(async () => {
     if (!token) return
 
-    if (!silent) {
-      setIsLoading(true)
-    }
+    setIsLoading(true)
     setError('')
 
     try {
-      // Build function params
-      const params: Record<string, any> = {
-        limit: 500, // Load enough for client-side filtering
-        order_by: '-posted_date',
+      // Fetch more notices to compute accurate facet counts
+      const params: SamNoticeListParams = {
+        limit: 500,
+        offset: 0,
       }
+      if (searchQuery) params.keyword = searchQuery
 
-      // Only add keyword if there's a search query
-      if (searchQuery.trim()) {
-        params.keyword = searchQuery.trim()
-      }
-
-      // Execute the query_notifications function
-      const result: FunctionExecuteResult = await functionsApi.executeFunction(
-        token,
-        'query_notifications',
-        params
-      )
-
-      if (result.status === 'success' && Array.isArray(result.data)) {
-        setNotices(result.data)
-      } else if (result.status === 'failed') {
-        setError(result.error || result.message || 'Failed to load notices')
-      }
+      const data = await samApi.listAllNotices(token, params)
+      setAllNotices(data.items)
+      setTotal(data.total)
     } catch (err: any) {
-      if (!silent) {
-        setError(err.message || 'Failed to load notices')
-      }
+      setError(err.message || 'Failed to load notices')
     } finally {
-      if (!silent) {
-        setIsLoading(false)
-      }
-      setIsRefreshing(false)
+      setIsLoading(false)
     }
   }, [token, searchQuery])
 
@@ -225,107 +178,70 @@ function SamNoticesContent() {
     }
   }, [token, hasConnection, loadNotices])
 
-  // Handle search submit
-  const handleSearch = () => {
-    setSearchQuery(pendingSearch)
-    setPage(1)
+  // Show connection required screen if no SAM.gov connection
+  if (hasConnection === false) {
+    return <SamConnectionRequired />
   }
 
-  // Handle refresh
-  const handleRefresh = async () => {
-    setIsRefreshing(true)
-    await loadNotices()
-  }
+  // Compute facet counts
+  const facetCounts = useMemo(() => {
+    const agencies: Record<string, number> = {}
+    const noticeTypes: Record<string, number> = {}
+    const timeframes = { '24h': 0, '7d': 0, '30d': 0 }
 
-  // Compute stats for type tabs
-  const typeStats = useMemo(() => {
-    const stats: Record<string, number> = { all: notices.length }
-    for (const notice of notices) {
-      const type = notice.notice_type || 'unknown'
-      stats[type] = (stats[type] || 0) + 1
-    }
-    return stats
-  }, [notices])
+    for (const notice of allNotices) {
+      // Agency counts
+      const agency = notice.agency_name || 'Unknown'
+      agencies[agency] = (agencies[agency] || 0) + 1
 
-  // Compute date stats
-  const dateStats = useMemo(() => {
-    const stats = {
-      today: 0,
-      '24h': 0,
-      '1week': 0,
-      '30days': 0,
+      // Notice type counts
+      const type = normalizeNoticeType(notice.notice_type)
+      noticeTypes[type] = (noticeTypes[type] || 0) + 1
+
+      // Timeframe counts
+      if (isWithinTimeframe(notice.posted_date, '24h')) timeframes['24h']++
+      if (isWithinTimeframe(notice.posted_date, '7d')) timeframes['7d']++
+      if (isWithinTimeframe(notice.posted_date, '30d')) timeframes['30d']++
     }
 
-    // Filter by type first if selected
-    const noticesInType = typeFilter === 'all'
-      ? notices
-      : notices.filter(n => n.notice_type === typeFilter)
-
-    for (const notice of noticesInType) {
-      if (isToday(notice.posted_date)) stats.today++
-      if (isWithinDays(notice.posted_date, 1)) stats['24h']++
-      if (isWithinDays(notice.posted_date, 7)) stats['1week']++
-      if (isWithinDays(notice.posted_date, 30)) stats['30days']++
-    }
-
-    return stats
-  }, [notices, typeFilter])
-
-  // Extract unique agencies from loaded notices
-  const uniqueAgencies = useMemo(() => {
-    const agencies = new Map<string, number>()
-
-    // Only count agencies in filtered notices
-    const noticesInType = typeFilter === 'all'
-      ? notices
-      : notices.filter(n => n.notice_type === typeFilter)
-
-    noticesInType.forEach(notice => {
-      if (notice.agency_name) {
-        agencies.set(notice.agency_name, (agencies.get(notice.agency_name) || 0) + 1)
-      }
-    })
-
-    // Sort by count (most common first), take top 8
-    return Array.from(agencies.entries())
+    // Sort agencies by count
+    const sortedAgencies = Object.entries(agencies)
       .sort((a, b) => b[1] - a[1])
-      .slice(0, 8)
-  }, [notices, typeFilter])
+      .slice(0, 10) // Top 10 agencies
 
-  // Apply filters and sort
+    // Sort notice types by count
+    const sortedNoticeTypes = Object.entries(noticeTypes)
+      .sort((a, b) => b[1] - a[1])
+
+    return {
+      agencies: sortedAgencies,
+      noticeTypes: sortedNoticeTypes,
+      timeframes,
+      total: allNotices.length,
+    }
+  }, [allNotices])
+
+  // Filter and sort notices
   const filteredAndSortedNotices = useMemo(() => {
-    let filtered = [...notices]
+    let result = [...allNotices]
 
-    // Apply type filter
-    if (typeFilter !== 'all') {
-      filtered = filtered.filter(n => n.notice_type === typeFilter)
-    }
-
-    // Apply date filter
-    if (dateFilter) {
-      filtered = filtered.filter(n => {
-        switch (dateFilter) {
-          case 'today':
-            return isToday(n.posted_date)
-          case '24h':
-            return isWithinDays(n.posted_date, 1)
-          case '1week':
-            return isWithinDays(n.posted_date, 7)
-          case '30days':
-            return isWithinDays(n.posted_date, 30)
-          default:
-            return true
-        }
-      })
-    }
-
-    // Apply agency filter (multi-select)
+    // Filter by selected agencies
     if (selectedAgencies.size > 0) {
-      filtered = filtered.filter(n => n.agency_name && selectedAgencies.has(n.agency_name))
+      result = result.filter(n => selectedAgencies.has(n.agency_name || 'Unknown'))
+    }
+
+    // Filter by selected notice types
+    if (selectedNoticeTypes.size > 0) {
+      result = result.filter(n => selectedNoticeTypes.has(normalizeNoticeType(n.notice_type)))
+    }
+
+    // Filter by timeframe
+    if (timeframeFilter !== 'all') {
+      result = result.filter(n => isWithinTimeframe(n.posted_date, timeframeFilter))
     }
 
     // Sort
-    return filtered.sort((a, b) => {
+    result.sort((a, b) => {
       let comparison = 0
 
       switch (sortColumn) {
@@ -337,6 +253,9 @@ function SamNoticesContent() {
           break
         case 'agency':
           comparison = (a.agency_name || '').localeCompare(b.agency_name || '')
+          break
+        case 'solicitation_number':
+          comparison = (a.solicitation_number || '').localeCompare(b.solicitation_number || '')
           break
         case 'posted': {
           const aDate = a.posted_date ? new Date(a.posted_date).getTime() : 0
@@ -354,9 +273,11 @@ function SamNoticesContent() {
 
       return sortDirection === 'asc' ? comparison : -comparison
     })
-  }, [notices, typeFilter, dateFilter, selectedAgencies, sortColumn, sortDirection])
 
-  // Paginated notices
+    return result
+  }, [allNotices, selectedAgencies, selectedNoticeTypes, timeframeFilter, sortColumn, sortDirection])
+
+  // Paginate
   const paginatedNotices = useMemo(() => {
     const start = (page - 1) * pageSize
     return filteredAndSortedNotices.slice(start, start + pageSize)
@@ -364,48 +285,47 @@ function SamNoticesContent() {
 
   const totalPages = Math.ceil(filteredAndSortedNotices.length / pageSize)
 
-  // Handle type filter change
-  const handleTypeChange = (value: string) => {
-    setTypeFilter(value)
-    setPage(1)
-  }
-
-  // Handle date filter change
-  const handleDateChange = (value: DateFilter) => {
-    setDateFilter(prev => prev === value ? null : value)
-    setPage(1)
-  }
-
   // Toggle agency filter
-  const toggleAgencyFilter = (agency: string) => {
-    setSelectedAgencies(prev => {
-      const next = new Set(prev)
-      if (next.has(agency)) {
-        next.delete(agency)
-      } else {
-        next.add(agency)
-      }
-      return next
-    })
+  const toggleAgency = (agency: string) => {
+    const newSelected = new Set(selectedAgencies)
+    if (newSelected.has(agency)) {
+      newSelected.delete(agency)
+    } else {
+      newSelected.add(agency)
+    }
+    setSelectedAgencies(newSelected)
     setPage(1)
   }
 
-  // Clear quick filters
-  const clearQuickFilters = () => {
-    setTypeFilter('all')
-    setDateFilter(null)
+  // Toggle notice type filter
+  const toggleNoticeType = (type: string) => {
+    const newSelected = new Set(selectedNoticeTypes)
+    if (newSelected.has(type)) {
+      newSelected.delete(type)
+    } else {
+      newSelected.add(type)
+    }
+    setSelectedNoticeTypes(newSelected)
+    setPage(1)
+  }
+
+  // Set timeframe filter
+  const handleTimeframeChange = (timeframe: TimeframeFilter) => {
+    setTimeframeFilter(timeframe === timeframeFilter ? 'all' : timeframe)
+    setPage(1)
+  }
+
+  const clearFilters = () => {
+    setSearchQuery('')
     setSelectedAgencies(new Set())
+    setSelectedNoticeTypes(new Set())
+    setTimeframeFilter('all')
     setPage(1)
   }
 
-  const hasQuickFilters = typeFilter !== 'all' || dateFilter !== null || selectedAgencies.size > 0
+  const hasFilters = searchQuery || selectedAgencies.size > 0 || selectedNoticeTypes.size > 0 || timeframeFilter !== 'all'
 
-  // Show connection required screen if no SAM.gov connection
-  if (hasConnection === false) {
-    return <SamConnectionRequired />
-  }
-
-  // Use formatDate from date-utils for consistent display
+  // Use formatDate from date-utils for consistent EST display
   const formatDate = (dateStr: string | null) => formatDateUtil(dateStr)
 
   return (
@@ -423,18 +343,18 @@ function SamNoticesContent() {
                   All Notices
                 </h1>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                  {notices.length.toLocaleString()} notices across all searches
+                  {filteredAndSortedNotices.length.toLocaleString()} of {total.toLocaleString()} notices
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-3">
               <Button
                 variant="secondary"
-                onClick={handleRefresh}
-                disabled={isLoading || isRefreshing}
+                onClick={loadNotices}
+                disabled={isLoading}
                 className="gap-2"
               >
-                <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
+                <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
                 Refresh
               </Button>
             </div>
@@ -451,220 +371,187 @@ function SamNoticesContent() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
                 type="text"
-                value={pendingSearch}
-                onChange={(e) => setPendingSearch(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                placeholder="Search by title or description..."
+                value={searchQuery}
+                onChange={(e) => {
+                  setSearchQuery(e.target.value)
+                  setPage(1)
+                }}
+                placeholder="Search by title, solicitation number, or description..."
                 className="w-full pl-10 pr-4 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
               />
             </div>
-            <Button onClick={handleSearch} disabled={isLoading}>
-              Search
-            </Button>
-            {searchQuery && (
+            {hasFilters && (
               <Button
                 variant="secondary"
-                onClick={() => {
-                  setPendingSearch('')
-                  setSearchQuery('')
-                  setPage(1)
-                }}
+                onClick={clearFilters}
                 className="gap-1"
               >
                 <X className="w-4 h-4" />
-                Clear
+                Clear All
               </Button>
             )}
           </div>
         </div>
 
-        {/* Notice Type Tabs (Job Manager style) */}
-        <div className="mb-6">
-          <div className="flex flex-wrap gap-2">
-            {NOTICE_TYPE_TABS.map((tab) => {
-              const Icon = tab.icon
-              const isActive = typeFilter === tab.value
-              const count = typeStats[tab.value] || 0
-
-              return (
+        {/* Quick Filter Panels */}
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 mb-6">
+          {/* Timeframe Filter */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Clock className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Posted</h3>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { value: '24h' as TimeframeFilter, label: 'Last 24 Hours', count: facetCounts.timeframes['24h'] },
+                { value: '7d' as TimeframeFilter, label: 'Last 7 Days', count: facetCounts.timeframes['7d'] },
+                { value: '30d' as TimeframeFilter, label: 'Last 30 Days', count: facetCounts.timeframes['30d'] },
+              ].map(({ value, label, count }) => (
                 <button
-                  key={tab.value}
-                  onClick={() => handleTypeChange(tab.value)}
+                  key={value}
+                  onClick={() => handleTimeframeChange(value)}
                   className={`
-                    flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors
-                    ${isActive
-                      ? 'bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400'
-                      : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700'
+                    flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors
+                    ${timeframeFilter === value
+                      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 ring-2 ring-indigo-500/20'
+                      : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
                     }
                   `}
                 >
-                  <Icon className="w-4 h-4" />
-                  {tab.label}
-                  {count > 0 && (
-                    <span className={`
-                      px-1.5 py-0.5 rounded-full text-xs
-                      ${isActive
-                        ? 'bg-cyan-200 dark:bg-cyan-800'
-                        : 'bg-gray-100 dark:bg-gray-700'
-                      }
-                    `}>
-                      {count}
-                    </span>
-                  )}
+                  {label}
+                  <span className={`
+                    px-1.5 py-0.5 rounded text-xs font-medium
+                    ${timeframeFilter === value
+                      ? 'bg-indigo-200 dark:bg-indigo-800'
+                      : 'bg-gray-200 dark:bg-gray-600'
+                    }
+                  `}>
+                    {count}
+                  </span>
                 </button>
-              )
-            })}
+              ))}
+            </div>
           </div>
-        </div>
 
-        {/* Date Filter Cards (Job Manager style stat cards) */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
-          {/* Today */}
-          <button
-            onClick={() => handleDateChange('today')}
-            className={`bg-white dark:bg-gray-800 rounded-xl border-2 p-4 transition-all ${
-              dateFilter === 'today'
-                ? 'border-indigo-500 ring-2 ring-indigo-500/20'
-                : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-700'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 flex items-center justify-center">
-                <Calendar className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-              </div>
-              <div className="text-left">
-                <p className="text-xs text-gray-500 dark:text-gray-400">Today</p>
-                <p className="text-xl font-bold text-gray-900 dark:text-white">{dateStats.today}</p>
-              </div>
-            </div>
-          </button>
-
-          {/* 24 Hours */}
-          <button
-            onClick={() => handleDateChange('24h')}
-            className={`bg-white dark:bg-gray-800 rounded-xl border-2 p-4 transition-all ${
-              dateFilter === '24h'
-                ? 'border-blue-500 ring-2 ring-blue-500/20'
-                : 'border-gray-200 dark:border-gray-700 hover:border-blue-300 dark:hover:border-blue-700'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-blue-50 dark:bg-blue-900/20 flex items-center justify-center">
-                <Clock className="w-5 h-5 text-blue-600 dark:text-blue-400" />
-              </div>
-              <div className="text-left">
-                <p className="text-xs text-gray-500 dark:text-gray-400">24 Hours</p>
-                <p className="text-xl font-bold text-gray-900 dark:text-white">{dateStats['24h']}</p>
-              </div>
-            </div>
-          </button>
-
-          {/* 1 Week */}
-          <button
-            onClick={() => handleDateChange('1week')}
-            className={`bg-white dark:bg-gray-800 rounded-xl border-2 p-4 transition-all ${
-              dateFilter === '1week'
-                ? 'border-emerald-500 ring-2 ring-emerald-500/20'
-                : 'border-gray-200 dark:border-gray-700 hover:border-emerald-300 dark:hover:border-emerald-700'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 flex items-center justify-center">
-                <Calendar className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-              </div>
-              <div className="text-left">
-                <p className="text-xs text-gray-500 dark:text-gray-400">1 Week</p>
-                <p className="text-xl font-bold text-gray-900 dark:text-white">{dateStats['1week']}</p>
-              </div>
-            </div>
-          </button>
-
-          {/* 30 Days */}
-          <button
-            onClick={() => handleDateChange('30days')}
-            className={`bg-white dark:bg-gray-800 rounded-xl border-2 p-4 transition-all ${
-              dateFilter === '30days'
-                ? 'border-amber-500 ring-2 ring-amber-500/20'
-                : 'border-gray-200 dark:border-gray-700 hover:border-amber-300 dark:hover:border-amber-700'
-            }`}
-          >
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 rounded-lg bg-amber-50 dark:bg-amber-900/20 flex items-center justify-center">
-                <Calendar className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-              </div>
-              <div className="text-left">
-                <p className="text-xs text-gray-500 dark:text-gray-400">30 Days</p>
-                <p className="text-xl font-bold text-gray-900 dark:text-white">{dateStats['30days']}</p>
-              </div>
-            </div>
-          </button>
-        </div>
-
-        {/* Agency Quick Filters */}
-        {uniqueAgencies.length > 0 && (
-          <div className="mb-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-            <div className="flex items-center justify-between mb-3">
-              <p className="text-sm font-medium text-gray-700 dark:text-gray-300 flex items-center gap-2">
-                <Building2 className="w-4 h-4" />
-                Filter by Agency
-              </p>
-              {hasQuickFilters && (
+          {/* Notice Type Filter */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Tag className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Notice Type</h3>
+              {selectedNoticeTypes.size > 0 && (
                 <button
-                  onClick={clearQuickFilters}
-                  className="flex items-center gap-1.5 text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-200 transition-colors"
+                  onClick={() => setSelectedNoticeTypes(new Set())}
+                  className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 ml-auto"
                 >
-                  <RotateCcw className="w-3 h-3" />
-                  Reset All Filters
+                  Clear
                 </button>
               )}
             </div>
-            <div className="flex flex-wrap gap-2">
-              {uniqueAgencies.map(([agency, count]) => {
-                const shortName = agency.length > 35 ? agency.substring(0, 32) + '...' : agency
-                return (
-                  <button
-                    key={agency}
-                    onClick={() => toggleAgencyFilter(agency)}
-                    title={agency}
-                    className={`px-3 py-1.5 text-xs font-medium rounded-full transition-colors ${
-                      selectedAgencies.has(agency)
-                        ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300 ring-1 ring-emerald-500'
-                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200 dark:bg-gray-700 dark:text-gray-300 dark:hover:bg-gray-600'
-                    }`}
-                  >
-                    {shortName}
-                    <span className="ml-1.5 text-[10px] opacity-75">({count})</span>
-                  </button>
-                )
-              })}
+            <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+              {facetCounts.noticeTypes.map(([type, count]) => (
+                <button
+                  key={type}
+                  onClick={() => toggleNoticeType(type)}
+                  className={`
+                    flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors
+                    ${selectedNoticeTypes.has(type)
+                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                      : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    }
+                  `}
+                >
+                  {selectedNoticeTypes.has(type) ? (
+                    <CheckSquare className="w-3 h-3" />
+                  ) : (
+                    <Square className="w-3 h-3" />
+                  )}
+                  <span className="truncate max-w-[120px]">{type}</span>
+                  <span className={`
+                    px-1 rounded text-[10px] font-medium
+                    ${selectedNoticeTypes.has(type)
+                      ? 'bg-emerald-200 dark:bg-emerald-800'
+                      : 'bg-gray-200 dark:bg-gray-600'
+                    }
+                  `}>
+                    {count}
+                  </span>
+                </button>
+              ))}
             </div>
           </div>
-        )}
+
+          {/* Agency Filter */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Building2 className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Top Agencies</h3>
+              {selectedAgencies.size > 0 && (
+                <button
+                  onClick={() => setSelectedAgencies(new Set())}
+                  className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 ml-auto"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2 max-h-32 overflow-y-auto">
+              {facetCounts.agencies.map(([agency, count]) => (
+                <button
+                  key={agency}
+                  onClick={() => toggleAgency(agency)}
+                  className={`
+                    flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors
+                    ${selectedAgencies.has(agency)
+                      ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+                      : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    }
+                  `}
+                >
+                  {selectedAgencies.has(agency) ? (
+                    <CheckSquare className="w-3 h-3" />
+                  ) : (
+                    <Square className="w-3 h-3" />
+                  )}
+                  <span className="truncate max-w-[150px]">{agency}</span>
+                  <span className={`
+                    px-1 rounded text-[10px] font-medium
+                    ${selectedAgencies.has(agency)
+                      ? 'bg-purple-200 dark:bg-purple-800'
+                      : 'bg-gray-200 dark:bg-gray-600'
+                    }
+                  `}>
+                    {count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
 
         {/* Active Filters Display */}
-        {hasQuickFilters && (
+        {hasFilters && (
           <div className="mb-4 flex items-center gap-2 flex-wrap">
             <span className="text-sm text-gray-500 dark:text-gray-400">Filters:</span>
-            {typeFilter !== 'all' && (
-              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-cyan-100 text-cyan-700 dark:bg-cyan-900/30 dark:text-cyan-400">
-                {NOTICE_TYPE_TABS.find(t => t.value === typeFilter)?.label}
-                <button onClick={() => handleTypeChange('all')} className="ml-1 hover:text-cyan-900 dark:hover:text-cyan-200">×</button>
-              </span>
-            )}
-            {dateFilter && (
+            {timeframeFilter !== 'all' && (
               <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400">
-                {dateFilter === 'today' ? 'Today' : dateFilter === '24h' ? '24 Hours' : dateFilter === '1week' ? '1 Week' : '30 Days'}
-                <button onClick={() => setDateFilter(null)} className="ml-1 hover:text-indigo-900 dark:hover:text-indigo-200">×</button>
+                {timeframeFilter === '24h' ? 'Last 24 Hours' : timeframeFilter === '7d' ? 'Last 7 Days' : 'Last 30 Days'}
+                <button onClick={() => setTimeframeFilter('all')} className="ml-1 hover:text-indigo-900 dark:hover:text-indigo-200">×</button>
               </span>
             )}
-            {selectedAgencies.size > 0 && (
-              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                {selectedAgencies.size} {selectedAgencies.size === 1 ? 'agency' : 'agencies'}
-                <button onClick={() => setSelectedAgencies(new Set())} className="ml-1 hover:text-emerald-900 dark:hover:text-emerald-200">×</button>
+            {Array.from(selectedNoticeTypes).map(type => (
+              <span key={type} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                {type}
+                <button onClick={() => toggleNoticeType(type)} className="ml-1 hover:text-emerald-900 dark:hover:text-emerald-200">×</button>
               </span>
-            )}
+            ))}
+            {Array.from(selectedAgencies).map(agency => (
+              <span key={agency} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 max-w-[200px]">
+                <span className="truncate">{agency}</span>
+                <button onClick={() => toggleAgency(agency)} className="ml-1 hover:text-purple-900 dark:hover:text-purple-200 flex-shrink-0">×</button>
+              </span>
+            ))}
             <button
-              onClick={clearQuickFilters}
+              onClick={clearFilters}
               className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
             >
               Clear all
@@ -688,42 +575,17 @@ function SamNoticesContent() {
             <div className="w-12 h-12 rounded-full border-4 border-gray-200 dark:border-gray-700 border-t-blue-500 animate-spin" />
             <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Loading notices...</p>
           </div>
-        ) : notices.length === 0 ? (
+        ) : paginatedNotices.length === 0 ? (
           <div className="text-center py-16">
             <FileText className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
             <p className="text-gray-500 dark:text-gray-400">
-              {searchQuery ? 'No notices match your search.' : 'No notices found.'}
+              {hasFilters ? 'No notices match your filters.' : 'No notices found.'}
             </p>
-          </div>
-        ) : filteredAndSortedNotices.length === 0 ? (
-          <div className="text-center py-16">
-            <Activity className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-            <p className="text-gray-500 dark:text-gray-400 mb-4">
-              No notices match your filters.
-            </p>
-            <Button variant="secondary" onClick={clearQuickFilters} className="gap-2">
-              <RotateCcw className="w-4 h-4" />
-              Reset Filters
-            </Button>
           </div>
         ) : (
           <>
             {/* Table */}
             <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-              <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700">
-                <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-                  <div>
-                    <h2 className="text-lg font-semibold text-gray-900 dark:text-white">
-                      Notices
-                    </h2>
-                    <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                      {filteredAndSortedNotices.length} notice{filteredAndSortedNotices.length !== 1 ? 's' : ''}
-                      {hasQuickFilters && ` (filtered from ${notices.length})`}
-                    </p>
-                  </div>
-                </div>
-              </div>
-
               <div className="overflow-x-auto">
                 <table className="w-full">
                   <thead>
@@ -745,6 +607,13 @@ function SamNoticesContent() {
                       <SortableHeader
                         label="Agency"
                         column="agency"
+                        currentColumn={sortColumn}
+                        direction={sortDirection}
+                        onSort={handleSort}
+                      />
+                      <SortableHeader
+                        label="Notice ID"
+                        column="solicitation_number"
                         currentColumn={sortColumn}
                         direction={sortDirection}
                         onSort={handleSort}
@@ -776,20 +645,9 @@ function SamNoticesContent() {
                           <NoticeTypeBadge type={notice.notice_type} />
                         </td>
                         <td className="px-4 py-3">
-                          <div className="min-w-0">
-                            <p className="text-sm font-medium text-gray-900 dark:text-white truncate max-w-[300px]">
-                              {notice.title || 'Untitled'}
-                            </p>
-                            {notice.solicitation_id && (
-                              <Link
-                                href={`/sam/solicitations/${notice.solicitation_id}`}
-                                onClick={(e) => e.stopPropagation()}
-                                className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline font-mono"
-                              >
-                                View Solicitation
-                              </Link>
-                            )}
-                          </div>
+                          <p className="text-sm font-medium text-gray-900 dark:text-white truncate max-w-[300px]">
+                            {notice.title || 'Untitled'}
+                          </p>
                         </td>
                         <td className="px-4 py-3">
                           <p className="text-sm text-gray-600 dark:text-gray-400 truncate max-w-[200px]">
@@ -797,7 +655,26 @@ function SamNoticesContent() {
                           </p>
                         </td>
                         <td className="px-4 py-3">
-                          <p className="text-sm text-gray-600 dark:text-gray-400 whitespace-nowrap">
+                          {notice.solicitation_number ? (
+                            notice.solicitation_id ? (
+                              <Link
+                                href={`/sam/solicitations/${notice.solicitation_id}`}
+                                onClick={(e) => e.stopPropagation()}
+                                className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline font-mono"
+                              >
+                                {notice.solicitation_number}
+                              </Link>
+                            ) : (
+                              <span className="text-sm text-gray-600 dark:text-gray-400 font-mono">
+                                {notice.solicitation_number}
+                              </span>
+                            )
+                          ) : (
+                            <span className="text-sm text-gray-400">-</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          <p className="text-sm text-gray-600 dark:text-gray-400">
                             {formatDate(notice.posted_date)}
                           </p>
                         </td>

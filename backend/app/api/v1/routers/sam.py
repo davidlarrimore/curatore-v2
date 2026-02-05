@@ -830,7 +830,7 @@ async def list_all_notices(
                     response_deadline=notice.response_deadline,
                     changes_summary=notice.changes_summary,
                     created_at=notice.created_at,
-                    solicitation_number=None,  # Standalone notices don't have solicitation numbers
+                    solicitation_number=notice.solicitation_number,  # Can have solnum even for standalone
                     agency_name=notice.agency_name,
                     bureau_name=notice.bureau_name,
                     office_name=notice.office_name,

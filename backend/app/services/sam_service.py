@@ -656,6 +656,7 @@ class SamService:
         full_parent_path: Optional[str] = None,
         ui_link: Optional[str] = None,
         raw_data: Optional[Dict[str, Any]] = None,
+        solicitation_number: Optional[str] = None,  # SAM.gov "Notice ID" for standalone notices
     ) -> SamNotice:
         """
         Create a new notice.
@@ -713,6 +714,7 @@ class SamService:
             full_parent_path=full_parent_path,
             ui_link=ui_link,
             raw_data=raw_data,
+            solicitation_number=solicitation_number,
             summary_status="pending" if solicitation_id is None else None,
         )
 
@@ -1556,6 +1558,7 @@ class SamService:
                     SamNotice.title.ilike(keyword_filter),
                     SamNotice.description.ilike(keyword_filter),
                     SamSolicitation.solicitation_number.ilike(keyword_filter),
+                    SamNotice.sam_notice_id.ilike(keyword_filter),
                 )
             )
 
@@ -1582,13 +1585,15 @@ class SamService:
                 SamNotice.office_name.ilike(f"%{office}%")
             )
 
-        # Apply keyword filter (no solicitation_number for standalone)
+        # Apply keyword filter (includes solicitation_number for standalone notices)
         if keyword:
             keyword_filter = f"%{keyword}%"
             standalone_query = standalone_query.where(
                 or_(
                     SamNotice.title.ilike(keyword_filter),
                     SamNotice.description.ilike(keyword_filter),
+                    SamNotice.solicitation_number.ilike(keyword_filter),
+                    SamNotice.sam_notice_id.ilike(keyword_filter),
                 )
             )
 

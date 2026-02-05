@@ -2220,6 +2220,10 @@ class SamNotice(Base):
     office_name = Column(String(500), nullable=True)
     full_parent_path = Column(String(1000), nullable=True)  # Original fullParentPathName
 
+    # Solicitation number (SAM.gov API field, displayed as "Notice ID" on SAM.gov website)
+    # For standalone notices, this is stored directly. For linked notices, it's on the parent.
+    solicitation_number = Column(String(100), nullable=True, index=True)
+
     # Links
     ui_link = Column(String(500), nullable=True)
 

@@ -66,6 +66,11 @@ export interface QueueStatsData {
     per_minute: number
     avg_extraction_seconds: number | null
   }
+  recent_5m: {
+    completed: number
+    failed: number
+    timed_out: number
+  }
   recent_24h: {
     completed: number
     failed: number

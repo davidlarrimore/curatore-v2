@@ -1582,6 +1582,7 @@ class SamPullService:
                 bureau_name=opportunity.get("bureau_name"),
                 office_name=opportunity.get("office_name"),
                 ui_link=opportunity.get("ui_link"),
+                solicitation_number=opportunity.get("solicitation_number"),  # SAM.gov "Notice ID"
             )
             results["new_standalone_notices"] = results.get("new_standalone_notices", 0) + 1
             logger.info(f"Created standalone notice {notice.id}: {notice.title}")

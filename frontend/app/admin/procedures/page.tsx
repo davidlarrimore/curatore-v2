@@ -1,9 +1,11 @@
 'use client'
 
 import { useState, useEffect, useCallback, useMemo } from 'react'
+import YAML from 'yaml'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
+import { useActiveJobs } from '@/lib/context-shims'
 import { proceduresApi, type ProcedureListItem, type Procedure, type ProcedureTrigger } from '@/lib/api'
 import { formatDateTime, formatTimeAgo } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
@@ -61,6 +63,7 @@ function getTriggerColor(triggerType: string): string {
 function ProceduresContent() {
   const router = useRouter()
   const { token } = useAuth()
+  const { addJob } = useActiveJobs()
 
   const [procedures, setProcedures] = useState<ProcedureListItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -148,9 +151,20 @@ function ProceduresContent() {
   const handleRun = async (slug: string) => {
     if (!token) return
 
+    const procedure = procedures.find(p => p.slug === slug)
     setRunningProcedure(slug)
     try {
       const result = await proceduresApi.runProcedure(token, slug, {}, false, true)
+      // Track the job in the unified jobs context
+      if (result.run_id) {
+        addJob({
+          runId: result.run_id,
+          jobType: 'procedure',
+          displayName: procedure?.name || slug,
+          resourceId: slug,
+          resourceType: 'procedure',
+        })
+      }
       setSuccessMessage(`Procedure ${slug} started (Run ID: ${result.run_id})`)
       setTimeout(() => setSuccessMessage(''), 5000)
     } catch (err: any) {
@@ -573,11 +587,11 @@ function ProceduresContent() {
                           {/* Definition preview */}
                           <div>
                             <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
-                              Definition
+                              Definition (YAML)
                             </h4>
                             <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900/50">
-                              <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 overflow-auto max-h-48">
-                                {JSON.stringify(procedureDetails.definition, null, 2)}
+                              <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
+                                {YAML.stringify(procedureDetails.definition)}
                               </pre>
                             </div>
                           </div>

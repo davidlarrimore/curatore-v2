@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
-import { assetsApi, type Run, type AssetMetadataList, type AssetQueueInfo } from '@/lib/api'
+import { assetsApi, type Run, type AssetMetadataList, type AssetQueueInfo, type Asset, type ExtractionResult, type AssetVersion } from '@/lib/api'
 import { ExtractionStatus, isActiveStatus } from '@/components/ui/ExtractionStatus'
 import { POLLING } from '@/lib/polling-config'
 import { formatDateTime } from '@/lib/date-utils'
@@ -39,70 +39,6 @@ import {
   Check,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
-
-interface Asset {
-  id: string
-  organization_id: string
-  source_type: string
-  source_metadata: Record<string, any>
-  original_filename: string
-  content_type: string | null
-  file_size: number | null
-  file_hash: string | null
-  raw_bucket: string
-  raw_object_key: string
-  status: string
-  current_version_number: number | null
-  created_at: string
-  updated_at: string
-  created_by: string | null
-  // Extraction pipeline status fields
-  extraction_tier: string | null
-  indexed_at: string | null
-}
-
-interface ExtractionResult {
-  id: string
-  asset_id: string
-  run_id: string
-  extractor_version: string
-  extraction_tier: string | null
-  status: string
-  extraction_time_seconds: number | null
-  extracted_bucket: string | null
-  extracted_object_key: string | null
-  structure_metadata: Record<string, any> | null
-  warnings: string[]
-  errors: string[]
-  created_at: string
-  // Triage fields (new extraction routing architecture)
-  triage_engine?: 'fast_pdf' | 'fast_office' | 'docling' | 'ocr_only' | null
-  triage_needs_ocr?: boolean | null
-  triage_needs_layout?: boolean | null
-  triage_complexity?: 'low' | 'medium' | 'high' | null
-  triage_duration_ms?: number | null
-}
-
-interface AssetVersion {
-  id: string
-  asset_id: string
-  version_number: number
-  raw_bucket: string
-  raw_object_key: string
-  file_size: number | null
-  file_hash: string | null
-  content_type: string | null
-  is_current: boolean
-  created_at: string
-  created_by: string | null
-  // Extraction info (permanent data)
-  extraction_status: string | null
-  extraction_tier: string | null
-  extractor_version: string | null
-  extraction_time_seconds: number | null
-  extraction_created_at: string | null
-  extraction_run_id: string | null
-}
 
 type TabType = 'original' | 'extracted' | 'metadata' | 'history'
 

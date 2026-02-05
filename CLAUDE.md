@@ -221,23 +221,23 @@ Curatore integrates with SAM.gov (System for Award Management) to track federal 
                               └─────────────────┘
 ```
 
-### Notice Types
+### Notice Types (ptype codes from SAM.gov API)
 
 | Type Code | Name | Has Solicitation Number? |
 |-----------|------|-------------------------|
-| `o` | Combined Synopsis/Solicitation | Yes (usually) |
+| `o` | Solicitation | Yes (usually) |
 | `p` | Presolicitation | Yes (usually) |
-| `k` | Sources Sought | Maybe |
-| `r` | Special Notice | **No** - always standalone |
-| `s` | Sale of Surplus Property | Maybe |
-| `g` | Grant Notice | Maybe |
+| `k` | Combined Synopsis/Solicitation | Yes (usually) |
+| `r` | Sources Sought | Maybe |
+| `s` | Special Notice | **No** - always standalone |
+| `g` | Sale of Surplus Property | Maybe |
 | `a` | Award Notice | Yes (usually) |
-| `u` | Justification | Yes (usually) |
+| `u` | Justification (J&A) | Yes (usually) |
 | `i` | Intent to Bundle | Maybe |
 
 ### Standalone Notices
 
-**Special Notices (type "r")** are informational and don't have solicitation numbers. They are stored as:
+**Special Notices (type "s")** are informational and don't have solicitation numbers. They are stored as:
 - `SamNotice` with `solicitation_id = NULL`
 - `organization_id` set on the notice itself (not inherited from solicitation)
 - Agency info stored directly on the notice (`agency_name`, `bureau_name`, `office_name`)

@@ -114,6 +114,11 @@ export interface UnifiedQueueStats {
     per_minute: number
     avg_extraction_seconds: number | null
   }
+  recent_5m: {
+    completed: number
+    failed: number
+    timed_out: number
+  }
   recent_24h: {
     completed: number
     failed: number
@@ -333,8 +338,10 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
     }
   }, [runToJob])
 
-  // Handle WebSocket message
-  const handleWebSocketMessage = useCallback((message: JobUpdateMessage) => {
+  // Handle WebSocket message - use ref to avoid reconnection when callbacks change
+  const handleWebSocketMessageRef = useRef<(message: JobUpdateMessage) => void>(() => {})
+
+  const handleWebSocketMessageImpl = useCallback((message: JobUpdateMessage) => {
     switch (message.type) {
       case 'run_status':
         handleJobStatusUpdate(message.data as RunStatusData)
@@ -392,6 +399,16 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
     }
   }, [handleJobStatusUpdate, runToJob])
 
+  // Keep ref updated so WebSocket always calls latest handler
+  useEffect(() => {
+    handleWebSocketMessageRef.current = handleWebSocketMessageImpl
+  }, [handleWebSocketMessageImpl])
+
+  // Stable wrapper for WebSocket client
+  const handleWebSocketMessage = useCallback((message: JobUpdateMessage) => {
+    handleWebSocketMessageRef.current(message)
+  }, [])
+
   // Handle connection status change
   // Note: We don't show toast notifications for connection changes - the StatusBar
   // has a ConnectionStatusIndicator that shows the current state. Toasts are too
@@ -409,8 +426,10 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
 
   // Handle fallback to polling
   // Note: No toast notification - the StatusBar indicator shows "Polling" status
+  // Use a ref to avoid dependency on startPolling which changes frequently
+  const startPollingRef = useRef<() => void>(() => {})
   const handleFallbackToPolling = useCallback(() => {
-    startPolling()
+    startPollingRef.current()
   }, [])
 
   // Handle WebSocket auth error (token expired)
@@ -491,6 +510,11 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
     pollQueueStats()
   }, [pollJobStatuses, pollQueueStats])
 
+  // Keep ref updated for stable callback access
+  useEffect(() => {
+    startPollingRef.current = startPolling
+  }, [startPolling])
+
   // Stop polling
   const stopPolling = useCallback(() => {
     if (jobPollIntervalRef.current) {
@@ -542,7 +566,10 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
       wsClientRef.current = null
       stopPolling()
     }
-  }, [token, isAuthenticated, handleWebSocketMessage, handleConnectionChange, handleFallbackToPolling, handleWebSocketAuthError, startPolling, stopPolling])
+    // Note: Only depend on token/auth and stable callbacks.
+    // startPolling/stopPolling are accessed via refs to avoid reconnection churn.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, isAuthenticated, handleConnectionChange, handleFallbackToPolling, handleWebSocketAuthError])
 
   // Start polling when in polling mode
   useEffect(() => {
@@ -628,8 +655,9 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
   // ============================================================================
 
   const hasActiveJobs = jobs.length > 0
-  // Count active jobs across ALL queues, not just extraction
-  const activeCount = queueStats
+
+  // Count active jobs from queue stats
+  const queueActiveCount = queueStats
     ? (
         // Extraction queue (pending + submitted + running)
         queueStats.extraction_queue.pending +
@@ -642,6 +670,10 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
         queueStats.celery_queues.maintenance
       )
     : 0
+
+  // Use the max of queue stats and tracked jobs to ensure we show activity
+  // even before queue stats update (e.g., when a procedure just started)
+  const activeCount = Math.max(queueActiveCount, jobs.length)
 
   // ============================================================================
   // Context Value

@@ -758,6 +758,11 @@ export interface UnifiedQueueStats {
     per_minute: number
     avg_extraction_seconds: number | null
   }
+  recent_5m: {
+    completed: number
+    failed: number
+    timed_out: number
+  }
   recent_24h: {
     completed: number
     failed: number
@@ -2035,6 +2040,9 @@ export interface Asset {
   created_at: string
   updated_at: string
   created_by: string | null
+  // Extraction pipeline status fields
+  extraction_tier: string | null
+  indexed_at: string | null
 }
 
 export interface AssetVersion {
@@ -2049,6 +2057,13 @@ export interface AssetVersion {
   is_current: boolean
   created_at: string
   created_by: string | null
+  // Extraction info (permanent data)
+  extraction_status?: string | null
+  extraction_tier?: string | null
+  extractor_version?: string | null
+  extraction_time_seconds?: number | null
+  extraction_created_at?: string | null
+  extraction_run_id?: string | null
 }
 
 export interface ExtractionResult {
@@ -4398,7 +4413,7 @@ export const functionsApi = {
     return handleJson(res)
   },
 
-  async getFunction(token?: string, name: string): Promise<FunctionMeta> {
+  async getFunction(token: string | undefined, name: string): Promise<FunctionMeta> {
     const res = await fetch(apiUrl(`/functions/${name}`), {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -4407,7 +4422,7 @@ export const functionsApi = {
   },
 
   async executeFunction(
-    token?: string,
+    token: string | undefined,
     name: string,
     params: Record<string, any> = {},
     dryRun: boolean = false
@@ -4489,7 +4504,7 @@ export const proceduresApi = {
     return handleJson(res)
   },
 
-  async getProcedure(token?: string, slug: string): Promise<Procedure> {
+  async getProcedure(token: string | undefined, slug: string): Promise<Procedure> {
     const res = await fetch(apiUrl(`/procedures/${slug}`), {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -4498,7 +4513,7 @@ export const proceduresApi = {
   },
 
   async runProcedure(
-    token?: string,
+    token: string | undefined,
     slug: string,
     params: Record<string, any> = {},
     dryRun: boolean = false,
@@ -4512,7 +4527,7 @@ export const proceduresApi = {
     return handleJson(res)
   },
 
-  async enableProcedure(token?: string, slug: string): Promise<{ status: string; message: string }> {
+  async enableProcedure(token: string | undefined, slug: string): Promise<{ status: string; message: string }> {
     const res = await fetch(apiUrl(`/procedures/${slug}/enable`), {
       method: 'POST',
       headers: authHeaders(token),
@@ -4520,7 +4535,7 @@ export const proceduresApi = {
     return handleJson(res)
   },
 
-  async disableProcedure(token?: string, slug: string): Promise<{ status: string; message: string }> {
+  async disableProcedure(token: string | undefined, slug: string): Promise<{ status: string; message: string }> {
     const res = await fetch(apiUrl(`/procedures/${slug}/disable`), {
       method: 'POST',
       headers: authHeaders(token),
@@ -4528,7 +4543,7 @@ export const proceduresApi = {
     return handleJson(res)
   },
 
-  async listTriggers(token?: string, slug: string): Promise<ProcedureTrigger[]> {
+  async listTriggers(token: string | undefined, slug: string): Promise<ProcedureTrigger[]> {
     const res = await fetch(apiUrl(`/procedures/${slug}/triggers`), {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -4537,7 +4552,7 @@ export const proceduresApi = {
   },
 
   async createTrigger(
-    token?: string,
+    token: string | undefined,
     slug: string,
     data: {
       trigger_type: string
@@ -4555,7 +4570,7 @@ export const proceduresApi = {
     return handleJson(res)
   },
 
-  async deleteTrigger(token?: string, slug: string, triggerId: string): Promise<{ status: string; message: string }> {
+  async deleteTrigger(token: string | undefined, slug: string, triggerId: string): Promise<{ status: string; message: string }> {
     const res = await fetch(apiUrl(`/procedures/${slug}/triggers/${triggerId}`), {
       method: 'DELETE',
       headers: authHeaders(token),
@@ -4669,7 +4684,7 @@ export const pipelinesApi = {
     return handleJson(res)
   },
 
-  async getPipeline(token?: string, slug: string): Promise<Pipeline> {
+  async getPipeline(token: string | undefined, slug: string): Promise<Pipeline> {
     const res = await fetch(apiUrl(`/pipelines/${slug}`), {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -4678,7 +4693,7 @@ export const pipelinesApi = {
   },
 
   async runPipeline(
-    token?: string,
+    token: string | undefined,
     slug: string,
     params: Record<string, any> = {},
     dryRun: boolean = false,
@@ -4693,7 +4708,7 @@ export const pipelinesApi = {
   },
 
   async listRuns(
-    token?: string,
+    token: string | undefined,
     slug: string,
     params?: { status?: string; limit?: number; offset?: number }
   ): Promise<{ runs: PipelineRun[]; total: number }> {
@@ -4710,7 +4725,7 @@ export const pipelinesApi = {
   },
 
   async getRunItems(
-    token?: string,
+    token: string | undefined,
     slug: string,
     runId: string,
     params?: { status?: string; stage?: string; limit?: number; offset?: number }
@@ -4729,7 +4744,7 @@ export const pipelinesApi = {
   },
 
   async resumeRun(
-    token?: string,
+    token: string | undefined,
     slug: string,
     runId: string,
     fromStage?: number
@@ -4742,7 +4757,7 @@ export const pipelinesApi = {
     return handleJson(res)
   },
 
-  async enablePipeline(token?: string, slug: string): Promise<{ status: string; message: string }> {
+  async enablePipeline(token: string | undefined, slug: string): Promise<{ status: string; message: string }> {
     const res = await fetch(apiUrl(`/pipelines/${slug}/enable`), {
       method: 'POST',
       headers: authHeaders(token),
@@ -4750,7 +4765,7 @@ export const pipelinesApi = {
     return handleJson(res)
   },
 
-  async disablePipeline(token?: string, slug: string): Promise<{ status: string; message: string }> {
+  async disablePipeline(token: string | undefined, slug: string): Promise<{ status: string; message: string }> {
     const res = await fetch(apiUrl(`/pipelines/${slug}/disable`), {
       method: 'POST',
       headers: authHeaders(token),
@@ -4758,7 +4773,7 @@ export const pipelinesApi = {
     return handleJson(res)
   },
 
-  async listTriggers(token?: string, slug: string): Promise<PipelineTrigger[]> {
+  async listTriggers(token: string | undefined, slug: string): Promise<PipelineTrigger[]> {
     const res = await fetch(apiUrl(`/pipelines/${slug}/triggers`), {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -4767,7 +4782,7 @@ export const pipelinesApi = {
   },
 
   async createTrigger(
-    token?: string,
+    token: string | undefined,
     slug: string,
     data: {
       trigger_type: string
@@ -4785,7 +4800,7 @@ export const pipelinesApi = {
     return handleJson(res)
   },
 
-  async deleteTrigger(token?: string, slug: string, triggerId: string): Promise<{ status: string; message: string }> {
+  async deleteTrigger(token: string | undefined, slug: string, triggerId: string): Promise<{ status: string; message: string }> {
     const res = await fetch(apiUrl(`/pipelines/${slug}/triggers/${triggerId}`), {
       method: 'DELETE',
       headers: authHeaders(token),

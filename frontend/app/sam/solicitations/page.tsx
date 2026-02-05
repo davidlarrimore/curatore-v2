@@ -17,20 +17,90 @@ import {
   AlertTriangle,
   ChevronLeft,
   ChevronRight,
-  Filter,
   X,
-  Calendar,
   FileText,
   Sparkles,
   Search,
   ChevronUp,
   ChevronDown,
   ArrowUpDown,
+  Clock,
+  Tag,
+  CheckSquare,
+  Square,
+  CheckCircle,
+  Award,
+  XCircle,
 } from 'lucide-react'
 
 // Sort types
 type SortColumn = 'solicitation_number' | 'title' | 'agency' | 'type' | 'status' | 'deadline'
 type SortDirection = 'asc' | 'desc'
+
+// Timeframe options
+type TimeframeFilter = 'all' | '24h' | '7d' | '30d'
+
+// Notice type display names
+const NOTICE_TYPE_LABELS: Record<string, string> = {
+  'o': 'Solicitation',
+  'p': 'Presolicitation',
+  'k': 'Combined Synopsis/Solicitation',
+  'r': 'Sources Sought',
+  's': 'Special Notice',
+  'g': 'Sale of Surplus Property',
+  'a': 'Award Notice',
+  'u': 'Justification (J&A)',
+  'i': 'Intent to Bundle',
+  'Combined Synopsis/Solicitation': 'Combined Synopsis/Solicitation',
+  'Solicitation': 'Solicitation',
+  'Presolicitation': 'Presolicitation',
+  'Sources Sought': 'Sources Sought',
+  'Special Notice': 'Special Notice',
+  'Award Notice': 'Award Notice',
+  'Sale of Surplus Property': 'Sale of Surplus Property',
+  'Justification': 'Justification (J&A)',
+  'Intent to Bundle': 'Intent to Bundle',
+}
+
+// Helper to normalize notice type for comparison
+function normalizeNoticeType(type: string): string {
+  return NOTICE_TYPE_LABELS[type] || type
+}
+
+// Helper to check if a date is within a timeframe
+function isWithinTimeframe(dateStr: string | null, timeframe: TimeframeFilter): boolean {
+  if (!dateStr || timeframe === 'all') return true
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diff = now.getTime() - date.getTime()
+  const hours = diff / (1000 * 60 * 60)
+
+  switch (timeframe) {
+    case '24h': return hours <= 24
+    case '7d': return hours <= 24 * 7
+    case '30d': return hours <= 24 * 30
+    default: return true
+  }
+}
+
+// Helper to check deadline timeframe (future deadlines)
+function isDeadlineWithinTimeframe(dateStr: string | null, timeframe: TimeframeFilter): boolean {
+  if (!dateStr || timeframe === 'all') return true
+  const date = new Date(dateStr)
+  const now = new Date()
+  const diff = date.getTime() - now.getTime()
+  const hours = diff / (1000 * 60 * 60)
+
+  // Only include future deadlines within the timeframe
+  if (hours < 0) return false
+
+  switch (timeframe) {
+    case '24h': return hours <= 24
+    case '7d': return hours <= 24 * 7
+    case '30d': return hours <= 24 * 30
+    default: return true
+  }
+}
 
 export default function SamSolicitationsPage() {
   return (
@@ -46,18 +116,18 @@ function SamSolicitationsContent() {
   const { token } = useAuth()
 
   // State
-  const [solicitations, setSolicitations] = useState<SamSolicitation[]>([])
+  const [allSolicitations, setAllSolicitations] = useState<SamSolicitation[]>([])
   const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
   const [hasConnection, setHasConnection] = useState<boolean | null>(null)
 
   // Filters and Search
-  const [showFilters, setShowFilters] = useState(false)
   const [searchQuery, setSearchQuery] = useState(searchParams.get('q') || '')
-  const [statusFilter, setStatusFilter] = useState(searchParams.get('status') || '')
-  const [noticeTypeFilter, setNoticeTypeFilter] = useState(searchParams.get('notice_type') || '')
-  const [naicsFilter, setNaicsFilter] = useState(searchParams.get('naics_code') || '')
+  const [selectedStatuses, setSelectedStatuses] = useState<Set<string>>(new Set())
+  const [selectedNoticeTypes, setSelectedNoticeTypes] = useState<Set<string>>(new Set())
+  const [selectedAgencies, setSelectedAgencies] = useState<Set<string>>(new Set())
+  const [timeframeFilter, setTimeframeFilter] = useState<TimeframeFilter>('all')
   const [page, setPage] = useState(1)
   const pageSize = 25
 
@@ -75,9 +145,139 @@ function SamSolicitationsContent() {
     }
   }
 
-  // Sorted solicitations
-  const sortedSolicitations = useMemo(() => {
-    return [...solicitations].sort((a, b) => {
+  // Check for SAM.gov connection
+  const checkConnection = useCallback(async () => {
+    if (!token) return
+
+    try {
+      const response = await connectionsApi.listConnections(token)
+      const samConnection = response.connections.find(
+        c => c.connection_type === 'sam_gov' && c.is_active
+      )
+      setHasConnection(!!samConnection)
+    } catch (err) {
+      setHasConnection(false)
+    }
+  }, [token])
+
+  // Load all solicitations (for facet counts and filtering)
+  const loadSolicitations = useCallback(async () => {
+    if (!token) return
+
+    setIsLoading(true)
+    setError('')
+
+    try {
+      // Fetch more solicitations to compute accurate facet counts
+      const params: any = {
+        limit: 500,
+        offset: 0,
+      }
+      if (searchQuery) params.keyword = searchQuery
+
+      const data = await samApi.listSolicitations(token, params)
+      setAllSolicitations(data.items)
+      setTotal(data.total)
+    } catch (err: any) {
+      setError(err.message || 'Failed to load solicitations')
+    } finally {
+      setIsLoading(false)
+    }
+  }, [token, searchQuery])
+
+  useEffect(() => {
+    if (token) {
+      checkConnection()
+    }
+  }, [token, checkConnection])
+
+  useEffect(() => {
+    if (token && hasConnection === true) {
+      loadSolicitations()
+    } else if (hasConnection === false) {
+      setIsLoading(false)
+    }
+  }, [token, hasConnection, loadSolicitations])
+
+  // Show connection required screen if no SAM.gov connection
+  if (hasConnection === false) {
+    return <SamConnectionRequired />
+  }
+
+  // Compute facet counts
+  const facetCounts = useMemo(() => {
+    const statuses: Record<string, number> = {}
+    const noticeTypes: Record<string, number> = {}
+    const agencies: Record<string, number> = {}
+    const deadlines = { '24h': 0, '7d': 0, '30d': 0 }
+
+    for (const sol of allSolicitations) {
+      // Status counts
+      const status = sol.status || 'unknown'
+      statuses[status] = (statuses[status] || 0) + 1
+
+      // Notice type counts
+      const type = normalizeNoticeType(sol.notice_type)
+      noticeTypes[type] = (noticeTypes[type] || 0) + 1
+
+      // Agency counts
+      const agency = sol.agency_name || 'Unknown'
+      agencies[agency] = (agencies[agency] || 0) + 1
+
+      // Deadline timeframe counts (future deadlines only)
+      if (isDeadlineWithinTimeframe(sol.response_deadline, '24h')) deadlines['24h']++
+      if (isDeadlineWithinTimeframe(sol.response_deadline, '7d')) deadlines['7d']++
+      if (isDeadlineWithinTimeframe(sol.response_deadline, '30d')) deadlines['30d']++
+    }
+
+    // Sort agencies by count
+    const sortedAgencies = Object.entries(agencies)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 10) // Top 10 agencies
+
+    // Sort notice types by count
+    const sortedNoticeTypes = Object.entries(noticeTypes)
+      .sort((a, b) => b[1] - a[1])
+
+    // Sort statuses by count
+    const sortedStatuses = Object.entries(statuses)
+      .sort((a, b) => b[1] - a[1])
+
+    return {
+      statuses: sortedStatuses,
+      noticeTypes: sortedNoticeTypes,
+      agencies: sortedAgencies,
+      deadlines,
+      total: allSolicitations.length,
+    }
+  }, [allSolicitations])
+
+  // Filter and sort solicitations
+  const filteredAndSortedSolicitations = useMemo(() => {
+    let result = [...allSolicitations]
+
+    // Filter by selected statuses
+    if (selectedStatuses.size > 0) {
+      result = result.filter(s => selectedStatuses.has(s.status || 'unknown'))
+    }
+
+    // Filter by selected notice types
+    if (selectedNoticeTypes.size > 0) {
+      result = result.filter(s => selectedNoticeTypes.has(normalizeNoticeType(s.notice_type)))
+    }
+
+    // Filter by selected agencies
+    if (selectedAgencies.size > 0) {
+      result = result.filter(s => selectedAgencies.has(s.agency_name || 'Unknown'))
+    }
+
+    // Filter by deadline timeframe
+    if (timeframeFilter !== 'all') {
+      result = result.filter(s => isDeadlineWithinTimeframe(s.response_deadline, timeframeFilter))
+    }
+
+    // Sort
+    result.sort((a, b) => {
       let comparison = 0
 
       switch (sortColumn) {
@@ -106,78 +306,70 @@ function SamSolicitationsContent() {
 
       return sortDirection === 'asc' ? comparison : -comparison
     })
-  }, [solicitations, sortColumn, sortDirection])
 
-  // Check for SAM.gov connection
-  const checkConnection = useCallback(async () => {
-    if (!token) return
+    return result
+  }, [allSolicitations, selectedStatuses, selectedNoticeTypes, selectedAgencies, timeframeFilter, sortColumn, sortDirection])
 
-    try {
-      const response = await connectionsApi.listConnections(token)
-      const samConnection = response.connections.find(
-        c => c.connection_type === 'sam_gov' && c.is_active
-      )
-      setHasConnection(!!samConnection)
-    } catch (err) {
-      setHasConnection(false)
+  // Paginate
+  const paginatedSolicitations = useMemo(() => {
+    const start = (page - 1) * pageSize
+    return filteredAndSortedSolicitations.slice(start, start + pageSize)
+  }, [filteredAndSortedSolicitations, page, pageSize])
+
+  const totalPages = Math.ceil(filteredAndSortedSolicitations.length / pageSize)
+
+  // Toggle status filter
+  const toggleStatus = (status: string) => {
+    const newSelected = new Set(selectedStatuses)
+    if (newSelected.has(status)) {
+      newSelected.delete(status)
+    } else {
+      newSelected.add(status)
     }
-  }, [token])
+    setSelectedStatuses(newSelected)
+    setPage(1)
+  }
 
-  // Load solicitations
-  const loadSolicitations = useCallback(async () => {
-    if (!token) return
-
-    setIsLoading(true)
-    setError('')
-
-    try {
-      const params: any = {
-        limit: pageSize,
-        offset: (page - 1) * pageSize,
-      }
-      if (searchQuery) params.keyword = searchQuery
-      if (statusFilter) params.status = statusFilter
-      if (noticeTypeFilter) params.notice_type = noticeTypeFilter
-      if (naicsFilter) params.naics_code = naicsFilter
-
-      const data = await samApi.listSolicitations(token, params)
-      setSolicitations(data.items)
-      setTotal(data.total)
-    } catch (err: any) {
-      setError(err.message || 'Failed to load solicitations')
-    } finally {
-      setIsLoading(false)
+  // Toggle notice type filter
+  const toggleNoticeType = (type: string) => {
+    const newSelected = new Set(selectedNoticeTypes)
+    if (newSelected.has(type)) {
+      newSelected.delete(type)
+    } else {
+      newSelected.add(type)
     }
-  }, [token, page, searchQuery, statusFilter, noticeTypeFilter, naicsFilter])
+    setSelectedNoticeTypes(newSelected)
+    setPage(1)
+  }
 
-  useEffect(() => {
-    if (token) {
-      checkConnection()
+  // Toggle agency filter
+  const toggleAgency = (agency: string) => {
+    const newSelected = new Set(selectedAgencies)
+    if (newSelected.has(agency)) {
+      newSelected.delete(agency)
+    } else {
+      newSelected.add(agency)
     }
-  }, [token, checkConnection])
+    setSelectedAgencies(newSelected)
+    setPage(1)
+  }
 
-  useEffect(() => {
-    if (token && hasConnection === true) {
-      loadSolicitations()
-    } else if (hasConnection === false) {
-      setIsLoading(false)
-    }
-  }, [token, hasConnection, loadSolicitations])
-
-  // Show connection required screen if no SAM.gov connection
-  if (hasConnection === false) {
-    return <SamConnectionRequired />
+  // Set timeframe filter
+  const handleTimeframeChange = (timeframe: TimeframeFilter) => {
+    setTimeframeFilter(timeframe === timeframeFilter ? 'all' : timeframe)
+    setPage(1)
   }
 
   const clearFilters = () => {
     setSearchQuery('')
-    setStatusFilter('')
-    setNoticeTypeFilter('')
-    setNaicsFilter('')
+    setSelectedStatuses(new Set())
+    setSelectedNoticeTypes(new Set())
+    setSelectedAgencies(new Set())
+    setTimeframeFilter('all')
     setPage(1)
   }
 
-  const hasFilters = searchQuery || statusFilter || noticeTypeFilter || naicsFilter
+  const hasFilters = searchQuery || selectedStatuses.size > 0 || selectedNoticeTypes.size > 0 || selectedAgencies.size > 0 || timeframeFilter !== 'all'
 
   // Use formatDate from date-utils for consistent EST display
   const formatDate = (dateStr: string | null) => formatDateUtil(dateStr)
@@ -199,7 +391,19 @@ function SamSolicitationsContent() {
     return updated >= sevenDaysAgo && sol.notice_count > 1
   }
 
-  const totalPages = Math.ceil(total / pageSize)
+  // Get status icon and color
+  const getStatusStyle = (status: string) => {
+    switch (status) {
+      case 'active':
+        return { icon: CheckCircle, bg: 'bg-emerald-100 dark:bg-emerald-900/30', text: 'text-emerald-700 dark:text-emerald-400', selectedBg: 'bg-emerald-200 dark:bg-emerald-800' }
+      case 'awarded':
+        return { icon: Award, bg: 'bg-blue-100 dark:bg-blue-900/30', text: 'text-blue-700 dark:text-blue-400', selectedBg: 'bg-blue-200 dark:bg-blue-800' }
+      case 'cancelled':
+        return { icon: XCircle, bg: 'bg-red-100 dark:bg-red-900/30', text: 'text-red-700 dark:text-red-400', selectedBg: 'bg-red-200 dark:bg-red-800' }
+      default:
+        return { icon: FileText, bg: 'bg-gray-100 dark:bg-gray-700', text: 'text-gray-700 dark:text-gray-400', selectedBg: 'bg-gray-200 dark:bg-gray-600' }
+    }
+  }
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
@@ -216,22 +420,11 @@ function SamSolicitationsContent() {
                   All Solicitations
                 </h1>
                 <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                  {total.toLocaleString()} solicitations across all searches
+                  {filteredAndSortedSolicitations.length.toLocaleString()} of {total.toLocaleString()} solicitations
                 </p>
               </div>
             </div>
             <div className="flex items-center gap-3">
-              <Button
-                variant="secondary"
-                onClick={() => setShowFilters(!showFilters)}
-                className="gap-2"
-              >
-                <Filter className="w-4 h-4" />
-                Filters
-                {hasFilters && (
-                  <span className="w-2 h-2 rounded-full bg-indigo-500" />
-                )}
-              </Button>
               <Button
                 variant="secondary"
                 onClick={loadSolicitations}
@@ -248,10 +441,9 @@ function SamSolicitationsContent() {
         {/* Navigation */}
         <SamNavigation />
 
-        {/* Search and Filters Panel */}
+        {/* Search Bar */}
         <div className="mb-6 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
-          {/* Search Bar */}
-          <div className="flex gap-4 mb-4">
+          <div className="flex gap-4">
             <div className="flex-1 relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
               <input
@@ -261,7 +453,7 @@ function SamSolicitationsContent() {
                   setSearchQuery(e.target.value)
                   setPage(1)
                 }}
-                placeholder="Search by title, solicitation number, or agency..."
+                placeholder="Search by title, solicitation number, or description..."
                 className="w-full pl-10 pr-4 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
               />
             </div>
@@ -276,72 +468,233 @@ function SamSolicitationsContent() {
               </Button>
             )}
           </div>
-
-          {/* Filters Row */}
-          {showFilters && (
-            <div className="flex flex-wrap items-end gap-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <div className="w-[150px]">
-                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Status
-                </label>
-                <select
-                  value={statusFilter}
-                  onChange={(e) => {
-                    setStatusFilter(e.target.value)
-                    setPage(1)
-                  }}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
-                >
-                  <option value="">All</option>
-                  <option value="active">Active</option>
-                  <option value="awarded">Awarded</option>
-                  <option value="cancelled">Cancelled</option>
-                </select>
-              </div>
-
-              <div className="w-[220px]">
-                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  Notice Type
-                </label>
-                <select
-                  value={noticeTypeFilter}
-                  onChange={(e) => {
-                    setNoticeTypeFilter(e.target.value)
-                    setPage(1)
-                  }}
-                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
-                >
-                  <option value="">All Types</option>
-                  <option value="Combined Synopsis/Solicitation">Combined Synopsis/Solicitation</option>
-                  <option value="Solicitation">Solicitation</option>
-                  <option value="Presolicitation">Presolicitation</option>
-                  <option value="Sources Sought">Sources Sought</option>
-                  <option value="Special Notice">Special Notice</option>
-                  <option value="Award Notice">Award Notice</option>
-                  <option value="Justification">Justification (J&A)</option>
-                  <option value="Intent to Bundle">Intent to Bundle (DoD)</option>
-                  <option value="Sale of Surplus Property">Sale of Surplus Property</option>
-                </select>
-              </div>
-
-              <div className="w-[150px]">
-                <label className="block text-xs font-medium text-gray-700 dark:text-gray-300 mb-1">
-                  NAICS Code
-                </label>
-                <input
-                  type="text"
-                  value={naicsFilter}
-                  onChange={(e) => {
-                    setNaicsFilter(e.target.value)
-                    setPage(1)
-                  }}
-                  placeholder="e.g., 541512"
-                  className="w-full px-3 py-2 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 bg-white dark:bg-gray-900 text-gray-900 dark:text-white"
-                />
-              </div>
-            </div>
-          )}
         </div>
+
+        {/* Quick Filter Panels */}
+        <div className="grid grid-cols-1 lg:grid-cols-4 gap-4 mb-6">
+          {/* Deadline Timeframe Filter */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Clock className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Deadline</h3>
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {[
+                { value: '24h' as TimeframeFilter, label: '24 Hours', count: facetCounts.deadlines['24h'] },
+                { value: '7d' as TimeframeFilter, label: '7 Days', count: facetCounts.deadlines['7d'] },
+                { value: '30d' as TimeframeFilter, label: '30 Days', count: facetCounts.deadlines['30d'] },
+              ].map(({ value, label, count }) => (
+                <button
+                  key={value}
+                  onClick={() => handleTimeframeChange(value)}
+                  className={`
+                    flex items-center gap-2 px-3 py-1.5 rounded-lg text-sm transition-colors
+                    ${timeframeFilter === value
+                      ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 ring-2 ring-indigo-500/20'
+                      : 'bg-gray-100 text-gray-700 dark:bg-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    }
+                  `}
+                >
+                  {label}
+                  <span className={`
+                    px-1.5 py-0.5 rounded text-xs font-medium
+                    ${timeframeFilter === value
+                      ? 'bg-indigo-200 dark:bg-indigo-800'
+                      : 'bg-gray-200 dark:bg-gray-600'
+                    }
+                  `}>
+                    {count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Status Filter */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <CheckCircle className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Status</h3>
+              {selectedStatuses.size > 0 && (
+                <button
+                  onClick={() => setSelectedStatuses(new Set())}
+                  className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 ml-auto"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2">
+              {facetCounts.statuses.map(([status, count]) => {
+                const style = getStatusStyle(status)
+                const Icon = style.icon
+                return (
+                  <button
+                    key={status}
+                    onClick={() => toggleStatus(status)}
+                    className={`
+                      flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors
+                      ${selectedStatuses.has(status)
+                        ? `${style.bg} ${style.text}`
+                        : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                      }
+                    `}
+                  >
+                    {selectedStatuses.has(status) ? (
+                      <CheckSquare className="w-3 h-3" />
+                    ) : (
+                      <Square className="w-3 h-3" />
+                    )}
+                    <span className="capitalize">{status}</span>
+                    <span className={`
+                      px-1 rounded text-[10px] font-medium
+                      ${selectedStatuses.has(status)
+                        ? style.selectedBg
+                        : 'bg-gray-200 dark:bg-gray-600'
+                      }
+                    `}>
+                      {count}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          {/* Notice Type Filter */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Tag className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Type</h3>
+              {selectedNoticeTypes.size > 0 && (
+                <button
+                  onClick={() => setSelectedNoticeTypes(new Set())}
+                  className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 ml-auto"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">
+              {facetCounts.noticeTypes.map(([type, count]) => (
+                <button
+                  key={type}
+                  onClick={() => toggleNoticeType(type)}
+                  className={`
+                    flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors
+                    ${selectedNoticeTypes.has(type)
+                      ? 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
+                      : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    }
+                  `}
+                >
+                  {selectedNoticeTypes.has(type) ? (
+                    <CheckSquare className="w-3 h-3" />
+                  ) : (
+                    <Square className="w-3 h-3" />
+                  )}
+                  <span className="truncate max-w-[100px]">{type}</span>
+                  <span className={`
+                    px-1 rounded text-[10px] font-medium
+                    ${selectedNoticeTypes.has(type)
+                      ? 'bg-emerald-200 dark:bg-emerald-800'
+                      : 'bg-gray-200 dark:bg-gray-600'
+                    }
+                  `}>
+                    {count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* Agency Filter */}
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-4">
+            <div className="flex items-center gap-2 mb-3">
+              <Building2 className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+              <h3 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Top Agencies</h3>
+              {selectedAgencies.size > 0 && (
+                <button
+                  onClick={() => setSelectedAgencies(new Set())}
+                  className="text-xs text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 ml-auto"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
+            <div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">
+              {facetCounts.agencies.map(([agency, count]) => (
+                <button
+                  key={agency}
+                  onClick={() => toggleAgency(agency)}
+                  className={`
+                    flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors
+                    ${selectedAgencies.has(agency)
+                      ? 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+                      : 'bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                    }
+                  `}
+                >
+                  {selectedAgencies.has(agency) ? (
+                    <CheckSquare className="w-3 h-3" />
+                  ) : (
+                    <Square className="w-3 h-3" />
+                  )}
+                  <span className="truncate max-w-[120px]">{agency}</span>
+                  <span className={`
+                    px-1 rounded text-[10px] font-medium
+                    ${selectedAgencies.has(agency)
+                      ? 'bg-purple-200 dark:bg-purple-800'
+                      : 'bg-gray-200 dark:bg-gray-600'
+                    }
+                  `}>
+                    {count}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+
+        {/* Active Filters Display */}
+        {hasFilters && (
+          <div className="mb-4 flex items-center gap-2 flex-wrap">
+            <span className="text-sm text-gray-500 dark:text-gray-400">Filters:</span>
+            {timeframeFilter !== 'all' && (
+              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400">
+                Deadline: {timeframeFilter === '24h' ? '24 Hours' : timeframeFilter === '7d' ? '7 Days' : '30 Days'}
+                <button onClick={() => setTimeframeFilter('all')} className="ml-1 hover:text-indigo-900 dark:hover:text-indigo-200">×</button>
+              </span>
+            )}
+            {Array.from(selectedStatuses).map(status => {
+              const style = getStatusStyle(status)
+              return (
+                <span key={status} className={`inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium ${style.bg} ${style.text} capitalize`}>
+                  {status}
+                  <button onClick={() => toggleStatus(status)} className="ml-1 hover:opacity-70">×</button>
+                </span>
+              )
+            })}
+            {Array.from(selectedNoticeTypes).map(type => (
+              <span key={type} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
+                {type}
+                <button onClick={() => toggleNoticeType(type)} className="ml-1 hover:text-emerald-900 dark:hover:text-emerald-200">×</button>
+              </span>
+            ))}
+            {Array.from(selectedAgencies).map(agency => (
+              <span key={agency} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400 max-w-[200px]">
+                <span className="truncate">{agency}</span>
+                <button onClick={() => toggleAgency(agency)} className="ml-1 hover:text-purple-900 dark:hover:text-purple-200 flex-shrink-0">×</button>
+              </span>
+            ))}
+            <button
+              onClick={clearFilters}
+              className="text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300"
+            >
+              Clear all
+            </button>
+          </div>
+        )}
 
         {/* Error State */}
         {error && (
@@ -359,7 +712,7 @@ function SamSolicitationsContent() {
             <div className="w-12 h-12 rounded-full border-4 border-gray-200 dark:border-gray-700 border-t-purple-500 animate-spin" />
             <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Loading solicitations...</p>
           </div>
-        ) : solicitations.length === 0 ? (
+        ) : paginatedSolicitations.length === 0 ? (
           <div className="text-center py-16">
             <Building2 className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
             <p className="text-gray-500 dark:text-gray-400">
@@ -422,7 +775,7 @@ function SamSolicitationsContent() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100 dark:divide-gray-700">
-                    {sortedSolicitations.map((sol) => (
+                    {paginatedSolicitations.map((sol) => (
                       <tr
                         key={sol.id}
                         onClick={() => router.push(`/sam/solicitations/${sol.id}`)}
@@ -479,7 +832,7 @@ function SamSolicitationsContent() {
             {totalPages > 1 && (
               <div className="flex items-center justify-between mt-4">
                 <p className="text-sm text-gray-500 dark:text-gray-400">
-                  Showing {((page - 1) * pageSize) + 1} - {Math.min(page * pageSize, total)} of {total}
+                  Showing {((page - 1) * pageSize) + 1} - {Math.min(page * pageSize, filteredAndSortedSolicitations.length)} of {filteredAndSortedSolicitations.length}
                 </p>
                 <div className="flex items-center gap-2">
                   <Button
