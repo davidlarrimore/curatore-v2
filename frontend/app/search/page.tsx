@@ -23,11 +23,16 @@ import {
   ExternalLink,
   Building2,
   Check,
+  Database,
+  User,
+  DollarSign,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
-// Source type configuration
-const sourceTypeConfig: Record<string, { name: string; icon: React.ReactNode; color: string }> = {
+// Source type filter configuration
+// Keys match the facet values returned from the backend API for filter buttons
+const sourceTypeFilterConfig: Record<string, { name: string; icon: React.ReactNode; color: string }> = {
+  // Asset-based sources (from source_type_filter)
   upload: {
     name: 'Upload',
     icon: <Upload className="w-4 h-4" />,
@@ -47,6 +52,45 @@ const sourceTypeConfig: Record<string, { name: string; icon: React.ReactNode; co
     name: 'SAM.gov',
     icon: <Building2 className="w-4 h-4" />,
     color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  },
+  // Salesforce entity types (individual filters)
+  // Filter keys match facet values: "Accounts", "Contacts", "Opportunities"
+  Accounts: {
+    name: 'Accounts',
+    icon: <Building2 className="w-4 h-4" />,
+    color: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400',
+  },
+  Contacts: {
+    name: 'Contacts',
+    icon: <User className="w-4 h-4" />,
+    color: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400',
+  },
+  Opportunities: {
+    name: 'Opportunities',
+    icon: <DollarSign className="w-4 h-4" />,
+    color: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400',
+  },
+}
+
+// Source type display configuration for search result badges
+// Keys match the source_type values returned in search hits
+const sourceTypeDisplayConfig: Record<string, { name: string; icon: React.ReactNode; color: string }> = {
+  ...sourceTypeFilterConfig,
+  // Salesforce result display labels (singular, returned in search hits)
+  Account: {
+    name: 'Account',
+    icon: <Building2 className="w-4 h-4" />,
+    color: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400',
+  },
+  Contact: {
+    name: 'Contact',
+    icon: <User className="w-4 h-4" />,
+    color: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400',
+  },
+  Opportunity: {
+    name: 'Opportunity',
+    icon: <DollarSign className="w-4 h-4" />,
+    color: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400',
   },
 }
 
@@ -194,9 +238,19 @@ function SearchContent() {
     setOffset((page - 1) * limit)
   }
 
-  // Navigate to asset detail
+  // Navigate to detail page - routes to appropriate page based on source type
   const handleResultClick = (hit: SearchHit) => {
-    router.push(`/assets/${hit.asset_id}`)
+    // Route Salesforce records to their specific pages
+    if (hit.source_type === 'Account') {
+      router.push(`/salesforce/accounts/${hit.asset_id}`)
+    } else if (hit.source_type === 'Contact') {
+      router.push(`/salesforce/contacts/${hit.asset_id}`)
+    } else if (hit.source_type === 'Opportunity') {
+      router.push(`/salesforce/opportunities/${hit.asset_id}`)
+    } else {
+      // Default to asset page for documents
+      router.push(`/assets/${hit.asset_id}`)
+    }
   }
 
   // Render highlighted text
@@ -306,7 +360,7 @@ function SearchContent() {
           {/* Source Type Filters */}
           <div className="flex flex-wrap items-center gap-3">
             <span className="text-sm text-gray-500 dark:text-gray-400">Source:</span>
-            {Object.entries(sourceTypeConfig).map(([type, config]) => {
+            {Object.entries(sourceTypeFilterConfig).map(([type, config]) => {
               const count = getSourceTypeCount(type)
               const isSelected = selectedSourceTypes.includes(type)
               return (
@@ -427,7 +481,7 @@ function SearchContent() {
                 Search your documents
               </h3>
               <p className="text-gray-500 dark:text-gray-400 max-w-md mx-auto">
-                Enter a search query to find documents across uploads, SharePoint, web scrapes, and SAM.gov.
+                Enter a search query to find documents across uploads, SharePoint, web scrapes, SAM.gov, and Salesforce CRM.
               </p>
             </div>
           </div>
@@ -471,7 +525,7 @@ function SearchContent() {
 
             {/* Result Cards */}
             {results.hits.map((hit) => {
-              const sourceConfig = sourceTypeConfig[hit.source_type || ''] || {
+              const sourceConfig = sourceTypeDisplayConfig[hit.source_type || ''] || {
                 name: hit.source_type || 'Unknown',
                 icon: <FileText className="w-4 h-4" />,
                 color: 'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-400',

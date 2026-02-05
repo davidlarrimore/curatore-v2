@@ -229,6 +229,44 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
     }
   }, [])
 
+  // Validate stored jobs when token becomes available
+  // This cleans up any stale jobs before WebSocket connects
+  useEffect(() => {
+    if (!token || jobs.length === 0) return
+
+    const validateStoredJobs = async () => {
+      const validatedJobs: UnifiedJob[] = []
+
+      for (const job of jobs) {
+        try {
+          const run = await runsApi.getRun(job.runId, token)
+          // Check if job is still active
+          const isTerminal = ['completed', 'failed', 'cancelled', 'timed_out'].includes(run.status)
+          if (!isTerminal) {
+            validatedJobs.push({
+              ...job,
+              status: run.status,
+              progress: run.progress,
+              errorMessage: run.error_message || undefined,
+            })
+          }
+        } catch (err: any) {
+          // If run doesn't exist (404) or other error, skip this job
+          console.debug(`Removing stale job ${job.runId}:`, err?.status || err?.message)
+        }
+      }
+
+      // Only update if we removed some jobs
+      if (validatedJobs.length !== jobs.length) {
+        setJobs(validatedJobs)
+      }
+    }
+
+    // Run validation once on token availability
+    validateStoredJobs()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]) // Only run when token changes, not on every jobs change
+
   // Save jobs to session storage when they change
   useEffect(() => {
     if (jobs.length > 0) {
@@ -376,19 +414,57 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
           setQueueStats(initialData.queue_stats)
         }
         // Reconcile active runs with local state
-        // Note: We don't replace local jobs, just update status for ones we're tracking
-        initialData.active_runs?.forEach(run => {
-          setJobs(prev => {
-            const existingJob = prev.find(j => j.runId === run.run_id)
-            if (existingJob) {
-              const updatedJob = runToJob(run, existingJob)
-              if (updatedJob) {
-                return prev.map(j => j.runId === run.run_id ? updatedJob : j)
-              }
+        // Jobs that completed/failed while we were disconnected need notifications
+        const activeRunIds = new Set(initialData.active_runs?.map(r => r.run_id) || [])
+
+        // Track jobs that were removed to show notifications
+        const removedJobs: UnifiedJob[] = []
+
+        setJobs(prev => {
+          // Find jobs that are no longer active on the server
+          for (const job of prev) {
+            if (!activeRunIds.has(job.runId)) {
+              removedJobs.push(job)
             }
-            return prev
+          }
+
+          // Filter out jobs that are no longer active on the server
+          const stillActiveJobs = prev.filter(job => activeRunIds.has(job.runId))
+
+          // Update status for jobs that are still active
+          return stillActiveJobs.map(job => {
+            const run = initialData.active_runs?.find(r => r.run_id === job.runId)
+            if (run) {
+              const updatedJob = runToJob(run, job)
+              return updatedJob || job
+            }
+            return job
           })
         })
+
+        // Check the final status of removed jobs and show notifications
+        // This runs after state update to avoid issues with closures
+        if (removedJobs.length > 0) {
+          setTimeout(async () => {
+            for (const job of removedJobs) {
+              try {
+                // Fetch the final run status to determine if it completed or failed
+                const run = await runsApi.getRun(job.runId, token!)
+                if (run.status === 'completed') {
+                  notificationService.jobCompleted(job.jobType as any, job.displayName)
+                } else if (run.status === 'failed' || run.status === 'timed_out') {
+                  notificationService.jobFailed(job.jobType as any, job.displayName, run.error_message || undefined)
+                } else if (run.status === 'cancelled') {
+                  notificationService.jobCancelled(job.jobType as any, job.displayName)
+                }
+              } catch (err) {
+                // Run doesn't exist or can't be fetched - job was likely removed
+                console.debug(`Could not fetch final status for removed job ${job.runId}:`, err)
+              }
+            }
+          }, 0)
+        }
+
         setLastUpdated(new Date())
         setIsLoading(false)
         break
@@ -397,7 +473,7 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
         // Heartbeat response, no action needed
         break
     }
-  }, [handleJobStatusUpdate, runToJob])
+  }, [handleJobStatusUpdate, runToJob, token])
 
   // Keep ref updated so WebSocket always calls latest handler
   useEffect(() => {
@@ -654,7 +730,12 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
   // Computed Values
   // ============================================================================
 
-  const hasActiveJobs = jobs.length > 0
+  // Filter to only active (non-terminal) jobs
+  const activeJobs = jobs.filter(j =>
+    !['completed', 'failed', 'cancelled', 'timed_out'].includes(j.status)
+  )
+
+  const hasActiveJobs = activeJobs.length > 0
 
   // Count active jobs from queue stats
   const queueActiveCount = queueStats
@@ -673,7 +754,7 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
 
   // Use the max of queue stats and tracked jobs to ensure we show activity
   // even before queue stats update (e.g., when a procedure just started)
-  const activeCount = Math.max(queueActiveCount, jobs.length)
+  const activeCount = Math.max(queueActiveCount, activeJobs.length)
 
   // ============================================================================
   // Context Value

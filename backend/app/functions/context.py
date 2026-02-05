@@ -202,7 +202,9 @@ class FunctionContext:
             return
 
         try:
-            await self.run_service.log_run_event(
+            # Use run_log_service for structured logging (NOT run_service)
+            from app.services.run_log_service import run_log_service
+            await run_log_service.log_event(
                 session=self.session,
                 run_id=self.run_id,
                 level=level,

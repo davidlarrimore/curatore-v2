@@ -36,6 +36,7 @@ import {
   StopCircle,
   Zap,
   Sparkles,
+  Database,
 } from 'lucide-react';
 import { runsApi, queueAdminApi, assetsApi } from '@/lib/api';
 import type {
@@ -64,6 +65,7 @@ const JOB_TYPE_CONFIG: Record<string, { icon: React.ElementType; label: string; 
   scrape: { icon: Globe, label: 'Web Scrape', color: 'text-emerald-600 dark:text-emerald-400' },
   sharepoint_sync: { icon: FolderSync, label: 'SharePoint Sync', color: 'text-purple-600 dark:text-purple-400' },
   system_maintenance: { icon: Wrench, label: 'Maintenance', color: 'text-gray-600 dark:text-gray-400' },
+  salesforce_import: { icon: Database, label: 'Salesforce Import', color: 'text-cyan-600 dark:text-cyan-400' },
 };
 
 // Log level configuration

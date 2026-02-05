@@ -58,13 +58,19 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
 
     const pending = stats?.extraction_queue.pending || 0
     const submitted = stats?.extraction_queue.submitted || 0
+
+    // Filter tracked jobs to only count active (non-terminal) ones
+    const activeTrackedJobs = jobs.filter(j =>
+      !['completed', 'failed', 'cancelled', 'timed_out'].includes(j.status)
+    ).length
+
     const running = Math.max(
       (stats?.extraction_queue.running || 0) + (stats?.workers.tasks_running || 0),
-      jobs.length // Include tracked jobs
+      activeTrackedJobs // Include only active tracked jobs
     )
 
     return { queued, pending, submitted, running }
-  }, [stats, jobs.length])
+  }, [stats, jobs])
 
   // Calculate recent stats (5 min)
   const recentStats = useMemo(() => {

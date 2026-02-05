@@ -342,6 +342,25 @@ class ProcedureQueue(QueueDefinition):
         )
 
 
+class SalesforceQueue(QueueDefinition):
+    """Salesforce CRM data import queue."""
+
+    def __init__(self):
+        super().__init__(
+            queue_type="salesforce",
+            celery_queue="salesforce",
+            run_type_aliases=["salesforce_import"],
+            can_cancel=True,
+            can_retry=False,
+            label="Salesforce",
+            description="Salesforce CRM data import",
+            icon="database",
+            color="cyan",
+            default_max_concurrent=None,  # Unlimited by default
+            default_timeout_seconds=1800,  # 30 minutes
+        )
+
+
 # =============================================================================
 # QUEUE REGISTRY
 # =============================================================================
@@ -398,6 +417,7 @@ class QueueRegistry:
         self.register(MaintenanceQueue())
         self.register(PipelineQueue())
         self.register(ProcedureQueue())
+        self.register(SalesforceQueue())
 
     def initialize(self, config_overrides: Optional[Dict[str, Dict[str, Any]]] = None):
         """

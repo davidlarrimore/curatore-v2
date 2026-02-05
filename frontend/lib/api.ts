@@ -4810,6 +4810,324 @@ export const pipelinesApi = {
   },
 }
 
+// ============================================================================
+// SALESFORCE CRM API
+// ============================================================================
+
+export interface SalesforceStats {
+  accounts: {
+    total: number
+    by_type: Array<{ type: string; count: number }>
+  }
+  contacts: {
+    total: number
+  }
+  opportunities: {
+    total: number
+    total_value: number
+    open: number
+    open_value: number
+    won: number
+    won_value: number
+    by_stage: Array<{ stage: string; count: number; value: number }>
+  }
+}
+
+export interface SalesforceAccount {
+  id: string
+  salesforce_id: string
+  name: string
+  parent_salesforce_id: string | null
+  account_type: string | null
+  industry: string | null
+  department: string | null
+  description: string | null
+  website: string | null
+  phone: string | null
+  billing_address: Record<string, any> | null
+  shipping_address: Record<string, any> | null
+  small_business_flags: Record<string, any> | null
+  indexed_at: string | null
+  created_at: string
+  updated_at: string
+  contact_count?: number
+  opportunity_count?: number
+}
+
+export interface SalesforceContact {
+  id: string
+  salesforce_id: string
+  account_id: string | null
+  account_salesforce_id: string | null
+  first_name: string | null
+  last_name: string
+  email: string | null
+  title: string | null
+  phone: string | null
+  mobile_phone: string | null
+  department: string | null
+  is_current_employee: boolean | null
+  mailing_address: Record<string, any> | null
+  created_at: string
+  updated_at: string
+  account_name?: string
+}
+
+export interface SalesforceOpportunity {
+  id: string
+  salesforce_id: string
+  account_id: string | null
+  account_salesforce_id: string | null
+  name: string
+  stage_name: string | null
+  amount: number | null
+  probability: number | null
+  close_date: string | null
+  is_closed: boolean | null
+  is_won: boolean | null
+  opportunity_type: string | null
+  role: string | null
+  lead_source: string | null
+  fiscal_year: string | null
+  fiscal_quarter: string | null
+  description: string | null
+  custom_dates: Record<string, any> | null
+  linked_sharepoint_folder_id: string | null
+  linked_sam_solicitation_id: string | null
+  indexed_at: string | null
+  created_at: string
+  updated_at: string
+  account_name?: string
+}
+
+export interface SalesforceAccountListResponse {
+  items: SalesforceAccount[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface SalesforceContactListResponse {
+  items: SalesforceContact[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface SalesforceOpportunityListResponse {
+  items: SalesforceOpportunity[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface FilterOptionsResponse {
+  options: string[]
+}
+
+export const salesforceApi = {
+  // ========== Import ==========
+
+  async importData(token: string | undefined, file: File): Promise<{ run_id: string; status: string; message: string }> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    const res = await fetch(apiUrl('/salesforce/import'), {
+      method: 'POST',
+      headers: authHeaders(token),
+      body: formData,
+    })
+    return handleJson(res)
+  },
+
+  // ========== Statistics ==========
+
+  async getStats(token: string | undefined): Promise<SalesforceStats> {
+    const res = await fetch(apiUrl('/salesforce/stats'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  // ========== Accounts ==========
+
+  async listAccounts(
+    token: string | undefined,
+    params?: {
+      account_type?: string
+      industry?: string
+      keyword?: string
+      limit?: number
+      offset?: number
+    }
+  ): Promise<SalesforceAccountListResponse> {
+    const searchParams = new URLSearchParams()
+    if (params?.account_type) searchParams.append('account_type', params.account_type)
+    if (params?.industry) searchParams.append('industry', params.industry)
+    if (params?.keyword) searchParams.append('keyword', params.keyword)
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/salesforce/accounts?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getAccount(token: string | undefined, accountId: string): Promise<SalesforceAccount> {
+    const res = await fetch(apiUrl(`/salesforce/accounts/${accountId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getAccountContacts(
+    token: string | undefined,
+    accountId: string,
+    params?: { limit?: number; offset?: number }
+  ): Promise<SalesforceContactListResponse> {
+    const searchParams = new URLSearchParams()
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/salesforce/accounts/${accountId}/contacts?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getAccountOpportunities(
+    token: string | undefined,
+    accountId: string,
+    params?: { limit?: number; offset?: number }
+  ): Promise<SalesforceOpportunityListResponse> {
+    const searchParams = new URLSearchParams()
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/salesforce/accounts/${accountId}/opportunities?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  // ========== Contacts ==========
+
+  async listContacts(
+    token: string | undefined,
+    params?: {
+      account_id?: string
+      keyword?: string
+      current_only?: boolean
+      limit?: number
+      offset?: number
+    }
+  ): Promise<SalesforceContactListResponse> {
+    const searchParams = new URLSearchParams()
+    if (params?.account_id) searchParams.append('account_id', params.account_id)
+    if (params?.keyword) searchParams.append('keyword', params.keyword)
+    if (params?.current_only !== undefined) searchParams.append('current_only', String(params.current_only))
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/salesforce/contacts?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getContact(token: string | undefined, contactId: string): Promise<SalesforceContact> {
+    const res = await fetch(apiUrl(`/salesforce/contacts/${contactId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  // ========== Opportunities ==========
+
+  async listOpportunities(
+    token: string | undefined,
+    params?: {
+      account_id?: string
+      stage_name?: string
+      opportunity_type?: string
+      is_open?: boolean
+      keyword?: string
+      limit?: number
+      offset?: number
+    }
+  ): Promise<SalesforceOpportunityListResponse> {
+    const searchParams = new URLSearchParams()
+    if (params?.account_id) searchParams.append('account_id', params.account_id)
+    if (params?.stage_name) searchParams.append('stage_name', params.stage_name)
+    if (params?.opportunity_type) searchParams.append('opportunity_type', params.opportunity_type)
+    if (params?.is_open !== undefined) searchParams.append('is_open', String(params.is_open))
+    if (params?.keyword) searchParams.append('keyword', params.keyword)
+    if (params?.limit) searchParams.append('limit', params.limit.toString())
+    if (params?.offset) searchParams.append('offset', params.offset.toString())
+
+    const url = apiUrl(`/salesforce/opportunities?${searchParams.toString()}`)
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getOpportunity(token: string | undefined, opportunityId: string): Promise<SalesforceOpportunity> {
+    const res = await fetch(apiUrl(`/salesforce/opportunities/${opportunityId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  // ========== Filter Options ==========
+
+  async getAccountTypes(token: string | undefined): Promise<FilterOptionsResponse> {
+    const res = await fetch(apiUrl('/salesforce/filters/account-types'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getIndustries(token: string | undefined): Promise<FilterOptionsResponse> {
+    const res = await fetch(apiUrl('/salesforce/filters/industries'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getStages(token: string | undefined): Promise<FilterOptionsResponse> {
+    const res = await fetch(apiUrl('/salesforce/filters/stages'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getOpportunityTypes(token: string | undefined): Promise<FilterOptionsResponse> {
+    const res = await fetch(apiUrl('/salesforce/filters/opportunity-types'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+}
+
 // Default export with all API modules
 export default {
   API_BASE_URL,
@@ -4831,6 +5149,7 @@ export default {
   scheduledTasksApi,
   searchApi,
   samApi,
+  salesforceApi,
   sharepointSyncApi,
   functionsApi,
   proceduresApi,

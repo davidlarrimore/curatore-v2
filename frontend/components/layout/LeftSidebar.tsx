@@ -1,9 +1,10 @@
 // components/layout/LeftSidebar.tsx
 'use client'
 
-import { useRouter, usePathname } from 'next/navigation'
+import { usePathname } from 'next/navigation'
 import { Fragment } from 'react'
 import { Dialog, Transition } from '@headlessui/react'
+import Link from 'next/link'
 import {
   X,
   FileText,
@@ -22,10 +23,10 @@ import {
   Code,
   Workflow,
   GitBranch,
+  Database,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import clsx from 'clsx'
-import Image from 'next/image'
 
 interface SystemStatus {
   health: string
@@ -61,7 +62,6 @@ export function LeftSidebar({
   systemStatus,
   onStatusRefresh
 }: LeftSidebarProps) {
-  const router = useRouter()
   const pathname = usePathname()
   const { user, isAuthenticated } = useAuth()
 
@@ -125,8 +125,95 @@ export function LeftSidebar({
       icon: Building2,
       current: pathname?.startsWith('/sam'),
       gradient: 'from-blue-500 to-indigo-600'
+    },
+    {
+      name: 'Salesforce CRM',
+      href: '/salesforce',
+      icon: Database,
+      current: pathname?.startsWith('/salesforce'),
+      gradient: 'from-cyan-500 to-blue-600'
     }
   ] : []
+
+  // Build section items
+  const buildNavigation: NavItem[] = isAuthenticated && user?.role === 'org_admin' ? [
+    {
+      name: 'Functions',
+      href: '/admin/functions',
+      icon: Code,
+      current: pathname === '/admin/functions',
+      gradient: 'from-purple-500 to-indigo-600'
+    },
+    {
+      name: 'Procedures',
+      href: '/admin/procedures',
+      icon: Workflow,
+      current: pathname === '/admin/procedures',
+      gradient: 'from-emerald-500 to-teal-600'
+    },
+    {
+      name: 'Pipelines',
+      href: '/admin/pipelines',
+      icon: GitBranch,
+      current: pathname === '/admin/pipelines',
+      gradient: 'from-blue-500 to-indigo-600'
+    }
+  ] : []
+
+  // Admin section items
+  const adminNavigation: NavItem[] = isAuthenticated && user?.role === 'org_admin' ? [
+    {
+      name: 'Job Manager',
+      href: '/admin/queue',
+      icon: Activity,
+      current: pathname === '/admin/queue',
+      gradient: 'from-indigo-500 to-purple-600'
+    },
+    {
+      name: 'Admin Settings',
+      href: '/settings-admin',
+      icon: Shield,
+      current: pathname === '/settings-admin',
+      gradient: 'from-red-500 to-rose-600'
+    }
+  ] : []
+
+  // Reusable NavLink component
+  const NavLink = ({ item, isMobile = false }: { item: NavItem; isMobile?: boolean }) => (
+    <Link
+      href={item.href}
+      onClick={isMobile ? () => onOpenChange(false) : undefined}
+      className={clsx(
+        "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
+        item.current
+          ? "bg-gradient-to-r text-white shadow-lg"
+          : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
+        item.current && item.gradient,
+        collapsed && !isMobile && "justify-center px-2"
+      )}
+      title={collapsed && !isMobile ? item.name : ''}
+    >
+      <item.icon
+        className={clsx(
+          "w-5 h-5 shrink-0",
+          item.current ? "text-white" : "text-gray-400 dark:text-gray-500"
+        )}
+      />
+      {(!collapsed || isMobile) && (
+        <>
+          <span className="flex-1 text-left">{item.name}</span>
+          {item.current && (
+            <ChevronRight className="w-4 h-4 text-white/70" />
+          )}
+          {item.badge && (
+            <span className="px-1.5 py-0.5 text-xs font-medium bg-white/20 rounded-md">
+              {item.badge}
+            </span>
+          )}
+        </>
+      )}
+    </Link>
+  )
 
   // Sidebar content (shared between mobile and desktop)
   const SidebarContent = ({ isMobile = false }: { isMobile?: boolean }) => (
@@ -175,42 +262,7 @@ export function LeftSidebar({
         <ul className="space-y-1">
           {navigation.map((item) => (
             <li key={item.name}>
-              <button
-                onClick={() => {
-                  router.push(item.href)
-                  if (isMobile) onOpenChange(false)
-                }}
-                className={clsx(
-                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
-                  item.current
-                    ? "bg-gradient-to-r text-white shadow-lg"
-                    : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
-                  item.current && item.gradient,
-                  collapsed && !isMobile && "justify-center px-2"
-                )}
-                title={collapsed && !isMobile ? item.name : ''}
-              >
-                <item.icon
-                  className={clsx(
-                    "shrink-0 transition-transform",
-                    collapsed && !isMobile ? "w-5 h-5" : "w-5 h-5",
-                    item.current ? "text-white" : "text-gray-400 dark:text-gray-500"
-                  )}
-                />
-                {(!collapsed || isMobile) && (
-                  <>
-                    <span className="flex-1 text-left">{item.name}</span>
-                    {item.current && (
-                      <ChevronRight className="w-4 h-4 text-white/70" />
-                    )}
-                    {item.badge && (
-                      <span className="px-1.5 py-0.5 text-xs font-medium bg-white/20 rounded-md">
-                        {item.badge}
-                      </span>
-                    )}
-                  </>
-                )}
-              </button>
+              <NavLink item={item} isMobile={isMobile} />
             </li>
           ))}
         </ul>
@@ -224,215 +276,39 @@ export function LeftSidebar({
               </p>
             )}
             {acquireNavigation.map((item) => (
-              <button
-                key={item.name}
-                onClick={() => {
-                  router.push(item.href)
-                  if (isMobile) onOpenChange(false)
-                }}
-                className={clsx(
-                  "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
-                  item.current
-                    ? "bg-gradient-to-r text-white shadow-lg"
-                    : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
-                  item.current && item.gradient,
-                  collapsed && !isMobile && "justify-center px-2"
-                )}
-                title={collapsed && !isMobile ? item.name : ''}
-              >
-                <item.icon
-                  className={clsx(
-                    "w-5 h-5 shrink-0",
-                    item.current ? "text-white" : "text-gray-400 dark:text-gray-500"
-                  )}
-                />
-                {(!collapsed || isMobile) && (
-                  <>
-                    <span className="flex-1 text-left">{item.name}</span>
-                    {item.current && (
-                      <ChevronRight className="w-4 h-4 text-white/70" />
-                    )}
-                  </>
-                )}
-              </button>
+              <NavLink key={item.name} item={item} isMobile={isMobile} />
             ))}
           </div>
         )}
 
         {/* Build section */}
-        {isAuthenticated && user?.role === 'org_admin' && (
+        {buildNavigation.length > 0 && (
           <div className="mt-4 space-y-1">
             {(!collapsed || isMobile) && (
               <p className="px-3 mb-2 text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
                 Build
               </p>
             )}
-            {/* Functions button */}
-            <button
-              onClick={() => {
-                router.push('/admin/functions')
-                if (isMobile) onOpenChange(false)
-              }}
-              className={clsx(
-                "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
-                pathname === '/admin/functions'
-                  ? "bg-gradient-to-r from-purple-500 to-indigo-600 text-white shadow-lg"
-                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
-                collapsed && !isMobile && "justify-center px-2"
-              )}
-              title={collapsed && !isMobile ? 'Functions' : ''}
-            >
-              <Code
-                className={clsx(
-                  "w-5 h-5 shrink-0",
-                  pathname === '/admin/functions' ? "text-white" : "text-gray-400 dark:text-gray-500"
-                )}
-              />
-              {(!collapsed || isMobile) && (
-                <>
-                  <span className="flex-1 text-left">Functions</span>
-                  {pathname === '/admin/functions' && (
-                    <ChevronRight className="w-4 h-4 text-white/70" />
-                  )}
-                </>
-              )}
-            </button>
-            {/* Procedures button */}
-            <button
-              onClick={() => {
-                router.push('/admin/procedures')
-                if (isMobile) onOpenChange(false)
-              }}
-              className={clsx(
-                "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
-                pathname === '/admin/procedures'
-                  ? "bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-lg"
-                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
-                collapsed && !isMobile && "justify-center px-2"
-              )}
-              title={collapsed && !isMobile ? 'Procedures' : ''}
-            >
-              <Workflow
-                className={clsx(
-                  "w-5 h-5 shrink-0",
-                  pathname === '/admin/procedures' ? "text-white" : "text-gray-400 dark:text-gray-500"
-                )}
-              />
-              {(!collapsed || isMobile) && (
-                <>
-                  <span className="flex-1 text-left">Procedures</span>
-                  {pathname === '/admin/procedures' && (
-                    <ChevronRight className="w-4 h-4 text-white/70" />
-                  )}
-                </>
-              )}
-            </button>
-            {/* Pipelines button */}
-            <button
-              onClick={() => {
-                router.push('/admin/pipelines')
-                if (isMobile) onOpenChange(false)
-              }}
-              className={clsx(
-                "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
-                pathname === '/admin/pipelines'
-                  ? "bg-gradient-to-r from-blue-500 to-indigo-600 text-white shadow-lg"
-                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
-                collapsed && !isMobile && "justify-center px-2"
-              )}
-              title={collapsed && !isMobile ? 'Pipelines' : ''}
-            >
-              <GitBranch
-                className={clsx(
-                  "w-5 h-5 shrink-0",
-                  pathname === '/admin/pipelines' ? "text-white" : "text-gray-400 dark:text-gray-500"
-                )}
-              />
-              {(!collapsed || isMobile) && (
-                <>
-                  <span className="flex-1 text-left">Pipelines</span>
-                  {pathname === '/admin/pipelines' && (
-                    <ChevronRight className="w-4 h-4 text-white/70" />
-                  )}
-                </>
-              )}
-            </button>
+            {buildNavigation.map((item) => (
+              <NavLink key={item.name} item={item} isMobile={isMobile} />
+            ))}
           </div>
         )}
       </nav>
 
       {/* Bottom section - Admin */}
-      <div className="mt-auto border-t border-gray-100 dark:border-gray-800 p-3 space-y-2">
-        {isAuthenticated && user?.role === 'org_admin' && (
-          <>
-            {(!collapsed || isMobile) && (
-              <p className="px-3 mb-1 text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-                Admin
-              </p>
-            )}
-            {/* Job Manager button */}
-            <button
-              onClick={() => {
-                router.push('/admin/queue')
-                if (isMobile) onOpenChange(false)
-              }}
-              className={clsx(
-                "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
-                pathname === '/admin/queue'
-                  ? "bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-lg"
-                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
-                collapsed && !isMobile && "justify-center px-2"
-              )}
-              title={collapsed && !isMobile ? 'Job Manager' : ''}
-            >
-              <Activity
-                className={clsx(
-                  "w-5 h-5 shrink-0",
-                  pathname === '/admin/queue' ? "text-white" : "text-gray-400 dark:text-gray-500"
-                )}
-              />
-              {(!collapsed || isMobile) && (
-                <>
-                  <span className="flex-1 text-left">Job Manager</span>
-                  {pathname === '/admin/queue' && (
-                    <ChevronRight className="w-4 h-4 text-white/70" />
-                  )}
-                </>
-              )}
-            </button>
-            {/* Admin Settings button */}
-            <button
-              onClick={() => {
-                router.push('/settings-admin')
-                if (isMobile) onOpenChange(false)
-              }}
-              className={clsx(
-                "w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition-all duration-200",
-                pathname === '/settings-admin'
-                  ? "bg-gradient-to-r from-red-500 to-rose-600 text-white shadow-lg"
-                  : "text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white hover:bg-gray-100 dark:hover:bg-gray-800",
-                collapsed && !isMobile && "justify-center px-2"
-              )}
-              title={collapsed && !isMobile ? 'Admin Settings' : ''}
-            >
-              <Shield
-                className={clsx(
-                  "w-5 h-5 shrink-0",
-                  pathname === '/settings-admin' ? "text-white" : "text-gray-400 dark:text-gray-500"
-                )}
-              />
-              {(!collapsed || isMobile) && (
-                <>
-                  <span className="flex-1 text-left">Admin Settings</span>
-                  {pathname === '/settings-admin' && (
-                    <ChevronRight className="w-4 h-4 text-white/70" />
-                  )}
-                </>
-              )}
-            </button>
-          </>
-        )}
-      </div>
+      {adminNavigation.length > 0 && (
+        <div className="mt-auto border-t border-gray-100 dark:border-gray-800 p-3 space-y-2">
+          {(!collapsed || isMobile) && (
+            <p className="px-3 mb-1 text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
+              Admin
+            </p>
+          )}
+          {adminNavigation.map((item) => (
+            <NavLink key={item.name} item={item} isMobile={isMobile} />
+          ))}
+        </div>
+      )}
     </div>
   )
 

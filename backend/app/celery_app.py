@@ -40,6 +40,7 @@ app = Celery(
 # - sam: SAM.gov API operations
 # - scrape: Web scraping and crawling
 # - sharepoint: SharePoint sync operations
+# - salesforce: Salesforce CRM data import
 # - maintenance: Scheduled tasks, cleanup, recovery
 app.conf.task_queues = (
     Queue("processing_priority", routing_key="processing_priority"),
@@ -47,6 +48,7 @@ app.conf.task_queues = (
     Queue("sam", routing_key="sam"),
     Queue("scrape", routing_key="scrape"),
     Queue("sharepoint", routing_key="sharepoint"),
+    Queue("salesforce", routing_key="salesforce"),
     Queue("pipeline", routing_key="pipeline"),
     Queue("maintenance", routing_key="maintenance"),
 )
@@ -96,6 +98,11 @@ app.conf.update(
         # PIPELINE QUEUE - Multi-stage document processing
         # =================================================================
         "app.tasks.execute_pipeline_task": {"queue": "pipeline"},
+
+        # =================================================================
+        # SALESFORCE QUEUE - Salesforce CRM data import
+        # =================================================================
+        "app.tasks.salesforce_import_task": {"queue": "salesforce"},
 
         # =================================================================
         # MAINTENANCE QUEUE - System tasks, queue management, cleanup

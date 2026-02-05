@@ -18,6 +18,7 @@ from .routers import (
     render,
     search,
     sam,
+    salesforce,
     sharepoint_sync,
     queue_admin,
     functions,
@@ -50,6 +51,8 @@ api_router.include_router(render.router)
 api_router.include_router(search.router)
 # Phase 7: SAM.gov Integration endpoints
 api_router.include_router(sam.router)
+# Salesforce CRM Integration endpoints
+api_router.include_router(salesforce.router)
 # Phase 8: SharePoint Sync Integration endpoints
 api_router.include_router(sharepoint_sync.router)
 # Extraction Queue Admin endpoints

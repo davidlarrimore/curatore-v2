@@ -223,12 +223,54 @@ class PgSearchService:
             filters = ["sc.organization_id = :org_id"]
             params: Dict[str, Any] = {"org_id": str(organization_id)}
 
-            # Only search asset-type chunks for the main search endpoint
-            filters.append("sc.source_type = 'asset'")
+            # Map display names to source_type values for Salesforce
+            # Facets return: "Accounts", "Contacts", "Opportunities" (display names)
+            # We need to map these to: salesforce_account, salesforce_contact, salesforce_opportunity
+            salesforce_display_map = {
+                "Accounts": "salesforce_account",
+                "Contacts": "salesforce_contact",
+                "Opportunities": "salesforce_opportunity",
+                # Also support legacy "salesforce" filter (all types)
+                "salesforce": None,  # Special case: all Salesforce types
+            }
 
+            # Handle source type filtering
             if source_types:
-                filters.append("sc.source_type_filter = ANY(:source_types)")
-                params["source_types"] = source_types
+                # Separate Salesforce types from asset types
+                sf_source_types = []
+                asset_source_types = []
+
+                for st in source_types:
+                    if st in salesforce_display_map:
+                        if st == "salesforce":
+                            # Legacy: all Salesforce types
+                            sf_source_types = ["salesforce_account", "salesforce_contact", "salesforce_opportunity"]
+                        else:
+                            sf_source_types.append(salesforce_display_map[st])
+                    else:
+                        asset_source_types.append(st)
+
+                # Build filter based on what types were requested
+                if sf_source_types and asset_source_types:
+                    # Mixed: both Salesforce and asset types
+                    filters.append("""(
+                        sc.source_type = ANY(:sf_source_types)
+                        OR (sc.source_type = 'asset' AND sc.source_type_filter = ANY(:asset_source_types))
+                    )""")
+                    params["sf_source_types"] = sf_source_types
+                    params["asset_source_types"] = asset_source_types
+                elif sf_source_types:
+                    # Only Salesforce types
+                    filters.append("sc.source_type = ANY(:sf_source_types)")
+                    params["sf_source_types"] = sf_source_types
+                else:
+                    # Only asset types
+                    filters.append("sc.source_type = 'asset'")
+                    filters.append("sc.source_type_filter = ANY(:source_types)")
+                    params["source_types"] = asset_source_types
+            else:
+                # Default: only search asset-type chunks
+                filters.append("sc.source_type = 'asset'")
 
             if content_types:
                 filters.append("sc.content_type = ANY(:content_types)")
@@ -298,12 +340,15 @@ class PgSearchService:
         total = count_result.scalar() or 0
 
         # Search with ranking
+        # For display, use source_type for Salesforce records (shows actual type),
+        # use source_type_filter for assets (shows data source like 'upload', 'sharepoint', etc.)
         search_sql = f"""
             WITH ranked_chunks AS (
                 SELECT
                     sc.source_id,
                     sc.title,
                     sc.filename,
+                    sc.source_type,
                     sc.source_type_filter,
                     sc.content_type,
                     sc.url,
@@ -322,7 +367,8 @@ class PgSearchService:
                 source_id,
                 title,
                 filename,
-                source_type_filter as source_type,
+                source_type,
+                source_type_filter,
                 content_type,
                 url,
                 created_at::text,
@@ -346,12 +392,23 @@ class PgSearchService:
 
         hits = []
         for row in rows:
+            # Determine display source_type:
+            # - For Salesforce records, show friendly type name (Account, Contact, Opportunity)
+            # - For assets, show the source_type_filter (upload, sharepoint, scrape, sam, etc.)
+            display_source_type = row.source_type_filter
+            if row.source_type == "salesforce_account":
+                display_source_type = "Account"
+            elif row.source_type == "salesforce_contact":
+                display_source_type = "Contact"
+            elif row.source_type == "salesforce_opportunity":
+                display_source_type = "Opportunity"
+
             hits.append(SearchHit(
                 asset_id=str(row.source_id),
                 score=float(row.score) * 100,  # Normalize to 0-100
                 title=row.title,
                 filename=row.filename,
-                source_type=row.source_type,
+                source_type=display_source_type,
                 content_type=row.content_type,
                 url=row.url,
                 created_at=row.created_at,
@@ -382,12 +439,14 @@ class PgSearchService:
 
         # Note: For true total, we'd need to scan all vectors, which is expensive.
         # Instead, we return top K and estimate total
+        # For display, use source_type for Salesforce records, source_type_filter for assets
         search_sql = f"""
             WITH ranked_chunks AS (
                 SELECT
                     sc.source_id,
                     sc.title,
                     sc.filename,
+                    sc.source_type,
                     sc.source_type_filter,
                     sc.content_type,
                     sc.url,
@@ -406,7 +465,8 @@ class PgSearchService:
                 source_id,
                 title,
                 filename,
-                source_type_filter as source_type,
+                source_type,
+                source_type_filter,
                 content_type,
                 url,
                 created_at::text,
@@ -426,12 +486,23 @@ class PgSearchService:
 
         hits = []
         for row in rows:
+            # Determine display source_type:
+            # - For Salesforce records, show friendly type name (Account, Contact, Opportunity)
+            # - For assets, show the source_type_filter (upload, sharepoint, scrape, sam, etc.)
+            display_source_type = row.source_type_filter
+            if row.source_type == "salesforce_account":
+                display_source_type = "Account"
+            elif row.source_type == "salesforce_contact":
+                display_source_type = "Contact"
+            elif row.source_type == "salesforce_opportunity":
+                display_source_type = "Opportunity"
+
             hits.append(SearchHit(
                 asset_id=str(row.source_id),
                 score=float(row.score) * 100,
                 title=row.title,
                 filename=row.filename,
-                source_type=row.source_type,
+                source_type=display_source_type,
                 content_type=row.content_type,
                 url=row.url,
                 created_at=row.created_at,
@@ -474,12 +545,14 @@ class PgSearchService:
         # 1. Gets keyword matches with ts_rank
         # 2. Gets semantic matches with vector similarity
         # 3. Combines them with weighted scoring
+        # For display, use source_type for Salesforce records, source_type_filter for assets
         search_sql = f"""
             WITH keyword_results AS (
                 SELECT
                     sc.source_id,
                     sc.title,
                     sc.filename,
+                    sc.source_type,
                     sc.source_type_filter,
                     sc.content_type,
                     sc.url,
@@ -499,6 +572,7 @@ class PgSearchService:
                     sc.source_id,
                     sc.title,
                     sc.filename,
+                    sc.source_type,
                     sc.source_type_filter,
                     sc.content_type,
                     sc.url,
@@ -524,7 +598,8 @@ class PgSearchService:
                     COALESCE(k.source_id, s.source_id) as source_id,
                     COALESCE(k.title, s.title) as title,
                     COALESCE(k.filename, s.filename) as filename,
-                    COALESCE(k.source_type_filter, s.source_type_filter) as source_type,
+                    COALESCE(k.source_type, s.source_type) as source_type,
+                    COALESCE(k.source_type_filter, s.source_type_filter) as source_type_filter,
                     COALESCE(k.content_type, s.content_type) as content_type,
                     COALESCE(k.url, s.url) as url,
                     COALESCE(k.created_at, s.created_at) as created_at,
@@ -541,6 +616,7 @@ class PgSearchService:
                 title,
                 filename,
                 source_type,
+                source_type_filter,
                 content_type,
                 url,
                 created_at::text,
@@ -565,12 +641,23 @@ class PgSearchService:
 
         hits = []
         for row in rows:
+            # Determine display source_type:
+            # - For Salesforce records, show friendly type name (Account, Contact, Opportunity)
+            # - For assets, show the source_type_filter (upload, sharepoint, scrape, sam, etc.)
+            display_source_type = row.source_type_filter
+            if row.source_type == "salesforce_account":
+                display_source_type = "Account"
+            elif row.source_type == "salesforce_contact":
+                display_source_type = "Contact"
+            elif row.source_type == "salesforce_opportunity":
+                display_source_type = "Opportunity"
+
             hits.append(SearchHit(
                 asset_id=str(row.source_id),
                 score=float(row.score) * 100,
                 title=row.title,
                 filename=row.filename,
-                source_type=row.source_type,
+                source_type=display_source_type,
                 content_type=row.content_type,
                 url=row.url,
                 created_at=row.created_at,
@@ -655,20 +742,37 @@ class PgSearchService:
             "facet_size": facet_size,
         }
 
-        # Base filter - matching documents
-        base_filter = """
-            sc.organization_id = :org_id
-            AND sc.source_type = 'asset'
-            AND sc.search_vector @@ to_tsquery('english', :fts_query)
-        """
-
-        # Source type facet
-        source_type_sql = f"""
-            SELECT sc.source_type_filter as value, COUNT(DISTINCT sc.source_id) as count
-            FROM search_chunks sc
-            WHERE {base_filter}
-            AND sc.source_type_filter IS NOT NULL
-            GROUP BY sc.source_type_filter
+        # Source type facet - includes both assets (by source_type_filter) and Salesforce records
+        # This query combines:
+        # 1. Asset source_type_filter counts
+        # 2. Salesforce records with display-friendly names (Accounts, Contacts, Opportunities)
+        source_type_sql = """
+            WITH asset_facets AS (
+                SELECT sc.source_type_filter as value, COUNT(DISTINCT sc.source_id) as count
+                FROM search_chunks sc
+                WHERE sc.organization_id = :org_id
+                AND sc.source_type = 'asset'
+                AND sc.search_vector @@ to_tsquery('english', :fts_query)
+                AND sc.source_type_filter IS NOT NULL
+                GROUP BY sc.source_type_filter
+            ),
+            salesforce_facets AS (
+                SELECT
+                    CASE sc.source_type
+                        WHEN 'salesforce_account' THEN 'Accounts'
+                        WHEN 'salesforce_contact' THEN 'Contacts'
+                        WHEN 'salesforce_opportunity' THEN 'Opportunities'
+                    END as value,
+                    COUNT(DISTINCT sc.source_id) as count
+                FROM search_chunks sc
+                WHERE sc.organization_id = :org_id
+                AND sc.source_type IN ('salesforce_account', 'salesforce_contact', 'salesforce_opportunity')
+                AND sc.search_vector @@ to_tsquery('english', :fts_query)
+                GROUP BY sc.source_type
+            )
+            SELECT value, count FROM asset_facets WHERE count > 0
+            UNION ALL
+            SELECT value, count FROM salesforce_facets WHERE count > 0
             ORDER BY count DESC
             LIMIT :facet_size
         """
@@ -678,7 +782,12 @@ class PgSearchService:
             for row in source_result.fetchall()
         ]
 
-        # Content type facet
+        # Content type facet - for assets only (Salesforce content types are different)
+        base_filter = """
+            sc.organization_id = :org_id
+            AND sc.source_type = 'asset'
+            AND sc.search_vector @@ to_tsquery('english', :fts_query)
+        """
         content_type_sql = f"""
             SELECT sc.content_type as value, COUNT(DISTINCT sc.source_id) as count
             FROM search_chunks sc
@@ -845,6 +954,160 @@ class PgSearchService:
 
         except Exception as e:
             logger.error(f"SAM search failed: {e}")
+            return SearchResults(total=0, hits=[])
+
+    async def search_salesforce(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        query: str,
+        entity_types: Optional[List[str]] = None,
+        account_types: Optional[List[str]] = None,
+        stages: Optional[List[str]] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> SearchResults:
+        """
+        Search Salesforce accounts, contacts, and opportunities.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            query: Search query
+            entity_types: Filter by type (account, contact, opportunity)
+            account_types: Filter by account type
+            stages: Filter by opportunity stage
+            limit: Maximum results
+            offset: Pagination offset
+
+        Returns:
+            SearchResults with Salesforce content
+        """
+        try:
+            filters = ["sc.organization_id = :org_id"]
+            params: Dict[str, Any] = {"org_id": str(organization_id)}
+
+            # Salesforce-specific source types
+            if entity_types:
+                # Map friendly names to source_type values
+                source_types = []
+                for et in entity_types:
+                    if et == "account":
+                        source_types.append("salesforce_account")
+                    elif et == "contact":
+                        source_types.append("salesforce_contact")
+                    elif et == "opportunity":
+                        source_types.append("salesforce_opportunity")
+                    else:
+                        source_types.append(et)  # Allow direct source_type values
+                filters.append("sc.source_type = ANY(:source_types)")
+                params["source_types"] = source_types
+            else:
+                filters.append("sc.source_type IN ('salesforce_account', 'salesforce_contact', 'salesforce_opportunity')")
+
+            if account_types:
+                filters.append("sc.metadata->>'account_type' = ANY(:account_types)")
+                params["account_types"] = account_types
+
+            if stages:
+                filters.append("sc.metadata->>'stage_name' = ANY(:stages)")
+                params["stages"] = stages
+
+            filter_clause = " AND ".join(filters)
+
+            fts_query = self._escape_fts_query(query)
+            if not fts_query:
+                return SearchResults(total=0, hits=[])
+
+            params["fts_query"] = fts_query
+
+            # Count
+            count_sql = f"""
+                SELECT COUNT(DISTINCT sc.source_id)
+                FROM search_chunks sc
+                WHERE {filter_clause}
+                AND sc.search_vector @@ to_tsquery('english', :fts_query)
+            """
+            count_result = await session.execute(text(count_sql), params)
+            total = count_result.scalar() or 0
+
+            # Search
+            search_sql = f"""
+                WITH ranked AS (
+                    SELECT
+                        sc.source_id,
+                        sc.source_type,
+                        sc.title,
+                        sc.filename,
+                        sc.content_type,
+                        sc.url,
+                        sc.created_at,
+                        sc.metadata,
+                        sc.content,
+                        ts_rank(sc.search_vector, to_tsquery('english', :fts_query)) as score,
+                        ROW_NUMBER() OVER (
+                            PARTITION BY sc.source_id
+                            ORDER BY ts_rank(sc.search_vector, to_tsquery('english', :fts_query)) DESC
+                        ) as rn
+                    FROM search_chunks sc
+                    WHERE {filter_clause}
+                    AND sc.search_vector @@ to_tsquery('english', :fts_query)
+                )
+                SELECT
+                    source_id,
+                    source_type,
+                    title,
+                    filename,
+                    content_type,
+                    url,
+                    created_at::text,
+                    metadata,
+                    score,
+                    ts_headline(
+                        'english',
+                        content,
+                        to_tsquery('english', :fts_query),
+                        'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=25, MaxFragments=3'
+                    ) as highlight
+                FROM ranked
+                WHERE rn = 1
+                ORDER BY score DESC
+                LIMIT :limit OFFSET :offset
+            """
+            params["limit"] = limit
+            params["offset"] = offset
+
+            result = await session.execute(text(search_sql), params)
+            rows = result.fetchall()
+
+            hits = []
+            for row in rows:
+                # Map source_type to friendly display name
+                display_type = row.source_type
+                if row.source_type == "salesforce_account":
+                    display_type = "Account"
+                elif row.source_type == "salesforce_contact":
+                    display_type = "Contact"
+                elif row.source_type == "salesforce_opportunity":
+                    display_type = "Opportunity"
+
+                hits.append(SearchHit(
+                    asset_id=str(row.source_id),
+                    score=float(row.score) * 100,
+                    title=row.title,
+                    filename=row.filename,  # Salesforce ID
+                    source_type=display_type,  # Friendly display name
+                    content_type=row.content_type,
+                    url=row.url,
+                    created_at=row.created_at,
+                    highlights={"content": [row.highlight]} if row.highlight else {},
+                    keyword_score=float(row.score),
+                ))
+
+            return SearchResults(total=total, hits=hits)
+
+        except Exception as e:
+            logger.error(f"Salesforce search failed: {e}")
             return SearchResults(total=0, hits=[])
 
     async def get_index_stats(

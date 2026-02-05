@@ -2858,3 +2858,342 @@ class SharePointSyncedDocument(Base):
 
     def __repr__(self) -> str:
         return f"<SharePointSyncedDocument(id={self.id}, path={self.sharepoint_path}, status={self.sync_status})>"
+
+
+# =============================================================================
+# SALESFORCE CRM MODELS (Phase: Salesforce Integration)
+# =============================================================================
+
+
+class SalesforceAccount(Base):
+    """
+    SalesforceAccount model for imported Salesforce Account records.
+
+    Stores Account data from Salesforce exports, including company information,
+    classification, and small business certifications. Supports hierarchical
+    account relationships via parent_salesforce_id.
+
+    Key Concepts:
+    - Unique on (organization_id, salesforce_id) for upsert operations
+    - Self-referential hierarchy via parent_salesforce_id
+    - Small business flags stored as JSONB for flexibility
+    - raw_data preserves original CSV fields for audit
+
+    Attributes:
+        id: Unique identifier (Curatore)
+        organization_id: Tenant isolation
+        salesforce_id: Original Salesforce 18-character ID
+        name: Account name
+        parent_salesforce_id: Parent account's Salesforce ID (hierarchy)
+        account_type: Account type (Customer, Partner, Competitor, etc.)
+        industry: Industry classification
+        department: Custom department field
+        description: Account description
+        website: Company website
+        phone: Primary phone
+        billing_address: Billing address (JSONB)
+        shipping_address: Shipping address (JSONB)
+        small_business_flags: SBA certifications (JSONB with sba_8a, hubzone, wosb, etc.)
+        raw_data: Original CSV row data (JSONB)
+        indexed_at: When indexed to search
+        created_at: Import timestamp
+        updated_at: Last update timestamp
+
+    Relationships:
+        organization: Parent organization
+        contacts: Associated contacts
+        opportunities: Associated opportunities
+    """
+
+    __tablename__ = "salesforce_accounts"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True
+    )
+
+    # Salesforce identifiers
+    salesforce_id = Column(String(18), nullable=False, index=True)
+    name = Column(String(255), nullable=False, index=True)
+    parent_salesforce_id = Column(String(18), nullable=True, index=True)
+
+    # Classification
+    account_type = Column(String(100), nullable=True, index=True)
+    industry = Column(String(100), nullable=True, index=True)
+    department = Column(String(255), nullable=True)
+
+    # Details
+    description = Column(Text, nullable=True)
+    website = Column(String(500), nullable=True)
+    phone = Column(String(50), nullable=True)
+
+    # Addresses (JSONB for flexibility)
+    billing_address = Column(JSON, nullable=True)  # {street, city, state, postal_code, country}
+    shipping_address = Column(JSON, nullable=True)  # {street, city, state, postal_code, country}
+
+    # Small business certifications (JSONB)
+    small_business_flags = Column(JSON, nullable=True)  # {sba_8a, hubzone, wosb, sdvosb, etc.}
+
+    # Audit trail
+    raw_data = Column(JSON, nullable=True)
+
+    # Search indexing
+    indexed_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    organization = relationship("Organization", backref="salesforce_accounts")
+    contacts = relationship(
+        "SalesforceContact",
+        back_populates="account",
+        cascade="all, delete-orphan",
+        foreign_keys="SalesforceContact.account_id",
+    )
+    opportunities = relationship(
+        "SalesforceOpportunity",
+        back_populates="account",
+        cascade="all, delete-orphan",
+        foreign_keys="SalesforceOpportunity.account_id",
+    )
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_sf_accounts_org_sf_id", "organization_id", "salesforce_id", unique=True),
+        Index("ix_sf_accounts_org_type", "organization_id", "account_type"),
+        Index("ix_sf_accounts_org_industry", "organization_id", "industry"),
+        Index("ix_sf_accounts_org_name", "organization_id", "name"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SalesforceAccount(id={self.id}, name={self.name}, sf_id={self.salesforce_id})>"
+
+
+class SalesforceContact(Base):
+    """
+    SalesforceContact model for imported Salesforce Contact records.
+
+    Stores Contact data from Salesforce exports, linking to parent Account.
+    Tracks current employee status for filtering active vs historical contacts.
+
+    Attributes:
+        id: Unique identifier (Curatore)
+        organization_id: Tenant isolation
+        salesforce_id: Original Salesforce 18-character ID
+        account_id: Reference to SalesforceAccount (Curatore ID)
+        account_salesforce_id: Salesforce Account ID (for import linking)
+        first_name: Contact first name
+        last_name: Contact last name
+        email: Email address
+        title: Job title
+        phone: Office phone
+        mobile_phone: Mobile phone
+        department: Department within company
+        is_current_employee: Whether contact is currently employed there
+        mailing_address: Mailing address (JSONB)
+        raw_data: Original CSV row data (JSONB)
+        created_at: Import timestamp
+        updated_at: Last update timestamp
+
+    Relationships:
+        organization: Parent organization
+        account: Parent account
+    """
+
+    __tablename__ = "salesforce_contacts"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True
+    )
+
+    # Salesforce identifiers
+    salesforce_id = Column(String(18), nullable=False, index=True)
+    account_id = Column(
+        UUID(), ForeignKey("salesforce_accounts.id", ondelete="CASCADE"),
+        nullable=True, index=True
+    )
+    account_salesforce_id = Column(String(18), nullable=True, index=True)
+
+    # Person details
+    first_name = Column(String(100), nullable=True)
+    last_name = Column(String(100), nullable=False)
+    email = Column(String(255), nullable=True, index=True)
+    title = Column(String(255), nullable=True)
+    phone = Column(String(50), nullable=True)
+    mobile_phone = Column(String(50), nullable=True)
+    department = Column(String(255), nullable=True)
+
+    # Status
+    is_current_employee = Column(Boolean, nullable=True, default=True)
+
+    # Address (JSONB)
+    mailing_address = Column(JSON, nullable=True)  # {street, city, state, postal_code, country}
+
+    # Audit trail
+    raw_data = Column(JSON, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    organization = relationship("Organization", backref="salesforce_contacts")
+    account = relationship(
+        "SalesforceAccount",
+        back_populates="contacts",
+        foreign_keys=[account_id],
+    )
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_sf_contacts_org_sf_id", "organization_id", "salesforce_id", unique=True),
+        Index("ix_sf_contacts_account", "account_id"),
+        Index("ix_sf_contacts_email", "email"),
+        Index("ix_sf_contacts_org_name", "organization_id", "last_name", "first_name"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SalesforceContact(id={self.id}, name={self.first_name} {self.last_name}, sf_id={self.salesforce_id})>"
+
+
+class SalesforceOpportunity(Base):
+    """
+    SalesforceOpportunity model for imported Salesforce Opportunity records.
+
+    Stores Opportunity data from Salesforce exports, including pipeline stage,
+    financials, and classification. Includes future hook columns for linking
+    to SharePoint folders and SAM.gov solicitations.
+
+    Key Concepts:
+    - Links to Account via account_id
+    - Pipeline tracking via stage_name, is_closed, is_won
+    - Future integrations via linked_sharepoint_folder_id, linked_sam_solicitation_id
+    - Custom dates stored as JSONB for flexibility
+
+    Attributes:
+        id: Unique identifier (Curatore)
+        organization_id: Tenant isolation
+        salesforce_id: Original Salesforce 18-character ID
+        account_id: Reference to SalesforceAccount (Curatore ID)
+        account_salesforce_id: Salesforce Account ID (for import linking)
+        name: Opportunity name
+        stage_name: Pipeline stage
+        amount: Deal amount (decimal)
+        probability: Win probability percentage
+        close_date: Expected close date
+        is_closed: Whether opportunity is closed
+        is_won: Whether opportunity was won (if closed)
+        opportunity_type: Type (New Business, Renewal, etc.)
+        role: Custom role field
+        lead_source: Lead source
+        fiscal_year: Fiscal year
+        fiscal_quarter: Fiscal quarter
+        description: Opportunity description
+        custom_dates: Additional dates (JSONB)
+        linked_sharepoint_folder_id: Future: link to SharePoint folder
+        linked_sam_solicitation_id: Future: link to SAM.gov solicitation
+        raw_data: Original CSV row data (JSONB)
+        indexed_at: When indexed to search
+        created_at: Import timestamp
+        updated_at: Last update timestamp
+
+    Relationships:
+        organization: Parent organization
+        account: Parent account
+    """
+
+    __tablename__ = "salesforce_opportunities"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True
+    )
+
+    # Salesforce identifiers
+    salesforce_id = Column(String(18), nullable=False, index=True)
+    account_id = Column(
+        UUID(), ForeignKey("salesforce_accounts.id", ondelete="CASCADE"),
+        nullable=True, index=True
+    )
+    account_salesforce_id = Column(String(18), nullable=True, index=True)
+
+    # Core opportunity fields
+    name = Column(String(255), nullable=False, index=True)
+    stage_name = Column(String(100), nullable=True, index=True)
+    amount = Column(Float, nullable=True)
+    probability = Column(Float, nullable=True)
+    close_date = Column(Date, nullable=True, index=True)
+    is_closed = Column(Boolean, nullable=True, default=False)
+    is_won = Column(Boolean, nullable=True, default=False)
+
+    # Classification
+    opportunity_type = Column(String(100), nullable=True, index=True)
+    role = Column(String(100), nullable=True)
+    lead_source = Column(String(100), nullable=True)
+    fiscal_year = Column(String(10), nullable=True)
+    fiscal_quarter = Column(String(10), nullable=True)
+
+    # Details
+    description = Column(Text, nullable=True)
+    custom_dates = Column(JSON, nullable=True)  # For additional date fields
+
+    # Future integration hooks (columns added now, logic later)
+    linked_sharepoint_folder_id = Column(
+        UUID(), ForeignKey("sharepoint_sync_configs.id", ondelete="SET NULL"),
+        nullable=True, index=True
+    )
+    linked_sam_solicitation_id = Column(
+        UUID(), ForeignKey("sam_solicitations.id", ondelete="SET NULL"),
+        nullable=True, index=True
+    )
+
+    # Audit trail
+    raw_data = Column(JSON, nullable=True)
+
+    # Search indexing
+    indexed_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    organization = relationship("Organization", backref="salesforce_opportunities")
+    account = relationship(
+        "SalesforceAccount",
+        back_populates="opportunities",
+        foreign_keys=[account_id],
+    )
+    linked_sharepoint_folder = relationship(
+        "SharePointSyncConfig",
+        foreign_keys=[linked_sharepoint_folder_id],
+    )
+    linked_sam_solicitation = relationship(
+        "SamSolicitation",
+        foreign_keys=[linked_sam_solicitation_id],
+    )
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_sf_opps_org_sf_id", "organization_id", "salesforce_id", unique=True),
+        Index("ix_sf_opps_org_stage", "organization_id", "stage_name"),
+        Index("ix_sf_opps_org_close_date", "organization_id", "close_date"),
+        Index("ix_sf_opps_org_type", "organization_id", "opportunity_type"),
+        Index("ix_sf_opps_account", "account_id"),
+        Index("ix_sf_opps_org_is_closed", "organization_id", "is_closed"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SalesforceOpportunity(id={self.id}, name={self.name}, stage={self.stage_name})>"

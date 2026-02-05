@@ -54,6 +54,7 @@ ALL_RUN_TYPES = [
     "procedure_run",
     "pipeline",
     "pipeline_run",
+    "salesforce_import",
 ]
 
 

@@ -172,6 +172,7 @@ class FunctionRegistry:
             from .search.search_solicitations import SearchSolicitationsFunction
             from .search.search_notices import SearchNoticesFunction
             from .search.search_scraped_assets import SearchScrapedAssetsFunction
+            from .search.search_salesforce import SearchSalesforceFunction
             self.register(QueryModelFunction)
             self.register(GetContentFunction)
             self.register(GetAssetFunction)
@@ -180,6 +181,7 @@ class FunctionRegistry:
             self.register(SearchSolicitationsFunction)
             self.register(SearchNoticesFunction)
             self.register(SearchScrapedAssetsFunction)
+            self.register(SearchSalesforceFunction)
         except ImportError as e:
             logger.warning(f"Failed to import search functions: {e}")
 

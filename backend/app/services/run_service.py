@@ -54,7 +54,7 @@ from sqlalchemy import select, and_, or_, func
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from ..database.models import Run, Asset, ExtractionResult, RunLogEvent
+from ..database.models import Run, Asset, ExtractionResult
 from ..config import settings
 
 logger = logging.getLogger("curatore.run_service")
@@ -658,57 +658,25 @@ class RunService:
 
         return run
 
-    async def log_run_event(
-        self,
-        session: AsyncSession,
-        run_id: UUID,
-        level: str,
-        event_type: str,
-        message: str,
-        context: Optional[Dict[str, Any]] = None,
-    ) -> Optional[RunLogEvent]:
-        """
-        Log an event for a run.
-
-        Creates a RunLogEvent record for structured logging and updates
-        the run's last_activity_at timestamp.
-
-        Args:
-            session: Database session
-            run_id: Run UUID
-            level: Log level (INFO, WARN, ERROR)
-            event_type: Event type identifier
-            message: Log message
-            context: Optional additional context (JSON-serializable)
-
-        Returns:
-            Created RunLogEvent or None if run not found
-        """
-        # Validate run exists
-        run = await self.get_run(session, run_id)
-        if not run:
-            logger.warning(f"Cannot log event: run {run_id} not found")
-            return None
-
-        # Create log event
-        log_event = RunLogEvent(
-            run_id=run_id,
-            level=level,
-            event_type=event_type,
-            message=message,
-            context=context or {},
-        )
-        session.add(log_event)
-
-        # Update last activity timestamp
-        run.last_activity_at = datetime.utcnow()
-
-        await session.commit()
-        await session.refresh(log_event)
-
-        logger.debug(f"Logged {level} event for run {run_id}: {event_type}")
-        return log_event
-
-
 # Singleton instance
 run_service = RunService()
+
+
+# =============================================================================
+# IMPORTANT NOTE FOR DEVELOPERS
+# =============================================================================
+# For logging events to runs (RunLogEvent), use run_log_service, NOT run_service.
+#
+# Example:
+#   from app.services.run_log_service import run_log_service
+#
+#   await run_log_service.log_event(session, run_id, "INFO", "my_event", "Message")
+#
+# The run_log_service provides structured logging methods:
+#   - log_event()      - Generic event logging
+#   - log_start()      - Log run start
+#   - log_progress()   - Log progress updates
+#   - log_error()      - Log errors
+#   - log_warning()    - Log warnings
+#   - log_summary()    - Log completion summary
+# =============================================================================

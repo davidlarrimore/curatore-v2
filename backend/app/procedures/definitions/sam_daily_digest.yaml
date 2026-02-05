@@ -28,7 +28,7 @@ parameters:
     type: str
     description: Email addresses to send the digest to (comma-separated if multiple)
     required: false
-    default: "dlarrimore@amivero.com, mpaschal@amivero.com, mmckinney@amivero.com, spoticha@amivero.com, cporter@amivero.com"
+    default: "dlarrimore@amivero.com, mpaschal@amivero.com, mmyette@amivero.com, mmckinney@amivero.com, spoticha@amivero.com, cporter@amivero.com"
     example: "dlarrimore@amivero.com, other@example.com"
 
   - name: posted_within_days

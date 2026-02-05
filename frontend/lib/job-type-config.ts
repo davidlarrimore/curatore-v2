@@ -13,6 +13,7 @@ import {
   Workflow,
   Zap,
   Trash2,
+  Database,
   LucideIcon,
 } from 'lucide-react'
 
@@ -26,6 +27,7 @@ export type JobType =
   | 'pipeline'
   | 'procedure'
   | 'deletion'
+  | 'salesforce_import'
 
 // Configuration for a single job type
 export interface JobTypeConfig {
@@ -121,6 +123,16 @@ export const JOB_TYPE_CONFIG: Record<JobType, JobTypeConfig> = {
     completedToast: (name) => `"${name}" deleted`,
     failedToast: (name, error) => `Failed to delete "${name}"${error ? `: ${error}` : ''}`,
   },
+  salesforce_import: {
+    label: 'Salesforce Import',
+    icon: Database,
+    color: 'cyan',
+    resourceType: 'salesforce',
+    hasChildJobs: false,
+    phases: ['parsing', 'importing', 'indexing'],
+    completedToast: (name) => `Salesforce import completed: ${name}`,
+    failedToast: (name, error) => `Salesforce import failed: ${name}${error ? ` - ${error}` : ''}`,
+  },
 }
 
 // Get job type from run_type string
@@ -135,6 +147,7 @@ export function getJobTypeFromRunType(runType: string): JobType | null {
     pipeline: 'pipeline',
     procedure: 'procedure',
     deletion: 'deletion',
+    salesforce_import: 'salesforce_import',
   }
 
   if (directMap[runType]) {
@@ -146,6 +159,7 @@ export function getJobTypeFromRunType(runType: string): JobType | null {
   if (runType.startsWith('sam_')) return 'sam_pull'
   if (runType.startsWith('scrape_')) return 'scrape'
   if (runType.startsWith('sharepoint_')) return 'sharepoint_sync'
+  if (runType.startsWith('salesforce_')) return 'salesforce_import'
   // Deletion aliases (e.g., sharepoint_delete, sam_delete)
   if (runType.endsWith('_delete')) return 'deletion'
 

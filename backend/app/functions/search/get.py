@@ -57,7 +57,10 @@ class GetFunction(BaseFunction):
                 type="str",
                 description="Content type to retrieve",
                 required=True,
-                enum_values=["asset", "solicitation", "notice", "scraped_asset"],
+                enum_values=[
+                    "asset", "solicitation", "notice", "scraped_asset",
+                    "salesforce_account", "salesforce_contact", "salesforce_opportunity",
+                ],
             ),
             ParameterDoc(
                 name="item_id",

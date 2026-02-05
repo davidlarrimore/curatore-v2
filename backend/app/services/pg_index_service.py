@@ -704,6 +704,323 @@ class PgIndexService:
                 "message": str(e),
             }
 
+    # =========================================================================
+    # SALESFORCE INDEXING
+    # =========================================================================
+
+    async def index_salesforce_account(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        account_id: UUID,
+        salesforce_id: str,
+        name: str,
+        account_type: Optional[str] = None,
+        industry: Optional[str] = None,
+        description: Optional[str] = None,
+        website: Optional[str] = None,
+    ) -> bool:
+        """
+        Index a Salesforce account for search.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            account_id: Internal account UUID
+            salesforce_id: Salesforce 18-character ID
+            name: Account name
+            account_type: Account type classification
+            industry: Industry classification
+            description: Account description
+            website: Company website
+
+        Returns:
+            True if indexed successfully
+        """
+        if not _is_search_enabled():
+            return False
+
+        try:
+            # Build content for indexing
+            content_parts = [name]
+            if account_type:
+                content_parts.append(f"Type: {account_type}")
+            if industry:
+                content_parts.append(f"Industry: {industry}")
+            if description:
+                content_parts.append(description)
+
+            content = "\n\n".join(content_parts)
+
+            # Generate embedding
+            embedding = await embedding_service.get_embedding(content)
+
+            # Build metadata
+            metadata = {
+                "salesforce_id": salesforce_id,
+                "account_type": account_type,
+                "industry": industry,
+                "website": website,
+            }
+
+            # Delete existing and insert new
+            await self._delete_chunks(session, "salesforce_account", account_id)
+
+            await self._insert_chunk(
+                session=session,
+                source_type="salesforce_account",
+                source_id=account_id,
+                organization_id=organization_id,
+                chunk_index=0,
+                content=content,
+                title=name,
+                filename=salesforce_id,
+                url=website,
+                embedding=embedding,
+                source_type_filter="salesforce",
+                content_type=account_type or "Account",
+                metadata=metadata,
+            )
+
+            await session.commit()
+            logger.debug(f"Indexed Salesforce account {account_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error indexing Salesforce account {account_id}: {e}")
+            await session.rollback()
+            return False
+
+    async def index_salesforce_opportunity(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        opportunity_id: UUID,
+        salesforce_id: str,
+        name: str,
+        stage_name: Optional[str] = None,
+        amount: Optional[float] = None,
+        opportunity_type: Optional[str] = None,
+        account_name: Optional[str] = None,
+        description: Optional[str] = None,
+        close_date: Optional[datetime] = None,
+    ) -> bool:
+        """
+        Index a Salesforce opportunity for search.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            opportunity_id: Internal opportunity UUID
+            salesforce_id: Salesforce 18-character ID
+            name: Opportunity name
+            stage_name: Pipeline stage
+            amount: Deal amount
+            opportunity_type: Opportunity type
+            account_name: Associated account name
+            description: Opportunity description
+            close_date: Expected close date
+
+        Returns:
+            True if indexed successfully
+        """
+        if not _is_search_enabled():
+            return False
+
+        try:
+            # Build content for indexing
+            content_parts = [name]
+            if account_name:
+                content_parts.append(f"Account: {account_name}")
+            if stage_name:
+                content_parts.append(f"Stage: {stage_name}")
+            if opportunity_type:
+                content_parts.append(f"Type: {opportunity_type}")
+            if amount:
+                content_parts.append(f"Amount: ${amount:,.2f}")
+            if description:
+                content_parts.append(description)
+
+            content = "\n\n".join(content_parts)
+
+            # Generate embedding
+            embedding = await embedding_service.get_embedding(content)
+
+            # Build metadata
+            metadata = {
+                "salesforce_id": salesforce_id,
+                "stage_name": stage_name,
+                "amount": amount,
+                "opportunity_type": opportunity_type,
+                "account_name": account_name,
+                "close_date": close_date.isoformat() if close_date else None,
+            }
+
+            # Delete existing and insert new
+            await self._delete_chunks(session, "salesforce_opportunity", opportunity_id)
+
+            await self._insert_chunk(
+                session=session,
+                source_type="salesforce_opportunity",
+                source_id=opportunity_id,
+                organization_id=organization_id,
+                chunk_index=0,
+                content=content,
+                title=name,
+                filename=salesforce_id,
+                url=None,
+                embedding=embedding,
+                source_type_filter="salesforce",
+                content_type=opportunity_type or "Opportunity",
+                metadata=metadata,
+            )
+
+            await session.commit()
+            logger.debug(f"Indexed Salesforce opportunity {opportunity_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error indexing Salesforce opportunity {opportunity_id}: {e}")
+            await session.rollback()
+            return False
+
+    async def delete_salesforce_account_index(
+        self,
+        session: AsyncSession,
+        account_id: UUID,
+    ) -> bool:
+        """Remove Salesforce account from search index."""
+        try:
+            await self._delete_chunks(session, "salesforce_account", account_id)
+            await session.commit()
+            logger.debug(f"Removed Salesforce account {account_id} from index")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete index for Salesforce account {account_id}: {e}")
+            return False
+
+    async def delete_salesforce_opportunity_index(
+        self,
+        session: AsyncSession,
+        opportunity_id: UUID,
+    ) -> bool:
+        """Remove Salesforce opportunity from search index."""
+        try:
+            await self._delete_chunks(session, "salesforce_opportunity", opportunity_id)
+            await session.commit()
+            logger.debug(f"Removed Salesforce opportunity {opportunity_id} from index")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete index for Salesforce opportunity {opportunity_id}: {e}")
+            return False
+
+    async def index_salesforce_contact(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        contact_id: UUID,
+        salesforce_id: str,
+        first_name: Optional[str] = None,
+        last_name: Optional[str] = None,
+        email: Optional[str] = None,
+        title: Optional[str] = None,
+        account_name: Optional[str] = None,
+        department: Optional[str] = None,
+    ) -> bool:
+        """
+        Index a Salesforce contact for search.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            contact_id: Internal contact UUID
+            salesforce_id: Salesforce 18-character ID
+            first_name: Contact first name
+            last_name: Contact last name
+            email: Contact email
+            title: Contact job title
+            account_name: Associated account name
+            department: Contact department
+
+        Returns:
+            True if indexed successfully
+        """
+        if not _is_search_enabled():
+            return False
+
+        try:
+            # Build full name
+            full_name = f"{first_name or ''} {last_name or ''}".strip() or "Unknown Contact"
+
+            # Build content for indexing
+            content_parts = [full_name]
+            if title:
+                content_parts.append(f"Title: {title}")
+            if account_name:
+                content_parts.append(f"Account: {account_name}")
+            if department:
+                content_parts.append(f"Department: {department}")
+            if email:
+                content_parts.append(f"Email: {email}")
+
+            content = "\n\n".join(content_parts)
+
+            # Generate embedding
+            embedding = await embedding_service.get_embedding(content)
+
+            # Build metadata
+            metadata = {
+                "salesforce_id": salesforce_id,
+                "first_name": first_name,
+                "last_name": last_name,
+                "email": email,
+                "title": title,
+                "account_name": account_name,
+            }
+
+            # Delete existing and insert new
+            await self._delete_chunks(session, "salesforce_contact", contact_id)
+
+            await self._insert_chunk(
+                session=session,
+                source_type="salesforce_contact",
+                source_id=contact_id,
+                organization_id=organization_id,
+                chunk_index=0,
+                content=content,
+                title=full_name,
+                filename=salesforce_id,
+                url=None,
+                embedding=embedding,
+                source_type_filter="salesforce",
+                content_type=title or "Contact",
+                metadata=metadata,
+            )
+
+            await session.commit()
+            logger.debug(f"Indexed Salesforce contact {contact_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error indexing Salesforce contact {contact_id}: {e}")
+            await session.rollback()
+            return False
+
+    async def delete_salesforce_contact_index(
+        self,
+        session: AsyncSession,
+        contact_id: UUID,
+    ) -> bool:
+        """Remove Salesforce contact from search index."""
+        try:
+            await self._delete_chunks(session, "salesforce_contact", contact_id)
+            await session.commit()
+            logger.debug(f"Removed Salesforce contact {contact_id} from index")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete index for Salesforce contact {contact_id}: {e}")
+            return False
+
 
 # Global service instance
 pg_index_service = PgIndexService()

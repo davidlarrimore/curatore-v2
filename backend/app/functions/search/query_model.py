@@ -33,6 +33,10 @@ ALLOWED_MODELS = {
     "SamNotice": "app.database.models.SamNotice",
     "ScrapeCollection": "app.database.models.ScrapeCollection",
     "SharePointSyncConfig": "app.database.models.SharePointSyncConfig",
+    # Salesforce CRM models
+    "SalesforceAccount": "app.database.models.SalesforceAccount",
+    "SalesforceContact": "app.database.models.SalesforceContact",
+    "SalesforceOpportunity": "app.database.models.SalesforceOpportunity",
 }
 
 

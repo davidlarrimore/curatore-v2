@@ -10,6 +10,7 @@ Provides functions for searching and retrieving content:
 - search_solicitations: Search SAM.gov solicitations
 - search_notices: Search SAM.gov notices
 - search_scraped_assets: Search web scraped content
+- search_salesforce: Search Salesforce CRM records
 - query_model: Query any database model directly
 """
 
@@ -20,6 +21,7 @@ from .search_assets import SearchAssetsFunction
 from .search_solicitations import SearchSolicitationsFunction
 from .search_notices import SearchNoticesFunction
 from .search_scraped_assets import SearchScrapedAssetsFunction
+from .search_salesforce import SearchSalesforceFunction
 from .query_model import QueryModelFunction
 
 __all__ = [
@@ -30,5 +32,6 @@ __all__ = [
     "SearchSolicitationsFunction",
     "SearchNoticesFunction",
     "SearchScrapedAssetsFunction",
+    "SearchSalesforceFunction",
     "QueryModelFunction",
 ]

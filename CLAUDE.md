@@ -1618,6 +1618,7 @@ curl -X POST http://localhost:8000/api/v1/sam/searches/{id}/pull \
 
 | Document | Description |
 |----------|-------------|
+| [`docs/DATA_CONNECTIONS.md`](docs/DATA_CONNECTIONS.md) | **Guide for adding new data connections** (Salesforce, SAM.gov-style integrations) |
 | [`docs/DOCUMENT_PROCESSING.md`](docs/DOCUMENT_PROCESSING.md) | Detailed document processing pipeline with diagrams |
 | [`config.yml.example`](config.yml.example) | Configuration reference |
 | [`docker-compose.yml`](docker-compose.yml) | Service architecture |

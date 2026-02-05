@@ -52,7 +52,7 @@ class SearchRequest(BaseModel):
         0.5, ge=0.0, le=1.0, description="Weight for semantic scores in hybrid mode (0-1)"
     )
     source_types: Optional[List[str]] = Field(
-        None, description="Filter by source types (upload, sharepoint, web_scrape, sam_gov)"
+        None, description="Filter by source types (upload, sharepoint, web_scrape, sam_gov, salesforce)"
     )
     content_types: Optional[List[str]] = Field(
         None, description="Filter by content/MIME types"
@@ -168,10 +168,13 @@ async def search_assets(
     - hybrid: Combines both with configurable weighting (default, best quality)
 
     Filters can be applied by:
-    - Source type (upload, sharepoint, web_scrape)
+    - Source type (upload, sharepoint, web_scrape, sam_gov, salesforce)
     - Content type (MIME type)
     - Collection ID (for web scrapes)
     - Date range
+
+    When filtering by "salesforce", results include Account, Contact, and Opportunity
+    records with friendly type labels in the source_type field.
     """
     if not _is_search_enabled():
         raise HTTPException(
@@ -295,7 +298,7 @@ async def search_assets_get(
     q: str = Query(..., min_length=1, max_length=500, description="Search query"),
     mode: Optional[str] = Query("hybrid", description="Search mode: keyword, semantic, hybrid"),
     source_types: Optional[str] = Query(
-        None, description="Comma-separated source types (upload,sharepoint,web_scrape,sam_gov)"
+        None, description="Comma-separated source types (upload,sharepoint,web_scrape,sam_gov,salesforce)"
     ),
     content_types: Optional[str] = Query(
         None, description="Comma-separated content types"
@@ -586,6 +589,188 @@ async def search_sam(
         raise HTTPException(
             status_code=500,
             detail=f"SAM search failed: {str(e)}",
+        )
+
+
+# =========================================================================
+# SALESFORCE SEARCH ENDPOINTS
+# =========================================================================
+
+
+class SalesforceSearchRequest(BaseModel):
+    """Salesforce search request with query and optional filters."""
+
+    query: str = Field(..., min_length=1, max_length=500, description="Search query")
+    entity_types: Optional[List[str]] = Field(
+        None, description="Filter by entity type (account, contact, opportunity)"
+    )
+    account_types: Optional[List[str]] = Field(
+        None, description="Filter by account types"
+    )
+    stages: Optional[List[str]] = Field(
+        None, description="Filter by opportunity stages"
+    )
+    limit: int = Field(20, ge=1, le=100, description="Maximum results to return")
+    offset: int = Field(0, ge=0, description="Offset for pagination")
+
+
+@router.post(
+    "/salesforce",
+    response_model=SearchResponse,
+    summary="Search Salesforce CRM data",
+    description="Full-text search across Salesforce accounts, contacts, and opportunities.",
+)
+async def search_salesforce(
+    request: SalesforceSearchRequest,
+    current_user: User = Depends(get_current_user),
+) -> SearchResponse:
+    """
+    Execute a full-text search across Salesforce CRM data.
+
+    Searches across accounts, contacts, and opportunities including names,
+    descriptions, titles, and other fields. Returns results with relevance
+    scoring and highlighted text snippets.
+
+    Results include a source_type field with friendly labels:
+    - "Account" for Salesforce accounts
+    - "Contact" for Salesforce contacts
+    - "Opportunity" for Salesforce opportunities
+
+    Filters can be applied by:
+    - Entity type (account, contact, opportunity)
+    - Account type
+    - Opportunity stage
+    """
+    if not _is_search_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Search is not enabled. Enable SEARCH_ENABLED to use search.",
+        )
+
+    try:
+        async with database_service.get_session() as session:
+            results = await pg_search_service.search_salesforce(
+                session=session,
+                organization_id=current_user.organization_id,
+                query=request.query,
+                entity_types=request.entity_types,
+                account_types=request.account_types,
+                stages=request.stages,
+                limit=request.limit,
+                offset=request.offset,
+            )
+
+        return SearchResponse(
+            total=results.total,
+            limit=request.limit,
+            offset=request.offset,
+            query=request.query,
+            hits=[
+                SearchHitResponse(
+                    asset_id=hit.asset_id,
+                    score=hit.score,
+                    title=hit.title,
+                    filename=hit.filename,  # Salesforce ID
+                    source_type=hit.source_type,  # Account, Contact, or Opportunity
+                    content_type=hit.content_type,
+                    url=hit.url,
+                    created_at=hit.created_at,
+                    highlights=hit.highlights,
+                    keyword_score=hit.keyword_score,
+                )
+                for hit in results.hits
+            ],
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Salesforce search failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Salesforce search failed: {str(e)}",
+        )
+
+
+@router.get(
+    "/salesforce",
+    response_model=SearchResponse,
+    summary="Search Salesforce CRM data (GET)",
+    description="Full-text search across Salesforce data using query parameters.",
+)
+async def search_salesforce_get(
+    q: str = Query(..., min_length=1, max_length=500, description="Search query"),
+    entity_types: Optional[str] = Query(
+        None, description="Comma-separated entity types (account,contact,opportunity)"
+    ),
+    account_types: Optional[str] = Query(
+        None, description="Comma-separated account types"
+    ),
+    stages: Optional[str] = Query(
+        None, description="Comma-separated opportunity stages"
+    ),
+    limit: int = Query(20, ge=1, le=100, description="Maximum results"),
+    offset: int = Query(0, ge=0, description="Pagination offset"),
+    current_user: User = Depends(get_current_user),
+) -> SearchResponse:
+    """
+    Execute a full-text search across Salesforce data using GET parameters.
+
+    Simpler alternative to POST /search/salesforce for basic queries.
+    """
+    if not _is_search_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Search is not enabled. Enable SEARCH_ENABLED to use search.",
+        )
+
+    # Parse comma-separated filters
+    entity_type_list = entity_types.split(",") if entity_types else None
+    account_type_list = account_types.split(",") if account_types else None
+    stage_list = stages.split(",") if stages else None
+
+    try:
+        async with database_service.get_session() as session:
+            results = await pg_search_service.search_salesforce(
+                session=session,
+                organization_id=current_user.organization_id,
+                query=q,
+                entity_types=entity_type_list,
+                account_types=account_type_list,
+                stages=stage_list,
+                limit=limit,
+                offset=offset,
+            )
+
+        return SearchResponse(
+            total=results.total,
+            limit=limit,
+            offset=offset,
+            query=q,
+            hits=[
+                SearchHitResponse(
+                    asset_id=hit.asset_id,
+                    score=hit.score,
+                    title=hit.title,
+                    filename=hit.filename,
+                    source_type=hit.source_type,
+                    content_type=hit.content_type,
+                    url=hit.url,
+                    created_at=hit.created_at,
+                    highlights=hit.highlights,
+                    keyword_score=hit.keyword_score,
+                )
+                for hit in results.hits
+            ],
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Salesforce search failed: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Salesforce search failed: {str(e)}",
         )
 
 

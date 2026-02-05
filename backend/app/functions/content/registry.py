@@ -202,6 +202,119 @@ CONTENT_TYPE_REGISTRY: Dict[str, Dict[str, Any]] = {
         },
         "title_field": "name",
     },
+
+    # =========================================================================
+    # SALESFORCE CRM TYPES
+    # =========================================================================
+
+    "salesforce_account": {
+        "formal_name": "Salesforce Account",
+        "model": "SalesforceAccount",
+        "has_text": True,
+        "text_source": "record",  # Text is JSON of the record
+        "text_format": "json",
+        "children": [
+            {"type": "salesforce_contact", "relation": "contacts", "display_name": "Contact"},
+            {"type": "salesforce_opportunity", "relation": "opportunities", "display_name": "Opportunity"},
+        ],
+        "display_names": {
+            "default": "Account",
+            "crm": "Customer Account",
+            "search": "Salesforce Account",
+        },
+        "fields": {
+            "salesforce_id": "salesforce_id",
+            "name": "name",
+            "account_type": "account_type",
+            "industry": "industry",
+            "department": "department",
+            "description": "description",
+            "website": "website",
+            "phone": "phone",
+        },
+        "metadata_fields": {
+            "billing_address": "billing_address",
+            "shipping_address": "shipping_address",
+            "small_business_flags": "small_business_flags",
+            "raw_data": "raw_data",
+            "created_at": "created_at",
+            "updated_at": "updated_at",
+        },
+        "title_field": "name",
+    },
+
+    "salesforce_contact": {
+        "formal_name": "Salesforce Contact",
+        "model": "SalesforceContact",
+        "has_text": True,
+        "text_source": "record",
+        "text_format": "json",
+        "children": [],
+        "display_names": {
+            "default": "Contact",
+            "crm": "Customer Contact",
+            "search": "Salesforce Contact",
+        },
+        "fields": {
+            "salesforce_id": "salesforce_id",
+            "first_name": "first_name",
+            "last_name": "last_name",
+            "email": "email",
+            "title": "title",
+            "phone": "phone",
+            "mobile_phone": "mobile_phone",
+            "department": "department",
+            "is_current_employee": "is_current_employee",
+        },
+        "metadata_fields": {
+            "mailing_address": "mailing_address",
+            "raw_data": "raw_data",
+            "created_at": "created_at",
+            "updated_at": "updated_at",
+        },
+        "title_field": None,  # Computed from first_name + last_name
+        "parent_type": "salesforce_account",
+        "parent_field": "account_id",
+    },
+
+    "salesforce_opportunity": {
+        "formal_name": "Salesforce Opportunity",
+        "model": "SalesforceOpportunity",
+        "has_text": True,
+        "text_source": "record",
+        "text_format": "json",
+        "children": [],
+        "display_names": {
+            "default": "Opportunity",
+            "crm": "Sales Opportunity",
+            "search": "Salesforce Opportunity",
+        },
+        "fields": {
+            "salesforce_id": "salesforce_id",
+            "name": "name",
+            "stage_name": "stage_name",
+            "amount": "amount",
+            "probability": "probability",
+            "close_date": "close_date",
+            "is_closed": "is_closed",
+            "is_won": "is_won",
+            "opportunity_type": "opportunity_type",
+            "role": "role",
+            "lead_source": "lead_source",
+            "fiscal_year": "fiscal_year",
+            "fiscal_quarter": "fiscal_quarter",
+            "description": "description",
+        },
+        "metadata_fields": {
+            "custom_dates": "custom_dates",
+            "raw_data": "raw_data",
+            "created_at": "created_at",
+            "updated_at": "updated_at",
+        },
+        "title_field": "name",
+        "parent_type": "salesforce_account",
+        "parent_field": "account_id",
+    },
 }
 
 
