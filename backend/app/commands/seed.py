@@ -309,7 +309,7 @@ async def seed_scheduled_tasks() -> list:
             "description": "Trigger SAM.gov pulls for all searches with 'daily' frequency.",
             "task_type": "sam.trigger_pull",
             "scope_type": "global",
-            "schedule_expression": "0 2 * * *",  # Daily at 2 AM UTC
+            "schedule_expression": "0 6 * * *",  # Daily at 6 AM UTC (1 AM EST)
             "enabled": True,
             "config": {"frequency": "daily"},
         },
