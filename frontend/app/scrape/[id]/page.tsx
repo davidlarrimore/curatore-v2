@@ -3,7 +3,7 @@
 import { useState, useEffect, use, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { useDeletionJobs } from '@/lib/context-shims'
+import { useDeletionJobs, useActiveJobs } from '@/lib/context-shims'
 import { scrapeApi, ScrapeCollection, ScrapedAsset, PathTreeNode, CrawlStatus } from '@/lib/api'
 import { formatCompact } from '@/lib/date-utils'
 import Link from 'next/link'
@@ -51,7 +51,8 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
   const collectionId = resolvedParams.id
   const router = useRouter()
   const { token, user } = useAuth()
-  const { addJob, isDeleting } = useDeletionJobs()
+  const { addJob: addDeletionJob, isDeleting } = useDeletionJobs()
+  const { addJob } = useActiveJobs()
 
   const [collection, setCollection] = useState<ScrapeCollection | null>(null)
   const [assets, setAssets] = useState<ScrapedAsset[]>([])
@@ -207,6 +208,17 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
       const result = await scrapeApi.startCrawl(token, collectionId)
       addToast('info', 'Crawl started! Fetching pages...')
 
+      // Track the job in the activity monitor
+      if (result.run_id) {
+        addJob({
+          runId: result.run_id,
+          jobType: 'scrape',
+          displayName: collection.name || 'Web Scrape',
+          resourceId: collectionId,
+          resourceType: 'scrape_collection',
+        })
+      }
+
       setCrawlStatus({
         run_id: result.run_id,
         status: 'running',
@@ -238,7 +250,7 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
       const result = await scrapeApi.deleteCollection(token, collectionId)
 
       // Add to global deletion tracking
-      addJob({
+      addDeletionJob({
         runId: result.run_id,
         configId: collectionId,
         configName: collection.name,
