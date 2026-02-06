@@ -308,6 +308,12 @@ function ProceduresContent() {
                 <RefreshCw className={`w-4 h-4 ${isRefreshing ? 'animate-spin' : ''}`} />
                 Refresh
               </Button>
+              <Link href="/admin/procedures/new">
+                <Button variant="primary" className="gap-2">
+                  <Plus className="w-4 h-4" />
+                  New Procedure
+                </Button>
+              </Link>
             </div>
           </div>
 
@@ -543,6 +549,13 @@ function ProceduresContent() {
 
                     {/* Actions */}
                     <div className="flex items-center gap-2">
+                      <Link href={`/admin/procedures/${procedure.slug}/edit`}>
+                        <Button variant="secondary" className="gap-2">
+                          <Settings className="w-4 h-4" />
+                          Edit
+                        </Button>
+                      </Link>
+
                       <Button
                         variant="secondary"
                         onClick={() => handleRun(procedure.slug)}

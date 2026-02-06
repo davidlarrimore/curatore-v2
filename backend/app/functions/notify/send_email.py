@@ -91,6 +91,15 @@ class SendEmailFunction(BaseFunction):
                     "body": "This is a test email.",
                 },
             },
+            {
+                "description": "HTML formatted email",
+                "params": {
+                    "to": ["user@example.com"],
+                    "subject": "Weekly Report",
+                    "body": "<html><body><h1>Report</h1><p>Content here...</p></body></html>",
+                    "html": True,
+                },
+            },
         ],
     )
 

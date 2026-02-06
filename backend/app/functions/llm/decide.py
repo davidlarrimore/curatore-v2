@@ -73,7 +73,7 @@ class DecideFunction(BaseFunction):
 
     meta = FunctionMeta(
         name="llm_decide",
-        category=FunctionCategory.LLM,
+        category=FunctionCategory.LOGIC,
         description="Make a boolean (yes/no) decision using an LLM",
         parameters=[
             ParameterDoc(

@@ -2,7 +2,7 @@
 """
 Search Notices function - Query SAM.gov notices.
 
-Query and filter SAM.gov notices (amendments, standalone notices) from the database.
+Query and filter SAM.gov notices (amendments, standalone notices) using hybrid search.
 Returns results as ContentItem instances for unified handling.
 """
 
@@ -43,8 +43,30 @@ class SearchNoticesFunction(BaseFunction):
     meta = FunctionMeta(
         name="search_notices",
         category=FunctionCategory.SEARCH,
-        description="Search SAM.gov notices with filters, returns ContentItem list",
+        description="Search SAM.gov notices with hybrid search and filters, returns ContentItem list",
         parameters=[
+            ParameterDoc(
+                name="keyword",
+                type="str",
+                description="Search query for title and description. Combines with all filters below for refined results.",
+                required=False,
+                default=None,
+            ),
+            ParameterDoc(
+                name="search_mode",
+                type="str",
+                description="Search mode: 'keyword' for exact term matches, 'semantic' for conceptual similarity, 'hybrid' combines both for best results.",
+                required=False,
+                default="hybrid",
+                enum_values=["keyword", "semantic", "hybrid"],
+            ),
+            ParameterDoc(
+                name="semantic_weight",
+                type="float",
+                description="Balance between keyword and semantic search in hybrid mode. 0.0 = keyword only, 1.0 = semantic only, 0.5 = equal weight.",
+                required=False,
+                default=0.5,
+            ),
             ParameterDoc(
                 name="notice_id",
                 type="str",
@@ -55,7 +77,7 @@ class SearchNoticesFunction(BaseFunction):
             ParameterDoc(
                 name="notice_types",
                 type="list[str]",
-                description="Filter by notice types (ptype codes from SAM.gov API)",
+                description="Filter by notice type codes. Common types: 'r' (Sources Sought/RFI), 's' (Special Notice), 'o' (Solicitation), 'k' (Combined Synopsis). Works with keyword search to narrow results.",
                 required=False,
                 default=None,
                 example=["s", "r"],
@@ -74,28 +96,21 @@ class SearchNoticesFunction(BaseFunction):
             ParameterDoc(
                 name="standalone_only",
                 type="bool",
-                description="Only return standalone notices (no solicitation)",
+                description="Only return standalone notices (not linked to a solicitation). Useful for finding special notices and announcements.",
                 required=False,
                 default=False,
             ),
             ParameterDoc(
                 name="posted_within_days",
                 type="int",
-                description="Only include notices posted within N days",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="keyword",
-                type="str",
-                description="Search in title and description",
+                description="Only include notices posted within N days (e.g., 7, 30, 90). Combines with keyword and type filters to find recent notices.",
                 required=False,
                 default=None,
             ),
             ParameterDoc(
                 name="order_by",
                 type="str",
-                description="Field to order by",
+                description="Field to order by (only used when no keyword search)",
                 required=False,
                 default="-posted_date",
                 enum_values=["-posted_date", "posted_date", "-version_number", "version_number"],
@@ -108,6 +123,13 @@ class SearchNoticesFunction(BaseFunction):
                 default=50,
             ),
             ParameterDoc(
+                name="offset",
+                type="int",
+                description="Number of results to skip for pagination",
+                required=False,
+                default=0,
+            ),
+            ParameterDoc(
                 name="include_solicitation",
                 type="bool",
                 description="Include parent solicitation data if linked",
@@ -116,9 +138,27 @@ class SearchNoticesFunction(BaseFunction):
             ),
         ],
         returns="list[ContentItem]: Matching notices as ContentItem instances",
-        tags=["search", "sam", "notices", "content"],
+        tags=["search", "sam", "notices", "content", "hybrid"],
         requires_llm=False,
         examples=[
+            {
+                "description": "Hybrid search for RFI notices posted recently",
+                "params": {
+                    "keyword": "request for information cybersecurity",
+                    "search_mode": "hybrid",
+                    "notice_types": ["r"],
+                    "posted_within_days": 30,
+                },
+            },
+            {
+                "description": "Semantic search for sources sought notices",
+                "params": {
+                    "keyword": "cloud infrastructure services",
+                    "search_mode": "semantic",
+                    "notice_types": ["r", "s"],
+                    "posted_within_days": 60,
+                },
+            },
             {
                 "description": "Get a specific notice by identifier (UUID or solicitation number)",
                 "params": {
@@ -126,33 +166,40 @@ class SearchNoticesFunction(BaseFunction):
                 },
             },
             {
-                "description": "Recent special notices",
+                "description": "Recent special notices and announcements",
                 "params": {
+                    "keyword": "industry day",
                     "notice_types": ["s"],
                     "posted_within_days": 30,
                 },
             },
             {
-                "description": "Search by SAM.gov internal ID",
+                "description": "Search for presolicitations in the last two weeks",
                 "params": {
-                    "notice_id": "74cef92c649b410db3ae44f158bf25a7",
+                    "keyword": "software development",
+                    "search_mode": "hybrid",
+                    "notice_types": ["p"],
+                    "posted_within_days": 14,
                 },
             },
         ],
     )
 
     async def execute(self, ctx: FunctionContext, **params) -> FunctionResult:
-        """Query notices."""
+        """Query notices with optional hybrid search."""
         from sqlalchemy.orm import selectinload
         from ...database.models import SamNotice, SamSolicitation
 
+        keyword = params.get("keyword")
+        search_mode = params.get("search_mode", "hybrid")
+        semantic_weight = params.get("semantic_weight", 0.5)
         notice_id = params.get("notice_id")
         notice_types = params.get("notice_types")
         standalone_only = params.get("standalone_only", False)
         posted_within_days = params.get("posted_within_days")
-        keyword = params.get("keyword")
         order_by = params.get("order_by", "-posted_date")
         include_solicitation = params.get("include_solicitation", False)
+        offset = params.get("offset", 0)
 
         # Coerce types
         limit_val = params.get("limit", 50)
@@ -164,7 +211,20 @@ class SearchNoticesFunction(BaseFunction):
             posted_within_days = int(posted_within_days) if posted_within_days else None
 
         try:
-            # Build query
+            # If keyword is provided, use PgSearchService for hybrid search
+            if keyword and keyword.strip():
+                return await self._search_with_pg_service(
+                    ctx=ctx,
+                    keyword=keyword.strip(),
+                    search_mode=search_mode,
+                    semantic_weight=semantic_weight,
+                    notice_types=notice_types,
+                    posted_within_days=posted_within_days,
+                    limit=limit,
+                    offset=offset,
+                )
+
+            # Otherwise, use direct database query with filters
             conditions = []
 
             # Organization filter - notices are linked via solicitation or directly
@@ -178,16 +238,11 @@ class SearchNoticesFunction(BaseFunction):
             )
 
             # Unified notice identifier search
-            # Searches: SAM.gov internal ID (UUID), solicitation_number on notice, or parent solicitation number
-            # Note: SAM.gov website calls "solicitation_number" the "Notice ID" - confusing!
             if notice_id:
                 conditions.append(
                     or_(
-                        # Match SAM.gov internal notice ID (UUID)
                         SamNotice.sam_notice_id == notice_id,
-                        # Match solicitation_number on standalone notices
                         SamNotice.solicitation_number == notice_id,
-                        # Match solicitation_number via parent solicitation (for linked notices)
                         SamNotice.solicitation.has(
                             SamSolicitation.solicitation_number == notice_id
                         ),
@@ -203,22 +258,11 @@ class SearchNoticesFunction(BaseFunction):
                 conditions.append(SamNotice.notice_type.in_(notice_types))
 
             # Posted date filter
-            # Use start of day (midnight) for cutoff to handle SAM.gov date-only timestamps
             if posted_within_days:
                 cutoff_date = (datetime.utcnow() - timedelta(days=posted_within_days)).replace(
                     hour=0, minute=0, second=0, microsecond=0
                 )
                 conditions.append(SamNotice.posted_date >= cutoff_date)
-
-            # Keyword search
-            if keyword:
-                keyword_pattern = f"%{keyword}%"
-                conditions.append(
-                    or_(
-                        SamNotice.title.ilike(keyword_pattern),
-                        SamNotice.description.ilike(keyword_pattern),
-                    )
-                )
 
             # Build query
             query = select(SamNotice).where(and_(*conditions))
@@ -239,79 +283,15 @@ class SearchNoticesFunction(BaseFunction):
                     order_col = field_map[field_name]
                     query = query.order_by(desc(order_col) if desc_order else order_col)
 
-            # Apply limit
-            query = query.limit(limit)
+            # Apply pagination
+            query = query.offset(offset).limit(limit)
 
             # Execute
             result = await ctx.session.execute(query)
             notices = result.scalars().all()
 
             # Format results as ContentItem instances
-            results = []
-            for notice in notices:
-                # Determine display type based on context
-                if notice.solicitation_id:
-                    display_type = "Amendment" if notice.version_number > 1 else "Notice"
-                else:
-                    display_type = "Special Notice"
-
-                # Build fields dict
-                fields = {
-                    "sam_notice_id": notice.sam_notice_id,
-                    "notice_type": notice.notice_type,
-                    "version_number": notice.version_number,
-                    "posted_date": notice.posted_date.isoformat() if notice.posted_date else None,
-                    "response_deadline": notice.response_deadline.isoformat() if notice.response_deadline else None,
-                    "agency_name": notice.agency_name,
-                    "bureau_name": notice.bureau_name,
-                    "office_name": notice.office_name,
-                    "naics_code": notice.naics_code,
-                    "psc_code": notice.psc_code,
-                    "set_aside_code": notice.set_aside_code,
-                }
-
-                # Build metadata dict
-                metadata = {
-                    "description": notice.description,
-                    "description_preview": notice.description[:500] + "..." if notice.description and len(notice.description) > 500 else notice.description,
-                    "has_changes_summary": notice.changes_summary is not None,
-                    "changes_summary": notice.changes_summary,
-                    "ui_link": notice.ui_link,
-                }
-
-                # Include solicitation data if requested and available
-                if include_solicitation and notice.solicitation_id and notice.solicitation:
-                    sol = notice.solicitation
-                    fields["solicitation"] = {
-                        "id": str(sol.id),
-                        "solicitation_number": sol.solicitation_number,
-                        "title": sol.title,
-                        "description": sol.description,
-                        "description_preview": sol.description[:500] + "..." if sol.description and len(sol.description) > 500 else sol.description,
-                        "status": sol.status,
-                        "notice_count": sol.notice_count,
-                        "notice_type": sol.notice_type,
-                        "response_deadline": sol.response_deadline.isoformat() if sol.response_deadline else None,
-                        "agency_name": sol.agency_name,
-                        "naics_code": sol.naics_code,
-                        "set_aside_code": sol.set_aside_code,
-                        "summary_status": sol.summary_status,
-                        "ui_link": sol.ui_link,
-                    }
-
-                item = ContentItem(
-                    id=str(notice.id),
-                    type="notice",
-                    display_type=display_type,
-                    title=notice.title,
-                    text=None,  # Text not loaded by default
-                    text_format="json",
-                    fields=fields,
-                    metadata=metadata,
-                    parent_id=str(notice.solicitation_id) if notice.solicitation_id else None,
-                    parent_type="solicitation" if notice.solicitation_id else None,
-                )
-                results.append(item)
+            results = self._format_notices_as_content_items(notices, include_solicitation)
 
             return FunctionResult.success_result(
                 data=results,
@@ -336,3 +316,139 @@ class SearchNoticesFunction(BaseFunction):
                 error=str(e),
                 message="Notice query failed",
             )
+
+    async def _search_with_pg_service(
+        self,
+        ctx: FunctionContext,
+        keyword: str,
+        search_mode: str,
+        semantic_weight: float,
+        notice_types: Optional[List[str]],
+        posted_within_days: Optional[int],
+        limit: int,
+        offset: int,
+    ) -> FunctionResult:
+        """Use PgSearchService for hybrid search with filters."""
+        search_results = await ctx.search_service.search_sam(
+            session=ctx.session,
+            organization_id=ctx.organization_id,
+            query=keyword,
+            search_mode=search_mode,
+            semantic_weight=semantic_weight,
+            source_types=["sam_notice"],  # Only notices
+            notice_types=notice_types,
+            posted_within_days=posted_within_days,
+            limit=limit,
+            offset=offset,
+        )
+
+        # Convert SearchHit results to ContentItem format
+        results = []
+        for hit in search_results.hits:
+            item = ContentItem(
+                id=hit.asset_id,
+                type="notice",
+                display_type="Notice",
+                title=hit.title,
+                text=None,
+                text_format="json",
+                fields={
+                    "source_type": hit.source_type,
+                    "url": hit.url,
+                    "created_at": hit.created_at,
+                },
+                metadata={
+                    "score": hit.score,
+                    "keyword_score": hit.keyword_score,
+                    "semantic_score": hit.semantic_score,
+                    "highlights": hit.highlights,
+                    "search_mode": search_mode,
+                },
+            )
+            results.append(item)
+
+        return FunctionResult.success_result(
+            data=results,
+            message=f"Found {len(results)} notices matching '{keyword}'",
+            metadata={
+                "total": search_results.total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + len(results) < search_results.total,
+                "keyword": keyword,
+                "search_mode": search_mode,
+                "semantic_weight": semantic_weight,
+                "notice_types": notice_types,
+                "result_type": "ContentItem",
+            },
+            items_processed=len(results),
+        )
+
+    def _format_notices_as_content_items(self, notices, include_solicitation: bool) -> List[ContentItem]:
+        """Format notice records as ContentItem instances."""
+        results = []
+        for notice in notices:
+            # Determine display type based on context
+            if notice.solicitation_id:
+                display_type = "Amendment" if notice.version_number > 1 else "Notice"
+            else:
+                display_type = "Special Notice"
+
+            # Build fields dict
+            fields = {
+                "sam_notice_id": notice.sam_notice_id,
+                "notice_type": notice.notice_type,
+                "version_number": notice.version_number,
+                "posted_date": notice.posted_date.isoformat() if notice.posted_date else None,
+                "response_deadline": notice.response_deadline.isoformat() if notice.response_deadline else None,
+                "agency_name": notice.agency_name,
+                "bureau_name": notice.bureau_name,
+                "office_name": notice.office_name,
+                "naics_code": notice.naics_code,
+                "psc_code": notice.psc_code,
+                "set_aside_code": notice.set_aside_code,
+            }
+
+            # Build metadata dict
+            metadata = {
+                "description": notice.description,
+                "description_preview": notice.description[:500] + "..." if notice.description and len(notice.description) > 500 else notice.description,
+                "has_changes_summary": notice.changes_summary is not None,
+                "changes_summary": notice.changes_summary,
+                "ui_link": notice.ui_link,
+            }
+
+            # Include solicitation data if requested and available
+            if include_solicitation and notice.solicitation_id and notice.solicitation:
+                sol = notice.solicitation
+                fields["solicitation"] = {
+                    "id": str(sol.id),
+                    "solicitation_number": sol.solicitation_number,
+                    "title": sol.title,
+                    "description": sol.description,
+                    "description_preview": sol.description[:500] + "..." if sol.description and len(sol.description) > 500 else sol.description,
+                    "status": sol.status,
+                    "notice_count": sol.notice_count,
+                    "notice_type": sol.notice_type,
+                    "response_deadline": sol.response_deadline.isoformat() if sol.response_deadline else None,
+                    "agency_name": sol.agency_name,
+                    "naics_code": sol.naics_code,
+                    "set_aside_code": sol.set_aside_code,
+                    "summary_status": sol.summary_status,
+                    "ui_link": sol.ui_link,
+                }
+
+            item = ContentItem(
+                id=str(notice.id),
+                type="notice",
+                display_type=display_type,
+                title=notice.title,
+                text=None,
+                text_format="json",
+                fields=fields,
+                metadata=metadata,
+                parent_id=str(notice.solicitation_id) if notice.solicitation_id else None,
+                parent_type="solicitation" if notice.solicitation_id else None,
+            )
+            results.append(item)
+        return results

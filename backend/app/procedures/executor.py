@@ -16,9 +16,12 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
+import asyncio
+
 from .base import ProcedureDefinition, StepDefinition, OnErrorPolicy
 from .loader import procedure_loader
 from ..functions import fn, FunctionContext, FunctionResult
+from ..functions.base import FlowResult
 
 logger = logging.getLogger("curatore.procedures.executor")
 
@@ -44,6 +47,10 @@ class ProcedureExecutor:
         """
         Execute a procedure by slug.
 
+        Loads the procedure definition from:
+        1. YAML files (via procedure_loader) - for system/file-based procedures
+        2. Database (via Procedure model) - for user-created procedures
+
         Args:
             session: Database session
             organization_id: Organization context
@@ -56,8 +63,13 @@ class ProcedureExecutor:
         Returns:
             Execution results including step outputs
         """
-        # Load procedure definition
+        # Try YAML loader first (for system/file-based procedures)
         definition = procedure_loader.get(procedure_slug)
+
+        # Fall back to database (for user-created procedures)
+        if not definition:
+            definition = await self._load_from_database(session, organization_id, procedure_slug)
+
         if not definition:
             return {
                 "status": "failed",
@@ -73,6 +85,42 @@ class ProcedureExecutor:
             run_id=run_id,
             dry_run=dry_run,
         )
+
+    async def _load_from_database(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        procedure_slug: str,
+    ) -> Optional[ProcedureDefinition]:
+        """
+        Load a procedure definition from the database.
+
+        Used for user-created procedures that don't have YAML files.
+        """
+        from sqlalchemy import select
+        from ..database.procedures import Procedure
+
+        try:
+            query = select(Procedure).where(
+                Procedure.organization_id == organization_id,
+                Procedure.slug == procedure_slug,
+                Procedure.is_active == True,
+            )
+            result = await session.execute(query)
+            procedure = result.scalar_one_or_none()
+
+            if not procedure or not procedure.definition:
+                return None
+
+            # Convert database definition to ProcedureDefinition
+            return ProcedureDefinition.from_dict(
+                data=procedure.definition,
+                source_type=procedure.source_type,
+                source_path=procedure.source_path,
+            )
+        except Exception as e:
+            logger.warning(f"Failed to load procedure {procedure_slug} from database: {e}")
+            return None
 
     async def execute_definition(
         self,
@@ -385,6 +433,25 @@ class ProcedureExecutor:
         try:
             result: FunctionResult = await func(ctx, **rendered_params)
 
+            # Check if this is a FlowResult with branches to execute
+            if isinstance(result, FlowResult) and step.branches:
+                flow_result = await self._execute_flow(ctx, step, result, item=item, item_index=item_index)
+                # Log step completion for flow functions
+                if item_index is None:
+                    await ctx.log_run_event(
+                        level="INFO" if flow_result.get("status") == "success" else "ERROR",
+                        event_type="step_complete",
+                        message=f"Step {step.name}: {flow_result.get('status')}",
+                        context={
+                            "step": step.name,
+                            "status": flow_result.get("status"),
+                            "flow_type": step.function,
+                            "duration_ms": flow_result.get("duration_ms"),
+                            "output": self._truncate_for_log(flow_result.get("data")),
+                        },
+                    )
+                return flow_result
+
             # Serialize data for storage and template access
             serialized_data = self._serialize_data(result.data)
 
@@ -435,13 +502,363 @@ class ProcedureExecutor:
                 "error": str(e),
             }
 
+    async def _execute_flow(
+        self,
+        ctx: FunctionContext,
+        step: StepDefinition,
+        flow_result: FlowResult,
+        item: Any = None,
+        item_index: int = None,
+    ) -> Dict[str, Any]:
+        """
+        Execute branches based on FlowResult from a flow control function.
+
+        Handles:
+        - branch_key (if_branch, switch_branch): run a single named branch
+        - branches_to_run (parallel): run multiple branches concurrently
+        - items_to_iterate (foreach): iterate over items with the 'each' branch
+        """
+        start_time = datetime.utcnow()
+
+        # if_branch / switch_branch: single branch by key
+        if flow_result.branch_key is not None:
+            return await self._execute_single_branch(
+                ctx, step, flow_result.branch_key, item=item, item_index=item_index
+            )
+
+        # parallel: run all branches concurrently (empty list means "all")
+        if flow_result.branches_to_run is not None:
+            max_concurrency = flow_result.metadata.get("max_concurrency", 0) if flow_result.metadata else 0
+            return await self._execute_parallel_branches(
+                ctx, step, max_concurrency, on_error=step.on_error
+            )
+
+        # foreach: iterate over items
+        if flow_result.items_to_iterate is not None:
+            concurrency = flow_result.metadata.get("concurrency", 1) if flow_result.metadata else 1
+            condition = flow_result.metadata.get("condition") if flow_result.metadata else None
+            return await self._execute_foreach_branches(
+                ctx, step, flow_result.items_to_iterate, concurrency, condition, on_error=step.on_error
+            )
+
+        # No flow control directive - return the flow result data as-is
+        return {
+            "status": "success",
+            "data": flow_result.data,
+            "message": flow_result.message,
+            "duration_ms": int((datetime.utcnow() - start_time).total_seconds() * 1000),
+        }
+
+    async def _execute_single_branch(
+        self,
+        ctx: FunctionContext,
+        step: StepDefinition,
+        branch_key: str,
+        item: Any = None,
+        item_index: int = None,
+    ) -> Dict[str, Any]:
+        """Execute a single named branch (for if_branch, switch_branch)."""
+        start_time = datetime.utcnow()
+
+        branch_steps = step.branches.get(branch_key) if step.branches else None
+
+        if not branch_steps:
+            # No matching branch - check for default (switch_branch)
+            branch_steps = step.branches.get("default") if step.branches else None
+            if branch_steps:
+                branch_key = "default"
+                logger.info(f"[{step.function} {step.name}] no match for '{branch_key}', using default")
+            else:
+                # No branch to run - this is a no-op
+                logger.info(f"[{step.function} {step.name}] no branch '{branch_key}' and no default → no-op")
+                return {
+                    "status": "success",
+                    "data": None,
+                    "message": f"No matching branch '{branch_key}'",
+                    "duration_ms": int((datetime.utcnow() - start_time).total_seconds() * 1000),
+                }
+
+        logger.info(f"[{step.function} {step.name}] executing branch '{branch_key}' ({len(branch_steps)} steps)")
+
+        # Execute branch steps sequentially
+        result = await self._execute_branch_steps(ctx, branch_steps, item=item, item_index=item_index)
+
+        return {
+            "status": result.get("status", "success"),
+            "data": result.get("data"),
+            "message": f"Executed branch '{branch_key}'",
+            "branch": branch_key,
+            "duration_ms": int((datetime.utcnow() - start_time).total_seconds() * 1000),
+            "error": result.get("error"),
+        }
+
+    async def _execute_parallel_branches(
+        self,
+        ctx: FunctionContext,
+        step: StepDefinition,
+        max_concurrency: int = 0,
+        on_error: OnErrorPolicy = OnErrorPolicy.FAIL,
+    ) -> Dict[str, Any]:
+        """Execute multiple branches concurrently (for parallel)."""
+        start_time = datetime.utcnow()
+
+        if not step.branches:
+            return {
+                "status": "failed",
+                "error": "No branches defined for parallel",
+                "duration_ms": 0,
+            }
+
+        branch_names = list(step.branches.keys())
+        logger.info(f"[parallel {step.name}] running {len(branch_names)} branches: {branch_names}")
+
+        # Create semaphore for concurrency control
+        semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency > 0 else None
+
+        async def run_branch(branch_name: str) -> tuple:
+            """Run a single branch with optional semaphore."""
+            if semaphore:
+                async with semaphore:
+                    result = await self._execute_branch_steps(ctx, step.branches[branch_name])
+            else:
+                result = await self._execute_branch_steps(ctx, step.branches[branch_name])
+            return branch_name, result
+
+        # Run all branches concurrently
+        tasks = [run_branch(name) for name in branch_names]
+
+        if on_error == OnErrorPolicy.FAIL:
+            # If any branch fails, we want to know immediately
+            # Use gather with return_exceptions to collect all results
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+        else:
+            # Continue on error - collect all results
+            results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        # Process results
+        branch_results = {}
+        failed_branches = []
+        for item in results:
+            if isinstance(item, Exception):
+                # An exception occurred in the coroutine
+                logger.error(f"[parallel {step.name}] branch failed with exception: {item}")
+                failed_branches.append("unknown")
+                continue
+            branch_name, result = item
+            branch_results[branch_name] = result.get("data")
+            if result.get("status") == "failed":
+                failed_branches.append(branch_name)
+                logger.warning(f"[parallel {step.name}] branch '{branch_name}' failed: {result.get('error')}")
+
+        # Determine status
+        if failed_branches and on_error == OnErrorPolicy.FAIL:
+            status = "failed"
+        elif failed_branches:
+            status = "partial"
+        else:
+            status = "success"
+
+        return {
+            "status": status,
+            "data": branch_results,
+            "message": f"Executed {len(branch_names)} branches ({len(failed_branches)} failed)",
+            "branches_executed": branch_names,
+            "branches_failed": failed_branches,
+            "duration_ms": int((datetime.utcnow() - start_time).total_seconds() * 1000),
+        }
+
+    async def _execute_foreach_branches(
+        self,
+        ctx: FunctionContext,
+        step: StepDefinition,
+        items: List[Any],
+        concurrency: int = 1,
+        condition: Optional[str] = None,
+        on_error: OnErrorPolicy = OnErrorPolicy.FAIL,
+    ) -> Dict[str, Any]:
+        """Execute 'each' branch for every item in the list (for foreach)."""
+        start_time = datetime.utcnow()
+
+        # Get the 'each' branch
+        each_steps = step.branches.get("each") if step.branches else None
+        if not each_steps:
+            return {
+                "status": "failed",
+                "error": "foreach requires 'branches.each' with at least one step",
+                "duration_ms": 0,
+            }
+
+        logger.info(f"[foreach {step.name}] {len(items)} items, concurrency={concurrency}")
+
+        # Apply condition filter if present
+        filtered_items = []
+        skipped_indices = []
+        for idx, item in enumerate(items):
+            if condition:
+                # Evaluate condition with item context
+                cond_result = self._evaluate_condition_with_item(condition, ctx, item, idx)
+                if not cond_result:
+                    skipped_indices.append(idx)
+                    continue
+            filtered_items.append((idx, item))
+
+        if skipped_indices:
+            logger.info(f"[foreach {step.name}] filtered to {len(filtered_items)} items (skipped {len(skipped_indices)})")
+
+        if not filtered_items:
+            return {
+                "status": "success",
+                "data": [],
+                "message": "No items to process (all filtered)",
+                "items_processed": 0,
+                "items_skipped": len(skipped_indices),
+                "items_failed": 0,
+                "duration_ms": int((datetime.utcnow() - start_time).total_seconds() * 1000),
+            }
+
+        # Execute for each item
+        results = [None] * len(items)  # Preserve original indices
+        failed_count = 0
+
+        if concurrency == 1:
+            # Sequential execution
+            for orig_idx, item in filtered_items:
+                result = await self._execute_branch_steps(ctx, each_steps, item=item, item_index=orig_idx)
+                results[orig_idx] = result.get("data")
+                if result.get("status") == "failed":
+                    failed_count += 1
+                    if on_error == OnErrorPolicy.FAIL:
+                        break
+        else:
+            # Concurrent execution
+            semaphore = asyncio.Semaphore(concurrency) if concurrency > 0 else None
+
+            async def run_item(orig_idx: int, item: Any) -> tuple:
+                if semaphore:
+                    async with semaphore:
+                        result = await self._execute_branch_steps(ctx, each_steps, item=item, item_index=orig_idx)
+                else:
+                    result = await self._execute_branch_steps(ctx, each_steps, item=item, item_index=orig_idx)
+                return orig_idx, result
+
+            tasks = [run_item(orig_idx, item) for orig_idx, item in filtered_items]
+            task_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+            for task_result in task_results:
+                if isinstance(task_result, Exception):
+                    failed_count += 1
+                    continue
+                orig_idx, result = task_result
+                results[orig_idx] = result.get("data")
+                if result.get("status") == "failed":
+                    failed_count += 1
+
+        # Determine status
+        if failed_count == len(filtered_items):
+            status = "failed"
+        elif failed_count > 0:
+            status = "partial"
+        else:
+            status = "success"
+
+        return {
+            "status": status,
+            "data": results,
+            "message": f"Processed {len(filtered_items) - failed_count}/{len(filtered_items)} items",
+            "items_processed": len(filtered_items),
+            "items_skipped": len(skipped_indices),
+            "items_failed": failed_count,
+            "duration_ms": int((datetime.utcnow() - start_time).total_seconds() * 1000),
+        }
+
+    async def _execute_branch_steps(
+        self,
+        ctx: FunctionContext,
+        steps: List[StepDefinition],
+        item: Any = None,
+        item_index: int = None,
+    ) -> Dict[str, Any]:
+        """Execute a list of steps sequentially, return result of last step."""
+        result = None
+        last_data = None
+
+        for branch_step in steps:
+            # Check step condition
+            if branch_step.condition:
+                cond_result = self._evaluate_condition_with_item(branch_step.condition, ctx, item, item_index)
+                if not cond_result:
+                    logger.debug(f"Skipping branch step {branch_step.name}: condition not met")
+                    continue
+
+            # Get function
+            func = fn.get_or_none(branch_step.function)
+            if not func:
+                return {
+                    "status": "failed",
+                    "error": f"Function not found: {branch_step.function}",
+                }
+
+            # Check for legacy foreach on branch step
+            if branch_step.foreach:
+                result = await self._execute_step_foreach(ctx, branch_step, func)
+            else:
+                result = await self._execute_step_single(ctx, branch_step, func, item=item, item_index=item_index)
+
+            # Store result for subsequent steps in this branch
+            ctx.set_step_result(branch_step.name, result.get("data") if result.get("status") == "success" else None)
+            last_data = result.get("data")
+
+            # Handle errors
+            if result.get("status") == "failed":
+                if branch_step.on_error == OnErrorPolicy.FAIL:
+                    return result
+                elif branch_step.on_error == OnErrorPolicy.SKIP:
+                    continue
+                # CONTINUE - keep going
+
+        return {
+            "status": "success" if result is None or result.get("status") == "success" else result.get("status"),
+            "data": last_data,
+            "error": result.get("error") if result else None,
+        }
+
+    def _evaluate_condition_with_item(
+        self,
+        condition: str,
+        ctx: FunctionContext,
+        item: Any = None,
+        item_index: int = None,
+    ) -> bool:
+        """Evaluate a Jinja2 condition with item context."""
+        try:
+            from jinja2 import Template
+            template = Template("{{ " + condition + " }}")
+            result = template.render(
+                params=ctx.params,
+                steps={
+                    k.replace("steps.", ""): v
+                    for k, v in ctx.variables.items()
+                    if k.startswith("steps.")
+                },
+                item=item,
+                item_index=item_index,
+                len=len,
+                str=str,
+                int=int,
+                bool=bool,
+            )
+            return result.lower() in ("true", "1", "yes")
+        except Exception as e:
+            logger.warning(f"Failed to evaluate condition '{condition}': {e}")
+            return False
+
     async def _execute_step_foreach(
         self,
         ctx: FunctionContext,
         step: StepDefinition,
         func: Any,
     ) -> Dict[str, Any]:
-        """Execute a step with foreach iteration."""
+        """Execute a step with foreach iteration (legacy single-step foreach)."""
         # Evaluate the foreach expression to get items
         items = ctx.render_params({"_foreach": step.foreach}).get("_foreach")
 

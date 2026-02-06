@@ -1,14 +1,16 @@
 # Salesforce CRM Integration
 
-Curatore integrates with Salesforce CRM to provide visibility into accounts, contacts, and opportunities. This document covers the integration architecture and usage.
+Curatore imports Salesforce CRM data via manual data exports. Users export their Salesforce data as a ZIP file and upload it to Curatore for processing.
 
 ## Overview
 
 The Salesforce integration allows users to:
-- Connect to Salesforce organizations via OAuth
+- Import Salesforce data from Data Export ZIP files
 - View and search accounts, contacts, and opportunities
-- Link SAM.gov solicitations to Salesforce opportunities
 - Track pipeline alongside government contracting data
+- Link opportunities to SAM.gov solicitations
+
+**Note:** This is a manual import workflow, not a live API connection. Data is imported from Salesforce's standard Data Export feature.
 
 ---
 
@@ -16,24 +18,58 @@ The Salesforce integration allows users to:
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────┐
-│                        SALESFORCE INTEGRATION ARCHITECTURE                       │
+│                        SALESFORCE IMPORT WORKFLOW                                │
 └─────────────────────────────────────────────────────────────────────────────────┘
 
-  Salesforce Org                    Curatore Database                   Frontend
-       │                                  │                                │
-       ▼                                  ▼                                ▼
-┌─────────────────┐              ┌─────────────────┐            ┌─────────────────┐
-│ OAuth Connect   │──────────────│ SalesforceConnection │        │ /salesforce     │
-│                 │              │ (credentials)   │            │                 │
-└─────────────────┘              └─────────────────┘            └─────────────────┘
-       │                                  │                                │
-       ▼                                  ▼                                ▼
-┌─────────────────┐              ┌─────────────────┐            ┌─────────────────┐
-│ SOQL Queries    │──────────────│ Cache/Sync      │────────────│ Accounts List   │
-│ (REST API)      │              │ (optional)      │            │ Contacts List   │
-└─────────────────┘              └─────────────────┘            │ Opps List       │
-                                                                └─────────────────┘
+  Salesforce                      Curatore                           Frontend
+       │                              │                                  │
+       ▼                              ▼                                  ▼
+┌─────────────────┐           ┌─────────────────┐              ┌─────────────────┐
+│ Data Export     │           │  Upload ZIP     │              │ /salesforce     │
+│ (Setup menu)    │           │  to Curatore    │              │                 │
+└─────────────────┘           └─────────────────┘              └─────────────────┘
+       │                              │                                  │
+       ▼                              ▼                                  ▼
+┌─────────────────┐           ┌─────────────────┐              ┌─────────────────┐
+│ Download ZIP    │───────────│ Import Service  │──────────────│ Accounts List   │
+│ (Account.csv,   │           │ - Parse CSVs    │              │ Contacts List   │
+│  Contact.csv,   │           │ - Upsert data   │              │ Opps List       │
+│  Opportunity.csv│           │ - Link records  │              └─────────────────┘
+└─────────────────┘           │ - Index search  │
+                              └─────────────────┘
 ```
+
+---
+
+## Import Workflow
+
+### Step 1: Export Data from Salesforce
+
+1. In Salesforce, go to **Setup** → **Data** → **Data Export**
+2. Click **Export Now** or schedule an export
+3. Select objects to include:
+   - Account
+   - Contact
+   - Opportunity
+4. Wait for export to complete (you'll receive an email)
+5. Download the ZIP file
+
+### Step 2: Upload to Curatore
+
+1. Navigate to `/salesforce` in Curatore
+2. Click **Import Data**
+3. Upload the ZIP file from Salesforce
+4. Import processes automatically:
+   - Parses Account.csv, Contact.csv, Opportunity.csv
+   - Upserts records by Salesforce ID
+   - Links contacts/opportunities to accounts
+   - Indexes data for search
+
+### Step 3: View Data
+
+- Browse accounts at `/salesforce/accounts`
+- Browse contacts at `/salesforce/contacts`
+- Browse opportunities at `/salesforce/opportunities`
 
 ---
 
@@ -41,10 +77,28 @@ The Salesforce integration allows users to:
 
 | Model | Purpose |
 |-------|---------|
-| `SalesforceConnection` | OAuth credentials and org info |
-| `SalesforceAccount` | Cached account data (optional) |
-| `SalesforceContact` | Cached contact data (optional) |
-| `SalesforceOpportunity` | Cached opportunity data (optional) |
+| `SalesforceAccount` | Account records from Salesforce |
+| `SalesforceContact` | Contact records linked to accounts |
+| `SalesforceOpportunity` | Opportunity records linked to accounts |
+
+### Key Fields
+
+**SalesforceAccount:**
+- `salesforce_id` - 18-character Salesforce ID (unique)
+- `name`, `account_type`, `industry`
+- `billing_address`, `shipping_address` (JSONB)
+- `small_business_flags` (SBA certifications: 8(a), HUBZone, WOSB, etc.)
+- `parent_id` - Links to parent account
+
+**SalesforceContact:**
+- `salesforce_id` - 18-character Salesforce ID (unique)
+- `first_name`, `last_name`, `email`, `title`
+- `account_id` - Links to SalesforceAccount
+
+**SalesforceOpportunity:**
+- `salesforce_id` - 18-character Salesforce ID (unique)
+- `name`, `stage_name`, `amount`, `close_date`
+- `account_id` - Links to SalesforceAccount
 
 ---
 
@@ -52,34 +106,68 @@ The Salesforce integration allows users to:
 
 | File | Purpose |
 |------|---------|
-| `salesforce_service.py` | Salesforce API client and CRUD operations |
-| `salesforce_import_service.py` | Bulk data import and sync |
+| `salesforce_service.py` | CRUD operations for accounts, contacts, opportunities |
+| `salesforce_import_service.py` | ZIP file parsing and data import |
+
+---
+
+## Import Processing Details
+
+The import service handles:
+
+1. **ZIP extraction** - Extracts CSV files from Salesforce export
+2. **CSV parsing** - Handles Latin-1 encoding from Salesforce
+3. **Field mapping** - Maps Salesforce field names to database columns
+4. **Upsert logic** - Creates new records or updates existing by `salesforce_id`
+5. **Relationship linking** - Links contacts/opportunities to accounts by `AccountId`
+6. **Search indexing** - Adds records to pgvector search index
+
+### Supported CSV Files
+
+| File | Object |
+|------|--------|
+| `Account.csv` | SalesforceAccount |
+| `Contact.csv` | SalesforceContact |
+| `Opportunity.csv` | SalesforceOpportunity |
+
+### Field Mappings
+
+The import service maps standard Salesforce fields plus common custom fields:
+
+**Account custom fields:**
+- `Department__c` → department
+- `SBA_8_a__c` → small business 8(a) flag
+- `HubZone__c` → HUBZone certification
+- `WOSB__c` → Women-Owned Small Business
+- `SDVOSB__c` → Service-Disabled Veteran-Owned
+
+**Contact custom fields:**
+- `Current_Employee__c` → is_current_employee flag
 
 ---
 
 ## API Endpoints
 
 ```
-# Connection Management
-GET    /api/v1/salesforce/connections              # List connections
-POST   /api/v1/salesforce/connections              # Create connection
-GET    /api/v1/salesforce/connections/{id}         # Get connection
-DELETE /api/v1/salesforce/connections/{id}         # Delete connection
-POST   /api/v1/salesforce/connections/{id}/test    # Test connection
+# Import
+POST   /api/v1/salesforce/import              # Upload and import ZIP file
 
 # Accounts
-GET    /api/v1/salesforce/accounts                 # List accounts
-GET    /api/v1/salesforce/accounts/{id}            # Get account detail
-GET    /api/v1/salesforce/accounts/{id}/contacts   # Get account contacts
-GET    /api/v1/salesforce/accounts/{id}/opportunities  # Get account opps
+GET    /api/v1/salesforce/accounts            # List accounts
+GET    /api/v1/salesforce/accounts/{id}       # Get account detail
+GET    /api/v1/salesforce/accounts/{id}/contacts      # Account contacts
+GET    /api/v1/salesforce/accounts/{id}/opportunities # Account opportunities
 
 # Contacts
-GET    /api/v1/salesforce/contacts                 # List contacts
-GET    /api/v1/salesforce/contacts/{id}            # Get contact detail
+GET    /api/v1/salesforce/contacts            # List contacts
+GET    /api/v1/salesforce/contacts/{id}       # Get contact detail
 
 # Opportunities
-GET    /api/v1/salesforce/opportunities            # List opportunities
-GET    /api/v1/salesforce/opportunities/{id}       # Get opportunity detail
+GET    /api/v1/salesforce/opportunities       # List opportunities
+GET    /api/v1/salesforce/opportunities/{id}  # Get opportunity detail
+
+# Dashboard
+GET    /api/v1/salesforce/stats               # Dashboard statistics
 ```
 
 ---
@@ -88,7 +176,7 @@ GET    /api/v1/salesforce/opportunities/{id}       # Get opportunity detail
 
 | Page | Path | Purpose |
 |------|------|---------|
-| Dashboard | `/salesforce` | Salesforce overview |
+| Dashboard | `/salesforce` | Overview, import button, stats |
 | Accounts | `/salesforce/accounts` | Account list and search |
 | Account Detail | `/salesforce/accounts/{id}` | Account with contacts/opps |
 | Contacts | `/salesforce/contacts` | Contact list and search |
@@ -98,75 +186,40 @@ GET    /api/v1/salesforce/opportunities/{id}       # Get opportunity detail
 
 ---
 
-## Connection Setup
-
-1. Navigate to `/salesforce` or `/connections`
-2. Click "Connect Salesforce"
-3. Authenticate via Salesforce OAuth
-4. Connection credentials stored securely
-
-### Required Salesforce Permissions
-
-The connected user needs:
-- Read access to Account, Contact, Opportunity objects
-- API access enabled
-- (Optional) Write access for future sync features
-
----
-
-## Configuration
-
-In `config.yml`:
-
-```yaml
-salesforce:
-  enabled: true
-  client_id: ${SALESFORCE_CLIENT_ID}
-  client_secret: ${SALESFORCE_CLIENT_SECRET}
-  # Optional: sync settings
-  sync:
-    enabled: false
-    frequency: daily
-```
-
-Environment variables:
-```bash
-SALESFORCE_CLIENT_ID=your_connected_app_client_id
-SALESFORCE_CLIENT_SECRET=your_connected_app_client_secret
-```
-
----
-
-## Data Model Notes
-
-### Accounts
-- Standard Salesforce Account fields
-- Industry, type, annual revenue
-- Linked contacts and opportunities
-
-### Contacts
-- Standard Salesforce Contact fields
-- Associated account relationship
-
-### Opportunities
-- Standard Salesforce Opportunity fields
-- Stage, close date, amount
-- Can be linked to SAM.gov solicitations
-
----
-
-## Integration with SAM.gov
-
-Opportunities can be linked to SAM.gov solicitations:
-- Match by solicitation number
-- Track proposal status alongside opportunity stage
-- View related SAM.gov notices from opportunity detail
-
----
-
 ## Search Integration
 
-Salesforce data is indexed to the search system:
+Salesforce data is indexed for unified search:
 - `source_type`: `salesforce_account`, `salesforce_contact`, `salesforce_opportunity`
-- Searchable content: name, description, industry
-- Unified search across all data sources
+- Searchable: name, description, industry, email, title
+
+---
+
+## Re-importing Data
+
+When you import a new export:
+- **Existing records** are updated (matched by `salesforce_id`)
+- **New records** are created
+- **Deleted records** in Salesforce are NOT automatically removed from Curatore
+
+To refresh all data, import the latest export. The upsert logic ensures data stays in sync.
+
+---
+
+## Troubleshooting
+
+### "No CSV files found in ZIP"
+- Ensure you exported Account, Contact, and/or Opportunity objects
+- Salesforce exports may include multiple ZIP files - use the one containing CSVs
+
+### Import takes a long time
+- Large exports (thousands of records) may take a few minutes
+- Progress is tracked via Run records
+
+### Missing relationships
+- Contacts/Opportunities link to Accounts by `AccountId`
+- If the Account wasn't included in the export, the link won't be established
+- Re-import with Account.csv included to fix
+
+### Custom field not imported
+- Only mapped fields are imported (see Field Mappings above)
+- Additional custom fields are stored in `raw_data` JSONB column

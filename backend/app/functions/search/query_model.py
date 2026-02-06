@@ -37,6 +37,10 @@ ALLOWED_MODELS = {
     "SalesforceAccount": "app.database.models.SalesforceAccount",
     "SalesforceContact": "app.database.models.SalesforceContact",
     "SalesforceOpportunity": "app.database.models.SalesforceOpportunity",
+    # Acquisition Forecast models
+    "AgForecast": "app.database.models.AgForecast",
+    "ApfsForecast": "app.database.models.ApfsForecast",
+    "StateForecast": "app.database.models.StateForecast",
 }
 
 

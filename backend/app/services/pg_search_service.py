@@ -20,27 +20,29 @@ Search Modes:
     - semantic: Vector similarity search only (finds related content)
     - hybrid: Combines both with configurable weighting (default, best quality)
 
-Usage:
-    from app.services.pg_search_service import pg_search_service
+Adding New Data Sources:
+    To add search for a new data source (e.g., "widgets"):
+    1. Define a display type mapper: WIDGET_DISPLAY_TYPES = {"widget_type": "Widget"}
+    2. Create a thin wrapper method that builds filters and calls _execute_typed_search()
 
-    # Hybrid search (default)
-    results = await pg_search_service.search(
-        session=db_session,
-        organization_id=org_id,
-        query="cybersecurity requirements",
-        search_mode="hybrid",
-        semantic_weight=0.5,
-    )
+    Example:
+        async def search_widgets(self, session, org_id, query, ...):
+            filters, params = self._build_base_filters(org_id)
+            filters.append("sc.source_type = 'widget'")
+            return await self._execute_typed_search(
+                session, filters, params, query, search_mode, semantic_weight,
+                limit, offset, display_type_mapper=lambda st: WIDGET_DISPLAY_TYPES.get(st, st)
+            )
 
 Author: Curatore v2 Development Team
-Version: 2.0.0
+Version: 2.1.0
 """
 
 import logging
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import UUID
 
 from sqlalchemy import text, func, select, and_, or_
@@ -51,6 +53,40 @@ from .embedding_service import embedding_service
 
 logger = logging.getLogger("curatore.pg_search_service")
 
+
+# =============================================================================
+# Display Type Mappers - Define friendly names for each source type
+# =============================================================================
+
+# Salesforce entity display names
+SALESFORCE_DISPLAY_TYPES = {
+    "salesforce_account": "Account",
+    "salesforce_contact": "Contact",
+    "salesforce_opportunity": "Opportunity",
+}
+
+# Forecast source display names
+FORECAST_DISPLAY_TYPES = {
+    "ag_forecast": "AG Forecast",
+    "apfs_forecast": "APFS Forecast",
+    "state_forecast": "State Forecast",
+}
+
+# SAM.gov display names (uses source_type directly)
+SAM_DISPLAY_TYPES = {
+    "sam_notice": "SAM Notice",
+    "sam_solicitation": "SAM Solicitation",
+}
+
+
+def _identity_mapper(source_type: str) -> str:
+    """Default mapper - returns source_type unchanged."""
+    return source_type
+
+
+# =============================================================================
+# Data Classes
+# =============================================================================
 
 @dataclass
 class FacetBucket:
@@ -101,6 +137,10 @@ class IndexStats:
     status: str
 
 
+# =============================================================================
+# Search Service
+# =============================================================================
+
 class PgSearchService:
     """
     PostgreSQL-based search service with hybrid full-text + semantic search.
@@ -126,6 +166,10 @@ class PgSearchService:
         """Initialize the PostgreSQL search service."""
         self._embedding_dim = 768  # Must match embedding model
 
+    # =========================================================================
+    # Helper Methods
+    # =========================================================================
+
     def _escape_fts_query(self, query: str) -> str:
         """
         Escape and format query for PostgreSQL full-text search.
@@ -141,208 +185,75 @@ class PgSearchService:
         # Use prefix matching for better UX
         return " & ".join(f"{word}:*" for word in words if word)
 
-    def _build_highlight_query(self, column: str, query: str) -> str:
+    def _build_base_filters(self, organization_id: UUID) -> Tuple[List[str], Dict[str, Any]]:
         """
-        Build ts_headline() query for highlighting matches.
-
-        Args:
-            column: Column name to highlight
-            query: Search query
+        Build base filter clause and params for organization scoping.
 
         Returns:
-            SQL snippet for ts_headline
+            Tuple of (filters list, params dict)
         """
-        escaped_query = self._escape_fts_query(query)
-        if not escaped_query:
-            return f"{column}"
-        return f"""
-            ts_headline(
-                'english',
-                {column},
-                to_tsquery('english', '{escaped_query}'),
-                'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=25, MaxFragments=3'
-            )
-        """
+        filters = ["sc.organization_id = :org_id"]
+        params: Dict[str, Any] = {"org_id": str(organization_id)}
+        return filters, params
 
-    async def health_check(self, session: AsyncSession) -> bool:
-        """
-        Check if search is healthy by verifying pgvector extension.
+    # =========================================================================
+    # Generic Typed Search - Core Abstraction
+    # =========================================================================
 
-        Returns:
-            True if search is available, False otherwise
-        """
-        try:
-            result = await session.execute(
-                text("SELECT extname FROM pg_extension WHERE extname = 'vector'")
-            )
-            row = result.fetchone()
-            return row is not None
-        except Exception as e:
-            logger.error(f"Search health check failed: {e}")
-            return False
-
-    async def search(
-        self,
-        session: AsyncSession,
-        organization_id: UUID,
-        query: str,
-        search_mode: str = "hybrid",
-        semantic_weight: float = 0.5,
-        source_types: Optional[List[str]] = None,
-        content_types: Optional[List[str]] = None,
-        collection_ids: Optional[List[UUID]] = None,
-        sync_config_ids: Optional[List[UUID]] = None,
-        date_from: Optional[datetime] = None,
-        date_to: Optional[datetime] = None,
-        limit: int = 20,
-        offset: int = 0,
-    ) -> SearchResults:
-        """
-        Execute a search query with optional filters.
-
-        Args:
-            session: Database session
-            organization_id: Organization UUID for scoping
-            query: Search query string
-            search_mode: Search mode (keyword, semantic, hybrid)
-            semantic_weight: Weight for semantic scores in hybrid mode (0-1)
-            source_types: Filter by source types
-            content_types: Filter by content/MIME types
-            collection_ids: Filter by collection IDs
-            sync_config_ids: Filter by sync config IDs
-            date_from: Filter by creation date >=
-            date_to: Filter by creation date <=
-            limit: Maximum results to return
-            offset: Offset for pagination
-
-        Returns:
-            SearchResults with total count and matching hits
-        """
-        try:
-            # Build filter conditions
-            filters = ["sc.organization_id = :org_id"]
-            params: Dict[str, Any] = {"org_id": str(organization_id)}
-
-            # Map display names to source_type values for Salesforce
-            # Facets return: "Accounts", "Contacts", "Opportunities" (display names)
-            # We need to map these to: salesforce_account, salesforce_contact, salesforce_opportunity
-            salesforce_display_map = {
-                "Accounts": "salesforce_account",
-                "Contacts": "salesforce_contact",
-                "Opportunities": "salesforce_opportunity",
-                # Also support legacy "salesforce" filter (all types)
-                "salesforce": None,  # Special case: all Salesforce types
-            }
-
-            # Handle source type filtering
-            if source_types:
-                # Separate Salesforce types, forecast types, and asset types
-                sf_source_types = []
-                forecast_source_types = []
-                asset_source_types = []
-
-                # Map for forecast display names
-                forecast_display_map = {
-                    "forecast": None,  # All forecast types
-                    "ag_forecast": "ag_forecast",
-                    "apfs_forecast": "apfs_forecast",
-                    "state_forecast": "state_forecast",
-                }
-
-                for st in source_types:
-                    if st in salesforce_display_map:
-                        if st == "salesforce":
-                            # Legacy: all Salesforce types
-                            sf_source_types = ["salesforce_account", "salesforce_contact", "salesforce_opportunity"]
-                        else:
-                            sf_source_types.append(salesforce_display_map[st])
-                    elif st in forecast_display_map:
-                        if st == "forecast":
-                            # All forecast types
-                            forecast_source_types = ["ag_forecast", "apfs_forecast", "state_forecast"]
-                        else:
-                            forecast_source_types.append(forecast_display_map[st])
-                    else:
-                        asset_source_types.append(st)
-
-                # Build compound filter
-                filter_clauses = []
-                if sf_source_types:
-                    filter_clauses.append("sc.source_type = ANY(:sf_source_types)")
-                    params["sf_source_types"] = sf_source_types
-                if forecast_source_types:
-                    filter_clauses.append("sc.source_type = ANY(:forecast_source_types)")
-                    params["forecast_source_types"] = forecast_source_types
-                if asset_source_types:
-                    filter_clauses.append("(sc.source_type = 'asset' AND sc.source_type_filter = ANY(:asset_source_types))")
-                    params["asset_source_types"] = asset_source_types
-
-                if filter_clauses:
-                    filters.append("(" + " OR ".join(filter_clauses) + ")")
-            else:
-                # Default: search assets, forecasts, Salesforce, and SAM records
-                filters.append("""(
-                    sc.source_type = 'asset'
-                    OR sc.source_type IN ('ag_forecast', 'apfs_forecast', 'state_forecast')
-                    OR sc.source_type IN ('salesforce_account', 'salesforce_contact', 'salesforce_opportunity')
-                    OR sc.source_type IN ('sam_solicitation', 'sam_notice')
-                )""")
-
-            if content_types:
-                filters.append("sc.content_type = ANY(:content_types)")
-                params["content_types"] = content_types
-
-            if collection_ids:
-                filters.append("sc.collection_id = ANY(:collection_ids)")
-                params["collection_ids"] = [str(c) for c in collection_ids]
-
-            if sync_config_ids:
-                filters.append("sc.sync_config_id = ANY(:sync_config_ids)")
-                params["sync_config_ids"] = [str(c) for c in sync_config_ids]
-
-            if date_from:
-                filters.append("sc.created_at >= :date_from")
-                params["date_from"] = date_from
-
-            if date_to:
-                filters.append("sc.created_at <= :date_to")
-                params["date_to"] = date_to
-
-            filter_clause = " AND ".join(filters)
-
-            # Escape query for FTS
-            fts_query = self._escape_fts_query(query)
-            if not fts_query:
-                return SearchResults(total=0, hits=[])
-
-            params["fts_query"] = fts_query
-
-            # Build query based on search mode
-            if search_mode == "keyword":
-                return await self._keyword_search(
-                    session, filter_clause, params, query, limit, offset
-                )
-            elif search_mode == "semantic":
-                return await self._semantic_search(
-                    session, filter_clause, params, query, limit, offset
-                )
-            else:  # hybrid
-                return await self._hybrid_search(
-                    session, filter_clause, params, query, semantic_weight, limit, offset
-                )
-
-        except Exception as e:
-            logger.error(f"Search failed: {e}")
-            return SearchResults(total=0, hits=[])
-
-    async def _keyword_search(
+    async def _execute_typed_search(
         self,
         session: AsyncSession,
         filter_clause: str,
         params: Dict[str, Any],
         query: str,
+        search_mode: str,
+        semantic_weight: float,
         limit: int,
         offset: int,
+        display_type_mapper: Callable[[str], str] = _identity_mapper,
+    ) -> SearchResults:
+        """
+        Execute a typed search with the specified mode.
+
+        This is the core abstraction that all specific search methods use.
+        It handles keyword, semantic, and hybrid search modes with a single
+        implementation, reducing code duplication.
+
+        Args:
+            session: Database session
+            filter_clause: SQL WHERE clause (joined filters)
+            params: SQL parameters dict (must include 'fts_query')
+            query: Original search query string
+            search_mode: "keyword", "semantic", or "hybrid"
+            semantic_weight: Weight for semantic scores (0-1)
+            limit: Max results
+            offset: Pagination offset
+            display_type_mapper: Function to map source_type to display name
+
+        Returns:
+            SearchResults with hits and total count
+        """
+        if search_mode == "keyword":
+            return await self._keyword_search_generic(
+                session, filter_clause, params, limit, offset, display_type_mapper
+            )
+        elif search_mode == "semantic":
+            return await self._semantic_search_generic(
+                session, filter_clause, params, query, limit, offset, display_type_mapper
+            )
+        else:  # hybrid
+            return await self._hybrid_search_generic(
+                session, filter_clause, params, query, semantic_weight, limit, offset, display_type_mapper
+            )
+
+    async def _keyword_search_generic(
+        self,
+        session: AsyncSession,
+        filter_clause: str,
+        params: Dict[str, Any],
+        limit: int,
+        offset: int,
+        display_type_mapper: Callable[[str], str],
     ) -> SearchResults:
         """Execute keyword-only search using full-text search."""
         # Count total
@@ -356,8 +267,6 @@ class PgSearchService:
         total = count_result.scalar() or 0
 
         # Search with ranking
-        # For display, use source_type for Salesforce records (shows actual type),
-        # use source_type_filter for assets (shows data source like 'upload', 'sharepoint', etc.)
         search_sql = f"""
             WITH ranked_chunks AS (
                 SELECT
@@ -408,23 +317,17 @@ class PgSearchService:
 
         hits = []
         for row in rows:
-            # Determine display source_type:
-            # - For Salesforce records, show friendly type name (Account, Contact, Opportunity)
-            # - For assets, show the source_type_filter (upload, sharepoint, scrape, sam, etc.)
-            display_source_type = row.source_type_filter
-            if row.source_type == "salesforce_account":
-                display_source_type = "Account"
-            elif row.source_type == "salesforce_contact":
-                display_source_type = "Contact"
-            elif row.source_type == "salesforce_opportunity":
-                display_source_type = "Opportunity"
+            # Use display_type_mapper to get friendly name, fallback to source_type_filter
+            display_type = display_type_mapper(row.source_type)
+            if display_type == row.source_type and row.source_type_filter:
+                display_type = row.source_type_filter
 
             hits.append(SearchHit(
                 asset_id=str(row.source_id),
-                score=float(row.score) * 100,  # Normalize to 0-100
+                score=float(row.score) * 100,
                 title=row.title,
                 filename=row.filename,
-                source_type=display_source_type,
+                source_type=display_type,
                 content_type=row.content_type,
                 url=row.url,
                 created_at=row.created_at,
@@ -434,7 +337,7 @@ class PgSearchService:
 
         return SearchResults(total=total, hits=hits)
 
-    async def _semantic_search(
+    async def _semantic_search_generic(
         self,
         session: AsyncSession,
         filter_clause: str,
@@ -442,22 +345,16 @@ class PgSearchService:
         query: str,
         limit: int,
         offset: int,
+        display_type_mapper: Callable[[str], str],
     ) -> SearchResults:
         """Execute semantic-only search using vector similarity."""
         # Generate query embedding
         query_embedding = await embedding_service.get_embedding(query)
-
-        # Count total (approximate for semantic - use a threshold)
-        # For semantic search, we consider anything with similarity > 0.3 as relevant
-        # Format embedding as pgvector string: '[0.1, 0.2, ...]'
         params["embedding"] = "[" + ",".join(str(f) for f in query_embedding) + "]"
         params["similarity_threshold"] = 0.3
 
-        # Optimized semantic search: pre-filter to top 200 candidates first
-        # This avoids scanning the entire table for vector similarity
         search_sql = f"""
             WITH top_candidates AS (
-                -- Pre-filter to top 200 by vector similarity (uses ivfflat/hnsw index)
                 SELECT
                     sc.source_id,
                     sc.title,
@@ -476,7 +373,6 @@ class PgSearchService:
                 LIMIT 200
             ),
             ranked_chunks AS (
-                -- Deduplicate by source_id, keeping best chunk per document
                 SELECT *,
                     ROW_NUMBER() OVER (
                         PARTITION BY source_id
@@ -509,23 +405,16 @@ class PgSearchService:
 
         hits = []
         for row in rows:
-            # Determine display source_type:
-            # - For Salesforce records, show friendly type name (Account, Contact, Opportunity)
-            # - For assets, show the source_type_filter (upload, sharepoint, scrape, sam, etc.)
-            display_source_type = row.source_type_filter
-            if row.source_type == "salesforce_account":
-                display_source_type = "Account"
-            elif row.source_type == "salesforce_contact":
-                display_source_type = "Contact"
-            elif row.source_type == "salesforce_opportunity":
-                display_source_type = "Opportunity"
+            display_type = display_type_mapper(row.source_type)
+            if display_type == row.source_type and row.source_type_filter:
+                display_type = row.source_type_filter
 
             hits.append(SearchHit(
                 asset_id=str(row.source_id),
                 score=float(row.score) * 100,
                 title=row.title,
                 filename=row.filename,
-                source_type=display_source_type,
+                source_type=display_type,
                 content_type=row.content_type,
                 url=row.url,
                 created_at=row.created_at,
@@ -533,12 +422,11 @@ class PgSearchService:
                 semantic_score=float(row.score),
             ))
 
-        # Estimate total as slightly more than returned if we hit limit
+        # Estimate total
         total = len(hits) if len(hits) < limit else limit + 10
-
         return SearchResults(total=total, hits=hits)
 
-    async def _hybrid_search(
+    async def _hybrid_search_generic(
         self,
         session: AsyncSession,
         filter_clause: str,
@@ -547,28 +435,15 @@ class PgSearchService:
         semantic_weight: float,
         limit: int,
         offset: int,
+        display_type_mapper: Callable[[str], str],
     ) -> SearchResults:
-        """
-        Execute hybrid search combining keyword and semantic results.
-
-        Uses Reciprocal Rank Fusion (RRF) style combination:
-        - Get top K results from keyword search
-        - Get top K results from semantic search
-        - Combine scores with configurable weighting
-        """
+        """Execute hybrid search combining keyword and semantic results."""
         # Generate query embedding
         query_embedding = await embedding_service.get_embedding(query)
-        # Format embedding as pgvector string: '[0.1, 0.2, ...]'
         params["embedding"] = "[" + ",".join(str(f) for f in query_embedding) + "]"
         params["keyword_weight"] = 1 - semantic_weight
         params["semantic_weight"] = semantic_weight
 
-        # Hybrid search query - optimized for performance
-        # Key optimizations:
-        # 1. Keyword search uses GIN index (fast)
-        # 2. Semantic search pre-filters to top 200 candidates using ORDER BY + LIMIT
-        #    before doing ROW_NUMBER() partitioning (avoids full table scan)
-        # 3. Combines results with weighted scoring
         search_sql = f"""
             WITH keyword_results AS (
                 SELECT
@@ -591,7 +466,6 @@ class PgSearchService:
                 AND sc.search_vector @@ to_tsquery('english', :fts_query)
             ),
             semantic_candidates AS (
-                -- Pre-filter to top 200 by vector similarity (uses ivfflat/hnsw index)
                 SELECT
                     sc.source_id,
                     sc.title,
@@ -610,7 +484,6 @@ class PgSearchService:
                 LIMIT 200
             ),
             semantic_results AS (
-                -- Deduplicate by source_id, keeping best chunk per document
                 SELECT *,
                     ROW_NUMBER() OVER (
                         PARTITION BY source_id
@@ -672,23 +545,16 @@ class PgSearchService:
 
         hits = []
         for row in rows:
-            # Determine display source_type:
-            # - For Salesforce records, show friendly type name (Account, Contact, Opportunity)
-            # - For assets, show the source_type_filter (upload, sharepoint, scrape, sam, etc.)
-            display_source_type = row.source_type_filter
-            if row.source_type == "salesforce_account":
-                display_source_type = "Account"
-            elif row.source_type == "salesforce_contact":
-                display_source_type = "Contact"
-            elif row.source_type == "salesforce_opportunity":
-                display_source_type = "Opportunity"
+            display_type = display_type_mapper(row.source_type)
+            if display_type == row.source_type and row.source_type_filter:
+                display_type = row.source_type_filter
 
             hits.append(SearchHit(
                 asset_id=str(row.source_id),
                 score=float(row.score) * 100,
                 title=row.title,
                 filename=row.filename,
-                source_type=display_source_type,
+                source_type=display_type,
                 content_type=row.content_type,
                 url=row.url,
                 created_at=row.created_at,
@@ -722,6 +588,473 @@ class PgSearchService:
         total = count_result.scalar() or 0
 
         return SearchResults(total=total, hits=hits)
+
+    # =========================================================================
+    # Health Check
+    # =========================================================================
+
+    async def health_check(self, session: AsyncSession) -> bool:
+        """
+        Check if search is healthy by verifying pgvector extension.
+
+        Returns:
+            True if search is available, False otherwise
+        """
+        try:
+            result = await session.execute(
+                text("SELECT extname FROM pg_extension WHERE extname = 'vector'")
+            )
+            row = result.fetchone()
+            return row is not None
+        except Exception as e:
+            logger.error(f"Search health check failed: {e}")
+            return False
+
+    # =========================================================================
+    # Main Search Method (Assets + All Types)
+    # =========================================================================
+
+    async def search(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        query: str,
+        search_mode: str = "hybrid",
+        semantic_weight: float = 0.5,
+        source_types: Optional[List[str]] = None,
+        content_types: Optional[List[str]] = None,
+        collection_ids: Optional[List[UUID]] = None,
+        sync_config_ids: Optional[List[UUID]] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> SearchResults:
+        """
+        Execute a search query with optional filters.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID for scoping
+            query: Search query string
+            search_mode: Search mode (keyword, semantic, hybrid)
+            semantic_weight: Weight for semantic scores in hybrid mode (0-1)
+            source_types: Filter by source types
+            content_types: Filter by content/MIME types
+            collection_ids: Filter by collection IDs
+            sync_config_ids: Filter by sync config IDs
+            date_from: Filter by creation date >=
+            date_to: Filter by creation date <=
+            limit: Maximum results to return
+            offset: Offset for pagination
+
+        Returns:
+            SearchResults with total count and matching hits
+        """
+        try:
+            # Build filter conditions
+            filters, params = self._build_base_filters(organization_id)
+
+            # Map display names to source_type values for Salesforce
+            salesforce_display_map = {
+                "Accounts": "salesforce_account",
+                "Contacts": "salesforce_contact",
+                "Opportunities": "salesforce_opportunity",
+                "salesforce": None,
+            }
+
+            # Map for forecast display names
+            forecast_display_map = {
+                "forecast": None,
+                "ag_forecast": "ag_forecast",
+                "apfs_forecast": "apfs_forecast",
+                "state_forecast": "state_forecast",
+            }
+
+            # Handle source type filtering
+            if source_types:
+                sf_source_types = []
+                forecast_source_types = []
+                asset_source_types = []
+
+                for st in source_types:
+                    if st in salesforce_display_map:
+                        if st == "salesforce":
+                            sf_source_types = ["salesforce_account", "salesforce_contact", "salesforce_opportunity"]
+                        else:
+                            sf_source_types.append(salesforce_display_map[st])
+                    elif st in forecast_display_map:
+                        if st == "forecast":
+                            forecast_source_types = ["ag_forecast", "apfs_forecast", "state_forecast"]
+                        else:
+                            forecast_source_types.append(forecast_display_map[st])
+                    else:
+                        asset_source_types.append(st)
+
+                filter_clauses = []
+                if sf_source_types:
+                    filter_clauses.append("sc.source_type = ANY(:sf_source_types)")
+                    params["sf_source_types"] = sf_source_types
+                if forecast_source_types:
+                    filter_clauses.append("sc.source_type = ANY(:forecast_source_types)")
+                    params["forecast_source_types"] = forecast_source_types
+                if asset_source_types:
+                    filter_clauses.append("(sc.source_type = 'asset' AND sc.source_type_filter = ANY(:asset_source_types))")
+                    params["asset_source_types"] = asset_source_types
+
+                if filter_clauses:
+                    filters.append("(" + " OR ".join(filter_clauses) + ")")
+            else:
+                filters.append("""(
+                    sc.source_type = 'asset'
+                    OR sc.source_type IN ('ag_forecast', 'apfs_forecast', 'state_forecast')
+                    OR sc.source_type IN ('salesforce_account', 'salesforce_contact', 'salesforce_opportunity')
+                    OR sc.source_type IN ('sam_solicitation', 'sam_notice')
+                )""")
+
+            if content_types:
+                filters.append("sc.content_type = ANY(:content_types)")
+                params["content_types"] = content_types
+
+            if collection_ids:
+                filters.append("sc.collection_id = ANY(:collection_ids)")
+                params["collection_ids"] = [str(c) for c in collection_ids]
+
+            if sync_config_ids:
+                filters.append("sc.sync_config_id = ANY(:sync_config_ids)")
+                params["sync_config_ids"] = [str(c) for c in sync_config_ids]
+
+            if date_from:
+                filters.append("sc.created_at >= :date_from")
+                params["date_from"] = date_from
+
+            if date_to:
+                filters.append("sc.created_at <= :date_to")
+                params["date_to"] = date_to
+
+            filter_clause = " AND ".join(filters)
+
+            # Escape query for FTS
+            fts_query = self._escape_fts_query(query)
+            if not fts_query:
+                return SearchResults(total=0, hits=[])
+
+            params["fts_query"] = fts_query
+
+            # Combined display type mapper for all types
+            def combined_mapper(source_type: str) -> str:
+                if source_type in SALESFORCE_DISPLAY_TYPES:
+                    return SALESFORCE_DISPLAY_TYPES[source_type]
+                if source_type in FORECAST_DISPLAY_TYPES:
+                    return FORECAST_DISPLAY_TYPES[source_type]
+                return source_type
+
+            return await self._execute_typed_search(
+                session, filter_clause, params, query, search_mode,
+                semantic_weight, limit, offset, combined_mapper
+            )
+
+        except Exception as e:
+            logger.error(f"Search failed: {e}")
+            return SearchResults(total=0, hits=[])
+
+    # =========================================================================
+    # SAM.gov Search
+    # =========================================================================
+
+    async def search_sam(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        query: str,
+        search_mode: str = "hybrid",
+        semantic_weight: float = 0.5,
+        source_types: Optional[List[str]] = None,
+        notice_types: Optional[List[str]] = None,
+        agencies: Optional[List[str]] = None,
+        naics_codes: Optional[List[str]] = None,
+        set_asides: Optional[List[str]] = None,
+        posted_within_days: Optional[int] = None,
+        response_deadline_after: Optional[str] = None,
+        date_from: Optional[datetime] = None,
+        date_to: Optional[datetime] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> SearchResults:
+        """
+        Search SAM.gov notices and solicitations.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            query: Search query
+            search_mode: Search mode (keyword, semantic, hybrid)
+            semantic_weight: Weight for semantic scores in hybrid mode (0-1)
+            source_types: Filter by type (sam_notice, sam_solicitation)
+            notice_types: Filter by notice types (ptype codes)
+            agencies: Filter by agency names
+            naics_codes: Filter by NAICS industry codes
+            set_asides: Filter by set-aside types
+            posted_within_days: Only include items posted within N days
+            response_deadline_after: Filter by response deadline (YYYY-MM-DD or 'today')
+            date_from: Filter by posted date >=
+            date_to: Filter by posted date <=
+            limit: Maximum results
+            offset: Pagination offset
+
+        Returns:
+            SearchResults with SAM.gov content
+        """
+        from datetime import timedelta
+
+        try:
+            filters, params = self._build_base_filters(organization_id)
+
+            # SAM-specific source types
+            if source_types:
+                filters.append("sc.source_type = ANY(:source_types)")
+                params["source_types"] = source_types
+            else:
+                filters.append("sc.source_type IN ('sam_notice', 'sam_solicitation')")
+
+            if notice_types:
+                filters.append("sc.metadata->>'notice_type' = ANY(:notice_types)")
+                params["notice_types"] = notice_types
+
+            if agencies:
+                filters.append("sc.metadata->>'agency' = ANY(:agencies)")
+                params["agencies"] = agencies
+
+            # NAICS code filter (check metadata field)
+            if naics_codes:
+                filters.append("sc.metadata->>'naics_code' = ANY(:naics_codes)")
+                params["naics_codes"] = naics_codes
+
+            # Set-aside filter (partial match using ILIKE with ANY)
+            if set_asides:
+                set_aside_conditions = []
+                for i, sa in enumerate(set_asides):
+                    param_name = f"set_aside_{i}"
+                    set_aside_conditions.append(f"sc.metadata->>'set_aside_code' ILIKE :{param_name}")
+                    params[param_name] = f"%{sa}%"
+                if set_aside_conditions:
+                    filters.append(f"({' OR '.join(set_aside_conditions)})")
+
+            # Posted within days filter
+            if posted_within_days:
+                cutoff_date = (datetime.utcnow() - timedelta(days=posted_within_days)).replace(
+                    hour=0, minute=0, second=0, microsecond=0
+                )
+                filters.append("(sc.metadata->>'posted_date')::timestamp >= :posted_cutoff")
+                params["posted_cutoff"] = cutoff_date
+
+            # Response deadline filter
+            if response_deadline_after:
+                if response_deadline_after.lower() == "today":
+                    deadline_date = datetime.utcnow().date()
+                else:
+                    deadline_date = datetime.strptime(response_deadline_after, "%Y-%m-%d").date()
+                filters.append("(sc.metadata->>'response_deadline')::date >= :deadline_date")
+                params["deadline_date"] = deadline_date
+
+            if date_from:
+                filters.append("sc.created_at >= :date_from")
+                params["date_from"] = date_from
+
+            if date_to:
+                filters.append("sc.created_at <= :date_to")
+                params["date_to"] = date_to
+
+            filter_clause = " AND ".join(filters)
+
+            fts_query = self._escape_fts_query(query)
+            if not fts_query:
+                return SearchResults(total=0, hits=[])
+
+            params["fts_query"] = fts_query
+
+            return await self._execute_typed_search(
+                session, filter_clause, params, query, search_mode,
+                semantic_weight, limit, offset,
+                display_type_mapper=lambda st: SAM_DISPLAY_TYPES.get(st, st)
+            )
+
+        except Exception as e:
+            logger.error(f"SAM search failed: {e}")
+            return SearchResults(total=0, hits=[])
+
+    # =========================================================================
+    # Salesforce Search
+    # =========================================================================
+
+    async def search_salesforce(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        query: str,
+        search_mode: str = "hybrid",
+        semantic_weight: float = 0.5,
+        entity_types: Optional[List[str]] = None,
+        account_types: Optional[List[str]] = None,
+        stages: Optional[List[str]] = None,
+        limit: int = 20,
+        offset: int = 0,
+    ) -> SearchResults:
+        """
+        Search Salesforce accounts, contacts, and opportunities.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            query: Search query
+            search_mode: Search mode (keyword, semantic, hybrid)
+            semantic_weight: Weight for semantic scores in hybrid mode (0-1)
+            entity_types: Filter by type (account, contact, opportunity)
+            account_types: Filter by account type
+            stages: Filter by opportunity stage
+            limit: Maximum results
+            offset: Pagination offset
+
+        Returns:
+            SearchResults with Salesforce content
+        """
+        try:
+            filters, params = self._build_base_filters(organization_id)
+
+            # Salesforce-specific source types
+            if entity_types:
+                source_types = []
+                for et in entity_types:
+                    if et == "account":
+                        source_types.append("salesforce_account")
+                    elif et == "contact":
+                        source_types.append("salesforce_contact")
+                    elif et == "opportunity":
+                        source_types.append("salesforce_opportunity")
+                    else:
+                        source_types.append(et)
+                filters.append("sc.source_type = ANY(:source_types)")
+                params["source_types"] = source_types
+            else:
+                filters.append("sc.source_type IN ('salesforce_account', 'salesforce_contact', 'salesforce_opportunity')")
+
+            if account_types:
+                filters.append("sc.metadata->>'account_type' = ANY(:account_types)")
+                params["account_types"] = account_types
+
+            if stages:
+                filters.append("sc.metadata->>'stage_name' = ANY(:stages)")
+                params["stages"] = stages
+
+            filter_clause = " AND ".join(filters)
+
+            fts_query = self._escape_fts_query(query)
+            if not fts_query:
+                return SearchResults(total=0, hits=[])
+
+            params["fts_query"] = fts_query
+
+            return await self._execute_typed_search(
+                session, filter_clause, params, query, search_mode,
+                semantic_weight, limit, offset,
+                display_type_mapper=lambda st: SALESFORCE_DISPLAY_TYPES.get(st, st)
+            )
+
+        except Exception as e:
+            logger.error(f"Salesforce search failed: {e}")
+            return SearchResults(total=0, hits=[])
+
+    # =========================================================================
+    # Forecast Search
+    # =========================================================================
+
+    async def search_forecasts(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        query: str,
+        search_mode: str = "hybrid",
+        semantic_weight: float = 0.5,
+        source_types: Optional[List[str]] = None,
+        fiscal_year: Optional[int] = None,
+        agency_name: Optional[str] = None,
+        naics_code: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> SearchResults:
+        """
+        Search acquisition forecasts across all sources (AG, APFS, State).
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            query: Search query
+            search_mode: Search mode (keyword, semantic, hybrid)
+            semantic_weight: Weight for semantic scores in hybrid mode (0-1)
+            source_types: Filter by forecast source (ag, apfs, state)
+            fiscal_year: Filter by fiscal year
+            agency_name: Filter by agency name (partial match)
+            naics_code: Filter by NAICS code
+            limit: Maximum results
+            offset: Pagination offset
+
+        Returns:
+            SearchResults with forecast content
+        """
+        try:
+            filters, params = self._build_base_filters(organization_id)
+
+            # Map user-facing source types to internal source_type values
+            forecast_type_map = {
+                "ag": "ag_forecast",
+                "apfs": "apfs_forecast",
+                "state": "state_forecast",
+            }
+
+            if source_types:
+                internal_types = [forecast_type_map.get(st, st) for st in source_types]
+                filters.append("sc.source_type = ANY(:source_types)")
+                params["source_types"] = internal_types
+            else:
+                filters.append("sc.source_type IN ('ag_forecast', 'apfs_forecast', 'state_forecast')")
+
+            if fiscal_year:
+                filters.append("(sc.metadata->>'fiscal_year')::int = :fiscal_year")
+                params["fiscal_year"] = fiscal_year
+
+            if agency_name:
+                filters.append("sc.metadata->>'agency_name' ILIKE :agency_pattern")
+                params["agency_pattern"] = f"%{agency_name}%"
+
+            if naics_code:
+                filters.append("""(
+                    sc.metadata->>'naics_codes' LIKE :naics_pattern
+                    OR sc.metadata->>'naics_code' = :naics_code
+                )""")
+                params["naics_pattern"] = f"%{naics_code}%"
+                params["naics_code"] = naics_code
+
+            filter_clause = " AND ".join(filters)
+
+            fts_query = self._escape_fts_query(query)
+            if not fts_query:
+                return SearchResults(total=0, hits=[])
+
+            params["fts_query"] = fts_query
+
+            return await self._execute_typed_search(
+                session, filter_clause, params, query, search_mode,
+                semantic_weight, limit, offset,
+                display_type_mapper=lambda st: FORECAST_DISPLAY_TYPES.get(st, st)
+            )
+
+        except Exception as e:
+            logger.error(f"Forecast search failed: {e}")
+            return SearchResults(total=0, hits=[])
+
+    # =========================================================================
+    # Faceted Search
+    # =========================================================================
 
     async def search_with_facets(
         self,
@@ -773,11 +1106,7 @@ class PgSearchService:
             "facet_size": facet_size,
         }
 
-        # Source type facet - includes assets, forecasts, and Salesforce records
-        # This query combines:
-        # 1. Asset source_type_filter counts
-        # 2. Forecast counts (grouped as 'forecast')
-        # 3. Salesforce records with display-friendly names (Accounts, Contacts, Opportunities)
+        # Source type facet
         source_type_sql = """
             WITH asset_facets AS (
                 SELECT sc.source_type_filter as value, COUNT(DISTINCT sc.source_id) as count
@@ -823,7 +1152,7 @@ class PgSearchService:
             for row in source_result.fetchall()
         ]
 
-        # Content type facet - for assets only (Salesforce content types are different)
+        # Content type facet
         base_filter = """
             sc.organization_id = :org_id
             AND sc.source_type = 'asset'
@@ -851,305 +1180,9 @@ class PgSearchService:
 
         return results
 
-    async def search_sam(
-        self,
-        session: AsyncSession,
-        organization_id: UUID,
-        query: str,
-        source_types: Optional[List[str]] = None,
-        notice_types: Optional[List[str]] = None,
-        agencies: Optional[List[str]] = None,
-        date_from: Optional[datetime] = None,
-        date_to: Optional[datetime] = None,
-        limit: int = 20,
-        offset: int = 0,
-    ) -> SearchResults:
-        """
-        Search SAM.gov notices and solicitations.
-
-        Args:
-            session: Database session
-            organization_id: Organization UUID
-            query: Search query
-            source_types: Filter by type (sam_notice, sam_solicitation)
-            notice_types: Filter by notice types
-            agencies: Filter by agency names
-            date_from: Filter by posted date >=
-            date_to: Filter by posted date <=
-            limit: Maximum results
-            offset: Pagination offset
-
-        Returns:
-            SearchResults with SAM.gov content
-        """
-        try:
-            filters = ["sc.organization_id = :org_id"]
-            params: Dict[str, Any] = {"org_id": str(organization_id)}
-
-            # SAM-specific source types
-            if source_types:
-                filters.append("sc.source_type = ANY(:source_types)")
-                params["source_types"] = source_types
-            else:
-                filters.append("sc.source_type IN ('sam_notice', 'sam_solicitation')")
-
-            if notice_types:
-                filters.append("sc.metadata->>'notice_type' = ANY(:notice_types)")
-                params["notice_types"] = notice_types
-
-            if agencies:
-                filters.append("sc.metadata->>'agency' = ANY(:agencies)")
-                params["agencies"] = agencies
-
-            if date_from:
-                filters.append("sc.created_at >= :date_from")
-                params["date_from"] = date_from
-
-            if date_to:
-                filters.append("sc.created_at <= :date_to")
-                params["date_to"] = date_to
-
-            filter_clause = " AND ".join(filters)
-
-            fts_query = self._escape_fts_query(query)
-            if not fts_query:
-                return SearchResults(total=0, hits=[])
-
-            params["fts_query"] = fts_query
-
-            # Count
-            count_sql = f"""
-                SELECT COUNT(DISTINCT sc.source_id)
-                FROM search_chunks sc
-                WHERE {filter_clause}
-                AND sc.search_vector @@ to_tsquery('english', :fts_query)
-            """
-            count_result = await session.execute(text(count_sql), params)
-            total = count_result.scalar() or 0
-
-            # Search
-            search_sql = f"""
-                WITH ranked AS (
-                    SELECT
-                        sc.source_id,
-                        sc.source_type,
-                        sc.title,
-                        sc.filename,
-                        sc.content_type,
-                        sc.url,
-                        sc.created_at,
-                        sc.metadata,
-                        sc.content,
-                        ts_rank(sc.search_vector, to_tsquery('english', :fts_query)) as score,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY sc.source_id
-                            ORDER BY ts_rank(sc.search_vector, to_tsquery('english', :fts_query)) DESC
-                        ) as rn
-                    FROM search_chunks sc
-                    WHERE {filter_clause}
-                    AND sc.search_vector @@ to_tsquery('english', :fts_query)
-                )
-                SELECT
-                    source_id,
-                    source_type,
-                    title,
-                    filename,
-                    content_type,
-                    url,
-                    created_at::text,
-                    metadata,
-                    score,
-                    ts_headline(
-                        'english',
-                        content,
-                        to_tsquery('english', :fts_query),
-                        'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=25, MaxFragments=3'
-                    ) as highlight
-                FROM ranked
-                WHERE rn = 1
-                ORDER BY score DESC
-                LIMIT :limit OFFSET :offset
-            """
-            params["limit"] = limit
-            params["offset"] = offset
-
-            result = await session.execute(text(search_sql), params)
-            rows = result.fetchall()
-
-            hits = []
-            for row in rows:
-                hits.append(SearchHit(
-                    asset_id=str(row.source_id),
-                    score=float(row.score) * 100,
-                    title=row.title,
-                    filename=row.filename,
-                    source_type=row.source_type,
-                    content_type=row.content_type,
-                    url=row.url,
-                    created_at=row.created_at,
-                    highlights={"content": [row.highlight]} if row.highlight else {},
-                    keyword_score=float(row.score),
-                ))
-
-            return SearchResults(total=total, hits=hits)
-
-        except Exception as e:
-            logger.error(f"SAM search failed: {e}")
-            return SearchResults(total=0, hits=[])
-
-    async def search_salesforce(
-        self,
-        session: AsyncSession,
-        organization_id: UUID,
-        query: str,
-        entity_types: Optional[List[str]] = None,
-        account_types: Optional[List[str]] = None,
-        stages: Optional[List[str]] = None,
-        limit: int = 20,
-        offset: int = 0,
-    ) -> SearchResults:
-        """
-        Search Salesforce accounts, contacts, and opportunities.
-
-        Args:
-            session: Database session
-            organization_id: Organization UUID
-            query: Search query
-            entity_types: Filter by type (account, contact, opportunity)
-            account_types: Filter by account type
-            stages: Filter by opportunity stage
-            limit: Maximum results
-            offset: Pagination offset
-
-        Returns:
-            SearchResults with Salesforce content
-        """
-        try:
-            filters = ["sc.organization_id = :org_id"]
-            params: Dict[str, Any] = {"org_id": str(organization_id)}
-
-            # Salesforce-specific source types
-            if entity_types:
-                # Map friendly names to source_type values
-                source_types = []
-                for et in entity_types:
-                    if et == "account":
-                        source_types.append("salesforce_account")
-                    elif et == "contact":
-                        source_types.append("salesforce_contact")
-                    elif et == "opportunity":
-                        source_types.append("salesforce_opportunity")
-                    else:
-                        source_types.append(et)  # Allow direct source_type values
-                filters.append("sc.source_type = ANY(:source_types)")
-                params["source_types"] = source_types
-            else:
-                filters.append("sc.source_type IN ('salesforce_account', 'salesforce_contact', 'salesforce_opportunity')")
-
-            if account_types:
-                filters.append("sc.metadata->>'account_type' = ANY(:account_types)")
-                params["account_types"] = account_types
-
-            if stages:
-                filters.append("sc.metadata->>'stage_name' = ANY(:stages)")
-                params["stages"] = stages
-
-            filter_clause = " AND ".join(filters)
-
-            fts_query = self._escape_fts_query(query)
-            if not fts_query:
-                return SearchResults(total=0, hits=[])
-
-            params["fts_query"] = fts_query
-
-            # Count
-            count_sql = f"""
-                SELECT COUNT(DISTINCT sc.source_id)
-                FROM search_chunks sc
-                WHERE {filter_clause}
-                AND sc.search_vector @@ to_tsquery('english', :fts_query)
-            """
-            count_result = await session.execute(text(count_sql), params)
-            total = count_result.scalar() or 0
-
-            # Search
-            search_sql = f"""
-                WITH ranked AS (
-                    SELECT
-                        sc.source_id,
-                        sc.source_type,
-                        sc.title,
-                        sc.filename,
-                        sc.content_type,
-                        sc.url,
-                        sc.created_at,
-                        sc.metadata,
-                        sc.content,
-                        ts_rank(sc.search_vector, to_tsquery('english', :fts_query)) as score,
-                        ROW_NUMBER() OVER (
-                            PARTITION BY sc.source_id
-                            ORDER BY ts_rank(sc.search_vector, to_tsquery('english', :fts_query)) DESC
-                        ) as rn
-                    FROM search_chunks sc
-                    WHERE {filter_clause}
-                    AND sc.search_vector @@ to_tsquery('english', :fts_query)
-                )
-                SELECT
-                    source_id,
-                    source_type,
-                    title,
-                    filename,
-                    content_type,
-                    url,
-                    created_at::text,
-                    metadata,
-                    score,
-                    ts_headline(
-                        'english',
-                        content,
-                        to_tsquery('english', :fts_query),
-                        'StartSel=<mark>, StopSel=</mark>, MaxWords=50, MinWords=25, MaxFragments=3'
-                    ) as highlight
-                FROM ranked
-                WHERE rn = 1
-                ORDER BY score DESC
-                LIMIT :limit OFFSET :offset
-            """
-            params["limit"] = limit
-            params["offset"] = offset
-
-            result = await session.execute(text(search_sql), params)
-            rows = result.fetchall()
-
-            hits = []
-            for row in rows:
-                # Map source_type to friendly display name
-                display_type = row.source_type
-                if row.source_type == "salesforce_account":
-                    display_type = "Account"
-                elif row.source_type == "salesforce_contact":
-                    display_type = "Contact"
-                elif row.source_type == "salesforce_opportunity":
-                    display_type = "Opportunity"
-
-                hits.append(SearchHit(
-                    asset_id=str(row.source_id),
-                    score=float(row.score) * 100,
-                    title=row.title,
-                    filename=row.filename,  # Salesforce ID
-                    source_type=display_type,  # Friendly display name
-                    content_type=row.content_type,
-                    url=row.url,
-                    created_at=row.created_at,
-                    highlights={"content": [row.highlight]} if row.highlight else {},
-                    keyword_score=float(row.score),
-                ))
-
-            return SearchResults(total=total, hits=hits)
-
-        except Exception as e:
-            logger.error(f"Salesforce search failed: {e}")
-            return SearchResults(total=0, hits=[])
+    # =========================================================================
+    # Index Statistics
+    # =========================================================================
 
     async def get_index_stats(
         self, session: AsyncSession, organization_id: UUID

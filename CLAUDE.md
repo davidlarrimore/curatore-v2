@@ -8,7 +8,7 @@ Development guidance for Claude Code working with Curatore v2.
 
 **Core Systems**: [Architecture](#architecture-principles) | [Data Models](#key-data-models) | [Queue System](docs/QUEUE_SYSTEM.md)
 
-**Integrations**: [SAM.gov](docs/SAM_INTEGRATION.md) | [Salesforce](docs/SALESFORCE_INTEGRATION.md) | [Forecasts](docs/FORECAST_INTEGRATION.md) | [SharePoint](docs/DATA_CONNECTIONS.md#sharepoint-sync) | [Web Scraping](docs/DATA_CONNECTIONS.md#web-scraping)
+**Integrations**: [SAM.gov](docs/SAM_INTEGRATION.md) | [Salesforce](docs/SALESFORCE_INTEGRATION.md) | [SharePoint](docs/SHAREPOINT_INTEGRATION.md) | [Forecasts](docs/FORECAST_INTEGRATION.md) | [Web Scraping](docs/DATA_CONNECTIONS.md#web-scraping)
 
 **Workflows**: [Functions & Procedures](docs/FUNCTIONS_PROCEDURES.md) | [Document Processing](docs/DOCUMENT_PROCESSING.md)
 
@@ -374,6 +374,7 @@ docker exec -it curatore-postgres psql -U curatore -d curatore -c "\dt"
 | [Queue System](docs/QUEUE_SYSTEM.md) | Queue architecture, job groups, cancellation |
 | [SAM.gov Integration](docs/SAM_INTEGRATION.md) | SAM.gov data model and API |
 | [Salesforce Integration](docs/SALESFORCE_INTEGRATION.md) | Salesforce CRM integration |
+| [SharePoint Integration](docs/SHAREPOINT_INTEGRATION.md) | SharePoint folder sync |
 | [Forecast Integration](docs/FORECAST_INTEGRATION.md) | Acquisition forecast sources |
 | [Functions & Procedures](docs/FUNCTIONS_PROCEDURES.md) | Workflow automation |
 | [Data Connections](docs/DATA_CONNECTIONS.md) | Adding new integrations |

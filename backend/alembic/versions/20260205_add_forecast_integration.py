@@ -402,7 +402,10 @@ def upgrade() -> None:
             poc_name, poc_email,
             sbs_name, sbs_email,
             NULL::varchar AS incumbent_contractor,
-            NULL::varchar AS source_url,
+            CASE WHEN apfs_id IS NOT NULL
+                THEN 'https://apfs-cloud.dhs.gov/record/' || apfs_id::text || '/public-print/'
+                ELSE NULL
+            END AS source_url,
             first_seen_at, last_updated_at, change_hash,
             indexed_at, created_at, updated_at
         FROM apfs_forecasts

@@ -27,11 +27,13 @@ logger = logging.getLogger("curatore.functions")
 class FunctionCategory(str, Enum):
     """Categories for organizing functions."""
     LLM = "llm"
+    LOGIC = "logic"
     SEARCH = "search"
     OUTPUT = "output"
     NOTIFY = "notify"
     COMPOUND = "compound"
     UTILITY = "utility"
+    FLOW = "flow"
 
 
 class FunctionStatus(str, Enum):
@@ -227,6 +229,62 @@ class FunctionResult:
             message=message,
             **kwargs
         )
+
+
+@dataclass
+class FlowResult(FunctionResult):
+    """
+    Returned by flow control functions to direct the executor.
+
+    Flow functions (if_branch, switch_branch, parallel, foreach) return this
+    specialized result to tell the executor which branches to execute.
+
+    Attributes:
+        branch_key: For if_branch/switch_branch - the name of the single branch to run
+        branches_to_run: For parallel - list of branch names to run concurrently
+        items_to_iterate: For foreach - the resolved list of items to iterate over
+        skipped_indices: For foreach - indices of items that were filtered out by condition
+    """
+    branch_key: Optional[str] = None
+    branches_to_run: Optional[List[str]] = None
+    items_to_iterate: Optional[List[Any]] = None
+    skipped_indices: Optional[List[int]] = None
+
+    @classmethod
+    def success_result(
+        cls,
+        data: Any = None,
+        message: str = "Success",
+        branch_key: Optional[str] = None,
+        branches_to_run: Optional[List[str]] = None,
+        items_to_iterate: Optional[List[Any]] = None,
+        skipped_indices: Optional[List[int]] = None,
+        **kwargs
+    ) -> "FlowResult":
+        """Create a successful flow result."""
+        return cls(
+            status=FunctionStatus.SUCCESS,
+            data=data,
+            message=message,
+            branch_key=branch_key,
+            branches_to_run=branches_to_run,
+            items_to_iterate=items_to_iterate,
+            skipped_indices=skipped_indices,
+            **kwargs
+        )
+
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for API responses and logging."""
+        result = super().to_dict()
+        if self.branch_key is not None:
+            result["branch_key"] = self.branch_key
+        if self.branches_to_run is not None:
+            result["branches_to_run"] = self.branches_to_run
+        if self.items_to_iterate is not None:
+            result["items_count"] = len(self.items_to_iterate)
+        if self.skipped_indices is not None:
+            result["skipped_count"] = len(self.skipped_indices)
+        return result
 
 
 # Type variable for function context

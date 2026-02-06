@@ -50,6 +50,11 @@ class StepDefinition:
     - When foreach is set, the step runs once per item
     - {{ item }} is available in params during each iteration
     - Results are collected into a list
+
+    Flow Control:
+    - branches: Named step lists for flow functions (if_branch, switch_branch, parallel, foreach)
+    - The flow function decides which branch(es) to execute
+    - {{ item }} and {{ item_index }} available in foreach branches
     """
     name: str
     function: str
@@ -57,7 +62,8 @@ class StepDefinition:
     on_error: OnErrorPolicy = OnErrorPolicy.FAIL
     condition: Optional[str] = None  # Jinja2 expression that must be true
     description: str = ""
-    foreach: Optional[str] = None  # Template expression for iteration
+    foreach: Optional[str] = None  # Template expression for iteration (legacy single-step)
+    branches: Optional[Dict[str, List["StepDefinition"]]] = None  # For flow control functions
 
 
 @dataclass
@@ -128,18 +134,7 @@ class ProcedureDefinition:
                 }
                 for p in self.parameters
             ],
-            "steps": [
-                {
-                    "name": s.name,
-                    "function": s.function,
-                    "params": s.params,
-                    "on_error": s.on_error.value,
-                    "condition": s.condition,
-                    "description": s.description,
-                    "foreach": s.foreach,
-                }
-                for s in self.steps
-            ],
+            "steps": [self._step_to_dict(s) for s in self.steps],
             "outputs": [
                 {"type": o.type, "config": o.config}
                 for o in self.outputs
@@ -158,6 +153,44 @@ class ProcedureDefinition:
             "tags": self.tags,
         }
 
+    def _step_to_dict(self, step: StepDefinition) -> Dict[str, Any]:
+        """Convert a step to dictionary, handling nested branches recursively."""
+        step_dict = {
+            "name": step.name,
+            "function": step.function,
+            "params": step.params,
+            "on_error": step.on_error.value,
+            "condition": step.condition,
+            "description": step.description,
+            "foreach": step.foreach,
+        }
+        if step.branches:
+            step_dict["branches"] = {
+                branch_name: [self._step_to_dict(s) for s in branch_steps]
+                for branch_name, branch_steps in step.branches.items()
+            }
+        return step_dict
+
+    @classmethod
+    def _step_from_dict(cls, s: Dict[str, Any]) -> StepDefinition:
+        """Create a StepDefinition from dictionary, handling nested branches recursively."""
+        branches = None
+        if s.get("branches"):
+            branches = {
+                branch_name: [cls._step_from_dict(nested_step) for nested_step in branch_steps]
+                for branch_name, branch_steps in s["branches"].items()
+            }
+        return StepDefinition(
+            name=s["name"],
+            function=s["function"],
+            params=s.get("params", {}),
+            on_error=OnErrorPolicy(s.get("on_error", "fail")),
+            condition=s.get("condition"),
+            description=s.get("description", ""),
+            foreach=s.get("foreach"),
+            branches=branches,
+        )
+
     @classmethod
     def from_dict(cls, data: Dict[str, Any], source_type: str = "yaml", source_path: str = None) -> "ProcedureDefinition":
         """Create from dictionary (loaded from YAML/JSON)."""
@@ -173,18 +206,7 @@ class ProcedureDefinition:
             for p in data.get("parameters", [])
         ]
 
-        steps = [
-            StepDefinition(
-                name=s["name"],
-                function=s["function"],
-                params=s.get("params", {}),
-                on_error=OnErrorPolicy(s.get("on_error", "fail")),
-                condition=s.get("condition"),
-                description=s.get("description", ""),
-                foreach=s.get("foreach"),
-            )
-            for s in data.get("steps", [])
-        ]
+        steps = [cls._step_from_dict(s) for s in data.get("steps", [])]
 
         outputs = [
             OutputDefinition(

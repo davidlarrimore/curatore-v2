@@ -660,6 +660,30 @@ export default function JobDetailPage() {
               </div>
             )}
 
+            {run.run_type === 'procedure' && run.config?.procedure_slug && (
+              <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-6">
+                <h3 className="text-sm font-semibold text-gray-900 dark:text-white mb-4 flex items-center gap-2">
+                  <Zap className="h-4 w-4 text-cyan-500" />
+                  Source Configuration
+                </h3>
+                <Link
+                  href={`/admin/procedures/${run.config.procedure_slug}/edit`}
+                  className="flex items-center gap-3 p-3 rounded-lg border border-cyan-200 dark:border-cyan-800 bg-cyan-50 dark:bg-cyan-900/20 hover:bg-cyan-100 dark:hover:bg-cyan-900/30 transition-colors"
+                >
+                  <Zap className="h-5 w-5 text-cyan-600 dark:text-cyan-400" />
+                  <div className="flex-1 min-w-0">
+                    <span className="text-sm font-medium text-cyan-800 dark:text-cyan-200">
+                      View Procedure
+                    </span>
+                    <div className="text-xs text-cyan-600 dark:text-cyan-400 font-mono truncate">
+                      {run.config.procedure_name || run.config.procedure_slug}
+                    </div>
+                  </div>
+                  <ExternalLink className="h-4 w-4 text-cyan-500 flex-shrink-0" />
+                </Link>
+              </div>
+            )}
+
             {/* Associated Assets */}
             {assets && assets.length > 0 && (
               <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-gray-200 dark:border-gray-700 p-6">

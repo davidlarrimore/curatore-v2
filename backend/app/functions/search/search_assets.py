@@ -137,19 +137,21 @@ class SearchAssetsFunction(BaseFunction):
                 filters["sync_config_id"] = UUID(sync_config_id) if isinstance(sync_config_id, str) else sync_config_id
 
             # Execute search
+            # PgSearchService uses semantic_weight (0-1), so convert from keyword_weight
+            semantic_weight = 1 - keyword_weight
             search_results = await ctx.search_service.search(
                 session=ctx.session,
                 organization_id=ctx.organization_id,
                 query=query,
                 search_mode=search_mode,
-                keyword_weight=keyword_weight,
+                semantic_weight=semantic_weight,
                 limit=limit,
                 **filters,
             )
 
             # Format results as ContentItem instances
             results = []
-            for sr in search_results.results:
+            for sr in search_results.hits:
                 item = ContentItem(
                     id=str(sr.source_id),
                     type="asset",

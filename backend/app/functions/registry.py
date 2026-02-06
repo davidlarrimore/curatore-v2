@@ -173,6 +173,7 @@ class FunctionRegistry:
             from .search.search_notices import SearchNoticesFunction
             from .search.search_scraped_assets import SearchScrapedAssetsFunction
             from .search.search_salesforce import SearchSalesforceFunction
+            from .search.search_forecasts import SearchForecastsFunction
             self.register(QueryModelFunction)
             self.register(GetContentFunction)
             self.register(GetAssetFunction)
@@ -182,6 +183,7 @@ class FunctionRegistry:
             self.register(SearchNoticesFunction)
             self.register(SearchScrapedAssetsFunction)
             self.register(SearchSalesforceFunction)
+            self.register(SearchForecastsFunction)
         except ImportError as e:
             logger.warning(f"Failed to import search functions: {e}")
 
@@ -191,10 +193,12 @@ class FunctionRegistry:
             from .output.bulk_update_metadata import BulkUpdateMetadataFunction
             from .output.create_artifact import CreateArtifactFunction
             from .output.generate_document import GenerateDocumentFunction
+            from .output.log import LogFunction
             self.register(UpdateMetadataFunction)
             self.register(BulkUpdateMetadataFunction)
             self.register(CreateArtifactFunction)
             self.register(GenerateDocumentFunction)
+            self.register(LogFunction)
         except ImportError as e:
             logger.warning(f"Failed to import output functions: {e}")
 
@@ -221,6 +225,19 @@ class FunctionRegistry:
             self.register(EnrichAssetsFunction)
         except ImportError as e:
             logger.warning(f"Failed to import compound functions: {e}")
+
+        # Import flow control functions
+        try:
+            from .flow.if_branch import IfBranchFunction
+            from .flow.switch_branch import SwitchBranchFunction
+            from .flow.parallel import ParallelFunction
+            from .flow.foreach import ForeachFunction
+            self.register(IfBranchFunction)
+            self.register(SwitchBranchFunction)
+            self.register(ParallelFunction)
+            self.register(ForeachFunction)
+        except ImportError as e:
+            logger.warning(f"Failed to import flow functions: {e}")
 
     def to_api_response(self) -> Dict[str, Any]:
         """

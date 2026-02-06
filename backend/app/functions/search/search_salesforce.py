@@ -2,7 +2,7 @@
 """
 Search Salesforce function - Search across Salesforce CRM records.
 
-Provides unified search across Salesforce Accounts, Contacts, and Opportunities
+Provides unified hybrid search across Salesforce Accounts, Contacts, and Opportunities
 with filtering by entity type, account, stage, and other fields.
 """
 
@@ -55,19 +55,34 @@ class SearchSalesforceFunction(BaseFunction):
     meta = FunctionMeta(
         name="search_salesforce",
         category=FunctionCategory.SEARCH,
-        description="Search Salesforce CRM records (Accounts, Contacts, Opportunities)",
+        description="Search Salesforce CRM records (Accounts, Contacts, Opportunities) with hybrid search",
         parameters=[
             ParameterDoc(
                 name="query",
                 type="str",
-                description="Text search query (searches name, description, email, etc.)",
+                description="Search query for name, description, email, and other text fields. Combines with all filters below for refined results.",
                 required=False,
                 default=None,
             ),
             ParameterDoc(
+                name="search_mode",
+                type="str",
+                description="Search mode: 'keyword' for exact term matches, 'semantic' for conceptual similarity, 'hybrid' combines both for best results.",
+                required=False,
+                default="hybrid",
+                enum_values=["keyword", "semantic", "hybrid"],
+            ),
+            ParameterDoc(
+                name="semantic_weight",
+                type="float",
+                description="Balance between keyword and semantic search in hybrid mode. 0.0 = keyword only, 1.0 = semantic only, 0.5 = equal weight.",
+                required=False,
+                default=0.5,
+            ),
+            ParameterDoc(
                 name="entity_types",
                 type="list[str]",
-                description="Entity types to search",
+                description="Which Salesforce entity types to search. Use 'account' for companies, 'contact' for people, 'opportunity' for deals/pursuits.",
                 required=False,
                 default=["account", "contact", "opportunity"],
                 enum_values=["account", "contact", "opportunity"],
@@ -75,85 +90,119 @@ class SearchSalesforceFunction(BaseFunction):
             ParameterDoc(
                 name="account_id",
                 type="str",
-                description="Filter by account UUID (for contacts/opportunities)",
+                description="Filter contacts and opportunities by their parent account UUID. Use to find all records related to a specific account.",
                 required=False,
                 default=None,
             ),
             ParameterDoc(
                 name="account_type",
                 type="str",
-                description="Filter accounts by type",
+                description="Filter accounts by their type classification (e.g., 'Customer', 'Partner', 'Prospect').",
                 required=False,
                 default=None,
             ),
             ParameterDoc(
                 name="industry",
                 type="str",
-                description="Filter accounts by industry",
+                description="Filter accounts by industry (e.g., 'Government', 'Technology', 'Healthcare').",
                 required=False,
                 default=None,
             ),
             ParameterDoc(
                 name="stage_name",
                 type="str",
-                description="Filter opportunities by stage",
+                description="Filter opportunities by sales stage (e.g., 'Qualification', 'Proposal', 'Negotiation', 'Closed Won').",
                 required=False,
                 default=None,
             ),
             ParameterDoc(
                 name="is_open",
                 type="bool",
-                description="Filter opportunities by open/closed status",
+                description="Filter opportunities: True for open/active opportunities, False for closed. Works with query to find matching open deals.",
                 required=False,
                 default=None,
             ),
             ParameterDoc(
                 name="is_current_employee",
                 type="bool",
-                description="Filter contacts by current employee status",
+                description="Filter contacts by employment status: True for current employees only, False for former employees.",
                 required=False,
                 default=None,
             ),
             ParameterDoc(
                 name="limit",
                 type="int",
-                description="Maximum number of results per entity type",
+                description="Maximum number of results",
                 required=False,
                 default=20,
             ),
+            ParameterDoc(
+                name="offset",
+                type="int",
+                description="Number of results to skip for pagination",
+                required=False,
+                default=0,
+            ),
         ],
         returns="list[ContentItem]: Search results as ContentItem instances",
-        tags=["search", "salesforce", "crm", "content"],
+        tags=["search", "salesforce", "crm", "content", "hybrid"],
         requires_llm=False,
         examples=[
             {
-                "description": "Search all Salesforce records",
+                "description": "Search open opportunities with keyword",
                 "params": {
-                    "query": "federal",
-                    "limit": 10,
-                },
-            },
-            {
-                "description": "Search open opportunities",
-                "params": {
+                    "query": "federal contracts",
+                    "search_mode": "hybrid",
                     "entity_types": ["opportunity"],
                     "is_open": True,
-                    "limit": 20,
                 },
             },
             {
-                "description": "Search contacts at an account",
+                "description": "Semantic search for cybersecurity opportunities by stage",
                 "params": {
+                    "query": "cybersecurity services",
+                    "search_mode": "semantic",
+                    "entity_types": ["opportunity"],
+                    "stage_name": "Qualification",
+                    "is_open": True,
+                },
+            },
+            {
+                "description": "Search government accounts by industry",
+                "params": {
+                    "query": "agency",
+                    "search_mode": "hybrid",
+                    "entity_types": ["account"],
+                    "industry": "Government",
+                },
+            },
+            {
+                "description": "Search contacts at a specific account",
+                "params": {
+                    "query": "program manager",
                     "entity_types": ["contact"],
                     "account_id": "uuid-here",
+                    "is_current_employee": True,
+                },
+            },
+            {
+                "description": "Find all open deals mentioning cloud",
+                "params": {
+                    "query": "cloud migration",
+                    "search_mode": "hybrid",
+                    "entity_types": ["opportunity"],
+                    "is_open": True,
+                    "limit": 50,
                 },
             },
         ],
     )
 
     async def execute(self, ctx: FunctionContext, **params) -> FunctionResult:
-        """Execute Salesforce search."""
+        """Execute Salesforce search with optional hybrid search."""
         query = params.get("query", "").strip() if params.get("query") else None
+        search_mode = params.get("search_mode", "hybrid")
+        semantic_weight = params.get("semantic_weight", 0.5)
         entity_types = params.get("entity_types") or ["account", "contact", "opportunity"]
         account_id = params.get("account_id")
         account_type = params.get("account_type")
@@ -162,6 +211,7 @@ class SearchSalesforceFunction(BaseFunction):
         is_open = params.get("is_open")
         is_current_employee = params.get("is_current_employee")
         limit = min(params.get("limit", 20), 100)
+        offset = params.get("offset", 0)
 
         # Import models
         from ...database.models import (
@@ -170,14 +220,27 @@ class SearchSalesforceFunction(BaseFunction):
             SalesforceOpportunity,
         )
 
-        results: List[ContentItem] = []
-
         try:
+            # If query is provided, use PgSearchService for hybrid search
+            if query:
+                return await self._search_with_pg_service(
+                    ctx=ctx,
+                    query=query,
+                    search_mode=search_mode,
+                    semantic_weight=semantic_weight,
+                    entity_types=entity_types,
+                    limit=limit,
+                    offset=offset,
+                )
+
+            # Otherwise, use direct database query with filters (no text search)
+            results: List[ContentItem] = []
+
             # Search accounts
             if "account" in entity_types:
                 accounts = await self._search_accounts(
                     ctx=ctx,
-                    query=query,
+                    query=None,  # No text search when using direct DB
                     account_type=account_type,
                     industry=industry,
                     limit=limit,
@@ -188,7 +251,7 @@ class SearchSalesforceFunction(BaseFunction):
             if "contact" in entity_types:
                 contacts = await self._search_contacts(
                     ctx=ctx,
-                    query=query,
+                    query=None,
                     account_id=account_id,
                     is_current_employee=is_current_employee,
                     limit=limit,
@@ -199,7 +262,7 @@ class SearchSalesforceFunction(BaseFunction):
             if "opportunity" in entity_types:
                 opportunities = await self._search_opportunities(
                     ctx=ctx,
-                    query=query,
+                    query=None,
                     account_id=account_id,
                     stage_name=stage_name,
                     is_open=is_open,
@@ -233,6 +296,71 @@ class SearchSalesforceFunction(BaseFunction):
                 error=str(e),
                 message="Salesforce search failed",
             )
+
+    async def _search_with_pg_service(
+        self,
+        ctx: FunctionContext,
+        query: str,
+        search_mode: str,
+        semantic_weight: float,
+        entity_types: List[str],
+        limit: int,
+        offset: int,
+    ) -> FunctionResult:
+        """Use PgSearchService for hybrid search."""
+        search_results = await ctx.search_service.search_salesforce(
+            session=ctx.session,
+            organization_id=ctx.organization_id,
+            query=query,
+            search_mode=search_mode,
+            semantic_weight=semantic_weight,
+            entity_types=entity_types,
+            limit=limit,
+            offset=offset,
+        )
+
+        # Convert SearchHit results to ContentItem format
+        results = []
+        for hit in search_results.hits:
+            item = ContentItem(
+                id=hit.asset_id,
+                type=f"salesforce_{hit.source_type.lower()}" if hit.source_type else "salesforce",
+                display_type=hit.source_type or "Record",
+                title=hit.title,
+                text=None,
+                text_format="json",
+                fields={
+                    "source_type": hit.source_type,
+                    "url": hit.url,
+                    "created_at": hit.created_at,
+                },
+                metadata={
+                    "score": hit.score,
+                    "keyword_score": hit.keyword_score,
+                    "semantic_score": hit.semantic_score,
+                    "highlights": hit.highlights,
+                    "search_mode": search_mode,
+                    "search_entity": hit.source_type.lower() if hit.source_type else None,
+                },
+            )
+            results.append(item)
+
+        return FunctionResult.success_result(
+            data=results,
+            message=f"Found {len(results)} Salesforce records matching '{query}'",
+            metadata={
+                "total": search_results.total,
+                "limit": limit,
+                "offset": offset,
+                "has_more": offset + len(results) < search_results.total,
+                "query": query,
+                "search_mode": search_mode,
+                "semantic_weight": semantic_weight,
+                "entity_types": entity_types,
+                "result_type": "ContentItem",
+            },
+            items_processed=len(results),
+        )
 
     async def _search_accounts(
         self,

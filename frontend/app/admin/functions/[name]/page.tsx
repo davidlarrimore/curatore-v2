@@ -60,6 +60,7 @@ function FunctionLabContent() {
   const [isExecuting, setIsExecuting] = useState(false)
   const [isDryRun, setIsDryRun] = useState(false)
   const [result, setResult] = useState<FunctionExecuteResult | null>(null)
+  const [executionKey, setExecutionKey] = useState(0)
 
   // YAML copy state
   const [copied, setCopied] = useState(false)
@@ -130,6 +131,7 @@ function FunctionLabContent() {
     setIsExecuting(true)
     setIsDryRun(dryRun)
     setResult(null)
+    setExecutionKey((k) => k + 1)
 
     try {
       const execResult = await functionsApi.executeFunction(
@@ -522,7 +524,7 @@ function FunctionLabContent() {
 
             {/* Execution Result Card */}
             {result && (
-              <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+              <div key={executionKey} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
                 <div
                   className={`px-6 py-4 border-b ${
                     result.status === 'success' || result.status === 'completed'
@@ -573,10 +575,15 @@ function FunctionLabContent() {
                   {result.error && (
                     <p className="text-sm text-red-600 dark:text-red-400">{result.error}</p>
                   )}
-                  {result.data && (
+                  {result.data !== undefined && (
                     <div>
                       <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
                         Result Data
+                        {Array.isArray(result.data) && (
+                          <span className="ml-2 text-gray-400 normal-case font-normal">
+                            ({result.data.length} item{result.data.length !== 1 ? 's' : ''})
+                          </span>
+                        )}
                       </h4>
                       <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg overflow-auto max-h-64">
                         {JSON.stringify(result.data, null, 2)}

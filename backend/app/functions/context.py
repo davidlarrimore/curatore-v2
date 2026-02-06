@@ -16,9 +16,27 @@ from typing import Any, Dict, List, Optional, TYPE_CHECKING
 from uuid import UUID
 import logging
 
+import markdown
 from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("curatore.functions.context")
+
+
+def _markdown_to_html(text: str) -> str:
+    """
+    Convert markdown text to HTML for use in templates.
+
+    Useful for embedding LLM output (which is typically markdown) into
+    HTML email bodies or other HTML contexts.
+
+    Args:
+        text: Markdown text to convert
+
+    Returns:
+        HTML string
+    """
+    md = markdown.Markdown(extensions=["tables", "fenced_code", "nl2br"])
+    return md.convert(str(text) if text else "")
 
 
 @dataclass
@@ -219,6 +237,36 @@ class FunctionContext:
     # TEMPLATE RENDERING
     # =========================================================================
 
+    def _create_jinja_env(self):
+        """
+        Create a Jinja2 environment with custom filters and globals.
+
+        Returns:
+            Configured Jinja2 Environment
+        """
+        from jinja2 import Environment
+        from zoneinfo import ZoneInfo
+
+        env = Environment()
+
+        # Register custom filters
+        env.filters["md_to_html"] = _markdown_to_html
+
+        # Register globals (functions available in templates)
+        def now_et():
+            """Return current datetime in US Eastern timezone."""
+            return datetime.now(ZoneInfo("America/New_York"))
+
+        def today():
+            """Return today's date formatted as 'Month Day, Year' in US Eastern."""
+            return datetime.now(ZoneInfo("America/New_York")).strftime("%B %d, %Y")
+
+        env.globals["now"] = datetime.utcnow
+        env.globals["now_et"] = now_et
+        env.globals["today"] = today
+
+        return env
+
     def render_template(self, template: str, item: Any = None) -> str:
         """
         Render a Jinja2 template string with context variables.
@@ -232,23 +280,16 @@ class FunctionContext:
         - today(): Current date string (US Eastern, formatted as 'Month Day, Year')
         - org_id: Organization ID
 
+        Available filters:
+        - md_to_html: Convert markdown to HTML (useful for LLM output in HTML emails)
+
         Args:
             template: Jinja2 template string
             item: Optional item context for foreach iteration
         """
         try:
-            from jinja2 import Template
-            from zoneinfo import ZoneInfo
-
-            def now_et():
-                """Return current datetime in US Eastern timezone."""
-                return datetime.now(ZoneInfo("America/New_York"))
-
-            def today():
-                """Return today's date formatted as 'Month Day, Year' in US Eastern."""
-                return datetime.now(ZoneInfo("America/New_York")).strftime("%B %d, %Y")
-
-            t = Template(template)
+            env = self._create_jinja_env()
+            t = env.from_string(template)
             context = {
                 "params": self.params,
                 "steps": {
@@ -257,9 +298,6 @@ class FunctionContext:
                     if k.startswith("steps.")
                 },
                 "variables": self.variables,
-                "now": datetime.utcnow,
-                "now_et": now_et,
-                "today": today,
                 "org_id": str(self.organization_id),
             }
 

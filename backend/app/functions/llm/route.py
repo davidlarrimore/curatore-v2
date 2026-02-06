@@ -94,7 +94,7 @@ class RouteFunction(BaseFunction):
 
     meta = FunctionMeta(
         name="llm_route",
-        category=FunctionCategory.LLM,
+        category=FunctionCategory.LOGIC,
         description="[STUB] Route data to one of several branches using LLM analysis",
         parameters=[
             ParameterDoc(

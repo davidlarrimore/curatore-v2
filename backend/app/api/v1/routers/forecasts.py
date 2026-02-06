@@ -634,6 +634,7 @@ def _model_to_unified_dict(model: Any, source_type: str) -> Dict[str, Any]:
         pop_state = None
         pop_country = None
         incumbent_contractor = None
+        source_url = getattr(model, "source_url", None)
     elif source_type == "apfs":
         source_id = model.apfs_number
         # Build naics_codes array from single code
@@ -649,6 +650,10 @@ def _model_to_unified_dict(model: Any, source_type: str) -> Dict[str, Any]:
         pop_state = None
         pop_country = None
         incumbent_contractor = None
+        # Construct source_url from apfs_id
+        source_url = None
+        if model.apfs_id:
+            source_url = f"https://apfs-cloud.dhs.gov/record/{model.apfs_id}/public-print/"
     elif source_type == "state":
         source_id = model.row_hash
         naics_codes = None
@@ -663,6 +668,7 @@ def _model_to_unified_dict(model: Any, source_type: str) -> Dict[str, Any]:
         pop_state = model.pop_state
         pop_country = model.pop_country
         incumbent_contractor = model.incumbent_contractor
+        source_url = None
     else:
         raise ValueError(f"Unknown source_type: {source_type}")
 
@@ -693,7 +699,7 @@ def _model_to_unified_dict(model: Any, source_type: str) -> Dict[str, Any]:
         "sbs_name": getattr(model, "sbs_name", None),
         "sbs_email": getattr(model, "sbs_email", None),
         "incumbent_contractor": incumbent_contractor,
-        "source_url": getattr(model, "source_url", None),
+        "source_url": source_url,
         "first_seen_at": model.first_seen_at,
         "last_updated_at": model.last_updated_at,
         "indexed_at": model.indexed_at,

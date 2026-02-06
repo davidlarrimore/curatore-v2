@@ -19,6 +19,7 @@ import {
   Sparkles,
   Box,
   FlaskConical,
+  GitBranch,
 } from 'lucide-react'
 
 export default function FunctionsPage() {
@@ -32,6 +33,7 @@ export default function FunctionsPage() {
 // Category icons mapping
 const CATEGORY_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   llm: Brain,
+  logic: GitBranch,
   search: Search,
   output: Send,
   notify: Send,
@@ -46,6 +48,7 @@ function getCategoryIcon(category: string): React.ComponentType<{ className?: st
 function getCategoryColor(category: string): string {
   switch (category) {
     case 'llm': return 'purple'
+    case 'logic': return 'orange'
     case 'search': return 'blue'
     case 'output': return 'emerald'
     case 'notify': return 'amber'

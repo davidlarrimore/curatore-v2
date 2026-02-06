@@ -908,13 +908,14 @@ async def list_active_jobs(
             elif run.run_type in ("procedure", "procedure_run"):
                 # Procedure run - display procedure name
                 config = run.config or {}
-                procedure_slug = config.get("procedure_slug", "Unknown Procedure")
-                display_name = procedure_slug.replace("_", " ").replace("-", " ").title()
+                # Use procedure_name if available, otherwise format slug
+                display_name = config.get("procedure_name") or config.get("procedure_slug", "Unknown Procedure").replace("_", " ").replace("-", " ").title()
+                procedure_slug = config.get("procedure_slug")
                 params = config.get("params", {})
                 if params:
                     display_context = f"{len(params)} param(s)"
                 else:
-                    display_context = None
+                    display_context = procedure_slug  # Show slug as context if no params
 
             elif run.run_type in ("pipeline", "pipeline_run"):
                 # Pipeline run - display pipeline name

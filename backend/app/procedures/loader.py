@@ -16,9 +16,12 @@ from typing import Dict, List, Optional, Any
 import yaml
 from jinja2 import Environment, BaseLoader
 
-from .base import ProcedureDefinition
+from .base import ProcedureDefinition, StepDefinition
 
 logger = logging.getLogger("curatore.procedures.loader")
+
+# Flow function names that require branch validation
+FLOW_FUNCTIONS = {"if_branch", "switch_branch", "parallel", "foreach"}
 
 
 class ProcedureLoader:
@@ -73,6 +76,14 @@ class ProcedureLoader:
                 source_path=str(path),
             )
 
+            # Validate flow function branches
+            errors = self._validate_procedure_steps(definition.steps)
+            if errors:
+                for error in errors:
+                    logger.warning(f"Validation error in {path}: {error}")
+                # Still return the definition but log warnings
+                # Strict validation can be added as a flag if needed
+
             logger.debug(f"Loaded procedure: {definition.slug} from {path}")
             return definition
 
@@ -123,6 +134,19 @@ class ProcedureLoader:
             self.discover_all()
         return list(self._definitions.values())
 
+    def reload(self) -> Dict[str, ProcedureDefinition]:
+        """
+        Clear the cache and reload all procedure definitions from disk.
+
+        Use this to pick up changes to YAML files without restarting the server.
+
+        Returns:
+            Dict mapping slug -> definition
+        """
+        logger.info("Reloading procedure definitions from disk...")
+        self._definitions = {}
+        return self.discover_all()
+
     def render_params(self, params: Dict[str, Any], context: Dict[str, Any]) -> Dict[str, Any]:
         """
         Render Jinja2 templates in parameter values.
@@ -143,6 +167,105 @@ class ProcedureLoader:
             return value
 
         return render_value(params)
+
+    def _validate_procedure_steps(self, steps: List[StepDefinition], path: str = "") -> List[str]:
+        """
+        Validate all steps in a procedure, including nested branches.
+
+        Returns a list of validation error messages.
+        """
+        errors = []
+        seen_names = set()
+
+        for step in steps:
+            step_path = f"{path}.{step.name}" if path else step.name
+
+            # Check for duplicate step names within scope
+            if step.name in seen_names:
+                errors.append(f"Duplicate step name '{step.name}' in {path or 'root'}")
+            seen_names.add(step.name)
+
+            # Validate flow function branches
+            if step.function in FLOW_FUNCTIONS:
+                branch_errors = self._validate_flow_branches(step, step_path)
+                errors.extend(branch_errors)
+            elif step.branches:
+                # Non-flow function has branches - warn but don't error
+                logger.debug(f"Step '{step_path}' has branches but is not a flow function")
+
+        return errors
+
+    def _validate_flow_branches(self, step: StepDefinition, step_path: str) -> List[str]:
+        """
+        Validate branches for a flow control function step.
+
+        Each flow function has specific branch requirements:
+        - if_branch: requires 'then' with ≥1 step; 'else' is optional
+        - switch_branch: requires ≥1 named case; 'default' is optional
+        - parallel: requires ≥2 branches
+        - foreach: requires 'each' with ≥1 step
+        """
+        errors = []
+        function = step.function
+        branches = step.branches or {}
+
+        if function == "if_branch":
+            if "then" not in branches:
+                errors.append(f"if_branch '{step_path}' requires 'branches.then'")
+            elif not branches["then"]:
+                errors.append(f"if_branch '{step_path}' requires at least one step in 'branches.then'")
+
+        elif function == "switch_branch":
+            non_default_branches = [k for k in branches.keys() if k != "default"]
+            if not non_default_branches:
+                errors.append(f"switch_branch '{step_path}' requires at least one case in 'branches'")
+            for branch_name, branch_steps in branches.items():
+                if not branch_steps:
+                    errors.append(f"switch_branch '{step_path}' branch '{branch_name}' has no steps")
+
+        elif function == "parallel":
+            if len(branches) < 2:
+                errors.append(f"parallel '{step_path}' requires at least 2 branches (found {len(branches)})")
+            for branch_name, branch_steps in branches.items():
+                if not branch_steps:
+                    errors.append(f"parallel '{step_path}' branch '{branch_name}' has no steps")
+
+        elif function == "foreach":
+            if "each" not in branches:
+                errors.append(f"foreach '{step_path}' requires 'branches.each'")
+            elif not branches["each"]:
+                errors.append(f"foreach '{step_path}' requires at least one step in 'branches.each'")
+
+        # Recursively validate nested steps in all branches
+        for branch_name, branch_steps in branches.items():
+            if branch_steps:
+                nested_errors = self._validate_procedure_steps(
+                    branch_steps,
+                    path=f"{step_path}.branches.{branch_name}"
+                )
+                errors.extend(nested_errors)
+
+        return errors
+
+    def validate_procedure(self, definition: ProcedureDefinition) -> List[str]:
+        """
+        Validate a complete procedure definition.
+
+        Returns a list of validation error messages. Empty list means valid.
+        """
+        errors = []
+
+        # Check required fields
+        if not definition.name:
+            errors.append("Procedure missing 'name'")
+        if not definition.slug:
+            errors.append("Procedure missing 'slug'")
+
+        # Validate all steps
+        step_errors = self._validate_procedure_steps(definition.steps)
+        errors.extend(step_errors)
+
+        return errors
 
 
 # Global loader instance

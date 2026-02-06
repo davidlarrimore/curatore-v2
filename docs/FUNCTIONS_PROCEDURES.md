@@ -273,6 +273,41 @@ steps:
 | `{{ now() }}` | Current UTC timestamp |
 | `{{ now_et() }}` | Current Eastern Time |
 
+### Content Formatting Filters
+
+#### `md_to_html` - Markdown to HTML Conversion
+
+LLM functions output markdown by default. When embedding their output in HTML
+contexts (emails, reports), use the `md_to_html` filter:
+
+```yaml
+steps:
+  - name: generate_summary
+    function: llm_summarize
+    params:
+      text: "{{ steps.query_data }}"
+
+  - name: send_report
+    function: send_email
+    params:
+      to: "{{ params.recipients }}"
+      subject: "Daily Report"
+      html: true
+      body: |
+        <html>
+        <body>
+          <h1>Report</h1>
+          <div>{{ steps.generate_summary | md_to_html }}</div>
+        </body>
+        </html>
+```
+
+The filter converts:
+- `# Header` → `<h1>Header</h1>`
+- `**bold**` → `<strong>bold</strong>`
+- `- list item` → `<ul><li>list item</li></ul>`
+- Code blocks, tables, etc.
+
 ---
 
 ## Event System

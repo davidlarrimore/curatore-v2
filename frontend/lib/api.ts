@@ -4500,6 +4500,66 @@ export interface ProcedureRunResponse {
   results?: Record<string, any>
 }
 
+export interface ProcedureStep {
+  name: string
+  function: string
+  params: Record<string, any>
+  on_error?: string
+  condition?: string
+  description?: string
+  foreach?: string
+  branches?: Record<string, ProcedureStep[]>
+}
+
+export interface ProcedureParameter {
+  name: string
+  type?: string
+  description?: string
+  required?: boolean
+  default?: any
+  enum_values?: string[]
+}
+
+export interface CreateProcedureRequest {
+  name: string
+  slug: string
+  description?: string
+  parameters?: ProcedureParameter[]
+  steps: ProcedureStep[]
+  on_error?: string
+  tags?: string[]
+}
+
+export interface UpdateProcedureRequest {
+  is_active?: boolean
+  description?: string
+  name?: string
+  parameters?: ProcedureParameter[]
+  steps?: ProcedureStep[]
+  on_error?: string
+  tags?: string[]
+}
+
+export interface ValidationError {
+  code: string
+  message: string
+  path: string
+  details: Record<string, any>
+}
+
+export interface ValidationResult {
+  valid: boolean
+  errors: ValidationError[]
+  warnings: ValidationError[]
+  error_count: number
+  warning_count: number
+}
+
+export interface ProcedureValidationError {
+  message: string
+  validation: ValidationResult
+}
+
 export const proceduresApi = {
   async listProcedures(
     token?: string,
@@ -4586,6 +4646,97 @@ export const proceduresApi = {
     const res = await fetch(apiUrl(`/procedures/${slug}/triggers/${triggerId}`), {
       method: 'DELETE',
       headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  async createProcedure(token: string | undefined, data: CreateProcedureRequest): Promise<Procedure> {
+    const res = await fetch(apiUrl('/procedures/'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    if (res.status === 422) {
+      const errorData = await res.json()
+      const error = new Error(errorData.detail?.message || 'Validation failed') as Error & { validation?: ValidationResult }
+      error.validation = errorData.detail?.validation
+      throw error
+    }
+    return handleJson(res)
+  },
+
+  async updateProcedure(token: string | undefined, slug: string, data: UpdateProcedureRequest): Promise<Procedure> {
+    const res = await fetch(apiUrl(`/procedures/${slug}`), {
+      method: 'PUT',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    if (res.status === 422) {
+      const errorData = await res.json()
+      const error = new Error(errorData.detail?.message || 'Validation failed') as Error & { validation?: ValidationResult }
+      error.validation = errorData.detail?.validation
+      throw error
+    }
+    return handleJson(res)
+  },
+
+  async deleteProcedure(token: string | undefined, slug: string): Promise<{ status: string; slug: string }> {
+    const res = await fetch(apiUrl(`/procedures/${slug}`), {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  async validateProcedure(token: string | undefined, data: CreateProcedureRequest): Promise<ValidationResult> {
+    const res = await fetch(apiUrl('/procedures/validate'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async reloadProcedures(token: string | undefined): Promise<{ status: string; message: string; procedures_loaded: number; slugs: string[] }> {
+    const res = await fetch(apiUrl('/procedures/reload'), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Generate or refine a procedure using AI.
+   *
+   * @param token - Auth token
+   * @param prompt - Description of procedure to create, or changes to make (in refine mode)
+   * @param currentYaml - Optional current procedure YAML to refine. If provided, prompt describes changes.
+   * @param includeExamples - Whether to include examples in AI context
+   */
+  async generateProcedure(
+    token: string | undefined,
+    prompt: string,
+    currentYaml?: string,
+    includeExamples: boolean = true
+  ): Promise<{
+    success: boolean
+    yaml?: string
+    procedure?: Record<string, any>
+    error?: string
+    attempts: number
+    validation_errors: ValidationError[]
+  }> {
+    const body: Record<string, any> = {
+      prompt,
+      include_examples: includeExamples,
+    }
+    if (currentYaml) {
+      body.current_yaml = currentYaml
+    }
+    const res = await fetch(apiUrl('/procedures/generate'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(body),
     })
     return handleJson(res)
   },

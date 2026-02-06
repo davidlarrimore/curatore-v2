@@ -12,16 +12,28 @@ All background jobs are managed through the Queue Registry system:
 
 ## Queue Types
 
-| Queue | Run Type | Celery Queue | Capabilities |
-|-------|----------|--------------|--------------|
-| Extraction | `extraction` | `extraction` | cancel, retry |
-| SAM.gov | `sam_pull` | `sam` | - |
-| Forecasts | `forecast_pull` | `forecast` | cancel |
-| Web Scrape | `scrape` | `scrape` | cancel |
-| SharePoint | `sharepoint_sync` | `sharepoint` | cancel |
-| Maintenance | `system_maintenance` | `maintenance` | - |
-| Procedure | `procedure` | `maintenance` | cancel, retry |
-| Pipeline | `pipeline` | `pipeline` | cancel, retry |
+| Queue | Run Type | Celery Queue | Capabilities | Max Concurrent |
+|-------|----------|--------------|--------------|----------------|
+| Extraction | `extraction` | `extraction` | cancel, retry | unlimited |
+| SAM.gov | `sam_pull` | `sam` | cancel | unlimited |
+| Forecast | `forecast_sync` | `forecast` | cancel, retry | 3 |
+| Web Scrape | `scrape` | `scrape` | cancel | unlimited |
+| SharePoint | `sharepoint_sync` | `sharepoint` | cancel | unlimited |
+| Salesforce | `salesforce_import` | `salesforce` | cancel | 1 |
+| Maintenance | `system_maintenance` | `maintenance` | - | unlimited |
+| Procedure | `procedure` | `maintenance` | cancel, retry | unlimited |
+| Pipeline | `pipeline` | `pipeline` | cancel, retry | unlimited |
+
+### Forecast Queue Details
+
+The Forecast queue handles acquisition forecast synchronization from three sources:
+- **AG** (Acquisition Gateway) - GSA multi-agency forecasts
+- **APFS** - DHS forecasts
+- **State** - Department of State forecasts
+
+Run type aliases: `forecast_sync`, `ag_pull`, `apfs_pull`, `state_pull`
+
+Default max concurrent: 3 (to avoid overwhelming external APIs)
 
 ## Queue Priority System
 
@@ -142,6 +154,7 @@ Different job types have different cancellation cascade behavior:
 |----------|--------------|----------|
 | SharePoint Sync | `QUEUED_ONLY` | Cancel pending/submitted children only; running extractions complete |
 | SAM.gov Pull | `QUEUED_ONLY` | Cancel pending/submitted children only; running extractions complete |
+| Forecast Sync | `QUEUED_ONLY` | Cancel pending/submitted children only; running extractions complete |
 | Web Scrape | `QUEUED_ONLY` | Cancel pending/submitted children only; running extractions complete |
 | Pipeline | `ALL` | Cancel ALL children including running (atomicity - partial results useless) |
 
