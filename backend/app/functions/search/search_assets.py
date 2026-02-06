@@ -40,7 +40,20 @@ class SearchAssetsFunction(BaseFunction):
     meta = FunctionMeta(
         name="search_assets",
         category=FunctionCategory.SEARCH,
-        description="Search assets using full-text and semantic search",
+        description="""Search assets (documents, files) using full-text and semantic search.
+
+Returns a list of ContentItem objects. Each item has these fields accessible in templates:
+- id: Asset UUID
+- title: Full path/title of the document
+- type: Always "asset"
+- display_type: Always "Document"
+- original_filename: The file name (e.g., "report.pdf")
+- folder_path: Folder path for SharePoint files (e.g., "Opportunities/DHS/Project")
+- source_url: Direct URL to the file (SharePoint web URL for SharePoint files)
+- content_type: MIME type (e.g., "application/pdf")
+- source_type: Source type ("sharepoint", "upload", "web_scrape", "sam_gov")
+- score: Search relevance score
+- snippet: Text snippet with search term highlights""",
         parameters=[
             ParameterDoc(
                 name="query",
@@ -93,7 +106,15 @@ class SearchAssetsFunction(BaseFunction):
                 default=20,
             ),
         ],
-        returns="list[ContentItem]: Search results as ContentItem instances with scores",
+        returns="""list[ContentItem]: Search results. Template fields:
+- {{ item.title }} - Full document path/title
+- {{ item.original_filename }} - File name only
+- {{ item.folder_path }} - Folder path (SharePoint)
+- {{ item.source_url }} - Direct link to document
+- {{ item.content_type }} - MIME type
+- {{ item.source_type }} - Source ("sharepoint", "upload", etc.)
+- {{ item.score }} - Relevance score
+- {{ item.snippet }} - Highlighted excerpt""",
         tags=["search", "assets", "hybrid", "content"],
         requires_llm=False,
         examples=[
@@ -125,16 +146,26 @@ class SearchAssetsFunction(BaseFunction):
             )
 
         try:
-            # Build filters
-            filters = {
-                "source_types": ["asset"],  # Only search assets
-            }
+            # Build source_types filter
+            # The search service treats values like "sharepoint", "upload", "web_scrape", "sam_gov"
+            # as asset source_type_filter values (filters: source_type='asset' AND source_type_filter=X)
             if source_type:
-                filters["source_type_filters"] = [source_type]
+                # Filter to specific asset type (e.g., "sharepoint")
+                source_types = [source_type]
+            else:
+                # All asset types - list all known asset source filters
+                source_types = ["upload", "sharepoint", "web_scrape", "sam_gov"]
+
+            # Build optional filters
+            collection_ids = None
             if collection_id:
-                filters["collection_id"] = UUID(collection_id) if isinstance(collection_id, str) else collection_id
+                cid = UUID(collection_id) if isinstance(collection_id, str) else collection_id
+                collection_ids = [cid]
+
+            sync_config_ids = None
             if sync_config_id:
-                filters["sync_config_id"] = UUID(sync_config_id) if isinstance(sync_config_id, str) else sync_config_id
+                sid = UUID(sync_config_id) if isinstance(sync_config_id, str) else sync_config_id
+                sync_config_ids = [sid]
 
             # Execute search
             # PgSearchService uses semantic_weight (0-1), so convert from keyword_weight
@@ -145,29 +176,45 @@ class SearchAssetsFunction(BaseFunction):
                 query=query,
                 search_mode=search_mode,
                 semantic_weight=semantic_weight,
+                source_types=source_types,
+                collection_ids=collection_ids,
+                sync_config_ids=sync_config_ids,
                 limit=limit,
-                **filters,
             )
 
             # Format results as ContentItem instances
             results = []
             for sr in search_results.hits:
+                # Extract snippet from highlights if available
+                snippet = None
+                if sr.highlights and "content" in sr.highlights and sr.highlights["content"]:
+                    snippet = sr.highlights["content"][0]
+
+                # Parse folder_path from title (title often contains full path like "Folder/SubFolder/file.pdf")
+                title = sr.title or sr.filename or ""
+                folder_path = ""
+                if "/" in title and sr.filename:
+                    # Title contains path, extract folder portion
+                    folder_path = title.rsplit("/", 1)[0] if "/" in title else ""
+
                 item = ContentItem(
-                    id=str(sr.source_id),
+                    id=str(sr.asset_id),
                     type="asset",
                     display_type="Document",
-                    title=sr.title or sr.filename,
+                    title=title,
                     text=None,  # Text not loaded by default for search results
                     text_format="markdown",
                     fields={
                         "original_filename": sr.filename,
+                        "folder_path": folder_path,
                         "content_type": sr.content_type,
-                        "source_type": sr.source_type_filter,
+                        "source_type": sr.source_type,  # Display type from search service
+                        "source_url": sr.url,
                         "status": "ready",  # Only indexed assets are searchable
                     },
                     metadata={
                         "score": sr.score,
-                        "snippet": sr.snippet,
+                        "snippet": snippet,
                         "search_mode": search_mode,
                     },
                 )

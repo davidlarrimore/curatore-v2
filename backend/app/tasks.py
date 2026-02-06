@@ -1227,7 +1227,7 @@ async def _check_scheduled_tasks() -> Dict[str, Any]:
     }
 
 
-@celery_app.task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+@celery_app.task(bind=True, max_retries=0)
 def execute_scheduled_task_async(
     self,
     task_id: str,
@@ -1317,6 +1317,37 @@ async def _execute_scheduled_task(
             timeout=3600,  # 1 hour timeout
             max_retries=0,  # Don't retry, skip if locked
         )
+
+        if not lock_id:
+            # Lock is held — check if there's a truly active run for this task.
+            # Only a "running" run with recent activity (last 5 min) counts.
+            # Runs in stale/submitted/pending states indicate the previous
+            # execution is stuck and the lock should be cleared.
+            activity_cutoff = datetime.utcnow() - timedelta(minutes=5)
+            active_run_result = await session.execute(
+                select(Run).where(
+                    Run.run_type == "system_maintenance",
+                    Run.status == "running",
+                    Run.config["task_type"].astext == task.task_type,
+                    Run.id != run.id,
+                    Run.last_activity_at > activity_cutoff,
+                ).limit(1)
+            )
+            active_run = active_run_result.scalar_one_or_none()
+
+            if active_run is None:
+                # No actively running task — lock is stale, force-clear and re-acquire
+                logger.warning(
+                    f"Stale lock detected for {task.name}: no active run found. "
+                    "Force-clearing lock."
+                )
+                r = await lock_service._get_redis()
+                await r.delete(f"{lock_service._lock_prefix}{lock_resource}")
+                lock_id = await lock_service.acquire_lock(
+                    lock_resource,
+                    timeout=3600,
+                    max_retries=0,
+                )
 
         if not lock_id:
             logger.warning(f"Task already running (locked): {task.name}")

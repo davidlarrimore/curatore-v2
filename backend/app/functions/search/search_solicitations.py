@@ -153,6 +153,13 @@ class SearchSolicitationsFunction(BaseFunction):
                 required=False,
                 default=0,
             ),
+            ParameterDoc(
+                name="include_assets",
+                type="bool",
+                description="Include document assets (attachments) from SAM.gov in keyword search results. Only applies when keyword search is used.",
+                required=False,
+                default=False,
+            ),
         ],
         returns="list[ContentItem]: Matching solicitations as ContentItem instances",
         tags=["search", "sam", "solicitations", "content", "hybrid"],
@@ -205,6 +212,14 @@ class SearchSolicitationsFunction(BaseFunction):
                     "response_deadline_after": "today",
                 },
             },
+            {
+                "description": "Search solicitations AND document attachments for AI content",
+                "params": {
+                    "keyword": "artificial intelligence",
+                    "search_mode": "hybrid",
+                    "include_assets": True,
+                },
+            },
         ],
     )
 
@@ -223,6 +238,7 @@ class SearchSolicitationsFunction(BaseFunction):
         search_id = params.get("search_id")
         has_summary = params.get("has_summary")
         order_by = params.get("order_by", "-posted_date")
+        include_assets = params.get("include_assets", False)
         offset = params.get("offset", 0)
 
         # Coerce types - Jinja2 templates render as strings
@@ -247,6 +263,7 @@ class SearchSolicitationsFunction(BaseFunction):
                     notice_types=types,
                     posted_within_days=posted_within_days,
                     response_deadline_after=response_deadline_after,
+                    include_assets=include_assets,
                     limit=limit,
                     offset=offset,
                 )
@@ -364,6 +381,7 @@ class SearchSolicitationsFunction(BaseFunction):
         notice_types: Optional[List[str]],
         posted_within_days: Optional[int],
         response_deadline_after: Optional[str],
+        include_assets: bool,
         limit: int,
         offset: int,
     ) -> FunctionResult:
@@ -380,6 +398,7 @@ class SearchSolicitationsFunction(BaseFunction):
             notice_types=notice_types,
             posted_within_days=posted_within_days,
             response_deadline_after=response_deadline_after,
+            include_sam_assets=include_assets,
             limit=limit,
             offset=offset,
         )
@@ -387,31 +406,66 @@ class SearchSolicitationsFunction(BaseFunction):
         # Convert SearchHit results to ContentItem format
         results = []
         for hit in search_results.hits:
-            item = ContentItem(
-                id=hit.asset_id,
-                type="solicitation",
-                display_type="Opportunity",
-                title=hit.title,
-                text=None,
-                text_format="json",
-                fields={
-                    "source_type": hit.source_type,
-                    "url": hit.url,
-                    "created_at": hit.created_at,
-                },
-                metadata={
-                    "score": hit.score,
-                    "keyword_score": hit.keyword_score,
-                    "semantic_score": hit.semantic_score,
-                    "highlights": hit.highlights,
-                    "search_mode": search_mode,
-                },
-            )
+            # Determine if this is an asset or a solicitation based on source_type
+            is_asset = hit.source_type not in ("SAM Solicitation", "sam_solicitation")
+
+            if is_asset:
+                item = ContentItem(
+                    id=hit.asset_id,
+                    type="asset",
+                    display_type="SAM Document",
+                    title=hit.title or hit.filename,
+                    text=None,
+                    text_format="json",
+                    fields={
+                        "source_type": hit.source_type,
+                        "filename": hit.filename,
+                        "content_type": hit.content_type,
+                        "url": hit.url,
+                        "created_at": hit.created_at,
+                    },
+                    metadata={
+                        "score": hit.score,
+                        "keyword_score": hit.keyword_score,
+                        "semantic_score": hit.semantic_score,
+                        "highlights": hit.highlights,
+                        "search_mode": search_mode,
+                    },
+                )
+            else:
+                item = ContentItem(
+                    id=hit.asset_id,
+                    type="solicitation",
+                    display_type="Opportunity",
+                    title=hit.title,
+                    text=None,
+                    text_format="json",
+                    fields={
+                        "source_type": hit.source_type,
+                        "url": hit.url,
+                        "created_at": hit.created_at,
+                    },
+                    metadata={
+                        "score": hit.score,
+                        "keyword_score": hit.keyword_score,
+                        "semantic_score": hit.semantic_score,
+                        "highlights": hit.highlights,
+                        "search_mode": search_mode,
+                    },
+                )
             results.append(item)
+
+        # Count solicitations vs assets
+        solicitation_count = sum(1 for r in results if r.type == "solicitation")
+        asset_count = sum(1 for r in results if r.type == "asset")
+
+        message = f"Found {len(results)} results matching '{keyword}'"
+        if include_assets and asset_count > 0:
+            message = f"Found {solicitation_count} solicitations and {asset_count} documents matching '{keyword}'"
 
         return FunctionResult.success_result(
             data=results,
-            message=f"Found {len(results)} solicitations matching '{keyword}'",
+            message=message,
             metadata={
                 "total": search_results.total,
                 "limit": limit,
@@ -420,6 +474,9 @@ class SearchSolicitationsFunction(BaseFunction):
                 "keyword": keyword,
                 "search_mode": search_mode,
                 "semantic_weight": semantic_weight,
+                "include_assets": include_assets,
+                "solicitation_count": solicitation_count,
+                "asset_count": asset_count,
                 "result_type": "ContentItem",
             },
             items_processed=len(results),

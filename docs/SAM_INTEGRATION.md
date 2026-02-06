@@ -152,6 +152,49 @@ class SamSearch:
 
 ---
 
+## Search Functions
+
+Two specialized search functions for querying SAM.gov data:
+
+| Function | Searches | Use Case |
+|----------|----------|----------|
+| `search_solicitations` | SamSolicitation records | Find opportunities by NAICS, set-aside, deadline |
+| `search_notices` | SamNotice records | Find notices by type, posted date |
+
+### Key Parameters
+
+Both functions support hybrid search (keyword + semantic) with these common parameters:
+
+| Parameter | Type | Description |
+|-----------|------|-------------|
+| `keyword` | str | Search query for title and description |
+| `search_mode` | str | `keyword`, `semantic`, or `hybrid` (default) |
+| `include_assets` | bool | **Also search document attachments** (PDFs, etc.) |
+| `posted_within_days` | int | Only include items posted within N days |
+| `limit` / `offset` | int | Pagination |
+
+### Including Document Assets
+
+When `include_assets=True`, the search also includes SAM.gov document attachments (RFPs, SOWs, amendments, etc.) that have been indexed:
+
+```yaml
+# Search for AI content in both notices AND their attachments
+- name: search_ai_opportunities
+  function: search_notices
+  params:
+    keyword: "artificial intelligence machine learning"
+    search_mode: hybrid
+    include_assets: true
+
+# Results include:
+# - Notices (type: "notice", display_type: "Notice")
+# - Documents (type: "asset", display_type: "SAM Document")
+```
+
+This is useful when the keywords appear in attached PDFs rather than the notice description.
+
+---
+
 ## Events
 
 | Event | When Emitted |

@@ -128,6 +128,8 @@ function ProceduresContent() {
   // Action states
   const [runningProcedure, setRunningProcedure] = useState<string | null>(null)
   const [togglingProcedure, setTogglingProcedure] = useState<string | null>(null)
+  const [deletingProcedure, setDeletingProcedure] = useState<string | null>(null)
+  const [confirmDelete, setConfirmDelete] = useState<ProcedureListItem | null>(null)
 
   // Load procedures
   const loadData = useCallback(async (silent = false) => {
@@ -227,18 +229,41 @@ function ProceduresContent() {
     try {
       if (procedure.is_active) {
         await proceduresApi.disableProcedure(token, procedure.slug)
-        setSuccessMessage(`Procedure ${procedure.slug} disabled`)
+        // Automatically show inactive procedures so the user can still see the deactivated one
+        if (!showInactive) {
+          setShowInactive(true)
+        }
+        setSuccessMessage(`Procedure "${procedure.name}" has been deactivated. It will not run until re-enabled.`)
       } else {
         await proceduresApi.enableProcedure(token, procedure.slug)
-        setSuccessMessage(`Procedure ${procedure.slug} enabled`)
+        setSuccessMessage(`Procedure "${procedure.name}" has been activated`)
       }
       await loadData(true)
-      setTimeout(() => setSuccessMessage(''), 3000)
+      setTimeout(() => setSuccessMessage(''), 5000)
     } catch (err: any) {
       setError(err.message || 'Failed to toggle procedure')
       setTimeout(() => setError(''), 5000)
     } finally {
       setTogglingProcedure(null)
+    }
+  }
+
+  // Delete procedure
+  const handleDelete = async (procedure: ProcedureListItem) => {
+    if (!token) return
+
+    setDeletingProcedure(procedure.slug)
+    try {
+      await proceduresApi.deleteProcedure(token, procedure.slug)
+      setSuccessMessage(`Procedure "${procedure.name}" has been deleted`)
+      setConfirmDelete(null)
+      await loadData(true)
+      setTimeout(() => setSuccessMessage(''), 5000)
+    } catch (err: any) {
+      setError(err.message || 'Failed to delete procedure')
+      setTimeout(() => setError(''), 5000)
+    } finally {
+      setDeletingProcedure(null)
     }
   }
 
@@ -574,6 +599,7 @@ function ProceduresContent() {
                         variant="secondary"
                         onClick={() => handleToggleActive(procedure)}
                         disabled={togglingProcedure === procedure.slug}
+                        title={procedure.is_active ? 'Deactivate procedure' : 'Activate procedure'}
                         className={procedure.is_active ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}
                       >
                         {togglingProcedure === procedure.slug ? (
@@ -582,6 +608,20 @@ function ProceduresContent() {
                           <Pause className="w-4 h-4" />
                         ) : (
                           <Play className="w-4 h-4" />
+                        )}
+                      </Button>
+
+                      <Button
+                        variant="secondary"
+                        onClick={() => setConfirmDelete(procedure)}
+                        disabled={deletingProcedure === procedure.slug}
+                        title="Delete procedure"
+                        className="text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                      >
+                        {deletingProcedure === procedure.slug ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Trash2 className="w-4 h-4" />
                         )}
                       </Button>
                     </div>
@@ -679,6 +719,52 @@ function ProceduresContent() {
             </div>
           )}
         </div>
+
+        {/* Delete Confirmation Modal */}
+        {confirmDelete && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 backdrop-blur-sm">
+            <div className="bg-white dark:bg-gray-800 rounded-xl shadow-xl max-w-md w-full mx-4 overflow-hidden">
+              <div className="p-6">
+                <div className="flex items-center gap-3 mb-4">
+                  <div className="w-10 h-10 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center flex-shrink-0">
+                    <AlertTriangle className="w-5 h-5 text-red-600 dark:text-red-400" />
+                  </div>
+                  <h3 className="text-lg font-semibold text-gray-900 dark:text-white">
+                    Delete Procedure
+                  </h3>
+                </div>
+                <p className="text-sm text-gray-600 dark:text-gray-400 mb-2">
+                  Are you sure you want to delete <span className="font-semibold text-gray-900 dark:text-white">{confirmDelete.name}</span>?
+                </p>
+                <p className="text-sm text-red-600 dark:text-red-400">
+                  This action is permanent and cannot be undone. All triggers and run history associated with this procedure will be lost.
+                </p>
+              </div>
+              <div className="flex items-center justify-end gap-3 px-6 py-4 bg-gray-50 dark:bg-gray-900/50 border-t border-gray-200 dark:border-gray-700">
+                <Button
+                  variant="secondary"
+                  onClick={() => setConfirmDelete(null)}
+                  disabled={deletingProcedure === confirmDelete.slug}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  variant="primary"
+                  onClick={() => handleDelete(confirmDelete)}
+                  disabled={deletingProcedure === confirmDelete.slug}
+                  className="bg-red-600 hover:bg-red-700 text-white gap-2"
+                >
+                  {deletingProcedure === confirmDelete.slug ? (
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="w-4 h-4" />
+                  )}
+                  Delete Procedure
+                </Button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </div>
   )

@@ -149,10 +149,26 @@ Provides lazy-loaded services:
 | Category | Functions | Purpose |
 |----------|-----------|---------|
 | **LLM** (`llm/`) | `generate`, `extract`, `summarize`, `classify`, `decide`, `route` | LLM-powered analysis |
-| **Search** (`search/`) | `search_assets`, `search_solicitations`, `search_notices`, `get`, `get_content`, `query_model` | Query and retrieve data |
+| **Search** (`search/`) | `search_assets`, `search_solicitations`, `search_notices`, `search_forecasts`, `get`, `get_content`, `query_model` | Query and retrieve data |
 | **Output** (`output/`) | `update_metadata`, `bulk_update_metadata`, `create_artifact`, `generate_document` | Create/update data |
 | **Notify** (`notify/`) | `send_email`, `webhook` | External notifications |
 | **Compound** (`compound/`) | `analyze_solicitation`, `summarize_solicitations`, `generate_digest`, `classify_document` | Multi-step workflows |
+
+### SAM.gov Search Functions
+
+The `search_solicitations` and `search_notices` functions support an `include_assets` parameter that also searches SAM.gov document attachments (PDFs, etc.):
+
+```yaml
+# Search notices AND their document attachments
+- name: search_ai_content
+  function: search_notices
+  params:
+    keyword: "artificial intelligence"
+    search_mode: hybrid
+    include_assets: true  # Also search SAM.gov attachments
+```
+
+Results include both notices/solicitations (type: `notice`/`solicitation`) and documents (type: `asset`, display: `SAM Document`).
 
 ### Function Registry
 

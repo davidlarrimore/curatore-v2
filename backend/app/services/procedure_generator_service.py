@@ -270,6 +270,66 @@ Use Jinja2 templates to reference dynamic values:
 5. Is it about web scraping results? → `search_scraped_assets`
 6. Is it about uploaded documents/files? → `search_assets`
 
+# SEARCH RESULT SCHEMAS
+
+Each search function returns a list of items. Use these EXACT field names in templates:
+
+## search_assets (Documents/Files)
+```yaml
+{{% for doc in steps.search_results %}}
+  {{{{ doc.title }}}}              # Full path/title (e.g., "Folder/SubFolder/file.pdf")
+  {{{{ doc.original_filename }}}}  # Just the filename (e.g., "file.pdf")
+  {{{{ doc.folder_path }}}}        # Folder path (e.g., "Folder/SubFolder")
+  {{{{ doc.source_url }}}}         # Direct URL to file (SharePoint URL, etc.)
+  {{{{ doc.content_type }}}}       # MIME type (e.g., "application/pdf")
+  {{{{ doc.source_type }}}}        # Source: "sharepoint", "upload", "web_scrape", "sam_gov"
+  {{{{ doc.score }}}}              # Relevance score
+  {{{{ doc.snippet }}}}            # Text excerpt with highlights
+{{% endfor %}}
+```
+
+## search_solicitations / search_notices (SAM.gov)
+```yaml
+{{% for item in steps.search_results %}}
+  {{{{ item.title }}}}             # Solicitation/notice title
+  {{{{ item.solicitation_number }}}}  # SAM.gov solicitation number
+  {{{{ item.notice_id }}}}         # SAM.gov notice ID
+  {{{{ item.agency }}}}            # Agency name
+  {{{{ item.posted_date }}}}       # Date posted
+  {{{{ item.response_deadline }}}} # Response deadline
+  {{{{ item.set_aside }}}}         # Set-aside type
+  {{{{ item.naics_code }}}}        # NAICS code
+  {{{{ item.detail_url }}}}        # Link to Curatore detail page
+  {{{{ item.sam_url }}}}           # Link to SAM.gov
+{{% endfor %}}
+```
+
+## search_forecasts (Acquisition Forecasts)
+```yaml
+{{% for forecast in steps.search_results %}}
+  {{{{ forecast.title }}}}         # Forecast title/description
+  {{{{ forecast.agency }}}}        # Agency name
+  {{{{ forecast.source_type }}}}   # Source: "ag", "apfs", "state"
+  {{{{ forecast.fiscal_year }}}}   # Fiscal year
+  {{{{ forecast.naics_code }}}}    # NAICS code
+  {{{{ forecast.estimated_value }}}} # Estimated contract value
+  {{{{ forecast.detail_url }}}}    # Link to Curatore detail page
+{{% endfor %}}
+```
+
+## search_salesforce (CRM Records)
+```yaml
+{{% for record in steps.search_results %}}
+  {{{{ record.title }}}}           # Record name
+  {{{{ record.type }}}}            # "account", "contact", "opportunity"
+  {{{{ record.account_name }}}}    # Account name (for contacts/opportunities)
+  {{{{ record.stage }}}}           # Opportunity stage
+  {{{{ record.amount }}}}          # Opportunity amount
+  {{{{ record.email }}}}           # Contact email
+  {{{{ record.phone }}}}           # Contact phone
+{{% endfor %}}
+```
+
 # HTML EMAIL FORMATTING
 
 When the user requests HTML/formatted/styled emails, use `send_email` with `html: true`:
@@ -879,6 +939,108 @@ Return ONLY the YAML procedure definition. Do not include:
 
 Output the single best YAML procedure for the request."""
 
+    async def _build_data_source_context(
+        self,
+        session: Any,
+        organization_id: UUID,
+    ) -> str:
+        """
+        Build context about available data sources for the organization.
+
+        Fetches SharePoint sync configs, SAM searches, Salesforce connections, etc.
+        so the AI knows what specific resources are available.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+
+        Returns:
+            str: Formatted context string to append to system prompt
+        """
+        from sqlalchemy import select
+        from ..database.models import SharePointSyncConfig, SamSearch, SalesforceConnection
+
+        lines = ["\n# AVAILABLE DATA SOURCES\n"]
+        lines.append("Use these specific IDs when the user references a data source by name.\n")
+
+        # Fetch SharePoint sync configs
+        try:
+            result = await session.execute(
+                select(SharePointSyncConfig)
+                .where(SharePointSyncConfig.organization_id == organization_id)
+                .where(SharePointSyncConfig.is_active == True)
+            )
+            sharepoint_configs = result.scalars().all()
+
+            if sharepoint_configs:
+                lines.append("## SharePoint Sync Configurations")
+                lines.append("Use `sync_config_id` parameter in `search_assets` to search a specific SharePoint site.\n")
+                lines.append("| Name | ID | Description | Folder |")
+                lines.append("|------|-----|-------------|--------|")
+                for config in sharepoint_configs:
+                    desc = (config.description or "")[:50]
+                    folder = config.folder_name or config.folder_url or ""
+                    lines.append(f"| {config.name} | `{config.id}` | {desc} | {folder} |")
+                lines.append("")
+                lines.append("**Example - Search specific SharePoint site:**")
+                lines.append("```yaml")
+                lines.append("- name: search_growth_sharepoint")
+                lines.append("  function: search_assets")
+                lines.append("  params:")
+                lines.append("    query: \"contract proposal\"")
+                lines.append("    source_type: sharepoint")
+                lines.append(f"    sync_config_id: \"{sharepoint_configs[0].id}\"  # {sharepoint_configs[0].name}")
+                lines.append("```")
+                lines.append("")
+        except Exception as e:
+            logger.warning(f"Failed to fetch SharePoint configs: {e}")
+
+        # Fetch SAM searches
+        try:
+            result = await session.execute(
+                select(SamSearch)
+                .where(SamSearch.organization_id == organization_id)
+                .where(SamSearch.is_active == True)
+            )
+            sam_searches = result.scalars().all()
+
+            if sam_searches:
+                lines.append("## SAM.gov Saved Searches")
+                lines.append("These are pre-configured SAM.gov searches. Users may reference them by name.\n")
+                lines.append("| Name | Description |")
+                lines.append("|------|-------------|")
+                for search in sam_searches:
+                    desc = (search.description or "")[:60]
+                    lines.append(f"| {search.name} | {desc} |")
+                lines.append("")
+        except Exception as e:
+            logger.warning(f"Failed to fetch SAM searches: {e}")
+
+        # Fetch Salesforce connections
+        try:
+            result = await session.execute(
+                select(SalesforceConnection)
+                .where(SalesforceConnection.organization_id == organization_id)
+                .where(SalesforceConnection.is_active == True)
+            )
+            sf_connections = result.scalars().all()
+
+            if sf_connections:
+                lines.append("## Salesforce Connections")
+                lines.append("| Name | Instance URL |")
+                lines.append("|------|--------------|")
+                for conn in sf_connections:
+                    lines.append(f"| {conn.name} | {conn.instance_url or 'N/A'} |")
+                lines.append("")
+        except Exception as e:
+            logger.warning(f"Failed to fetch Salesforce connections: {e}")
+
+        if len(lines) <= 2:
+            # No data sources found
+            return ""
+
+        return "\n".join(lines)
+
     def _build_error_feedback_message(
         self,
         validation_errors: List[Dict[str, Any]],
@@ -1015,6 +1177,17 @@ IMPORTANT: Only return the YAML, no explanations. If you're keeping it unchanged
 
         # Build system prompt with function catalog
         system_prompt = self._build_system_prompt()
+
+        # Add data source context if session and org_id are provided
+        if session and organization_id:
+            try:
+                data_source_context = await self._build_data_source_context(
+                    session, organization_id
+                )
+                if data_source_context:
+                    system_prompt += data_source_context
+            except Exception as e:
+                logger.warning(f"Failed to build data source context: {e}")
 
         # Build user prompt based on mode (generate vs refine)
         if current_yaml:

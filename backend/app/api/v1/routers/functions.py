@@ -237,10 +237,22 @@ async def execute_function(
             if result.success and not request.dry_run:
                 await session.commit()
 
+            # Convert ContentItem objects to dicts for JSON serialization
+            data = result.data
+            if data is not None:
+                from ....functions.content import ContentItem
+                if isinstance(data, list):
+                    data = [
+                        item.to_dict() if isinstance(item, ContentItem) else item
+                        for item in data
+                    ]
+                elif isinstance(data, ContentItem):
+                    data = data.to_dict()
+
             return ExecuteFunctionResponse(
                 status=result.status.value,
                 message=result.message,
-                data=result.data,
+                data=data,
                 error=result.error,
                 metadata=result.metadata,
                 items_processed=result.items_processed,

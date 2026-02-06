@@ -383,18 +383,22 @@ async def generate_procedure(
         endpoint to save the generated procedure after reviewing it.
     """
     from ....services.procedure_generator_service import procedure_generator_service
+    from ....services.database_service import database_service
 
     if request.current_yaml:
         logger.info(f"Refining procedure with prompt: {request.prompt[:100]}...")
     else:
         logger.info(f"Generating procedure from prompt: {request.prompt[:100]}...")
 
-    result = await procedure_generator_service.generate_procedure(
-        prompt=request.prompt,
-        organization_id=organization_id,
-        include_examples=request.include_examples,
-        current_yaml=request.current_yaml,
-    )
+    # Use database session to fetch available data sources for context
+    async with database_service.get_session() as session:
+        result = await procedure_generator_service.generate_procedure(
+            prompt=request.prompt,
+            organization_id=organization_id,
+            session=session,
+            include_examples=request.include_examples,
+            current_yaml=request.current_yaml,
+        )
 
     # Convert validation errors to response format
     validation_errors = [

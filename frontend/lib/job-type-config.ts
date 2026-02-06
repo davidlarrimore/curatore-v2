@@ -15,6 +15,7 @@ import {
   Trash2,
   Database,
   TrendingUp,
+  Wrench,
   LucideIcon,
 } from 'lucide-react'
 
@@ -30,12 +31,13 @@ export type JobType =
   | 'deletion'
   | 'salesforce_import'
   | 'forecast_sync'
+  | 'system_maintenance'
 
 // Configuration for a single job type
 export interface JobTypeConfig {
   label: string
   icon: LucideIcon
-  color: 'purple' | 'blue' | 'emerald' | 'indigo' | 'amber' | 'cyan' | 'red'
+  color: 'purple' | 'blue' | 'emerald' | 'indigo' | 'amber' | 'cyan' | 'red' | 'gray'
   resourceType: string
   hasChildJobs: boolean
   phases: string[]
@@ -145,6 +147,16 @@ export const JOB_TYPE_CONFIG: Record<JobType, JobTypeConfig> = {
     completedToast: (name) => `Forecast sync completed: ${name}`,
     failedToast: (name, error) => `Forecast sync failed: ${name}${error ? ` - ${error}` : ''}`,
   },
+  system_maintenance: {
+    label: 'Maintenance',
+    icon: Wrench,
+    color: 'gray',
+    resourceType: 'system_maintenance',
+    hasChildJobs: false,
+    phases: [],
+    completedToast: (name) => `Maintenance task completed: ${name}`,
+    failedToast: (name, error) => `Maintenance task failed: ${name}${error ? ` - ${error}` : ''}`,
+  },
 }
 
 // Get job type from run_type string
@@ -161,6 +173,7 @@ export function getJobTypeFromRunType(runType: string): JobType | null {
     deletion: 'deletion',
     salesforce_import: 'salesforce_import',
     forecast_sync: 'forecast_sync',
+    system_maintenance: 'system_maintenance',
   }
 
   if (directMap[runType]) {

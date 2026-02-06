@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
+import { useActiveJobs } from '@/lib/context-shims'
 import { scheduledTasksApi, ScheduledTask, MaintenanceStats, TaskRun } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -46,6 +47,7 @@ const TASK_TYPE_COLORS: Record<string, string> = {
 
 export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabProps) {
   const { token } = useAuth()
+  const { addJob } = useActiveJobs()
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
   const [stats, setStats] = useState<MaintenanceStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -127,7 +129,14 @@ export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabPr
 
     setActionLoading(task.id)
     try {
-      await scheduledTasksApi.triggerTask(token, task.id)
+      const result = await scheduledTasksApi.triggerTask(token, task.id)
+      addJob({
+        runId: result.run_id,
+        jobType: 'system_maintenance',
+        displayName: task.display_name,
+        resourceId: task.id,
+        resourceType: 'system_maintenance',
+      })
       await loadData()
       // Refresh runs for this task and expand to show the new run
       setExpandedTask(task.id)

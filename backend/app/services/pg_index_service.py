@@ -226,10 +226,14 @@ class PgIndexService:
             if sp_path:
                 title = f"{sp_path}/{asset.original_filename}"
 
+            # Get SharePoint web URL for direct access
+            url = source_meta.get("sharepoint_web_url")
+
             # Store enhanced metadata
             metadata = {
                 "sharepoint_path": sp_path,
                 "sharepoint_folder": source_meta.get("sharepoint_folder"),
+                "sharepoint_web_url": url,
                 "created_by": source_meta.get("created_by"),
                 "modified_by": source_meta.get("modified_by"),
             }

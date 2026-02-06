@@ -42,6 +42,14 @@ from ..database.models import (
     SharePointSyncedDocument,
     AssetVersion,
     SamSearch,
+    SamSolicitation,
+    SamNotice,
+    SalesforceAccount,
+    SalesforceContact,
+    SalesforceOpportunity,
+    AgForecast,
+    ApfsForecast,
+    StateForecast,
     ForecastSync,
 )
 
@@ -756,34 +764,31 @@ async def handle_search_reindex(
     config: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Reindex all assets to PostgreSQL + pgvector for full-text and semantic search.
+    Reindex all searchable content to PostgreSQL + pgvector.
 
-    This handler:
-    1. Checks if search is enabled
-    2. Iterates over all organizations (or specific org if configured)
-    3. Reindexes all assets with completed extractions
-    4. Reports indexing statistics
+    This handler processes 9 source types across all organizations:
+    assets, SAM solicitations, SAM notices, Salesforce accounts/contacts/
+    opportunities, and AG/APFS/State forecasts.
+
+    Progress is streamed via run_service.update_run_progress() to keep
+    the job monitor updated and prevent activity-based timeouts.
 
     Args:
         session: Database session
         run: Run context for tracking
         config: Task configuration:
             - organization_id: Optional specific org to reindex
-            - batch_size: Batch size for bulk operations (default: 100)
+            - batch_size: Items per progress update (default: 50)
+            - data_sources: Optional list to limit which types to reindex.
+              Values: "assets", "sam", "salesforce", "forecasts"
+              Default: all sources.
 
     Returns:
-        Dict with reindex statistics:
-        {
-            "status": "completed" | "disabled" | "failed",
-            "organizations_processed": int,
-            "total_assets": int,
-            "indexed": int,
-            "failed": int,
-            "errors": list
-        }
+        Dict with reindex statistics per phase
     """
     from .config_loader import config_loader
     from .pg_index_service import pg_index_service
+    from .run_service import run_service
     from ..config import settings
 
     run_id = run.id
@@ -809,14 +814,15 @@ async def handle_search_reindex(
             "status": "disabled",
             "message": "Search is not enabled",
             "organizations_processed": 0,
-            "total_assets": 0,
-            "indexed": 0,
-            "failed": 0,
+            "total_items": 0,
+            "total_indexed": 0,
+            "total_failed": 0,
         }
 
     # Get configuration
     specific_org_id = config.get("organization_id")
-    batch_size = config.get("batch_size", 100)
+    batch_size = config.get("batch_size", 50)
+    data_sources = config.get("data_sources", ["assets", "sam", "salesforce", "forecasts"])
 
     # Get organizations to process
     if specific_org_id:
@@ -828,73 +834,324 @@ async def handle_search_reindex(
     organizations = list(org_result.scalars().all())
 
     total_orgs = len(organizations)
-    total_assets = 0
-    total_indexed = 0
-    total_failed = 0
     all_errors: List[str] = []
+    max_errors = 50
+
+    # Phase definitions: (phase_key, data_source_group, model, org_filter)
+    phase_defs = []
+    if "assets" in data_sources:
+        phase_defs.append(("assets", Asset))
+    if "sam" in data_sources:
+        phase_defs.append(("sam_solicitations", SamSolicitation))
+        phase_defs.append(("sam_notices", SamNotice))
+    if "salesforce" in data_sources:
+        phase_defs.append(("salesforce_accounts", SalesforceAccount))
+        phase_defs.append(("salesforce_contacts", SalesforceContact))
+        phase_defs.append(("salesforce_opportunities", SalesforceOpportunity))
+    if "forecasts" in data_sources:
+        phase_defs.append(("ag_forecasts", AgForecast))
+        phase_defs.append(("apfs_forecasts", ApfsForecast))
+        phase_defs.append(("state_forecasts", StateForecast))
 
     await _log_event(
         session, run_id, "INFO", "progress",
-        f"Processing {total_orgs} organization(s) for reindex"
+        f"Processing {total_orgs} organization(s) for reindex, "
+        f"data sources: {data_sources}"
     )
+
+    # Count total items across all orgs and phases for progress tracking
+    total_items = 0
+    for org in organizations:
+        for phase_key, model in phase_defs:
+            if phase_key == "assets":
+                count_q = select(func.count(model.id)).where(
+                    and_(model.organization_id == org.id, model.status == "ready")
+                )
+            elif phase_key == "sam_notices":
+                # Notices can be linked via solicitation org_id or standalone org_id
+                count_q = select(func.count(model.id)).where(
+                    or_(
+                        model.organization_id == org.id,
+                        model.solicitation_id.in_(
+                            select(SamSolicitation.id).where(
+                                SamSolicitation.organization_id == org.id
+                            )
+                        ),
+                    )
+                )
+            else:
+                count_q = select(func.count(model.id)).where(
+                    model.organization_id == org.id
+                )
+            count_result = await session.execute(count_q)
+            total_items += count_result.scalar() or 0
+
+    await _log_event(
+        session, run_id, "INFO", "progress",
+        f"Total items to reindex: {total_items}"
+    )
+
+    # Initialize phase stats
+    phases: Dict[str, Dict[str, int]] = {}
+    for phase_key, _ in phase_defs:
+        phases[phase_key] = {"total": 0, "indexed": 0, "failed": 0}
+
+    current_item = 0
+    total_indexed = 0
+    total_failed = 0
 
     for org in organizations:
         await _log_event(
             session, run_id, "INFO", "progress",
-            f"Reindexing assets for organization: {org.name}"
+            f"Reindexing for organization: {org.name}"
         )
 
-        try:
-            result = await pg_index_service.reindex_organization(
-                session=session,
-                organization_id=org.id,
-                batch_size=batch_size,
-            )
+        for phase_key, model in phase_defs:
+            phase_label = phase_key.replace("_", " ").title()
 
-            org_total = result.get("total", 0)
-            org_indexed = result.get("indexed", 0)
-            org_failed = result.get("failed", 0)
-            org_errors = result.get("errors", [])
+            # Build the query for this phase
+            if phase_key == "assets":
+                base_query = (
+                    select(model)
+                    .where(and_(model.organization_id == org.id, model.status == "ready"))
+                    .order_by(model.created_at)
+                )
+            elif phase_key == "sam_notices":
+                base_query = (
+                    select(model)
+                    .where(or_(
+                        model.organization_id == org.id,
+                        model.solicitation_id.in_(
+                            select(SamSolicitation.id).where(
+                                SamSolicitation.organization_id == org.id
+                            )
+                        ),
+                    ))
+                    .order_by(model.id)
+                )
+            else:
+                base_query = (
+                    select(model)
+                    .where(model.organization_id == org.id)
+                    .order_by(model.id)
+                )
 
-            total_assets += org_total
-            total_indexed += org_indexed
-            total_failed += org_failed
-            all_errors.extend(org_errors[:5])  # Limit errors per org
+            # Paginate through results
+            offset = 0
+            page_size = 200
+            while True:
+                page_result = await session.execute(
+                    base_query.offset(offset).limit(page_size)
+                )
+                items = list(page_result.scalars().all())
+                if not items:
+                    break
 
-            await _log_event(
-                session, run_id, "INFO", "progress",
-                f"Organization {org.name}: {org_indexed}/{org_total} indexed, {org_failed} failed"
-            )
+                for item in items:
+                    phases[phase_key]["total"] += 1
+                    current_item += 1
 
-        except Exception as e:
-            error_msg = f"Failed to reindex org {org.name}: {str(e)}"
-            logger.error(error_msg)
-            all_errors.append(error_msg)
-            await _log_event(
-                session, run_id, "ERROR", "error",
-                error_msg
-            )
+                    try:
+                        success = await _index_item(
+                            pg_index_service, session, org.id,
+                            phase_key, item,
+                        )
+                        if success:
+                            phases[phase_key]["indexed"] += 1
+                            total_indexed += 1
+                        else:
+                            phases[phase_key]["failed"] += 1
+                            total_failed += 1
+                    except Exception as e:
+                        phases[phase_key]["failed"] += 1
+                        total_failed += 1
+                        if len(all_errors) < max_errors:
+                            all_errors.append(
+                                f"{phase_key} {getattr(item, 'id', '?')}: {str(e)[:200]}"
+                            )
 
-    # Final summary
-    await _log_event(
-        session, run_id, "INFO", "summary",
-        f"Search reindex completed: {total_indexed}/{total_assets} assets indexed across {total_orgs} organizations",
-        context={
-            "organizations_processed": total_orgs,
-            "total_assets": total_assets,
-            "indexed": total_indexed,
-            "failed": total_failed,
-        }
+                    # Stream progress every batch_size items
+                    if current_item % batch_size == 0:
+                        await run_service.update_run_progress(
+                            session, run_id,
+                            current=current_item, total=total_items,
+                            unit="items", phase=f"Indexing {phase_label}",
+                            details={"organization": org.name},
+                        )
+
+                offset += page_size
+
+    # Final progress update
+    await run_service.update_run_progress(
+        session, run_id,
+        current=total_items, total=total_items,
+        unit="items", phase="Complete",
     )
 
-    return {
+    # Final summary
+    summary = {
         "status": "completed",
         "organizations_processed": total_orgs,
-        "total_assets": total_assets,
-        "indexed": total_indexed,
-        "failed": total_failed,
-        "errors": all_errors[:20],  # Limit total errors
+        "total_items": total_items,
+        "total_indexed": total_indexed,
+        "total_failed": total_failed,
+        "phases": phases,
+        "errors": all_errors,
     }
+
+    await _log_event(
+        session, run_id, "INFO", "summary",
+        f"Search reindex completed: {total_indexed}/{total_items} items indexed "
+        f"across {total_orgs} organizations",
+        context=summary,
+    )
+
+    return summary
+
+
+async def _index_item(
+    pg_index_service,
+    session: AsyncSession,
+    org_id: UUID,
+    phase_key: str,
+    item,
+) -> bool:
+    """Index a single item based on its phase type. Returns True on success."""
+    if phase_key == "assets":
+        return await pg_index_service.index_asset(session, item.id)
+
+    elif phase_key == "sam_solicitations":
+        return await pg_index_service.index_sam_solicitation(
+            session, organization_id=org_id,
+            solicitation_id=item.id,
+            solicitation_number=item.solicitation_number or "",
+            title=item.title or "",
+            description=item.description or "",
+            agency=item.agency_name,
+            office=item.office_name,
+            naics_code=item.naics_code,
+            set_aside=item.set_aside_code,
+            posted_date=item.posted_date,
+            response_deadline=item.response_deadline,
+            url=item.ui_link,
+        )
+
+    elif phase_key == "sam_notices":
+        return await pg_index_service.index_sam_notice(
+            session, organization_id=org_id,
+            notice_id=item.id,
+            sam_notice_id=item.sam_notice_id,
+            solicitation_id=item.solicitation_id,
+            title=item.title or "",
+            description=item.description or "",
+            notice_type=item.notice_type or "",
+            posted_date=item.posted_date,
+            response_deadline=item.response_deadline,
+        )
+
+    elif phase_key == "salesforce_accounts":
+        return await pg_index_service.index_salesforce_account(
+            session, organization_id=org_id,
+            account_id=item.id,
+            salesforce_id=item.salesforce_id,
+            name=item.name,
+            account_type=item.account_type,
+            industry=item.industry,
+            description=item.description,
+            website=item.website,
+        )
+
+    elif phase_key == "salesforce_contacts":
+        # Resolve account name if linked
+        account_name = None
+        if item.account_id:
+            acct = await session.get(SalesforceAccount, item.account_id)
+            if acct:
+                account_name = acct.name
+        return await pg_index_service.index_salesforce_contact(
+            session, organization_id=org_id,
+            contact_id=item.id,
+            salesforce_id=item.salesforce_id,
+            first_name=item.first_name,
+            last_name=item.last_name,
+            email=item.email,
+            title=item.title,
+            account_name=account_name,
+            department=item.department,
+        )
+
+    elif phase_key == "salesforce_opportunities":
+        # Resolve account name if linked
+        account_name = None
+        if item.account_id:
+            acct = await session.get(SalesforceAccount, item.account_id)
+            if acct:
+                account_name = acct.name
+        return await pg_index_service.index_salesforce_opportunity(
+            session, organization_id=org_id,
+            opportunity_id=item.id,
+            salesforce_id=item.salesforce_id,
+            name=item.name,
+            stage_name=item.stage_name,
+            amount=item.amount,
+            opportunity_type=item.opportunity_type,
+            account_name=account_name,
+            description=item.description,
+            close_date=item.close_date,
+        )
+
+    elif phase_key == "ag_forecasts":
+        return await pg_index_service.index_forecast(
+            session, organization_id=org_id,
+            forecast_id=item.id,
+            source_type="ag",
+            source_id=item.nid,
+            title=item.title or "",
+            description=item.description,
+            agency_name=item.agency_name,
+            naics_codes=item.naics_codes,
+            set_aside_type=item.set_aside_type,
+            fiscal_year=item.estimated_award_fy,
+            estimated_award_quarter=item.estimated_award_quarter,
+            url=item.source_url,
+        )
+
+    elif phase_key == "apfs_forecasts":
+        naics_codes = None
+        if item.naics_code:
+            naics_codes = [{"code": item.naics_code, "description": item.naics_description or ""}]
+        return await pg_index_service.index_forecast(
+            session, organization_id=org_id,
+            forecast_id=item.id,
+            source_type="apfs",
+            source_id=item.apfs_number,
+            title=item.title or "",
+            description=item.description,
+            agency_name=item.component,
+            naics_codes=naics_codes,
+            set_aside_type=item.small_business_set_aside,
+            fiscal_year=item.fiscal_year,
+            estimated_award_quarter=item.award_quarter,
+        )
+
+    elif phase_key == "state_forecasts":
+        naics_codes = None
+        if item.naics_code:
+            naics_codes = [{"code": item.naics_code}]
+        return await pg_index_service.index_forecast(
+            session, organization_id=org_id,
+            forecast_id=item.id,
+            source_type="state",
+            source_id=item.row_hash,
+            title=item.title or "",
+            description=item.description,
+            naics_codes=naics_codes,
+            set_aside_type=item.set_aside_type,
+            fiscal_year=item.fiscal_year,
+            estimated_award_quarter=item.estimated_award_quarter,
+        )
+
+    return False
 
 
 # =============================================================================
@@ -965,7 +1222,7 @@ async def handle_stale_run_cleanup(
         stale_submitted_query = (
             select(Run)
             .where(and_(
-                Run.run_type == "extraction",
+                Run.run_type.in_(["extraction", "system_maintenance"]),
                 Run.status == "submitted",
                 Run.submitted_to_celery_at < submitted_cutoff,
             ))
@@ -977,7 +1234,7 @@ async def handle_stale_run_cleanup(
         stale_running_query = (
             select(Run)
             .where(and_(
-                Run.run_type == "extraction",
+                Run.run_type.in_(["extraction", "system_maintenance"]),
                 Run.status == "running",
                 Run.started_at < running_cutoff,
             ))
@@ -1016,19 +1273,19 @@ async def handle_stale_run_cleanup(
                 for stale_run in runs_list:
                     try:
                         # Special handling for maintenance runs - they're time-sensitive
-                        # If a maintenance run is stuck pending, the scheduled time has passed
-                        # and retrying doesn't make sense - mark as timed_out immediately
-                        if stale_run.run_type == "system_maintenance" and status_name == "pending":
+                        # If a maintenance run is stuck in any state, the scheduled time
+                        # has passed and retrying doesn't make sense - mark as timed_out
+                        if stale_run.run_type == "system_maintenance" and status_name in ("pending", "submitted", "running"):
                             stale_run.status = "timed_out"
                             stale_run.completed_at = now
                             stale_run.error_message = (
-                                "Orphaned maintenance run - Celery task was never executed. "
+                                f"Orphaned maintenance run - stuck in '{status_name}' state. "
                                 "The scheduled time has passed."
                             )
                             results["orphaned_maintenance_timed_out"] += 1
 
                             logger.warning(
-                                f"Maintenance run {stale_run.id} was orphaned (pending), marked as timed_out"
+                                f"Maintenance run {stale_run.id} was orphaned ({status_name}), marked as timed_out"
                             )
                             continue
 

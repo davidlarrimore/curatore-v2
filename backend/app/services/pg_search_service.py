@@ -778,6 +778,7 @@ class PgSearchService:
         response_deadline_after: Optional[str] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
+        include_sam_assets: bool = False,
         limit: int = 20,
         offset: int = 0,
     ) -> SearchResults:
@@ -799,6 +800,7 @@ class PgSearchService:
             response_deadline_after: Filter by response deadline (YYYY-MM-DD or 'today')
             date_from: Filter by posted date >=
             date_to: Filter by posted date <=
+            include_sam_assets: Also search document assets from SAM.gov (attachments)
             limit: Maximum results
             offset: Pagination offset
 
@@ -812,10 +814,23 @@ class PgSearchService:
 
             # SAM-specific source types
             if source_types:
-                filters.append("sc.source_type = ANY(:source_types)")
+                if include_sam_assets:
+                    # Include both specified SAM types AND sam_gov assets
+                    filters.append("""(
+                        sc.source_type = ANY(:source_types)
+                        OR (sc.source_type = 'asset' AND sc.source_type_filter = 'sam_gov')
+                    )""")
+                else:
+                    filters.append("sc.source_type = ANY(:source_types)")
                 params["source_types"] = source_types
             else:
-                filters.append("sc.source_type IN ('sam_notice', 'sam_solicitation')")
+                if include_sam_assets:
+                    filters.append("""(
+                        sc.source_type IN ('sam_notice', 'sam_solicitation')
+                        OR (sc.source_type = 'asset' AND sc.source_type_filter = 'sam_gov')
+                    )""")
+                else:
+                    filters.append("sc.source_type IN ('sam_notice', 'sam_solicitation')")
 
             if notice_types:
                 filters.append("sc.metadata->>'notice_type' = ANY(:notice_types)")

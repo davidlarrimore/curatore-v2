@@ -171,3 +171,33 @@ class ContentItem:
             f"<ContentItem(id={self.id}, type={self.type}, "
             f"title={self.title[:30] if self.title else None}...)>"
         )
+
+    def __getattr__(self, name: str) -> Any:
+        """
+        Allow attribute-style access to fields for cleaner Jinja2 templates.
+
+        This enables templates to use {{ item.source_url }} instead of
+        {{ item.fields.source_url }}, making templates more readable.
+
+        Args:
+            name: Attribute name to look up
+
+        Returns:
+            Value from fields dict if found, None otherwise
+        """
+        # Safety check during dataclass initialization
+        try:
+            fields = object.__getattribute__(self, "fields")
+        except AttributeError:
+            return None
+        if name in fields:
+            return fields[name]
+        # Also check metadata for common attributes
+        try:
+            metadata = object.__getattribute__(self, "metadata")
+        except AttributeError:
+            return None
+        if name in metadata:
+            return metadata[name]
+        # Return None for undefined fields (Jinja2 friendly)
+        return None
