@@ -24,6 +24,7 @@ import {
   Workflow,
   GitBranch,
   Database,
+  TrendingUp,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import clsx from 'clsx'
@@ -125,6 +126,13 @@ export function LeftSidebar({
       icon: Building2,
       current: pathname?.startsWith('/sam'),
       gradient: 'from-blue-500 to-indigo-600'
+    },
+    {
+      name: 'Acquisition Forecasts',
+      href: '/forecasts',
+      icon: TrendingUp,
+      current: pathname?.startsWith('/forecasts'),
+      gradient: 'from-emerald-500 to-teal-600'
     },
     {
       name: 'Salesforce CRM',

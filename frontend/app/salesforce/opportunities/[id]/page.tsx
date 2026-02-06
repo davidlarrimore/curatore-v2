@@ -21,6 +21,7 @@ import {
   Percent,
   Clock,
   FileText,
+  ExternalLink,
 } from 'lucide-react'
 
 export default function SalesforceOpportunityDetailPage() {
@@ -174,15 +175,27 @@ function SalesforceOpportunityDetailContent() {
                 </p>
               </div>
             </div>
-            <Button
-              variant="secondary"
-              onClick={loadData}
-              disabled={isLoading}
-              className="gap-2"
-            >
-              <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
-              Refresh
-            </Button>
+            <div className="flex gap-2">
+              <a
+                href={`https://amivero.lightning.force.com/lightning/r/Opportunity/${opportunity.salesforce_id}/view`}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
+                <Button variant="secondary" className="gap-2">
+                  <ExternalLink className="w-4 h-4" />
+                  View in Salesforce
+                </Button>
+              </a>
+              <Button
+                variant="secondary"
+                onClick={loadData}
+                disabled={isLoading}
+                className="gap-2"
+              >
+                <RefreshCw className={`w-4 h-4 ${isLoading ? 'animate-spin' : ''}`} />
+                Refresh
+              </Button>
+            </div>
           </div>
         </div>
 

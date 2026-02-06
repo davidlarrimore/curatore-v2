@@ -82,23 +82,6 @@ if compgen -G "${REPO_ROOT}/scripts/*.sh" > /dev/null; then
   chmod +x "${REPO_ROOT}"/scripts/*.sh || true
 fi
 
-# --- Ensure canonical directory structure exists (host-level)
-if [[ -x "${REPO_ROOT}/scripts/setup_directories.sh" ]]; then
-  "${REPO_ROOT}/scripts/setup_directories.sh"
-else
-  echo "ℹ️  setup-directories.sh not found; creating minimal structure directly..."
-  mkdir -p "${REPO_ROOT}/files/uploaded_files" \
-           "${REPO_ROOT}/files/processed_files" \
-           "${REPO_ROOT}/files/batch_files"
-  touch "${REPO_ROOT}/files/uploaded_files/.gitkeep" \
-        "${REPO_ROOT}/files/processed_files/.gitkeep" \
-        "${REPO_ROOT}/files/batch_files/.gitkeep"
-  chmod 755 "${REPO_ROOT}/files" \
-            "${REPO_ROOT}/files/uploaded_files" \
-            "${REPO_ROOT}/files/processed_files" \
-            "${REPO_ROOT}/files/batch_files"
-fi
-
 # --- Scaffold .env from example if missing
 if [[ ! -f "${REPO_ROOT}/.env" && -f "${REPO_ROOT}/.env.example" ]]; then
   cp "${REPO_ROOT}/.env.example" "${REPO_ROOT}/.env"

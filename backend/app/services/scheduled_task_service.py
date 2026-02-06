@@ -451,9 +451,25 @@ class ScheduledTaskService:
         # Import here to avoid circular imports
         from ..tasks import execute_scheduled_task_async
 
-        execute_scheduled_task_async.delay(
-            task_id=str(task.id),
-            run_id=str(run.id),
+        # Use apply_async with explicit queue for reliable routing
+        celery_task = execute_scheduled_task_async.apply_async(
+            kwargs={
+                "task_id": str(task.id),
+                "run_id": str(run.id),
+            },
+            queue="maintenance",
+        )
+
+        # Update run with Celery task info (same pattern as extraction tasks)
+        now = datetime.utcnow()
+        run.status = "submitted"
+        run.celery_task_id = celery_task.id
+        run.submitted_to_celery_at = now
+        run.last_activity_at = now
+        await session.commit()
+
+        logger.info(
+            f"Submitted maintenance run {run.id} to Celery: task_id={celery_task.id}"
         )
 
         return run

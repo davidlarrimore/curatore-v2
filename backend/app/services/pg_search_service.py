@@ -236,9 +236,18 @@ class PgSearchService:
 
             # Handle source type filtering
             if source_types:
-                # Separate Salesforce types from asset types
+                # Separate Salesforce types, forecast types, and asset types
                 sf_source_types = []
+                forecast_source_types = []
                 asset_source_types = []
+
+                # Map for forecast display names
+                forecast_display_map = {
+                    "forecast": None,  # All forecast types
+                    "ag_forecast": "ag_forecast",
+                    "apfs_forecast": "apfs_forecast",
+                    "state_forecast": "state_forecast",
+                }
 
                 for st in source_types:
                     if st in salesforce_display_map:
@@ -247,30 +256,37 @@ class PgSearchService:
                             sf_source_types = ["salesforce_account", "salesforce_contact", "salesforce_opportunity"]
                         else:
                             sf_source_types.append(salesforce_display_map[st])
+                    elif st in forecast_display_map:
+                        if st == "forecast":
+                            # All forecast types
+                            forecast_source_types = ["ag_forecast", "apfs_forecast", "state_forecast"]
+                        else:
+                            forecast_source_types.append(forecast_display_map[st])
                     else:
                         asset_source_types.append(st)
 
-                # Build filter based on what types were requested
-                if sf_source_types and asset_source_types:
-                    # Mixed: both Salesforce and asset types
-                    filters.append("""(
-                        sc.source_type = ANY(:sf_source_types)
-                        OR (sc.source_type = 'asset' AND sc.source_type_filter = ANY(:asset_source_types))
-                    )""")
+                # Build compound filter
+                filter_clauses = []
+                if sf_source_types:
+                    filter_clauses.append("sc.source_type = ANY(:sf_source_types)")
                     params["sf_source_types"] = sf_source_types
+                if forecast_source_types:
+                    filter_clauses.append("sc.source_type = ANY(:forecast_source_types)")
+                    params["forecast_source_types"] = forecast_source_types
+                if asset_source_types:
+                    filter_clauses.append("(sc.source_type = 'asset' AND sc.source_type_filter = ANY(:asset_source_types))")
                     params["asset_source_types"] = asset_source_types
-                elif sf_source_types:
-                    # Only Salesforce types
-                    filters.append("sc.source_type = ANY(:sf_source_types)")
-                    params["sf_source_types"] = sf_source_types
-                else:
-                    # Only asset types
-                    filters.append("sc.source_type = 'asset'")
-                    filters.append("sc.source_type_filter = ANY(:source_types)")
-                    params["source_types"] = asset_source_types
+
+                if filter_clauses:
+                    filters.append("(" + " OR ".join(filter_clauses) + ")")
             else:
-                # Default: only search asset-type chunks
-                filters.append("sc.source_type = 'asset'")
+                # Default: search assets, forecasts, Salesforce, and SAM records
+                filters.append("""(
+                    sc.source_type = 'asset'
+                    OR sc.source_type IN ('ag_forecast', 'apfs_forecast', 'state_forecast')
+                    OR sc.source_type IN ('salesforce_account', 'salesforce_contact', 'salesforce_opportunity')
+                    OR sc.source_type IN ('sam_solicitation', 'sam_notice')
+                )""")
 
             if content_types:
                 filters.append("sc.content_type = ANY(:content_types)")
@@ -437,11 +453,11 @@ class PgSearchService:
         params["embedding"] = "[" + ",".join(str(f) for f in query_embedding) + "]"
         params["similarity_threshold"] = 0.3
 
-        # Note: For true total, we'd need to scan all vectors, which is expensive.
-        # Instead, we return top K and estimate total
-        # For display, use source_type for Salesforce records, source_type_filter for assets
+        # Optimized semantic search: pre-filter to top 200 candidates first
+        # This avoids scanning the entire table for vector similarity
         search_sql = f"""
-            WITH ranked_chunks AS (
+            WITH top_candidates AS (
+                -- Pre-filter to top 200 by vector similarity (uses ivfflat/hnsw index)
                 SELECT
                     sc.source_id,
                     sc.title,
@@ -452,14 +468,21 @@ class PgSearchService:
                     sc.url,
                     sc.created_at,
                     sc.content,
-                    1 - (sc.embedding <=> CAST(:embedding AS vector)) as semantic_score,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY sc.source_id
-                        ORDER BY sc.embedding <=> CAST(:embedding AS vector) ASC
-                    ) as rn
+                    1 - (sc.embedding <=> CAST(:embedding AS vector)) as semantic_score
                 FROM search_chunks sc
                 WHERE {filter_clause}
                 AND sc.embedding IS NOT NULL
+                ORDER BY sc.embedding <=> CAST(:embedding AS vector)
+                LIMIT 200
+            ),
+            ranked_chunks AS (
+                -- Deduplicate by source_id, keeping best chunk per document
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY source_id
+                        ORDER BY semantic_score DESC
+                    ) as rn
+                FROM top_candidates
             )
             SELECT
                 source_id,
@@ -540,12 +563,12 @@ class PgSearchService:
         params["keyword_weight"] = 1 - semantic_weight
         params["semantic_weight"] = semantic_weight
 
-        # Hybrid search query
-        # This query:
-        # 1. Gets keyword matches with ts_rank
-        # 2. Gets semantic matches with vector similarity
-        # 3. Combines them with weighted scoring
-        # For display, use source_type for Salesforce records, source_type_filter for assets
+        # Hybrid search query - optimized for performance
+        # Key optimizations:
+        # 1. Keyword search uses GIN index (fast)
+        # 2. Semantic search pre-filters to top 200 candidates using ORDER BY + LIMIT
+        #    before doing ROW_NUMBER() partitioning (avoids full table scan)
+        # 3. Combines results with weighted scoring
         search_sql = f"""
             WITH keyword_results AS (
                 SELECT
@@ -567,7 +590,8 @@ class PgSearchService:
                 WHERE {filter_clause}
                 AND sc.search_vector @@ to_tsquery('english', :fts_query)
             ),
-            semantic_results AS (
+            semantic_candidates AS (
+                -- Pre-filter to top 200 by vector similarity (uses ivfflat/hnsw index)
                 SELECT
                     sc.source_id,
                     sc.title,
@@ -578,14 +602,21 @@ class PgSearchService:
                     sc.url,
                     sc.created_at,
                     sc.content,
-                    1 - (sc.embedding <=> CAST(:embedding AS vector)) as semantic_score,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY sc.source_id
-                        ORDER BY sc.embedding <=> CAST(:embedding AS vector) ASC
-                    ) as rn
+                    1 - (sc.embedding <=> CAST(:embedding AS vector)) as semantic_score
                 FROM search_chunks sc
                 WHERE {filter_clause}
                 AND sc.embedding IS NOT NULL
+                ORDER BY sc.embedding <=> CAST(:embedding AS vector)
+                LIMIT 200
+            ),
+            semantic_results AS (
+                -- Deduplicate by source_id, keeping best chunk per document
+                SELECT *,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY source_id
+                        ORDER BY semantic_score DESC
+                    ) as rn
+                FROM semantic_candidates
             ),
             keyword_top AS (
                 SELECT * FROM keyword_results WHERE rn = 1
@@ -742,10 +773,11 @@ class PgSearchService:
             "facet_size": facet_size,
         }
 
-        # Source type facet - includes both assets (by source_type_filter) and Salesforce records
+        # Source type facet - includes assets, forecasts, and Salesforce records
         # This query combines:
         # 1. Asset source_type_filter counts
-        # 2. Salesforce records with display-friendly names (Accounts, Contacts, Opportunities)
+        # 2. Forecast counts (grouped as 'forecast')
+        # 3. Salesforce records with display-friendly names (Accounts, Contacts, Opportunities)
         source_type_sql = """
             WITH asset_facets AS (
                 SELECT sc.source_type_filter as value, COUNT(DISTINCT sc.source_id) as count
@@ -755,6 +787,13 @@ class PgSearchService:
                 AND sc.search_vector @@ to_tsquery('english', :fts_query)
                 AND sc.source_type_filter IS NOT NULL
                 GROUP BY sc.source_type_filter
+            ),
+            forecast_facets AS (
+                SELECT 'forecast' as value, COUNT(DISTINCT sc.source_id) as count
+                FROM search_chunks sc
+                WHERE sc.organization_id = :org_id
+                AND sc.source_type IN ('ag_forecast', 'apfs_forecast', 'state_forecast')
+                AND sc.search_vector @@ to_tsquery('english', :fts_query)
             ),
             salesforce_facets AS (
                 SELECT
@@ -771,6 +810,8 @@ class PgSearchService:
                 GROUP BY sc.source_type
             )
             SELECT value, count FROM asset_facets WHERE count > 0
+            UNION ALL
+            SELECT value, count FROM forecast_facets WHERE count > 0
             UNION ALL
             SELECT value, count FROM salesforce_facets WHERE count > 0
             ORDER BY count DESC

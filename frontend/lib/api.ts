@@ -50,7 +50,18 @@ async function handleJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
     let body: any = undefined
     try { body = await res.json() } catch {}
-    const msg = (body && (body.detail || body.message)) || res.statusText
+    let msg = res.statusText
+    if (body) {
+      const detail = body.detail || body.message
+      if (typeof detail === 'string') {
+        msg = detail
+      } else if (Array.isArray(detail)) {
+        // Pydantic validation errors - extract messages
+        msg = detail.map((e: any) => e.msg || JSON.stringify(e)).join('; ')
+      } else if (detail) {
+        msg = JSON.stringify(detail)
+      }
+    }
     httpError(res, msg, body)
   }
   return res.json() as Promise<T>
@@ -5128,6 +5139,269 @@ export const salesforceApi = {
   },
 }
 
+// ============================================================================
+// FORECAST SYNC API (Acquisition Forecasts)
+// ============================================================================
+
+export interface ForecastSync {
+  id: string
+  organization_id: string
+  name: string
+  slug: string
+  source_type: 'ag' | 'apfs' | 'state'
+  status: 'active' | 'paused' | 'archived'
+  is_active: boolean
+  sync_frequency: 'manual' | 'hourly' | 'daily'
+  filter_config: Record<string, any>
+  automation_config: Record<string, any>
+  last_sync_at: string | null
+  last_sync_status: string | null
+  last_sync_run_id: string | null
+  forecast_count: number
+  created_at: string
+  updated_at: string
+  is_syncing: boolean
+  current_sync_status: string | null
+}
+
+export interface ForecastSyncListResponse {
+  items: ForecastSync[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface ForecastSyncCreateRequest {
+  name: string
+  source_type: 'ag' | 'apfs' | 'state'
+  filter_config?: Record<string, any>
+  sync_frequency?: 'manual' | 'hourly' | 'daily'
+  automation_config?: Record<string, any>
+}
+
+export interface ForecastSyncUpdateRequest {
+  name?: string
+  filter_config?: Record<string, any>
+  status?: 'active' | 'paused' | 'archived'
+  is_active?: boolean
+  sync_frequency?: 'manual' | 'hourly' | 'daily'
+  automation_config?: Record<string, any>
+}
+
+export interface Forecast {
+  id: string
+  organization_id: string
+  sync_id: string
+  source_type: 'ag' | 'apfs' | 'state'
+  source_id: string
+  title: string
+  description: string | null
+  agency_name: string | null
+  naics_codes: Array<{ code?: string; description?: string }> | null
+  acquisition_phase: string | null
+  set_aside_type: string | null
+  contract_type: string | null
+  contract_vehicle: string | null
+  estimated_solicitation_date: string | null
+  fiscal_year: number | null
+  estimated_award_quarter: string | null
+  pop_start_date: string | null
+  pop_end_date: string | null
+  pop_city: string | null
+  pop_state: string | null
+  pop_country: string | null
+  poc_name: string | null
+  poc_email: string | null
+  sbs_name: string | null
+  sbs_email: string | null
+  incumbent_contractor: string | null
+  source_url: string | null
+  first_seen_at: string
+  last_updated_at: string
+  indexed_at: string | null
+  created_at: string
+  updated_at: string
+}
+
+export interface ForecastListResponse {
+  items: Forecast[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export interface ForecastStatsResponse {
+  total_syncs: number
+  active_syncs: number
+  total_forecasts: number
+  by_source: Record<string, number>
+  recent_changes: number
+  last_sync_at: string | null
+}
+
+export const forecastsApi = {
+  // Sync configuration
+  async listSyncs(
+    token: string | undefined,
+    params?: {
+      status?: string
+      source_type?: string
+      limit?: number
+      offset?: number
+    }
+  ): Promise<ForecastSyncListResponse> {
+    const queryParams = new URLSearchParams()
+    if (params?.status) queryParams.set('status', params.status)
+    if (params?.source_type) queryParams.set('source_type', params.source_type)
+    if (params?.limit) queryParams.set('limit', params.limit.toString())
+    if (params?.offset) queryParams.set('offset', params.offset.toString())
+
+    const url = queryParams.toString()
+      ? `/forecasts/syncs?${queryParams.toString()}`
+      : '/forecasts/syncs'
+    const res = await fetch(apiUrl(url), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async createSync(
+    token: string | undefined,
+    data: ForecastSyncCreateRequest
+  ): Promise<ForecastSync> {
+    const res = await fetch(apiUrl('/forecasts/syncs'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async getSync(token: string | undefined, syncId: string): Promise<ForecastSync> {
+    const res = await fetch(apiUrl(`/forecasts/syncs/${syncId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async updateSync(
+    token: string | undefined,
+    syncId: string,
+    data: ForecastSyncUpdateRequest
+  ): Promise<ForecastSync> {
+    const res = await fetch(apiUrl(`/forecasts/syncs/${syncId}`), {
+      method: 'PATCH',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteSync(token: string | undefined, syncId: string): Promise<void> {
+    const res = await fetch(apiUrl(`/forecasts/syncs/${syncId}`), {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    })
+    if (!res.ok) {
+      const error = await res.json().catch(() => ({}))
+      throw new Error(error.detail || 'Failed to delete sync')
+    }
+  },
+
+  async triggerSyncPull(
+    token: string | undefined,
+    syncId: string
+  ): Promise<{ run_id: string; sync_id: string; status: string; message: string }> {
+    const res = await fetch(apiUrl(`/forecasts/syncs/${syncId}/pull`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  async clearSyncForecasts(
+    token: string | undefined,
+    syncId: string
+  ): Promise<{ sync_id: string; deleted_count: number; message: string }> {
+    const res = await fetch(apiUrl(`/forecasts/syncs/${syncId}/clear`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
+
+  // Forecasts (unified view)
+  async listForecasts(
+    token: string | undefined,
+    params?: {
+      source_type?: string
+      sync_id?: string
+      agency_name?: string
+      naics_code?: string
+      fiscal_year?: number
+      search?: string
+      sort_by?: string
+      sort_direction?: 'asc' | 'desc'
+      limit?: number
+      offset?: number
+    }
+  ): Promise<ForecastListResponse> {
+    const queryParams = new URLSearchParams()
+    if (params?.source_type) queryParams.set('source_type', params.source_type)
+    if (params?.sync_id) queryParams.set('sync_id', params.sync_id)
+    if (params?.agency_name) queryParams.set('agency_name', params.agency_name)
+    if (params?.naics_code) queryParams.set('naics_code', params.naics_code)
+    if (params?.fiscal_year) queryParams.set('fiscal_year', params.fiscal_year.toString())
+    if (params?.search) queryParams.set('search', params.search)
+    if (params?.sort_by) queryParams.set('sort_by', params.sort_by)
+    if (params?.sort_direction) queryParams.set('sort_direction', params.sort_direction)
+    if (params?.limit) queryParams.set('limit', params.limit.toString())
+    if (params?.offset) queryParams.set('offset', params.offset.toString())
+
+    const url = queryParams.toString()
+      ? `/forecasts?${queryParams.toString()}`
+      : '/forecasts'
+    const res = await fetch(apiUrl(url), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getForecast(
+    token: string | undefined,
+    sourceType: string,
+    sourceId: string
+  ): Promise<Forecast> {
+    const res = await fetch(apiUrl(`/forecasts/${sourceType}/${sourceId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getForecastById(
+    token: string | undefined,
+    forecastId: string
+  ): Promise<Forecast> {
+    const res = await fetch(apiUrl(`/forecasts/${forecastId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getStats(token: string | undefined): Promise<ForecastStatsResponse> {
+    const res = await fetch(apiUrl('/forecasts/stats'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+}
+
 // Default export with all API modules
 export default {
   API_BASE_URL,
@@ -5150,6 +5424,7 @@ export default {
   searchApi,
   samApi,
   salesforceApi,
+  forecastsApi,
   sharepointSyncApi,
   functionsApi,
   proceduresApi,

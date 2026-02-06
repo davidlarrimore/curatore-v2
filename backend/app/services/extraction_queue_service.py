@@ -415,15 +415,16 @@ class ExtractionQueueService:
         session: AsyncSession,
     ) -> Dict[str, Any]:
         """
-        Mark runs that have exceeded their activity timeout as 'timed_out'.
+        Check for stale and timed-out jobs using a two-phase approach.
 
-        Called periodically by Celery beat task. Uses activity-based timeouts:
-        - Finds runs where status IN ('submitted', 'running')
-        - Checks if last_activity_at is older than the activity timeout
-        - Jobs actively reporting progress will not be timed out
-        - Parent jobs with active children are NOT timed out (they're waiting for children)
+        Phase 1: Mark jobs as "stale" after 2 minutes of inactivity (warning state)
+        Phase 2: Mark jobs as "timed_out" after 5 minutes of inactivity (terminal state)
 
-        This applies to ALL running jobs, not just extractions.
+        Called periodically by Celery beat task (every 30 seconds recommended).
+        Uses activity-based timeouts via last_activity_at field.
+
+        All job types are checked - jobs should use heartbeat_service to stay alive.
+        Parent jobs with active children are NOT timed out (they're waiting for children).
 
         Args:
             session: Database session
@@ -432,10 +433,16 @@ class ExtractionQueueService:
             Dict with timeout check statistics
         """
         from ..database.models import RunGroup
+        from .heartbeat_service import HeartbeatService
 
         now = datetime.utcnow()
-        activity_timeout = settings.run_activity_timeout_seconds
-        cutoff = now - timedelta(seconds=activity_timeout)
+
+        # Two-phase thresholds
+        stale_threshold = HeartbeatService.STALE_THRESHOLD_SECONDS  # 2 minutes
+        timeout_threshold = HeartbeatService.TIMEOUT_THRESHOLD_SECONDS  # 5 minutes
+
+        stale_cutoff = now - timedelta(seconds=stale_threshold)
+        timeout_cutoff = now - timedelta(seconds=timeout_threshold)
 
         # Find parent run IDs that have active children (should not be timed out)
         # A parent should not timeout while its children are still queued or running
@@ -453,88 +460,171 @@ class ExtractionQueueService:
             )
         )
 
-        # Find stale runs (no activity within timeout window)
-        # Includes most run types, but excludes:
-        # 1. SharePoint syncs - they have Celery time limits and can be blocked by PostgreSQL I/O
-        # 2. Parent jobs with active children - they're waiting for children to complete
+        # Helper to get last activity time for a run
+        def get_last_activity(run: Run) -> Optional[datetime]:
+            return run.last_activity_at or run.submitted_to_celery_at or run.started_at
+
+        # ========================================================================
+        # PHASE 1: Mark stale jobs (running/submitted -> stale after 2 min)
+        # ========================================================================
         result = await session.execute(
             select(Run)
             .where(and_(
                 Run.status.in_(["submitted", "running"]),
-                # Exclude SharePoint syncs - they have Celery time limits and can
-                # be blocked by database I/O during large syncs (4000+ files)
-                ~Run.run_type.in_(["sharepoint_sync", "sharepoint_import"]),
                 # Exclude parent jobs that have active children
                 Run.id.notin_(parent_runs_with_active_children_subquery),
                 or_(
-                    # No activity recorded - use submitted_to_celery_at or started_at as fallback
+                    # No activity recorded - use submitted_to_celery_at or started_at
                     and_(
                         Run.last_activity_at.is_(None),
                         or_(
-                            Run.submitted_to_celery_at < cutoff,
+                            Run.submitted_to_celery_at < stale_cutoff,
                             and_(
                                 Run.submitted_to_celery_at.is_(None),
-                                Run.started_at < cutoff,
+                                Run.started_at < stale_cutoff,
                             ),
                         ),
                     ),
                     # Has activity but it's stale
-                    Run.last_activity_at < cutoff,
+                    Run.last_activity_at < stale_cutoff,
                 ),
             ))
         )
-        stale_runs = list(result.scalars().all())
+        potentially_stale_runs = list(result.scalars().all())
 
-        if not stale_runs:
-            return {"status": "none_timed_out", "count": 0}
-
-        # Mark each as timed_out
+        stale_count = 0
         timed_out_count = 0
-        for run in stale_runs:
+
+        for run in potentially_stale_runs:
             try:
-                last_activity = run.last_activity_at or run.submitted_to_celery_at or run.started_at
-                inactivity_seconds = int((now - last_activity).total_seconds()) if last_activity else 0
+                last_activity = get_last_activity(run)
+                if not last_activity:
+                    continue
 
-                run.status = "timed_out"
-                run.completed_at = now
-                run.error_message = (
-                    f"Job timed out after {inactivity_seconds} seconds of inactivity "
-                    f"(threshold: {activity_timeout}s). The job may have crashed or stalled."
-                )
+                inactivity_seconds = int((now - last_activity).total_seconds())
 
-                # For extraction runs, update associated asset status
-                if run.run_type == "extraction" and run.input_asset_ids:
-                    asset_id = UUID(run.input_asset_ids[0])
-                    asset = await session.get(Asset, asset_id)
-                    if asset and asset.status in ("pending", "extracting"):
-                        asset.status = "failed"
-
-                    # Update extraction result status
-                    ext_result = await session.execute(
-                        select(ExtractionResult)
-                        .where(ExtractionResult.run_id == run.id)
-                        .limit(1)
+                # Check if it should be timed out (5 min) or just stale (2 min)
+                if inactivity_seconds >= timeout_threshold:
+                    # Terminal state - job is dead
+                    run.status = "timed_out"
+                    run.completed_at = now
+                    run.error_message = (
+                        f"Job timed out after {inactivity_seconds} seconds of inactivity "
+                        f"(threshold: {timeout_threshold}s). The worker may have crashed."
                     )
-                    extraction = ext_result.scalar_one_or_none()
-                    if extraction:
-                        extraction.status = "failed"
-                        extraction.error_message = run.error_message
 
-                timed_out_count += 1
-                logger.warning(
-                    f"Marked run {run.id} ({run.run_type}) as timed_out: "
-                    f"no activity for {inactivity_seconds}s (last: {last_activity})"
-                )
+                    # For extraction runs, update associated asset status
+                    if run.run_type == "extraction" and run.input_asset_ids:
+                        asset_id = UUID(run.input_asset_ids[0])
+                        asset = await session.get(Asset, asset_id)
+                        if asset and asset.status in ("pending", "extracting"):
+                            asset.status = "failed"
+
+                        # Update extraction result status
+                        ext_result = await session.execute(
+                            select(ExtractionResult)
+                            .where(ExtractionResult.run_id == run.id)
+                            .limit(1)
+                        )
+                        extraction = ext_result.scalar_one_or_none()
+                        if extraction:
+                            extraction.status = "failed"
+                            extraction.error_message = run.error_message
+
+                    timed_out_count += 1
+                    logger.warning(
+                        f"Marked run {run.id} ({run.run_type}) as timed_out: "
+                        f"no activity for {inactivity_seconds}s"
+                    )
+
+                else:
+                    # Warning state - job might be stuck but could recover
+                    run.status = "stale"
+                    # Don't set completed_at - job can still recover
+                    run.error_message = (
+                        f"Job appears stale after {inactivity_seconds} seconds of inactivity. "
+                        f"Will timeout at {timeout_threshold}s if no heartbeat received."
+                    )
+                    stale_count += 1
+                    logger.info(
+                        f"Marked run {run.id} ({run.run_type}) as stale: "
+                        f"no activity for {inactivity_seconds}s"
+                    )
 
             except Exception as e:
-                logger.error(f"Failed to mark run {run.id} as timed_out: {e}")
+                logger.error(f"Failed to check run {run.id} for timeout: {e}")
+
+        # ========================================================================
+        # PHASE 2: Check if stale jobs recovered (got heartbeat) or timed out
+        # ========================================================================
+        result = await session.execute(
+            select(Run)
+            .where(Run.status == "stale")
+        )
+        stale_runs = list(result.scalars().all())
+
+        recovered_count = 0
+        for run in stale_runs:
+            try:
+                last_activity = get_last_activity(run)
+                if not last_activity:
+                    continue
+
+                inactivity_seconds = int((now - last_activity).total_seconds())
+
+                if inactivity_seconds < stale_threshold:
+                    # Job recovered! Got a heartbeat
+                    run.status = "running"
+                    run.error_message = None
+                    recovered_count += 1
+                    logger.info(f"Run {run.id} ({run.run_type}) recovered from stale state")
+
+                elif inactivity_seconds >= timeout_threshold:
+                    # Job is dead
+                    run.status = "timed_out"
+                    run.completed_at = now
+                    run.error_message = (
+                        f"Job timed out after {inactivity_seconds} seconds of inactivity "
+                        f"(threshold: {timeout_threshold}s). The worker may have crashed."
+                    )
+
+                    # For extraction runs, update associated asset status
+                    if run.run_type == "extraction" and run.input_asset_ids:
+                        asset_id = UUID(run.input_asset_ids[0])
+                        asset = await session.get(Asset, asset_id)
+                        if asset and asset.status in ("pending", "extracting"):
+                            asset.status = "failed"
+
+                        ext_result = await session.execute(
+                            select(ExtractionResult)
+                            .where(ExtractionResult.run_id == run.id)
+                            .limit(1)
+                        )
+                        extraction = ext_result.scalar_one_or_none()
+                        if extraction:
+                            extraction.status = "failed"
+                            extraction.error_message = run.error_message
+
+                    timed_out_count += 1
+                    logger.warning(
+                        f"Marked stale run {run.id} ({run.run_type}) as timed_out: "
+                        f"no recovery after {inactivity_seconds}s"
+                    )
+
+            except Exception as e:
+                logger.error(f"Failed to check stale run {run.id}: {e}")
 
         await session.commit()
 
-        logger.info(f"Timeout check complete: {timed_out_count} runs marked as timed_out")
+        logger.info(
+            f"Timeout check complete: {stale_count} marked stale, "
+            f"{timed_out_count} timed out, {recovered_count} recovered"
+        )
         return {
             "status": "processed",
-            "count": timed_out_count,
+            "stale_count": stale_count,
+            "timed_out_count": timed_out_count,
+            "recovered_count": recovered_count,
             "checked_at": now.isoformat(),
         }
 

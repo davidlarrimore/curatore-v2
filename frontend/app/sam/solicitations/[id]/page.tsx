@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, use, useCallback } from 'react'
+import { useState, useEffect, use, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
@@ -109,8 +109,9 @@ function SolicitationDetailContent({ params }: PageProps) {
     }
   }, [solicitation?.summary_status, loadSolicitation])
 
-  // Get active refresh jobs for this solicitation
+  // Get active refresh jobs for this solicitation (via WebSocket)
   const activeRefreshJobs = getJobsForResource('sam_solicitation', solicitationId)
+  const prevJobCountRef = useRef(activeRefreshJobs.length)
 
   // Handle refresh from SAM.gov
   const handleRefreshFromSam = async () => {
@@ -143,15 +144,18 @@ function SolicitationDetailContent({ params }: PageProps) {
     }
   }
 
-  // Poll for data updates while there's an active refresh job
+  // Refresh data when a refresh job completes (via WebSocket)
   useEffect(() => {
-    if (activeRefreshJobs.length > 0 && token) {
-      const interval = setInterval(() => {
-        loadData()
-      }, 5000)
-      return () => clearInterval(interval)
+    const currentCount = activeRefreshJobs.length
+    const prevCount = prevJobCountRef.current
+
+    // If job count decreased, a job completed - refresh data
+    if (currentCount < prevCount) {
+      loadData()
     }
-  }, [activeRefreshJobs.length, token, loadData])
+
+    prevJobCountRef.current = currentCount
+  }, [activeRefreshJobs.length, loadData])
 
   // Handle regenerate summary
   const handleRegenerateSummary = async () => {

@@ -82,7 +82,7 @@ function getQueueType(runType: string): string {
 }
 
 // Status filter type
-type StatusFilter = 'all' | 'pending' | 'submitted' | 'running' | 'completed' | 'failed' | 'timed_out'
+type StatusFilter = 'all' | 'pending' | 'submitted' | 'running' | 'stale' | 'completed' | 'failed' | 'timed_out'
 
 // Helper to get icon component for a run type
 function getJobTypeIcon(runType: string): React.ComponentType<{ className?: string }> {
@@ -116,6 +116,8 @@ function getStatusClasses(status: string): string {
       return 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
     case 'running':
       return 'bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400'
+    case 'stale':
+      return 'bg-orange-100 text-orange-700 dark:bg-orange-900/30 dark:text-orange-400'
     case 'completed':
       return 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400'
     case 'failed':
@@ -269,12 +271,12 @@ function JobManagerContent() {
     await Promise.all([loadData(), refreshQueue()])
   }
 
-  // Compute stats for queue tabs (active jobs only: pending + submitted + running)
+  // Compute stats for queue tabs (active jobs only: pending + submitted + running + stale)
   const queueStats24h = useMemo(() => {
     const stats: Record<string, number> = { all: 0 }
 
     for (const job of allJobs) {
-      const isActive = ['pending', 'submitted', 'running'].includes(job.status)
+      const isActive = ['pending', 'submitted', 'running', 'stale'].includes(job.status)
       if (isActive) {
         stats.all++
         const queueType = getQueueType(job.run_type)
@@ -285,12 +287,13 @@ function JobManagerContent() {
     return stats
   }, [allJobs])
 
-  // Compute status stats - active for pending/submitted/running, 24h for completed/failed/timed_out
+  // Compute status stats - active for pending/submitted/running/stale, 24h for completed/failed/timed_out
   const statusStats = useMemo(() => {
     const stats = {
       pending: 0,
       submitted: 0,
       running: 0,
+      stale: 0,
       completed24h: 0,
       failed24h: 0,
       timedOut24h: 0,
@@ -305,6 +308,7 @@ function JobManagerContent() {
       if (job.status === 'pending') stats.pending++
       else if (job.status === 'submitted') stats.submitted++
       else if (job.status === 'running') stats.running++
+      else if (job.status === 'stale') stats.stale++
       else if (job.status === 'completed') {
         if (job.completed_at && isWithin24Hours(job.completed_at)) {
           stats.completed24h++
@@ -622,6 +626,28 @@ function JobManagerContent() {
             </div>
           </button>
 
+          {/* Stale (may be stuck) */}
+          {statusStats.stale > 0 && (
+            <button
+              onClick={() => handleStatusChange(statusFilter === 'stale' ? 'all' : 'stale')}
+              className={`bg-white dark:bg-gray-800 rounded-xl border-2 p-4 transition-all ${
+                statusFilter === 'stale'
+                  ? 'border-orange-500 ring-2 ring-orange-500/20'
+                  : 'border-gray-200 dark:border-gray-700 hover:border-orange-300 dark:hover:border-orange-700'
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-orange-50 dark:bg-orange-900/20 flex items-center justify-center">
+                  <AlertTriangle className="w-5 h-5 text-orange-600 dark:text-orange-400" />
+                </div>
+                <div className="text-left">
+                  <p className="text-xs text-gray-500 dark:text-gray-400">Stale</p>
+                  <p className="text-xl font-bold text-orange-600 dark:text-orange-400">{statusStats.stale}</p>
+                </div>
+              </div>
+            </button>
+          )}
+
           {/* Completed (24h) */}
           <button
             onClick={() => handleStatusChange(statusFilter === 'completed' ? 'all' : 'completed')}
@@ -888,8 +914,10 @@ function JobManagerContent() {
                             <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium ${getStatusClasses(job.status)}`}>
                               {job.status === 'running' && <Loader2 className="w-3 h-3 animate-spin" />}
                               {job.status === 'pending' && <Clock className="w-3 h-3" />}
+                              {job.status === 'stale' && <AlertTriangle className="w-3 h-3" />}
                               {job.status === 'completed' && <CheckCircle className="w-3 h-3" />}
                               {job.status === 'failed' && <XCircle className="w-3 h-3" />}
+                              {job.status === 'timed_out' && <Timer className="w-3 h-3" />}
                               {job.status}
                             </span>
                             {job.queue_position && job.status === 'pending' && (

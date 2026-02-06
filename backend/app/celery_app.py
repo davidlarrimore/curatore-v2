@@ -41,6 +41,7 @@ app = Celery(
 # - scrape: Web scraping and crawling
 # - sharepoint: SharePoint sync operations
 # - salesforce: Salesforce CRM data import
+# - forecast: Acquisition forecast sync (AG, APFS, State)
 # - maintenance: Scheduled tasks, cleanup, recovery
 app.conf.task_queues = (
     Queue("processing_priority", routing_key="processing_priority"),
@@ -49,6 +50,7 @@ app.conf.task_queues = (
     Queue("scrape", routing_key="scrape"),
     Queue("sharepoint", routing_key="sharepoint"),
     Queue("salesforce", routing_key="salesforce"),
+    Queue("forecast", routing_key="forecast"),
     Queue("pipeline", routing_key="pipeline"),
     Queue("maintenance", routing_key="maintenance"),
 )
@@ -56,6 +58,8 @@ app.conf.task_queues = (
 # Core settings with sensible defaults, overridable via env
 app.conf.update(
     task_acks_late=_bool(os.getenv("CELERY_ACKS_LATE", "true"), True),
+    # Ensure tasks are requeued if worker is lost (complements acks_late)
+    task_reject_on_worker_lost=_bool(os.getenv("CELERY_REJECT_ON_WORKER_LOST", "true"), True),
     worker_prefetch_multiplier=int(os.getenv("CELERY_PREFETCH_MULTIPLIER", "1")),
     worker_max_tasks_per_child=int(os.getenv("CELERY_MAX_TASKS_PER_CHILD", "50")),
     task_soft_time_limit=int(os.getenv("CELERY_TASK_SOFT_TIME_LIMIT", "600")),
@@ -103,6 +107,11 @@ app.conf.update(
         # SALESFORCE QUEUE - Salesforce CRM data import
         # =================================================================
         "app.tasks.salesforce_import_task": {"queue": "salesforce"},
+
+        # =================================================================
+        # FORECAST QUEUE - Acquisition forecast sync (AG, APFS, State)
+        # =================================================================
+        "app.tasks.forecast_sync_task": {"queue": "forecast"},
 
         # =================================================================
         # MAINTENANCE QUEUE - System tasks, queue management, cleanup
@@ -214,15 +223,17 @@ if extraction_queue_enabled:
         "options": {"queue": "maintenance"},
     }
 
-# Add extraction timeout checker task
-# This task marks extractions that have exceeded their timeout as 'timed_out'
+# Add job timeout checker task
+# This task checks for stale/timed-out jobs using two-phase detection:
+# - Phase 1: Mark jobs as "stale" after 2 min of no heartbeat (warning)
+# - Phase 2: Mark jobs as "timed_out" after 5 min of no heartbeat (terminal)
 extraction_timeout_check_enabled = _bool(os.getenv("EXTRACTION_TIMEOUT_CHECK_ENABLED", "true"), True)
-extraction_timeout_check_interval = int(os.getenv("EXTRACTION_TIMEOUT_CHECK_INTERVAL", "60"))  # 1 minute
+extraction_timeout_check_interval = int(os.getenv("EXTRACTION_TIMEOUT_CHECK_INTERVAL", "30"))  # 30 seconds
 
 if extraction_timeout_check_enabled:
     beat_schedule["check-extraction-timeouts"] = {
         "task": "app.tasks.check_extraction_timeouts_task",
-        "schedule": extraction_timeout_check_interval,  # Every N seconds (default: 60)
+        "schedule": extraction_timeout_check_interval,  # Every N seconds (default: 30)
         "options": {"queue": "maintenance"},
     }
 

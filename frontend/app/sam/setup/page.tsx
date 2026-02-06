@@ -1,9 +1,10 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo } from 'react'
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { useActiveJobs } from '@/lib/context-shims'
+import { useUnifiedJobs } from '@/lib/unified-jobs-context'
 import { samApi, connectionsApi, SamSearch, SamApiUsage, SamQueueStats } from '@/lib/api'
 import { formatCompact } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
@@ -49,7 +50,8 @@ export default function SamSetupPage() {
 function SamSetupContent() {
   const router = useRouter()
   const { token } = useAuth()
-  const { addJob } = useActiveJobs()
+  const { addJob, getJobsForResource } = useActiveJobs()
+  const { getJobsByType } = useUnifiedJobs()
 
   // State
   const [searches, setSearches] = useState<SamSearch[]>([])
@@ -62,6 +64,10 @@ function SamSetupContent() {
   const [hasConnection, setHasConnection] = useState<boolean | null>(null)
   const [sortColumn, setSortColumn] = useState<SortColumn>('name')
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
+
+  // Track SAM pull jobs via WebSocket
+  const samPullJobs = getJobsByType('sam_pull' as any)
+  const prevJobCountRef = useRef(samPullJobs.length)
 
   // Sort handler
   const handleSort = (column: SortColumn) => {
@@ -170,16 +176,18 @@ function SamSetupContent() {
     return <SamConnectionRequired />
   }
 
-  // Poll when any search is pulling
+  // Refresh data when a SAM pull job completes (via WebSocket)
   useEffect(() => {
-    const hasPulling = searches.some(s => s.is_pulling)
-    if (hasPulling) {
-      const interval = setInterval(() => {
-        loadData(true) // Silent refresh - don't show spinner
-      }, 3000) // Poll every 3 seconds while pulling
-      return () => clearInterval(interval)
+    const currentCount = samPullJobs.length
+    const prevCount = prevJobCountRef.current
+
+    // If job count decreased, a job completed - refresh data
+    if (currentCount < prevCount) {
+      loadData(true) // Silent refresh
     }
-  }, [searches, loadData])
+
+    prevJobCountRef.current = currentCount
+  }, [samPullJobs.length, loadData])
 
   // Handlers
   const handleCreate = () => {
@@ -264,8 +272,7 @@ function SamSetupContent() {
       } else {
         toast.success(`Pull completed: ${result.new_solicitations || 0} new solicitations`)
       }
-      // Refresh data silently to show the pulling indicator
-      // The polling effect will take over once is_pulling is detected
+      // Refresh data silently - WebSocket will handle job completion detection
       loadData(true)
     } catch (err: any) {
       // Check if this is a rate limit error (429)
@@ -460,10 +467,10 @@ function SamSetupContent() {
               <span className="font-medium">{searches.filter(s => s.status === 'active').length}</span>
               <span>active</span>
             </div>
-            {searches.filter(s => s.is_pulling).length > 0 && (
+            {(searches.filter(s => s.is_pulling).length > 0 || samPullJobs.length > 0) && (
               <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-indigo-50 dark:bg-indigo-900/20 text-indigo-700 dark:text-indigo-400">
                 <RefreshCw className="w-4 h-4 animate-spin" />
-                <span className="font-medium">{searches.filter(s => s.is_pulling).length}</span>
+                <span className="font-medium">{Math.max(searches.filter(s => s.is_pulling).length, samPullJobs.length)}</span>
                 <span>pulling</span>
               </div>
             )}
@@ -580,6 +587,7 @@ function SamSetupContent() {
                     <SearchTableRow
                       key={search.id}
                       search={search}
+                      hasActiveJob={getJobsForResource('sam_search', search.id).length > 0}
                       onEdit={() => handleEdit(search)}
                       onClone={() => handleClone(search)}
                       onDelete={() => handleDelete(search)}
@@ -639,6 +647,7 @@ function SortableHeader({ label, column, currentColumn, direction, onSort }: Sor
 // Search Table Row Component
 interface SearchTableRowProps {
   search: SamSearch
+  hasActiveJob: boolean  // WebSocket-tracked job for immediate UI feedback
   onEdit: () => void
   onClone: () => void
   onDelete: () => void
@@ -651,6 +660,7 @@ interface SearchTableRowProps {
 
 function SearchTableRow({
   search,
+  hasActiveJob,
   onEdit,
   onClone,
   onDelete,
@@ -660,6 +670,8 @@ function SearchTableRow({
   getStatusColor,
   getPullStatusColor,
 }: SearchTableRowProps) {
+  // Include WebSocket-tracked jobs for immediate UI feedback
+  const isPulling = search.is_pulling || hasActiveJob
   const [showMenu, setShowMenu] = useState(false)
 
   // Build search criteria summary
@@ -687,7 +699,7 @@ function SearchTableRow({
       <td className="px-4 py-3">
         <div className="flex items-center gap-3">
           {/* Pulling indicator */}
-          {search.is_pulling && (
+          {isPulling && (
             <div className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse" />
           )}
           <div className="min-w-0">
@@ -729,7 +741,7 @@ function SearchTableRow({
 
       {/* Last Pull */}
       <td className="px-4 py-3">
-        {search.is_pulling ? (
+        {isPulling ? (
           <div className="flex items-center gap-1.5 text-sm text-indigo-600 dark:text-indigo-400">
             <RefreshCw className="w-3.5 h-3.5 animate-spin" />
             <span className="font-medium">Pulling...</span>
@@ -747,19 +759,19 @@ function SearchTableRow({
           {/* Sync button */}
           <button
             onClick={() => {
-              if (!search.is_pulling) {
+              if (!isPulling) {
                 onTriggerPull()
               }
             }}
-            disabled={search.is_pulling}
-            title={search.is_pulling ? 'Sync in progress...' : 'Sync now'}
+            disabled={isPulling}
+            title={isPulling ? 'Sync in progress...' : 'Sync now'}
             className={`p-1.5 rounded-lg transition-all ${
-              search.is_pulling
+              isPulling
                 ? 'text-indigo-500 cursor-not-allowed'
                 : 'text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20'
             }`}
           >
-            <RefreshCw className={`w-4 h-4 ${search.is_pulling ? 'animate-spin' : ''}`} />
+            <RefreshCw className={`w-4 h-4 ${isPulling ? 'animate-spin' : ''}`} />
           </button>
 
           {/* Edit button */}

@@ -20,6 +20,7 @@ from .routers import (
     sam,
     salesforce,
     sharepoint_sync,
+    forecasts,
     queue_admin,
     functions,
     procedures,
@@ -55,6 +56,8 @@ api_router.include_router(sam.router)
 api_router.include_router(salesforce.router)
 # Phase 8: SharePoint Sync Integration endpoints
 api_router.include_router(sharepoint_sync.router)
+# Acquisition Forecast Integration endpoints
+api_router.include_router(forecasts.router)
 # Extraction Queue Admin endpoints
 api_router.include_router(queue_admin.router)
 # Procedures Framework endpoints

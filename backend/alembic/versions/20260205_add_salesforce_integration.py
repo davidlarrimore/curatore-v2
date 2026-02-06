@@ -31,7 +31,7 @@ from sqlalchemy import text
 
 # revision identifiers, used by Alembic.
 revision = 'add_salesforce_integration'
-down_revision = 'add_solicitation_number_to_notices'
+down_revision = '20260205_notices_solnum'
 branch_labels = None
 depends_on = None
 

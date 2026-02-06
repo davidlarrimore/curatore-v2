@@ -55,6 +55,7 @@ ALL_RUN_TYPES = [
     "pipeline",
     "pipeline_run",
     "salesforce_import",
+    "forecast_sync",
 ]
 
 
@@ -306,49 +307,60 @@ async def get_unified_queue_stats(
             )
             recent_stats[status] = result.scalar() or 0
 
-        # Get Celery queue lengths from Redis
-        celery_queues = {"processing_priority": 0, "extraction": 0, "enhancement": 0, "maintenance": 0}
-        workers_info = {"active": 0, "tasks_running": 0}
+        # Get worker health info (simple check - are workers online?)
+        # NOTE: We intentionally don't show per-queue Celery counts as they're unreliable.
+        # The database Run status is the source of truth for job counts.
+        workers_info = {"active": 0, "tasks_running": 0, "tasks_reserved": 0}
         try:
-            import redis
-            r = redis.Redis(host='redis', port=6379, db=0)
-            celery_queues = {
-                "processing_priority": r.llen("processing_priority") or 0,
-                "extraction": r.llen("extraction") or 0,
-                "enhancement": r.llen("enhancement") or 0,
-                "sam": r.llen("sam") or 0,
-                "scrape": r.llen("scrape") or 0,
-                "sharepoint": r.llen("sharepoint") or 0,
-                "maintenance": r.llen("maintenance") or 0,
-            }
+            from ....celery_app import app as celery_app
+            inspector = celery_app.control.inspect(timeout=2.0)  # Short timeout
 
-            # Try to get worker info from Celery
-            try:
-                from ....celery_app import app as celery_app
-                inspector = celery_app.control.inspect()
-                active = inspector.active() or {}
-                workers_info["active"] = len(active)
-                workers_info["tasks_running"] = sum(len(tasks) for tasks in active.values())
-            except Exception as e:
-                logger.debug(f"Could not get Celery worker info: {e}")
+            # Get active workers and their running tasks
+            active = inspector.active() or {}
+            workers_info["active"] = len(active)
+            workers_info["tasks_running"] = sum(len(tasks) for tasks in active.values())
+
+            # Get reserved tasks (prefetched by workers)
+            reserved = inspector.reserved() or {}
+            workers_info["tasks_reserved"] = sum(len(tasks) for tasks in reserved.values())
+
         except Exception as e:
-            logger.debug(f"Could not connect to Redis for queue lengths: {e}")
+            logger.debug(f"Could not get Celery worker info: {e}")
+
+        # Get database-backed job counts by status (the real source of truth)
+        # This replaces the unreliable Celery queue counts
+        job_counts_by_status = {}
+        for status in ["pending", "submitted", "running", "stale"]:
+            result = await session.execute(
+                select(func.count(Run.id))
+                .where(and_(
+                    Run.organization_id == current_user.organization_id,
+                    Run.status == status,
+                ))
+            )
+            job_counts_by_status[status] = result.scalar() or 0
 
         return UnifiedQueueStatsResponse(
             extraction_queue=ExtractionQueueInfo(
                 pending=stats.get("pending_count", 0),
                 submitted=stats.get("submitted_count", 0),
                 running=stats.get("running_count", 0),
+                stale=job_counts_by_status.get("stale", 0),
                 max_concurrent=stats.get("max_concurrent", 10),
             ),
+            # DEPRECATED: Celery queue counts are unreliable. Use database Run status instead.
+            # These are kept for backwards compatibility but always return 0.
+            # The "workers" field below shows actual worker status.
             celery_queues=CeleryQueuesInfo(
-                processing_priority=celery_queues.get("processing_priority", 0),
-                extraction=celery_queues.get("extraction", 0),
-                enhancement=celery_queues.get("enhancement", 0),
-                sam=celery_queues.get("sam", 0),
-                scrape=celery_queues.get("scrape", 0),
-                sharepoint=celery_queues.get("sharepoint", 0),
-                maintenance=celery_queues.get("maintenance", 0),
+                processing_priority=0,
+                extraction=0,
+                enhancement=0,
+                sam=0,
+                scrape=0,
+                sharepoint=0,
+                salesforce=0,
+                pipeline=0,
+                maintenance=0,
             ),
             throughput=ThroughputInfo(
                 per_minute=stats.get("throughput_per_minute", 0.0),
@@ -367,6 +379,7 @@ async def get_unified_queue_stats(
             workers=WorkersInfo(
                 active=workers_info.get("active", 0),
                 tasks_running=workers_info.get("tasks_running", 0),
+                tasks_reserved=workers_info.get("tasks_reserved", 0),
             ),
         )
 

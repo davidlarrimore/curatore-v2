@@ -14,6 +14,7 @@ import {
   Zap,
   Trash2,
   Database,
+  TrendingUp,
   LucideIcon,
 } from 'lucide-react'
 
@@ -28,6 +29,7 @@ export type JobType =
   | 'procedure'
   | 'deletion'
   | 'salesforce_import'
+  | 'forecast_sync'
 
 // Configuration for a single job type
 export interface JobTypeConfig {
@@ -133,6 +135,16 @@ export const JOB_TYPE_CONFIG: Record<JobType, JobTypeConfig> = {
     completedToast: (name) => `Salesforce import completed: ${name}`,
     failedToast: (name, error) => `Salesforce import failed: ${name}${error ? ` - ${error}` : ''}`,
   },
+  forecast_sync: {
+    label: 'Forecast Sync',
+    icon: TrendingUp,
+    color: 'emerald',
+    resourceType: 'forecast_sync',
+    hasChildJobs: false,
+    phases: ['fetching', 'parsing', 'indexing'],
+    completedToast: (name) => `Forecast sync completed: ${name}`,
+    failedToast: (name, error) => `Forecast sync failed: ${name}${error ? ` - ${error}` : ''}`,
+  },
 }
 
 // Get job type from run_type string
@@ -148,6 +160,7 @@ export function getJobTypeFromRunType(runType: string): JobType | null {
     procedure: 'procedure',
     deletion: 'deletion',
     salesforce_import: 'salesforce_import',
+    forecast_sync: 'forecast_sync',
   }
 
   if (directMap[runType]) {
@@ -160,6 +173,7 @@ export function getJobTypeFromRunType(runType: string): JobType | null {
   if (runType.startsWith('scrape_')) return 'scrape'
   if (runType.startsWith('sharepoint_')) return 'sharepoint_sync'
   if (runType.startsWith('salesforce_')) return 'salesforce_import'
+  if (runType.startsWith('forecast_')) return 'forecast_sync'
   // Deletion aliases (e.g., sharepoint_delete, sam_delete)
   if (runType.endsWith('_delete')) return 'deletion'
 

@@ -129,22 +129,6 @@ if [[ -f "${GUARD_FILE}" ]]; then
   rm -f "${GUARD_FILE}"
 fi
 
-# --- Recreate directory structure
-if [[ -x "${REPO_ROOT}/scripts/setup_directories.sh" ]]; then
-  "${REPO_ROOT}/scripts/setup_directories.sh"
-else
-  mkdir -p "${REPO_ROOT}/files/uploaded_files" \
-           "${REPO_ROOT}/files/processed_files" \
-           "${REPO_ROOT}/files/batch_files"
-  touch "${REPO_ROOT}/files/uploaded_files/.gitkeep" \
-        "${REPO_ROOT}/files/processed_files/.gitkeep" \
-        "${REPO_ROOT}/files/batch_files/.gitkeep"
-  chmod 755 "${REPO_ROOT}/files" \
-            "${REPO_ROOT}/files/uploaded_files" \
-            "${REPO_ROOT}/files/processed_files" \
-            "${REPO_ROOT}/files/batch_files"
-fi
-
 # --- Quick environment sanity checks before re-init
 echo "🩺 Sanity checks..."
 # Disk space (warn if < 2GB free)

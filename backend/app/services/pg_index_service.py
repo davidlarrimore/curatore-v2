@@ -564,6 +564,150 @@ class PgIndexService:
             logger.error(f"Failed to delete SAM solicitation index {solicitation_id}: {e}")
             return False
 
+    # =========================================================================
+    # FORECAST INDEXING
+    # =========================================================================
+
+    async def index_forecast(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        forecast_id: UUID,
+        source_type: str,
+        source_id: str,
+        title: str,
+        description: Optional[str] = None,
+        agency_name: Optional[str] = None,
+        naics_codes: Optional[list] = None,
+        set_aside_type: Optional[str] = None,
+        fiscal_year: Optional[int] = None,
+        estimated_award_quarter: Optional[str] = None,
+        url: Optional[str] = None,
+    ) -> bool:
+        """
+        Index an acquisition forecast.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            forecast_id: Internal forecast UUID
+            source_type: Source (ag, apfs, state)
+            source_id: Source-specific identifier (nid, apfs_number, row_hash)
+            title: Forecast title
+            description: Forecast description
+            agency_name: Agency name
+            naics_codes: List of NAICS code dicts
+            set_aside_type: Set-aside type
+            fiscal_year: Fiscal year
+            estimated_award_quarter: Estimated award quarter
+            url: Source URL (if available)
+
+        Returns:
+            True if indexed successfully
+        """
+        if not _is_search_enabled():
+            return False
+
+        try:
+            # Build content for indexing
+            content_parts = [title]
+            if description:
+                content_parts.append(description)
+            if agency_name:
+                content_parts.append(agency_name)
+            if naics_codes:
+                for nc in naics_codes:
+                    if isinstance(nc, dict):
+                        code = nc.get("code", "")
+                        desc = nc.get("description", "")
+                        if code:
+                            content_parts.append(code)
+                        if desc:
+                            content_parts.append(desc)
+
+            content = "\n\n".join(content_parts)
+
+            # Generate embedding
+            embedding = await embedding_service.get_embedding(content)
+
+            # Build metadata
+            metadata = {
+                "source_type": source_type,
+                "source_id": source_id,
+                "agency_name": agency_name,
+                "set_aside_type": set_aside_type,
+                "fiscal_year": fiscal_year,
+                "estimated_award_quarter": estimated_award_quarter,
+            }
+
+            # Delete existing chunk for this forecast
+            await self._delete_chunks(session, f"{source_type}_forecast", forecast_id)
+
+            # Insert single chunk (forecasts are typically short)
+            await self._insert_chunk(
+                session=session,
+                source_type=f"{source_type}_forecast",
+                source_id=forecast_id,
+                organization_id=organization_id,
+                chunk_index=0,
+                content=content,
+                title=title,
+                filename=source_id,
+                url=url,
+                embedding=embedding,
+                source_type_filter="forecast",
+                content_type=source_type,
+                metadata=metadata,
+            )
+
+            # Update indexed_at timestamp on the forecast record
+            if source_type == "ag":
+                from ..database.models import AgForecast
+                await session.execute(
+                    update(AgForecast)
+                    .where(AgForecast.id == forecast_id)
+                    .values(indexed_at=datetime.utcnow())
+                )
+            elif source_type == "apfs":
+                from ..database.models import ApfsForecast
+                await session.execute(
+                    update(ApfsForecast)
+                    .where(ApfsForecast.id == forecast_id)
+                    .values(indexed_at=datetime.utcnow())
+                )
+            elif source_type == "state":
+                from ..database.models import StateForecast
+                await session.execute(
+                    update(StateForecast)
+                    .where(StateForecast.id == forecast_id)
+                    .values(indexed_at=datetime.utcnow())
+                )
+
+            await session.commit()
+            logger.debug(f"Indexed {source_type} forecast {forecast_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error indexing forecast {forecast_id}: {e}")
+            await session.rollback()
+            return False
+
+    async def delete_forecast(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        forecast_id: UUID,
+        source_type: str,
+    ) -> bool:
+        """Delete a forecast from the index."""
+        try:
+            await self._delete_chunks(session, f"{source_type}_forecast", forecast_id)
+            await session.commit()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to delete forecast index {forecast_id}: {e}")
+            return False
+
     async def reindex_organization(
         self,
         session: AsyncSession,

@@ -98,15 +98,19 @@ async def _execute_extraction_async(
     Returns:
         Dict with extraction result
     """
+    from .services.heartbeat_service import heartbeat_service
+
     async with database_service.get_session() as session:
-        result = await extraction_orchestrator.execute_extraction(
-            session=session,
-            asset_id=asset_id,
-            run_id=run_id,
-            extraction_id=extraction_id,
-        )
-        await session.commit()
-        return result
+        # Use auto-heartbeat to signal we're alive every 30 seconds
+        async with heartbeat_service.auto_heartbeat(session, run_id):
+            result = await extraction_orchestrator.execute_extraction(
+                session=session,
+                asset_id=asset_id,
+                run_id=run_id,
+                extraction_id=extraction_id,
+            )
+            await session.commit()
+            return result
 
 
 # ============================================================================
@@ -1185,15 +1189,28 @@ async def _check_scheduled_tasks() -> Dict[str, Any]:
                 # (Same fix as extraction queue race condition)
                 await session.commit()
 
-                # Enqueue the task for execution
-                execute_scheduled_task_async.delay(
-                    task_id=str(task.id),
-                    run_id=str(run.id),
+                # Enqueue the task for execution with explicit queue routing
+                # Use apply_async instead of delay for reliable routing + task tracking
+                celery_task = execute_scheduled_task_async.apply_async(
+                    kwargs={
+                        "task_id": str(task.id),
+                        "run_id": str(run.id),
+                    },
+                    queue="maintenance",
                 )
+
+                # Update run with Celery task info (same pattern as extraction tasks)
+                from datetime import datetime as dt
+                now = dt.utcnow()
+                run.status = "submitted"
+                run.celery_task_id = celery_task.id
+                run.submitted_to_celery_at = now
+                run.last_activity_at = now
+                await session.commit()
 
                 triggered_tasks.append(task.name)
                 logging.getLogger("curatore.tasks.scheduled").info(
-                    f"Enqueued scheduled task: {task.name} (run_id={run.id})"
+                    f"Submitted scheduled task: {task.name} (run_id={run.id}, celery_task_id={celery_task.id})"
                 )
 
             except Exception as e:
@@ -1490,6 +1507,7 @@ def sam_pull_task(
     from .services.sam_pull_service import sam_pull_service
     from .services.sam_service import sam_service
     from .services.run_group_service import run_group_service
+    from .services.heartbeat_service import heartbeat_service
     from .database.models import Run, SamSearch
     from sqlalchemy import select
 
@@ -1574,6 +1592,9 @@ def sam_pull_task(
                     group_id = group.id
                     logger.info(f"Created group {group_id} for SAM pull task")
 
+                # Send heartbeat before starting pull
+                await heartbeat_service.beat(session, run_uuid, progress={"phase": "starting_pull"})
+
                 # Perform the pull
                 result = await sam_pull_service.pull_opportunities(
                     session=session,
@@ -1585,6 +1606,12 @@ def sam_pull_task(
                     run_id=run_uuid,
                     group_id=group_id,
                 )
+
+                # Heartbeat after pull completes
+                await heartbeat_service.beat(session, run_uuid, progress={
+                    "phase": "pull_complete",
+                    "total_fetched": result.get("total_fetched", 0),
+                })
 
                 # Finalize group after pull completes (handles case where all children complete fast)
                 if group:
@@ -3449,13 +3476,15 @@ async def _sharepoint_sync_async(
     from .services.extraction_queue_service import extraction_queue_service
     from .services.run_group_service import run_group_service
     from .services.queue_registry import QueuePriority
+    from .services.heartbeat_service import heartbeat_service
     from .database.models import SharePointSyncedDocument, Asset, SharePointSyncConfig
 
     logger = logging.getLogger("curatore.tasks.sharepoint_sync")
 
     async with database_service.get_session() as session:
-        # Start the run
+        # Start the run and send initial heartbeat
         await run_service.start_run(session, run_id)
+        await heartbeat_service.beat(session, run_id)
 
         # Get sync config for automation settings
         config = await session.get(SharePointSyncConfig, sync_config_id)
@@ -3500,7 +3529,7 @@ async def _sharepoint_sync_async(
         await session.commit()
 
         try:
-            # Execute sync
+            # Execute sync (group_id passed to link child extractions to this run's group)
             result = await sharepoint_sync_service.execute_sync(
                 session=session,
                 sync_config_id=sync_config_id,
@@ -3508,7 +3537,14 @@ async def _sharepoint_sync_async(
                 run_id=run_id,
                 full_sync=full_sync,
                 use_delta=use_delta,
+                group_id=group_id,
             )
+
+            # Heartbeat after sync execution
+            await heartbeat_service.beat(session, run_id, progress={
+                "phase": "sync_complete",
+                "files_synced": result.get("files_synced", 0),
+            })
 
             # Get newly created assets for extraction
             new_docs_result = await session.execute(
@@ -3546,6 +3582,14 @@ async def _sharepoint_sync_async(
                             group_id=group_id,
                         )
                         extraction_count += 1
+
+                        # Heartbeat every 20 extractions queued
+                        if extraction_count % 20 == 0:
+                            await heartbeat_service.beat(session, run_id, progress={
+                                "phase": "queueing_extractions",
+                                "queued": extraction_count,
+                                "total": len(new_docs),
+                            })
                     except Exception as e:
                         logger.warning(f"Failed to queue extraction for asset {asset.id}: {e}")
 
@@ -4794,6 +4838,7 @@ async def _scrape_crawl_async(
     from .services.run_service import run_service
     from .services.run_log_service import run_log_service
     from .services.run_group_service import run_group_service
+    from .services.heartbeat_service import heartbeat_service
     from .database.models import ScrapeCollection
 
     logger = logging.getLogger("curatore.tasks.scrape_crawl")
@@ -4820,7 +4865,7 @@ async def _scrape_crawl_async(
         )
         group_id = group.id
 
-        # Log start
+        # Log start and send initial heartbeat
         await run_log_service.log_event(
             session=session,
             run_id=run_id,
@@ -4829,6 +4874,7 @@ async def _scrape_crawl_async(
             message=f"Starting web scrape (max_pages={max_pages})",
             context={"group_id": str(group_id)},
         )
+        await heartbeat_service.beat(session, run_id, progress={"phase": "starting_crawl"})
         await session.commit()
 
         try:
@@ -4842,6 +4888,12 @@ async def _scrape_crawl_async(
                 run_id=run_id,
                 group_id=group_id,  # Pass group_id for child extraction tracking
             )
+
+            # Heartbeat after crawl completes
+            await heartbeat_service.beat(session, run_id, progress={
+                "phase": "crawl_complete",
+                "pages_crawled": result.get("pages_crawled", 0),
+            })
 
             # Finalize the group (handles case where children complete before parent finishes)
             await run_group_service.finalize_group(session, group_id)
@@ -5732,3 +5784,186 @@ async def _fail_salesforce_import_run(run_id, error: str) -> None:
     async with database_service.get_session() as session:
         await run_service.fail_run(session, run_id, error)
         await session.commit()
+
+
+# ============================================================================
+# ACQUISITION FORECAST TASKS
+# ============================================================================
+
+
+@shared_task(bind=True, autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 3})
+def forecast_sync_task(
+    self,
+    sync_id: str,
+    organization_id: str,
+    run_id: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Celery task to sync acquisition forecasts from configured source.
+
+    This task dispatches to the appropriate pull service based on the sync's
+    source_type (ag, apfs, state).
+
+    Args:
+        sync_id: ForecastSync UUID string
+        organization_id: Organization UUID string
+        run_id: Optional pre-created Run UUID string
+
+    Returns:
+        Dict containing pull statistics
+    """
+    from .services.forecast_sync_service import forecast_sync_service
+
+    logger = logging.getLogger("curatore.forecast")
+    logger.info(f"Starting forecast sync task for sync {sync_id}" + (f" (run_id={run_id})" if run_id else ""))
+
+    try:
+        result = asyncio.run(
+            _execute_forecast_sync_async(
+                sync_id=uuid.UUID(sync_id),
+                organization_id=uuid.UUID(organization_id),
+                run_id=uuid.UUID(run_id) if run_id else None,
+            )
+        )
+
+        logger.info(f"Forecast sync completed for sync {sync_id}: {result.get('status', 'unknown')}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Forecast sync task failed for sync {sync_id}: {e}", exc_info=True)
+        raise
+
+
+async def _execute_forecast_sync_async(
+    sync_id,
+    organization_id,
+    run_id: Optional[uuid.UUID] = None,
+) -> Dict[str, Any]:
+    """
+    Async wrapper for forecast sync execution.
+
+    Args:
+        sync_id: ForecastSync UUID
+        organization_id: Organization UUID
+        run_id: Optional existing Run UUID
+
+    Returns:
+        Dict with sync statistics
+    """
+    from .services.run_service import run_service
+    from .services.forecast_sync_service import forecast_sync_service
+    from .services.ag_pull_service import ag_pull_service
+    from .services.apfs_pull_service import apfs_pull_service
+    from .services.state_pull_service import state_pull_service
+    from .database.models import Run
+
+    async with database_service.get_session() as session:
+        # Get sync config
+        sync = await forecast_sync_service.get_sync(session, sync_id)
+        if not sync:
+            raise ValueError(f"ForecastSync not found: {sync_id}")
+
+        # Create or get run
+        if run_id:
+            # Update existing run
+            run = await session.get(Run, run_id)
+            if not run:
+                raise ValueError(f"Run not found: {run_id}")
+            run.status = "running"
+            run.started_at = datetime.utcnow()
+            await session.commit()
+        else:
+            # Create new run
+            run = Run(
+                organization_id=organization_id,
+                run_type="forecast_sync",
+                origin="system",
+                status="running",
+                config={
+                    "sync_id": str(sync_id),
+                    "source_type": sync.source_type,
+                },
+                started_at=datetime.utcnow(),
+            )
+            session.add(run)
+            await session.flush()
+            run_id = run.id
+
+            # Update sync with run_id
+            sync.last_sync_run_id = run.id
+            await session.commit()
+
+        try:
+            # Dispatch to appropriate pull service
+            if sync.source_type == "ag":
+                result = await ag_pull_service.pull_forecasts(
+                    session=session,
+                    sync_id=sync_id,
+                    organization_id=organization_id,
+                    run_id=run_id,
+                )
+            elif sync.source_type == "apfs":
+                result = await apfs_pull_service.pull_forecasts(
+                    session=session,
+                    sync_id=sync_id,
+                    organization_id=organization_id,
+                    run_id=run_id,
+                )
+            elif sync.source_type == "state":
+                result = await state_pull_service.pull_forecasts(
+                    session=session,
+                    sync_id=sync_id,
+                    organization_id=organization_id,
+                    run_id=run_id,
+                )
+            else:
+                raise ValueError(f"Unknown source_type: {sync.source_type}")
+
+            # Determine status
+            status = "completed"
+            if result.get("errors", 0) > 0:
+                if result.get("total_processed", 0) > 0:
+                    status = "partial"
+                else:
+                    status = "failed"
+
+            # Update sync status
+            await forecast_sync_service.update_sync_status(
+                session=session,
+                sync_id=sync_id,
+                status="success" if status == "completed" else status,
+                run_id=run_id,
+            )
+
+            # Complete run
+            await run_service.complete_run(
+                session=session,
+                run_id=run_id,
+                results_summary=result,
+            )
+            await session.commit()
+
+            return {
+                "sync_id": str(sync_id),
+                "source_type": sync.source_type,
+                "status": status,
+                **result,
+            }
+
+        except Exception as e:
+            # Update sync status on failure
+            await forecast_sync_service.update_sync_status(
+                session=session,
+                sync_id=sync_id,
+                status="failed",
+                run_id=run_id,
+            )
+
+            await session.rollback()
+            await run_service.fail_run(
+                session=session,
+                run_id=run_id,
+                error_message=str(e),
+            )
+            await session.commit()
+            raise

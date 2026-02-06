@@ -299,7 +299,7 @@ class MaintenanceQueue(QueueDefinition):
             description="System maintenance and cleanup tasks",
             icon="wrench",
             color="gray",
-            default_max_concurrent=1,  # Always serialize maintenance
+            default_max_concurrent=4,  # Allow concurrent different task types (locks prevent same-task overlap)
             default_timeout_seconds=300,
         )
 
@@ -361,6 +361,25 @@ class SalesforceQueue(QueueDefinition):
         )
 
 
+class ForecastQueue(QueueDefinition):
+    """Acquisition Forecast sync queue for AG, APFS, and State sources."""
+
+    def __init__(self):
+        super().__init__(
+            queue_type="forecast",
+            celery_queue="forecast",
+            run_type_aliases=["forecast_sync", "ag_pull", "apfs_pull", "state_pull"],
+            can_cancel=True,
+            can_retry=True,
+            label="Forecast",
+            description="Acquisition forecast synchronization",
+            icon="trending-up",
+            color="emerald",
+            default_max_concurrent=3,  # Limit concurrent syncs
+            default_timeout_seconds=1800,  # 30 minutes
+        )
+
+
 # =============================================================================
 # QUEUE REGISTRY
 # =============================================================================
@@ -418,6 +437,7 @@ class QueueRegistry:
         self.register(PipelineQueue())
         self.register(ProcedureQueue())
         self.register(SalesforceQueue())
+        self.register(ForecastQueue())
 
     def initialize(self, config_overrides: Optional[Dict[str, Dict[str, Any]]] = None):
         """

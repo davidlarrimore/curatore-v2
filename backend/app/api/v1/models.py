@@ -2177,21 +2177,28 @@ class SharePointRemoveItemsResponse(BaseModel):
 
 
 class ExtractionQueueInfo(BaseModel):
-    """Extraction queue counts."""
+    """Extraction queue counts (database-backed, source of truth)."""
     pending: int = Field(..., description="Extractions waiting in queue")
     submitted: int = Field(..., description="Extractions submitted to worker")
     running: int = Field(..., description="Extractions currently processing")
+    stale: int = Field(default=0, description="Extractions that appear stuck (no heartbeat)")
     max_concurrent: int = Field(..., description="Maximum concurrent extractions")
 
 
 class CeleryQueuesInfo(BaseModel):
-    """Celery queue lengths."""
+    """DEPRECATED: Celery queue counts are unreliable. Use ExtractionQueueInfo instead.
+
+    These fields are kept for backwards compatibility but always return 0.
+    The WorkersInfo.active field indicates whether workers are online.
+    """
     processing_priority: int = Field(default=0, description="High priority queue length")
     extraction: int = Field(default=0, description="Extraction queue length")
     enhancement: int = Field(default=0, description="Enhancement queue length (Docling)")
     sam: int = Field(default=0, description="SAM.gov queue length")
     scrape: int = Field(default=0, description="Web scrape queue length")
     sharepoint: int = Field(default=0, description="SharePoint queue length")
+    salesforce: int = Field(default=0, description="Salesforce queue length")
+    pipeline: int = Field(default=0, description="Pipeline queue length")
     maintenance: int = Field(default=0, description="Maintenance queue length")
 
 
@@ -2219,6 +2226,7 @@ class WorkersInfo(BaseModel):
     """Celery worker information."""
     active: int = Field(..., description="Number of active workers")
     tasks_running: int = Field(..., description="Total tasks currently running")
+    tasks_reserved: int = Field(default=0, description="Tasks prefetched by workers, waiting to execute")
 
 
 class UnifiedQueueStatsResponse(BaseModel):

@@ -42,6 +42,7 @@ from ..database.models import (
     SharePointSyncedDocument,
     AssetVersion,
     SamSearch,
+    ForecastSync,
 )
 
 logger = logging.getLogger("curatore.services.maintenance")
@@ -1748,6 +1749,158 @@ async def handle_cleanup_expired_runs(
 
 
 # =============================================================================
+# Handler: Forecast Scheduled Sync
+# =============================================================================
+
+async def handle_forecast_scheduled_sync(
+    session: AsyncSession,
+    run: Run,
+    config: Dict[str, Any],
+) -> Dict[str, Any]:
+    """
+    Execute scheduled forecast syncs for all syncs with matching frequency.
+
+    This handler:
+    1. Finds all ForecastSync records with the specified frequency
+    2. Skips syncs that already have a running job
+    3. Triggers forecast_sync_task for each eligible sync
+
+    Args:
+        session: Database session
+        run: Run context for tracking
+        config: Task configuration:
+            - frequency: "hourly" or "daily" (required)
+
+    Returns:
+        Dict with sync statistics:
+        {
+            "frequency": str,
+            "syncs_found": int,
+            "syncs_triggered": int,
+            "syncs_skipped": int,
+            "errors": list
+        }
+    """
+    frequency = config.get("frequency")
+    if not frequency:
+        await _log_event(
+            session, run.id, "ERROR", "error",
+            "Missing 'frequency' in config (expected 'hourly' or 'daily')"
+        )
+        return {
+            "status": "failed",
+            "error": "Missing frequency configuration",
+        }
+
+    await _log_event(
+        session, run.id, "INFO", "start",
+        f"Starting scheduled forecast sync for frequency: {frequency}"
+    )
+
+    # Find all active forecast syncs with matching frequency
+    syncs_result = await session.execute(
+        select(ForecastSync).where(
+            and_(
+                ForecastSync.sync_frequency == frequency,
+                ForecastSync.is_active == True,
+                ForecastSync.status == "active",
+            )
+        )
+    )
+    forecast_syncs = list(syncs_result.scalars().all())
+
+    syncs_found = len(forecast_syncs)
+    syncs_triggered = 0
+    syncs_skipped = 0
+    errors: List[str] = []
+
+    await _log_event(
+        session, run.id, "INFO", "progress",
+        f"Found {syncs_found} forecast syncs with frequency '{frequency}'"
+    )
+
+    for sync in forecast_syncs:
+        try:
+            # Check if there's already a running sync for this config
+            active_run_result = await session.execute(
+                select(Run).where(
+                    and_(
+                        Run.run_type == "forecast_sync",
+                        Run.status.in_(["pending", "running"]),
+                        Run.config["sync_id"].astext == str(sync.id),
+                    )
+                ).limit(1)
+            )
+            active_run = active_run_result.scalar_one_or_none()
+
+            if active_run:
+                await _log_event(
+                    session, run.id, "INFO", "progress",
+                    f"Skipping '{sync.name}' - sync already in progress (run_id={active_run.id})"
+                )
+                syncs_skipped += 1
+                continue
+
+            # Create a new run for this sync
+            sync_run = Run(
+                id=uuid4(),
+                organization_id=sync.organization_id,
+                run_type="forecast_sync",
+                origin="scheduled",
+                status="pending",
+                config={
+                    "sync_id": str(sync.id),
+                    "sync_name": sync.name,
+                    "source_type": sync.source_type,
+                    "triggered_by_task": str(run.id),
+                },
+            )
+            session.add(sync_run)
+
+            # Commit before dispatching Celery task
+            await session.commit()
+
+            # Trigger the sync task
+            from ..tasks import forecast_sync_task
+            forecast_sync_task.delay(
+                sync_id=str(sync.id),
+                organization_id=str(sync.organization_id),
+                run_id=str(sync_run.id),
+            )
+
+            await _log_event(
+                session, run.id, "INFO", "progress",
+                f"Triggered sync for '{sync.name}' ({sync.source_type}) - run_id={sync_run.id}"
+            )
+            syncs_triggered += 1
+
+        except Exception as e:
+            error_msg = f"Error triggering sync for '{sync.name}': {str(e)}"
+            logger.error(error_msg)
+            errors.append(error_msg)
+            await _log_event(
+                session, run.id, "ERROR", "error", error_msg
+            )
+
+    summary = {
+        "frequency": frequency,
+        "syncs_found": syncs_found,
+        "syncs_triggered": syncs_triggered,
+        "syncs_skipped": syncs_skipped,
+        "errors": errors,
+    }
+
+    status = "completed" if not errors else "partial"
+    await _log_event(
+        session, run.id, "INFO", "summary",
+        f"Forecast scheduled sync complete: {syncs_triggered} triggered, {syncs_skipped} skipped",
+        summary
+    )
+
+    return summary
+
+
+# =============================================================================
 # Handler Registry
 # =============================================================================
 
@@ -1762,6 +1915,7 @@ async def handle_cleanup_expired_runs(
 #   - search: Search index operations
 #   - sharepoint: SharePoint sync operations
 #   - sam: SAM.gov pull operations
+#   - forecast: Acquisition forecast sync operations
 #   - extraction: Extraction queue operations
 #   - procedure: Procedure execution
 #
@@ -1791,6 +1945,9 @@ MAINTENANCE_HANDLERS = {
 
     # SAM.gov domain - pull triggers
     "sam.trigger_pull": handle_sam_scheduled_pull,
+
+    # Forecast domain - sync triggers
+    "forecast.trigger_sync": handle_forecast_scheduled_sync,
 
     # Extraction domain - queue management
     "extraction.queue_orphans": handle_queue_pending_assets,

@@ -1058,6 +1058,7 @@ class SharePointSyncService:
         run_id: UUID,
         full_sync: bool = False,
         use_delta: Optional[bool] = None,
+        group_id: Optional[UUID] = None,
     ) -> Dict[str, Any]:
         """
         Execute synchronization for a sync config.
@@ -1418,6 +1419,7 @@ class SharePointSyncService:
                         item=item,
                         run_id=run_id,
                         full_sync=full_sync,
+                        group_id=group_id,
                     )
                     results[result] += 1
                     processed_files += 1
@@ -1877,6 +1879,7 @@ class SharePointSyncService:
                             item=item,
                             run_id=run_id,
                             full_sync=False,
+                            group_id=group_id,
                         )
                         results[result] += 1
                         processed_files += 1
@@ -2300,6 +2303,7 @@ class SharePointSyncService:
         item: Dict[str, Any],
         run_id: UUID,
         full_sync: bool,
+        group_id: Optional[UUID] = None,
     ) -> str:
         """
         Sync a single file from SharePoint.
@@ -2354,6 +2358,7 @@ class SharePointSyncService:
                 item=item,
                 existing_doc=existing_doc,
                 run_id=run_id,
+                group_id=group_id,
             )
 
         # No SharePointSyncedDocument found - check for orphan asset by sharepoint_item_id
@@ -2392,6 +2397,7 @@ class SharePointSyncService:
             config=config,
             item=item,
             run_id=run_id,
+            group_id=group_id,
         )
 
     async def _find_asset_by_sharepoint_item_id(
@@ -2464,6 +2470,7 @@ class SharePointSyncService:
         config: SharePointSyncConfig,
         item: Dict[str, Any],
         run_id: UUID,
+        group_id: Optional[UUID] = None,
     ) -> str:
         """Download a new file and create an asset with comprehensive metadata."""
         from .asset_service import asset_service
@@ -2650,6 +2657,7 @@ class SharePointSyncService:
                 file_size=actual_size,
                 file_hash=content_hash,
                 status="pending",  # Will trigger extraction
+                group_id=group_id,  # Link child extraction to parent job's run group
             )
         except Exception as e:
             # Handle duplicate asset (UNIQUE constraint on storage key)
@@ -2740,6 +2748,7 @@ class SharePointSyncService:
         item: Dict[str, Any],
         existing_doc: SharePointSyncedDocument,
         run_id: UUID,
+        group_id: Optional[UUID] = None,
     ) -> str:
         """Update an existing synced file that has changed in SharePoint."""
         from .asset_service import asset_service
@@ -2801,6 +2810,7 @@ class SharePointSyncService:
                 config=config,
                 item=item,
                 run_id=run_id,
+                group_id=group_id,
             )
 
         # Download updated content with retry logic for transient errors
@@ -2894,8 +2904,9 @@ class SharePointSyncService:
             await extraction_queue_service.queue_extraction_for_asset(
                 session=session,
                 asset_id=asset.id,
+                group_id=group_id,  # Link child extraction to parent job's run group
             )
-            logger.debug(f"Queued extraction for updated asset {asset.id}")
+            logger.debug(f"Queued extraction for updated asset {asset.id}" + (f" (group: {group_id})" if group_id else ""))
         except Exception as e:
             # Safety net task will catch this if queueing fails
             logger.warning(f"Failed to queue extraction for updated asset {asset.id}: {e}")

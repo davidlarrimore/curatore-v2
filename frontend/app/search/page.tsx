@@ -26,6 +26,7 @@ import {
   Database,
   User,
   DollarSign,
+  TrendingUp,
 } from 'lucide-react'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 
@@ -52,6 +53,11 @@ const sourceTypeFilterConfig: Record<string, { name: string; icon: React.ReactNo
     name: 'SAM.gov',
     icon: <Building2 className="w-4 h-4" />,
     color: 'bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400',
+  },
+  forecast: {
+    name: 'Acquisition Forecasts',
+    icon: <TrendingUp className="w-4 h-4" />,
+    color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
   },
   // Salesforce entity types (individual filters)
   // Filter keys match facet values: "Accounts", "Contacts", "Opportunities"
@@ -91,6 +97,22 @@ const sourceTypeDisplayConfig: Record<string, { name: string; icon: React.ReactN
     name: 'Opportunity',
     icon: <DollarSign className="w-4 h-4" />,
     color: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400',
+  },
+  // Forecast result display labels (individual sources)
+  ag_forecast: {
+    name: 'AG Forecast',
+    icon: <TrendingUp className="w-4 h-4" />,
+    color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+  },
+  apfs_forecast: {
+    name: 'DHS Forecast',
+    icon: <TrendingUp className="w-4 h-4" />,
+    color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
+  },
+  state_forecast: {
+    name: 'State Forecast',
+    icon: <TrendingUp className="w-4 h-4" />,
+    color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
   },
 }
 
@@ -247,6 +269,9 @@ function SearchContent() {
       router.push(`/salesforce/contacts/${hit.asset_id}`)
     } else if (hit.source_type === 'Opportunity') {
       router.push(`/salesforce/opportunities/${hit.asset_id}`)
+    } else if (hit.source_type === 'ag_forecast' || hit.source_type === 'apfs_forecast' || hit.source_type === 'state_forecast') {
+      // Route forecast records to forecast detail page
+      router.push(`/forecasts/${hit.asset_id}`)
     } else {
       // Default to asset page for documents
       router.push(`/assets/${hit.asset_id}`)

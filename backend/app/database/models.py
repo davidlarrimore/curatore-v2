@@ -3197,3 +3197,532 @@ class SalesforceOpportunity(Base):
 
     def __repr__(self) -> str:
         return f"<SalesforceOpportunity(id={self.id}, name={self.name}, stage={self.stage_name})>"
+
+
+# =============================================================================
+# ACQUISITION FORECAST MODELS (Phase: Forecast Integration)
+# =============================================================================
+
+
+class ForecastSync(Base):
+    """
+    ForecastSync model for managing acquisition forecast sync configurations.
+
+    A sync defines a configuration for pulling forecasts from one of three sources:
+    - AG (GSA Acquisition Gateway) - Multi-agency, API with list + detail endpoints
+    - APFS (DHS) - DHS-only, single bulk API endpoint
+    - State (State Department) - Monthly Excel download from website
+
+    Similar to SamSearch for SAM.gov, this is the top-level entity for organizing
+    forecast data ingestion from a specific source.
+
+    Key Concepts:
+    - Each sync targets one source type with source-specific filters
+    - Syncs can be scheduled for automatic pulls (manual, hourly, daily)
+    - Tracks last sync status and forecast counts
+    - Supports automation configuration for triggering procedures
+
+    Attributes:
+        id: Unique sync identifier
+        organization_id: Organization that owns this sync
+        name: Display name for the sync
+        slug: URL-friendly identifier (unique within org)
+        source_type: Source type (ag, apfs, state)
+        status: Sync status (active, paused, archived)
+        is_active: Whether sync is enabled
+        sync_frequency: How often to sync (manual, hourly, daily)
+        last_sync_at: Timestamp of last sync
+        last_sync_status: Status of last sync (success, failed, partial)
+        last_sync_run_id: Run ID of last sync
+        filter_config: JSONB with source-specific filter configuration
+        automation_config: JSONB with procedure/pipeline triggers
+        forecast_count: Cached count of forecasts from this sync
+
+    filter_config Examples:
+        AG: {
+            "agency_ids": [2, 4, 5],
+            "naics_ids": [123, 456],
+            "award_status": "Active"
+        }
+        APFS: {
+            "organizations": ["CBP", "ICE"],
+            "fiscal_years": [2026, 2027],
+            "naics_codes": ["541512"]
+        }
+        State: {} (no filters - single file)
+
+    Relationships:
+        organization: Organization that owns this sync
+        last_sync_run: Most recent sync Run
+    """
+
+    __tablename__ = "forecast_syncs"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Sync metadata
+    name = Column(String(255), nullable=False)
+    slug = Column(String(100), nullable=False)
+    source_type = Column(String(20), nullable=False)  # ag, apfs, state
+
+    # Status
+    status = Column(String(20), nullable=False, default="active", index=True)
+    is_active = Column(Boolean, nullable=False, default=True, index=True)
+
+    # Scheduling
+    sync_frequency = Column(String(20), nullable=False, default="manual")  # manual, hourly, daily
+
+    # Pull tracking
+    last_sync_at = Column(DateTime, nullable=True)
+    last_sync_status = Column(String(50), nullable=True)  # success, failed, partial
+    last_sync_run_id = Column(
+        UUID(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Filter config (JSONB - source-specific)
+    filter_config = Column(JSON, nullable=False, default=dict, server_default="{}")
+
+    # Automation configuration (procedure triggers)
+    automation_config = Column(JSONB, nullable=False, default=dict, server_default="{}")
+
+    # Stats (denormalized)
+    forecast_count = Column(Integer, nullable=False, default=0)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+    created_by = Column(
+        UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Relationships
+    organization = relationship("Organization", backref="forecast_syncs")
+    last_sync_run = relationship("Run", foreign_keys=[last_sync_run_id])
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_forecast_syncs_org_slug", "organization_id", "slug", unique=True),
+        Index("ix_forecast_syncs_org_status", "organization_id", "status"),
+        Index("ix_forecast_syncs_org_active", "organization_id", "is_active"),
+        Index("ix_forecast_syncs_source_type", "source_type"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ForecastSync(id={self.id}, name={self.name}, source={self.source_type})>"
+
+
+class AgForecast(Base):
+    """
+    AgForecast model for GSA Acquisition Gateway forecast records.
+
+    Stores forecast data from the Acquisition Gateway API, which serves
+    multi-agency forecasts. Data is pulled via a two-phase process:
+    1. List API for discovery and pagination
+    2. Detail API for complete record data
+
+    Key Concepts:
+    - Each forecast is identified by unique nid (AG's internal ID)
+    - Supports change detection via change_hash
+    - Includes NAICS codes, acquisition strategies, timeline info
+    - Links to contacts (POC, SBS)
+
+    Attributes:
+        id: Unique forecast identifier (Curatore)
+        organization_id: Tenant isolation
+        sync_id: Reference to ForecastSync configuration
+        nid: AG's unique record identifier
+        title: Forecast title
+        description: Detailed description
+        agency_name: Agency name
+        agency_id: AG's agency ID
+        organization_name: Sub-organization name
+        naics_codes: NAICS codes with descriptions (JSONB array)
+        acquisition_phase: Current acquisition phase
+        acquisition_strategies: Strategies (JSONB array)
+        award_status: Award status (Active, Awarded, etc.)
+        requirement_type: Type of requirement
+        procurement_method: Procurement method
+        set_aside_type: Set-aside designation
+        extent_competed: Competition level
+        listing_id: AG listing ID
+        estimated_solicitation_date: Planned solicitation date
+        estimated_award_fy: Planned award fiscal year
+        estimated_award_quarter: Planned award quarter
+        period_of_performance: POP description
+        poc_name: Point of contact name
+        poc_email: Point of contact email
+        sbs_name: Small business specialist name
+        sbs_email: Small business specialist email
+        source_url: Direct link to AG forecast page
+        raw_data: Original API response (JSONB)
+        first_seen_at: When first imported
+        last_updated_at: When last modified (from source or detection)
+        change_hash: Hash for change detection
+        indexed_at: When indexed to search
+
+    Relationships:
+        organization: Parent organization
+        sync: Parent sync configuration
+    """
+
+    __tablename__ = "ag_forecasts"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sync_id = Column(
+        UUID(), ForeignKey("forecast_syncs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # AG identifiers
+    nid = Column(String(50), nullable=False, index=True)
+
+    # Core fields
+    title = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    agency_name = Column(String(255), nullable=True)
+    agency_id = Column(Integer, nullable=True, index=True)
+    organization_name = Column(String(255), nullable=True)
+
+    # NAICS (JSONB array: [{id, code, description}])
+    naics_codes = Column(JSON, nullable=True)
+
+    # Acquisition details
+    acquisition_phase = Column(String(100), nullable=True)
+    acquisition_strategies = Column(JSON, nullable=True)  # [{id, name}]
+    award_status = Column(String(100), nullable=True, index=True)
+    requirement_type = Column(String(100), nullable=True)
+    procurement_method = Column(String(100), nullable=True)
+    set_aside_type = Column(String(100), nullable=True)
+    extent_competed = Column(String(100), nullable=True)
+    listing_id = Column(String(255), nullable=True)
+
+    # Timeline
+    estimated_solicitation_date = Column(Date, nullable=True)
+    estimated_award_fy = Column(Integer, nullable=True, index=True)
+    estimated_award_quarter = Column(String(20), nullable=True)
+    period_of_performance = Column(String(255), nullable=True)
+
+    # Contacts
+    poc_name = Column(String(255), nullable=True)
+    poc_email = Column(String(255), nullable=True)
+    sbs_name = Column(String(255), nullable=True)
+    sbs_email = Column(String(255), nullable=True)
+
+    # Source tracking
+    source_url = Column(String(1000), nullable=True)
+    raw_data = Column(JSON, nullable=True)
+
+    # Change tracking
+    first_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    change_hash = Column(String(64), nullable=True)
+    history = Column(JSONB, nullable=True, default=list)  # Version history of changes
+
+    # Search
+    indexed_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    organization = relationship("Organization", backref="ag_forecasts")
+    sync = relationship("ForecastSync", backref="ag_forecasts")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_ag_forecasts_org_nid", "organization_id", "nid", unique=True),
+        Index("ix_ag_forecasts_org_agency", "organization_id", "agency_id"),
+        Index("ix_ag_forecasts_org_status", "organization_id", "award_status"),
+        Index("ix_ag_forecasts_est_award_fy", "estimated_award_fy"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<AgForecast(id={self.id}, nid={self.nid}, title={self.title[:50] if self.title else ''})>"
+
+
+class ApfsForecast(Base):
+    """
+    ApfsForecast model for DHS APFS (Acquisition Planning Forecast System) records.
+
+    Stores forecast data from the DHS APFS API, which provides bulk access to
+    all DHS forecast records in a single API call. No pagination or server-side
+    filtering is supported.
+
+    Key Concepts:
+    - DHS-only forecasts (no multi-agency)
+    - Each forecast identified by apfs_number
+    - Rich contact information (requirements, alternate, SBS)
+    - Component-based organization (CBP, ICE, etc.)
+
+    Attributes:
+        id: Unique forecast identifier (Curatore)
+        organization_id: Tenant isolation
+        sync_id: Reference to ForecastSync configuration
+        apfs_number: DHS forecast number (external ID)
+        apfs_id: Internal numeric ID from APFS
+        title: Forecast title
+        description: Detailed description
+        component: DHS component (CBP, ICE, USCIS, etc.)
+        mission: Mission description
+        naics_code: NAICS code
+        naics_description: NAICS description
+        contract_type: Contract type (FFP, T&M, etc.)
+        contract_vehicle: Contract vehicle (GWAC, GSA Schedule, etc.)
+        contract_status: Current status
+        competition_type: Competition type
+        small_business_program: SB program designation
+        small_business_set_aside: Set-aside type
+        dollar_range: Estimated value range
+        fiscal_year: Target fiscal year
+        award_quarter: Target award quarter
+        anticipated_award_date: Planned award date
+        estimated_solicitation_date: Planned solicitation date
+        pop_start_date: Period of performance start
+        pop_end_date: Period of performance end
+        requirements_office: Requirements office name
+        contracting_office: Contracting office name
+        poc_name/email/phone: Primary point of contact
+        alt_contact_name/email: Alternate contact
+        sbs_name/email/phone: Small business specialist
+        current_state: Record state (Published, Draft, etc.)
+        published_date: When published
+        raw_data: Original API response (JSONB)
+        first_seen_at: When first imported
+        last_updated_at: When last modified
+        change_hash: Hash for change detection
+        indexed_at: When indexed to search
+
+    Relationships:
+        organization: Parent organization
+        sync: Parent sync configuration
+    """
+
+    __tablename__ = "apfs_forecasts"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sync_id = Column(
+        UUID(), ForeignKey("forecast_syncs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # APFS identifiers
+    apfs_number = Column(String(50), nullable=False, index=True)
+    apfs_id = Column(Integer, nullable=True)
+
+    # Core fields
+    title = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+    component = Column(String(255), nullable=True, index=True)  # CBP, ICE, etc.
+    mission = Column(String(255), nullable=True)
+
+    # NAICS
+    naics_code = Column(String(20), nullable=True)
+    naics_description = Column(String(500), nullable=True)
+
+    # Contract details
+    contract_type = Column(String(100), nullable=True)
+    contract_vehicle = Column(String(255), nullable=True)
+    contract_status = Column(String(100), nullable=True, index=True)
+    competition_type = Column(String(100), nullable=True)
+
+    # Small business
+    small_business_program = Column(String(100), nullable=True)
+    small_business_set_aside = Column(String(100), nullable=True)
+
+    # Financial
+    dollar_range = Column(String(100), nullable=True)
+
+    # Timeline
+    fiscal_year = Column(Integer, nullable=True, index=True)
+    award_quarter = Column(String(50), nullable=True)
+    anticipated_award_date = Column(Date, nullable=True)
+    estimated_solicitation_date = Column(Date, nullable=True)
+    pop_start_date = Column(Date, nullable=True)
+    pop_end_date = Column(Date, nullable=True)
+
+    # Offices
+    requirements_office = Column(String(255), nullable=True)
+    contracting_office = Column(String(255), nullable=True)
+
+    # Contacts
+    poc_name = Column(String(255), nullable=True)
+    poc_email = Column(String(255), nullable=True)
+    poc_phone = Column(String(50), nullable=True)
+    alt_contact_name = Column(String(255), nullable=True)
+    alt_contact_email = Column(String(255), nullable=True)
+    sbs_name = Column(String(255), nullable=True)
+    sbs_email = Column(String(255), nullable=True)
+    sbs_phone = Column(String(50), nullable=True)
+
+    # State
+    current_state = Column(String(50), nullable=True)
+    published_date = Column(Date, nullable=True)
+
+    # Source tracking
+    raw_data = Column(JSON, nullable=True)
+
+    # Change tracking
+    first_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    change_hash = Column(String(64), nullable=True)
+    history = Column(JSONB, nullable=True, default=list)  # Version history of changes
+
+    # Search
+    indexed_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    organization = relationship("Organization", backref="apfs_forecasts")
+    sync = relationship("ForecastSync", backref="apfs_forecasts")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_apfs_forecasts_org_apfs_num", "organization_id", "apfs_number", unique=True),
+        Index("ix_apfs_forecasts_org_component", "organization_id", "component"),
+        Index("ix_apfs_forecasts_org_fy", "organization_id", "fiscal_year"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ApfsForecast(id={self.id}, apfs_number={self.apfs_number}, title={self.title[:50] if self.title else ''})>"
+
+
+class StateForecast(Base):
+    """
+    StateForecast model for State Department acquisition forecast records.
+
+    Stores forecast data parsed from the State Department's monthly Excel
+    procurement forecast. The file is downloaded from the State Department
+    website and parsed row by row.
+
+    Key Concepts:
+    - Single source (State Department only)
+    - Records identified by row_hash (generated from content)
+    - Includes place of performance information
+    - May include incumbent contractor info
+
+    Attributes:
+        id: Unique forecast identifier (Curatore)
+        organization_id: Tenant isolation
+        sync_id: Reference to ForecastSync configuration
+        row_hash: SHA-256 hash of row content (for upsert)
+        title: Forecast title
+        description: Detailed description
+        naics_code: NAICS code
+        pop_city: Place of performance city
+        pop_state: Place of performance state
+        pop_country: Place of performance country
+        acquisition_phase: Current acquisition phase
+        set_aside_type: Set-aside designation
+        contract_type: Contract type
+        anticipated_award_type: Award type
+        estimated_value: Estimated value (string, may be range)
+        fiscal_year: Target fiscal year
+        estimated_award_quarter: Target award quarter
+        estimated_solicitation_date: Planned solicitation date
+        incumbent_contractor: Current incumbent (if recompete)
+        awarded_contract_order: Contract/order number if awarded
+        facility_clearance: Required clearance level
+        source_file: Original filename
+        source_row: Row number in Excel
+        raw_data: Original row data (JSONB)
+        first_seen_at: When first imported
+        last_updated_at: When last modified
+        change_hash: Hash for change detection
+        indexed_at: When indexed to search
+
+    Relationships:
+        organization: Parent organization
+        sync: Parent sync configuration
+    """
+
+    __tablename__ = "state_forecasts"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    sync_id = Column(
+        UUID(), ForeignKey("forecast_syncs.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Identifier (generated from row content hash)
+    row_hash = Column(String(64), nullable=False, index=True)
+
+    # Core fields
+    title = Column(Text, nullable=False)
+    description = Column(Text, nullable=True)
+
+    # NAICS
+    naics_code = Column(String(20), nullable=True)
+
+    # Place of performance
+    pop_city = Column(String(255), nullable=True)
+    pop_state = Column(String(100), nullable=True)
+    pop_country = Column(String(100), nullable=True)
+
+    # Acquisition details
+    acquisition_phase = Column(String(100), nullable=True)
+    set_aside_type = Column(String(100), nullable=True)
+    contract_type = Column(String(100), nullable=True)
+    anticipated_award_type = Column(String(100), nullable=True)
+
+    # Financial & Timeline
+    estimated_value = Column(String(255), nullable=True)
+    fiscal_year = Column(Integer, nullable=True, index=True)
+    estimated_award_quarter = Column(String(50), nullable=True)
+    estimated_solicitation_date = Column(Date, nullable=True)
+
+    # Additional
+    incumbent_contractor = Column(String(255), nullable=True)
+    awarded_contract_order = Column(String(255), nullable=True)
+    facility_clearance = Column(String(100), nullable=True)
+
+    # Source tracking
+    source_file = Column(String(255), nullable=True)
+    source_row = Column(Integer, nullable=True)
+    raw_data = Column(JSON, nullable=True)
+
+    # Change tracking
+    first_seen_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    last_updated_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    change_hash = Column(String(64), nullable=True)
+    history = Column(JSONB, nullable=True, default=list)  # Version history of changes
+
+    # Search
+    indexed_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    organization = relationship("Organization", backref="state_forecasts")
+    sync = relationship("ForecastSync", backref="state_forecasts")
+
+    # Indexes
+    __table_args__ = (
+        Index("ix_state_forecasts_org_hash", "organization_id", "row_hash", unique=True),
+        Index("ix_state_forecasts_org_fy", "organization_id", "fiscal_year"),
+    )
+
+    def __repr__(self) -> str:
+        return f"<StateForecast(id={self.id}, row_hash={self.row_hash[:16]}..., title={self.title[:50] if self.title else ''})>"

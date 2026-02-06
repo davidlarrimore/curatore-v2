@@ -468,19 +468,10 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
         {files.length === 0 ? (
           <div className="text-center py-12 text-gray-500 flex-shrink-0 border-2 border-dashed border-gray-200 rounded-xl">
             <div className="text-6xl mb-4">📂</div>
-            {sourceType === 'local' ? (
-              <div>
-                <p className="text-xl font-medium mb-2">No batch files found</p>
-                <p className="text-sm">
-                  Place files in the <code className="bg-gray-200 text-gray-800 px-2 py-1 rounded font-mono">files/batch_files/</code> folder and refresh
-                </p>
-              </div>
-            ) : (
-              <div>
-                <p className="text-xl font-medium mb-2">No uploaded files</p>
-                <p className="text-sm">Upload files using the area above to get started</p>
-              </div>
-            )}
+            <div>
+              <p className="text-xl font-medium mb-2">No files found</p>
+              <p className="text-sm">Upload files using the area above to get started</p>
+            </div>
           </div>
         ) : (
           <div className="flex-1 overflow-y-auto min-h-0 border border-gray-200 rounded-lg">

@@ -314,6 +314,28 @@ async def seed_scheduled_tasks() -> list:
             "config": {"frequency": "daily"},
         },
 
+        # === Forecast Domain ===
+        {
+            "name": "forecast_sync_hourly",
+            "display_name": "Forecast Sync (Hourly)",
+            "description": "Trigger acquisition forecast syncs for all syncs with 'hourly' frequency.",
+            "task_type": "forecast.trigger_sync",
+            "scope_type": "global",
+            "schedule_expression": "30 * * * *",  # Every hour at minute 30 (offset from SAM)
+            "enabled": True,
+            "config": {"frequency": "hourly"},
+        },
+        {
+            "name": "forecast_sync_daily",
+            "display_name": "Forecast Sync (Daily)",
+            "description": "Trigger acquisition forecast syncs for all syncs with 'daily' frequency.",
+            "task_type": "forecast.trigger_sync",
+            "scope_type": "global",
+            "schedule_expression": "30 6 * * *",  # Daily at 6:30 AM UTC (offset from SAM at 6 AM)
+            "enabled": True,
+            "config": {"frequency": "daily"},
+        },
+
         # === Extraction Domain ===
         {
             "name": "queue_pending_assets",
