@@ -23,9 +23,11 @@ Usage:
         result = await handler(session, run, config)
 """
 
+import asyncio
 import logging
+import time
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from uuid import UUID, uuid4
 
 from sqlalchemy import select, func, and_, or_, delete
@@ -64,7 +66,12 @@ async def _log_event(
     message: str,
     context: Optional[Dict[str, Any]] = None,
 ) -> None:
-    """Helper to create a RunLogEvent."""
+    """Helper to create a RunLogEvent.
+
+    Uses commit() instead of flush() to release the transaction immediately.
+    This prevents holding locks that would block heartbeat updates from
+    other connections trying to update the same runs row.
+    """
     event = RunLogEvent(
         id=uuid4(),
         run_id=run_id,
@@ -74,7 +81,7 @@ async def _log_event(
         context=context or {},
     )
     session.add(event)
-    await session.flush()
+    await session.commit()
 
 
 # =============================================================================
@@ -787,6 +794,7 @@ async def handle_search_reindex(
         Dict with reindex statistics per phase
     """
     from .config_loader import config_loader
+    from .embedding_service import embedding_service
     from .pg_index_service import pg_index_service
     from .run_service import run_service
     from ..config import settings
@@ -821,8 +829,8 @@ async def handle_search_reindex(
 
     # Get configuration
     specific_org_id = config.get("organization_id")
-    batch_size = config.get("batch_size", 50)
     data_sources = config.get("data_sources", ["assets", "sam", "salesforce", "forecasts"])
+    force = config.get("force", False)  # If False, skip items already indexed with current content
 
     # Get organizations to process
     if specific_org_id:
@@ -856,8 +864,30 @@ async def handle_search_reindex(
     await _log_event(
         session, run_id, "INFO", "progress",
         f"Processing {total_orgs} organization(s) for reindex, "
-        f"data sources: {data_sources}"
+        f"data sources: {data_sources}, force={force}"
     )
+
+    def _needs_reindex_filter(model):
+        """Return a filter clause that excludes already-indexed unchanged items.
+
+        Models without indexed_at are always included (no way to track).
+        Models with indexed_at but no updated_at (e.g. SamNotice — immutable
+        records) are included only when indexed_at IS NULL.
+        Models with both columns are included when indexed_at IS NULL or
+        indexed_at < updated_at (content changed since last index).
+        """
+        if force:
+            return True  # No filter — reindex everything
+        if not hasattr(model, "indexed_at"):
+            return True  # Model can't be checked — always include
+        if not hasattr(model, "updated_at"):
+            # Immutable model — only include if never indexed
+            return model.indexed_at.is_(None)
+        # Include items that have never been indexed OR were updated after indexing
+        return or_(
+            model.indexed_at.is_(None),
+            model.indexed_at < model.updated_at,
+        )
 
     # Count total items across all orgs and phases for progress tracking
     total_items = 0
@@ -865,23 +895,28 @@ async def handle_search_reindex(
         for phase_key, model in phase_defs:
             if phase_key == "assets":
                 count_q = select(func.count(model.id)).where(
-                    and_(model.organization_id == org.id, model.status == "ready")
+                    and_(model.organization_id == org.id, model.status == "ready",
+                         _needs_reindex_filter(model))
                 )
             elif phase_key == "sam_notices":
                 # Notices can be linked via solicitation org_id or standalone org_id
                 count_q = select(func.count(model.id)).where(
-                    or_(
-                        model.organization_id == org.id,
-                        model.solicitation_id.in_(
-                            select(SamSolicitation.id).where(
-                                SamSolicitation.organization_id == org.id
-                            )
+                    and_(
+                        or_(
+                            model.organization_id == org.id,
+                            model.solicitation_id.in_(
+                                select(SamSolicitation.id).where(
+                                    SamSolicitation.organization_id == org.id
+                                )
+                            ),
                         ),
+                        _needs_reindex_filter(model),
                     )
                 )
             else:
                 count_q = select(func.count(model.id)).where(
-                    model.organization_id == org.id
+                    and_(model.organization_id == org.id,
+                         _needs_reindex_filter(model))
                 )
             count_result = await session.execute(count_q)
             total_items += count_result.scalar() or 0
@@ -899,6 +934,42 @@ async def handle_search_reindex(
     current_item = 0
     total_indexed = 0
     total_failed = 0
+    last_heartbeat = time.monotonic()
+    heartbeat_interval = 30  # seconds — must be well under the 300s inactivity timeout
+
+    async def _heartbeat(phase_key: str, phase_label: str, org_name: str):
+        """Commit a visible heartbeat with progress + log update.
+
+        Uses time.monotonic() so the heartbeat fires based on wall-clock
+        time rather than item count.  This ensures the run's
+        last_activity_at is always committed (visible to the timeout
+        monitor) regardless of how long individual items take.
+
+        Uses heartbeat_service with a fresh session to avoid greenlet
+        errors when the main session is in a bad state after exceptions.
+        """
+        from .heartbeat_service import heartbeat_service
+
+        nonlocal last_heartbeat
+        now_mono = time.monotonic()
+        if now_mono - last_heartbeat < heartbeat_interval:
+            return  # Not time yet
+        last_heartbeat = now_mono
+
+        # Use heartbeat service with fresh session to avoid greenlet errors
+        try:
+            progress = {
+                "current": current_item,
+                "total": total_items,
+                "unit": "items",
+                "percent": int((current_item / total_items) * 100) if total_items > 0 else 0,
+                "phase": f"Indexing {phase_label}",
+                "organization": org_name,
+            }
+            await heartbeat_service.beat_sync(run_id, progress=progress)
+        except Exception as e:
+            # Heartbeat failures should not crash the task
+            logger.debug(f"Heartbeat failed (non-fatal): {e}")
 
     for org in organizations:
         await _log_event(
@@ -909,36 +980,58 @@ async def handle_search_reindex(
         for phase_key, model in phase_defs:
             phase_label = phase_key.replace("_", " ").title()
 
-            # Build the query for this phase
+            # Build the query for this phase, filtering to items needing reindex
             if phase_key == "assets":
                 base_query = (
                     select(model)
-                    .where(and_(model.organization_id == org.id, model.status == "ready"))
+                    .where(and_(model.organization_id == org.id, model.status == "ready",
+                                _needs_reindex_filter(model)))
                     .order_by(model.created_at)
                 )
             elif phase_key == "sam_notices":
                 base_query = (
                     select(model)
-                    .where(or_(
-                        model.organization_id == org.id,
-                        model.solicitation_id.in_(
-                            select(SamSolicitation.id).where(
-                                SamSolicitation.organization_id == org.id
-                            )
+                    .where(and_(
+                        or_(
+                            model.organization_id == org.id,
+                            model.solicitation_id.in_(
+                                select(SamSolicitation.id).where(
+                                    SamSolicitation.organization_id == org.id
+                                )
+                            ),
                         ),
+                        _needs_reindex_filter(model),
                     ))
                     .order_by(model.id)
                 )
             else:
                 base_query = (
                     select(model)
-                    .where(model.organization_id == org.id)
+                    .where(and_(model.organization_id == org.id,
+                                _needs_reindex_filter(model)))
                     .order_by(model.id)
                 )
 
+            # Track per-phase start counts so we can report how many were processed
+            phase_start_indexed = phases[phase_key]["indexed"]
+            phase_start_failed = phases[phase_key]["failed"]
+            phase_start_total = phases[phase_key]["total"]
+
+            await _log_event(
+                session, run_id, "INFO", "progress",
+                f"Starting phase: {phase_label}",
+                {"phase": phase_key, "organization": org.name},
+            )
+
             # Paginate through results
             offset = 0
-            page_size = 200
+            # Use smaller page size to ensure heartbeats fire frequently enough
+            # to avoid stale detection (131s timeout). With rate limiting,
+            # 50 assets can still take 60-90s, but should complete before timeout.
+            page_size = 50
+            is_asset_phase = phase_key == "assets"
+            embed_batch_size = 50  # Matches embedding_service internal batch size
+
             while True:
                 page_result = await session.execute(
                     base_query.offset(offset).limit(page_size)
@@ -947,39 +1040,239 @@ async def handle_search_reindex(
                 if not items:
                     break
 
-                for item in items:
-                    phases[phase_key]["total"] += 1
-                    current_item += 1
+                if is_asset_phase:
+                    # Cross-asset batching: prepare all assets in this page,
+                    # batch-embed all chunks concurrently, then write to DB.
+                    phases[phase_key]["total"] += len(items)
+                    current_item += len(items)
 
-                    try:
-                        success = await _index_item(
-                            pg_index_service, session, org.id,
-                            phase_key, item,
-                        )
-                        if success:
-                            phases[phase_key]["indexed"] += 1
-                            total_indexed += 1
-                        else:
+                    # Pass heartbeat callback to send progress during long-running
+                    # embedding operations (can take > 60s with rate limit retries)
+                    # Uses heartbeat_service with fresh session to avoid transaction issues
+                    async def _send_heartbeat():
+                        from .heartbeat_service import heartbeat_service
+                        try:
+                            progress = {
+                                "current": current_item,
+                                "total": total_items,
+                                "unit": "items",
+                                "percent": int((current_item / total_items) * 100) if total_items > 0 else 0,
+                                "phase": f"Embedding {phase_label}",
+                                "organization": org.name,
+                            }
+                            await heartbeat_service.beat_sync(run_id, progress=progress)
+                            logger.debug(f"Heartbeat sent: {current_item}/{total_items}")
+                        except Exception as e:
+                            logger.debug(f"Heartbeat callback failed (non-fatal): {e}")
+
+                    batch_results = await _prepare_and_embed_asset_batch(
+                        pg_index_service, session, items,
+                        heartbeat_callback=_send_heartbeat,
+                    )
+
+                    for item, batch_result in zip(items, batch_results):
+                        try:
+                            if batch_result is not None:
+                                success = await pg_index_service.index_asset_prepared(
+                                    session,
+                                    batch_result["prepared"],
+                                    batch_result["embeddings"],
+                                )
+                            else:
+                                # Fallback to original single-asset path
+                                success = await pg_index_service.index_asset(
+                                    session, item.id,
+                                )
+                            if success:
+                                phases[phase_key]["indexed"] += 1
+                                total_indexed += 1
+                            else:
+                                phases[phase_key]["failed"] += 1
+                                total_failed += 1
+                        except Exception as e:
                             phases[phase_key]["failed"] += 1
                             total_failed += 1
-                    except Exception as e:
-                        phases[phase_key]["failed"] += 1
-                        total_failed += 1
-                        if len(all_errors) < max_errors:
-                            all_errors.append(
-                                f"{phase_key} {getattr(item, 'id', '?')}: {str(e)[:200]}"
-                            )
+                            if len(all_errors) < max_errors:
+                                all_errors.append(
+                                    f"{phase_key} {getattr(item, 'id', '?')}: {str(e)[:200]}"
+                                )
 
-                    # Stream progress every batch_size items
-                    if current_item % batch_size == 0:
-                        await run_service.update_run_progress(
-                            session, run_id,
-                            current=current_item, total=total_items,
-                            unit="items", phase=f"Indexing {phase_label}",
-                            details={"organization": org.name},
-                        )
+                        # Time-based heartbeat: commit progress + log every 30s
+                        await _heartbeat(phase_key, phase_label, org.name)
+
+                    # Commit after each batch to release any held locks and ensure
+                    # progress is saved even if the job crashes later
+                    await session.commit()
+                else:
+                    # Non-asset phases: batch-embed across items before indexing.
+                    # Build content strings, batch-embed in groups of 50, then
+                    # call _index_item with pre-computed embeddings.
+                    pending_items: List = []
+                    pending_contents: List[str] = []
+
+                    for item in items:
+                        phases[phase_key]["total"] += 1
+                        current_item += 1
+
+                        try:
+                            content = await _build_content_for_item(
+                                session, phase_key, item,
+                            )
+                            if content is not None:
+                                pending_items.append(item)
+                                pending_contents.append(content)
+                            else:
+                                # Fallback: index without pre-computed embedding
+                                success = await _index_item(
+                                    pg_index_service, session, org.id,
+                                    phase_key, item,
+                                )
+                                if success:
+                                    phases[phase_key]["indexed"] += 1
+                                    total_indexed += 1
+                                else:
+                                    phases[phase_key]["failed"] += 1
+                                    total_failed += 1
+                        except Exception as e:
+                            phases[phase_key]["failed"] += 1
+                            total_failed += 1
+                            if len(all_errors) < max_errors:
+                                all_errors.append(
+                                    f"{phase_key} {getattr(item, 'id', '?')}: {str(e)[:200]}"
+                                )
+
+                        # Flush the embedding batch when it reaches embed_batch_size
+                        if len(pending_items) >= embed_batch_size:
+                            try:
+                                embeddings = await embedding_service.get_embeddings_batch(
+                                    pending_contents
+                                )
+                                for itm, emb in zip(pending_items, embeddings):
+                                    try:
+                                        success = await _index_item(
+                                            pg_index_service, session, org.id,
+                                            phase_key, itm, embedding=emb,
+                                        )
+                                        if success:
+                                            phases[phase_key]["indexed"] += 1
+                                            total_indexed += 1
+                                        else:
+                                            phases[phase_key]["failed"] += 1
+                                            total_failed += 1
+                                    except Exception as e:
+                                        phases[phase_key]["failed"] += 1
+                                        total_failed += 1
+                                        if len(all_errors) < max_errors:
+                                            all_errors.append(
+                                                f"{phase_key} {getattr(itm, 'id', '?')}: {str(e)[:200]}"
+                                            )
+                            except Exception as e:
+                                # Batch embedding failed — fall back to per-item
+                                logger.warning(f"Batch embedding failed, falling back to per-item: {e}")
+                                for itm in pending_items:
+                                    try:
+                                        success = await _index_item(
+                                            pg_index_service, session, org.id,
+                                            phase_key, itm,
+                                        )
+                                        if success:
+                                            phases[phase_key]["indexed"] += 1
+                                            total_indexed += 1
+                                        else:
+                                            phases[phase_key]["failed"] += 1
+                                            total_failed += 1
+                                    except Exception as e2:
+                                        phases[phase_key]["failed"] += 1
+                                        total_failed += 1
+                                        if len(all_errors) < max_errors:
+                                            all_errors.append(
+                                                f"{phase_key} {getattr(itm, 'id', '?')}: {str(e2)[:200]}"
+                                            )
+                            pending_items = []
+                            pending_contents = []
+
+                        # Time-based heartbeat: commit progress + log every 30s
+                        await _heartbeat(phase_key, phase_label, org.name)
+
+                    # Flush remaining pending items after the page
+                    if pending_items:
+                        try:
+                            embeddings = await embedding_service.get_embeddings_batch(
+                                pending_contents
+                            )
+                            for itm, emb in zip(pending_items, embeddings):
+                                try:
+                                    success = await _index_item(
+                                        pg_index_service, session, org.id,
+                                        phase_key, itm, embedding=emb,
+                                    )
+                                    if success:
+                                        phases[phase_key]["indexed"] += 1
+                                        total_indexed += 1
+                                    else:
+                                        phases[phase_key]["failed"] += 1
+                                        total_failed += 1
+                                except Exception as e:
+                                    phases[phase_key]["failed"] += 1
+                                    total_failed += 1
+                                    if len(all_errors) < max_errors:
+                                        all_errors.append(
+                                            f"{phase_key} {getattr(itm, 'id', '?')}: {str(e)[:200]}"
+                                        )
+                        except Exception as e:
+                            logger.warning(f"Batch embedding failed, falling back to per-item: {e}")
+                            for itm in pending_items:
+                                try:
+                                    success = await _index_item(
+                                        pg_index_service, session, org.id,
+                                        phase_key, itm,
+                                    )
+                                    if success:
+                                        phases[phase_key]["indexed"] += 1
+                                        total_indexed += 1
+                                    else:
+                                        phases[phase_key]["failed"] += 1
+                                        total_failed += 1
+                                except Exception as e2:
+                                    phases[phase_key]["failed"] += 1
+                                    total_failed += 1
+                                    if len(all_errors) < max_errors:
+                                        all_errors.append(
+                                            f"{phase_key} {getattr(itm, 'id', '?')}: {str(e2)[:200]}"
+                                        )
+                        pending_items = []
+                        pending_contents = []
+
+                    # Commit after each batch to release locks and save progress
+                    await session.commit()
 
                 offset += page_size
+
+            # Phase complete — log summary
+            phase_processed = phases[phase_key]["total"] - phase_start_total
+            phase_ok = phases[phase_key]["indexed"] - phase_start_indexed
+            phase_err = phases[phase_key]["failed"] - phase_start_failed
+            if phase_processed > 0:
+                level = "WARN" if phase_err > 0 else "INFO"
+                await _log_event(
+                    session, run_id, level, "progress",
+                    f"Completed phase: {phase_label} — "
+                    f"{phase_ok} indexed, {phase_err} failed "
+                    f"(of {phase_processed} items)",
+                    {
+                        "phase": phase_key,
+                        "organization": org.name,
+                        "processed": phase_processed,
+                        "indexed": phase_ok,
+                        "failed": phase_err,
+                    },
+                )
+            else:
+                await _log_event(
+                    session, run_id, "INFO", "progress",
+                    f"Completed phase: {phase_label} — no items to index",
+                    {"phase": phase_key, "organization": org.name},
+                )
 
     # Final progress update
     await run_service.update_run_progress(
@@ -1009,14 +1302,200 @@ async def handle_search_reindex(
     return summary
 
 
+async def _prepare_and_embed_asset_batch(
+    pg_index_service,
+    session: AsyncSession,
+    assets: List,
+    heartbeat_callback: Optional[Callable] = None,
+    embed_batch_size: int = 50,
+) -> List[Optional[Dict[str, Any]]]:
+    """Prepare multiple assets and batch-embed all their chunks.
+
+    Processes embeddings in sub-batches with heartbeat callbacks between
+    batches to prevent stale job detection during rate-limited API calls.
+
+    Returns a list (same length as ``assets``) of dicts with keys
+    ``prepared`` and ``embeddings``, or None for assets that failed preparation.
+    """
+    from .embedding_service import embedding_service
+
+    # 1. Prepare all assets (read-only: fetch content, chunk)
+    prepared_list: List[Optional[Dict[str, Any]]] = []
+    for asset in assets:
+        try:
+            prepared = await pg_index_service.prepare_asset_for_indexing(
+                session, asset.id
+            )
+            prepared_list.append(prepared)
+        except Exception as e:
+            logger.warning(f"Failed to prepare asset {asset.id}: {e}")
+            prepared_list.append(None)
+
+    # Send heartbeat after preparation phase
+    if heartbeat_callback:
+        try:
+            await heartbeat_callback()
+        except Exception as e:
+            logger.debug(f"Heartbeat failed during preparation: {e}")
+
+    # 2. Collect all chunk texts and build a map for reassembly
+    all_chunk_texts: List[str] = []
+    # chunk_map[i] = (start_index, count) in all_chunk_texts
+    chunk_map: List[Optional[tuple]] = []
+    for prepared in prepared_list:
+        if prepared is not None and prepared["chunks"]:
+            start = len(all_chunk_texts)
+            texts = [chunk.content for chunk in prepared["chunks"]]
+            all_chunk_texts.extend(texts)
+            chunk_map.append((start, len(texts)))
+        else:
+            chunk_map.append(None)
+
+    # 3. Batch embedding with heartbeats between batches
+    # Process in sub-batches to allow heartbeats during rate-limited operations
+    all_embeddings: List[List[float]] = []
+    if all_chunk_texts:
+        try:
+            for i in range(0, len(all_chunk_texts), embed_batch_size):
+                batch = all_chunk_texts[i:i + embed_batch_size]
+                batch_embeddings = await embedding_service.get_embeddings_batch(batch)
+                all_embeddings.extend(batch_embeddings)
+
+                # Send heartbeat after each sub-batch
+                if heartbeat_callback:
+                    try:
+                        await heartbeat_callback()
+                    except Exception as e:
+                        logger.debug(f"Heartbeat failed during embedding: {e}")
+
+        except Exception as e:
+            logger.error(f"Batch embedding failed entirely: {e}")
+            # Return all None so caller falls back to per-asset indexing
+            return [None] * len(assets)
+
+    # 4. Map embeddings back to per-asset groups
+    results: List[Optional[Dict[str, Any]]] = []
+    for i, prepared in enumerate(prepared_list):
+        if prepared is None or chunk_map[i] is None:
+            results.append(None)
+        else:
+            start, count = chunk_map[i]
+            asset_embeddings = all_embeddings[start:start + count]
+            results.append({
+                "prepared": prepared,
+                "embeddings": asset_embeddings,
+            })
+
+    return results
+
+
+async def _build_content_for_item(
+    session: AsyncSession,
+    phase_key: str,
+    item,
+) -> Optional[str]:
+    """Build the indexable content string for a non-asset item (no embedding generation).
+
+    Mirrors the content-building logic in each pg_index_service.index_*() method
+    so we can batch-embed across items before calling the index methods with
+    pre-computed embeddings.
+
+    Returns None for asset items (they handle their own batching internally).
+    """
+    if phase_key == "sam_solicitations":
+        content = f"{item.title or ''}\n\n{item.description or ''}"
+        if item.agency_name:
+            content = f"{item.agency_name}\n{content}"
+        return content
+
+    elif phase_key == "sam_notices":
+        return f"{item.title or ''}\n\n{item.description or ''}"
+
+    elif phase_key == "salesforce_accounts":
+        parts = [item.name]
+        if item.account_type:
+            parts.append(f"Type: {item.account_type}")
+        if item.industry:
+            parts.append(f"Industry: {item.industry}")
+        if item.description:
+            parts.append(item.description)
+        return "\n\n".join(parts)
+
+    elif phase_key == "salesforce_contacts":
+        full_name = f"{item.first_name or ''} {item.last_name or ''}".strip() or "Unknown Contact"
+        parts = [full_name]
+        if item.title:
+            parts.append(f"Title: {item.title}")
+        # Resolve account name if linked
+        if item.account_id:
+            acct = await session.get(SalesforceAccount, item.account_id)
+            if acct:
+                parts.append(f"Account: {acct.name}")
+        if item.department:
+            parts.append(f"Department: {item.department}")
+        if item.email:
+            parts.append(f"Email: {item.email}")
+        return "\n\n".join(parts)
+
+    elif phase_key == "salesforce_opportunities":
+        parts = [item.name]
+        # Resolve account name if linked
+        if item.account_id:
+            acct = await session.get(SalesforceAccount, item.account_id)
+            if acct:
+                parts.append(f"Account: {acct.name}")
+        if item.stage_name:
+            parts.append(f"Stage: {item.stage_name}")
+        if item.opportunity_type:
+            parts.append(f"Type: {item.opportunity_type}")
+        if item.amount:
+            parts.append(f"Amount: ${item.amount:,.2f}")
+        if item.description:
+            parts.append(item.description)
+        return "\n\n".join(parts)
+
+    elif phase_key in ("ag_forecasts", "apfs_forecasts", "state_forecasts"):
+        content_parts = [item.title or ""]
+        if getattr(item, "description", None):
+            content_parts.append(item.description)
+        if getattr(item, "agency_name", None):
+            content_parts.append(item.agency_name)
+        elif getattr(item, "component", None):
+            content_parts.append(item.component)
+        # Handle NAICS codes
+        naics_codes = getattr(item, "naics_codes", None)
+        if naics_codes:
+            for nc in naics_codes:
+                if isinstance(nc, dict):
+                    code = nc.get("code", "")
+                    desc = nc.get("description", "")
+                    if code:
+                        content_parts.append(code)
+                    if desc:
+                        content_parts.append(desc)
+        elif getattr(item, "naics_code", None):
+            content_parts.append(item.naics_code)
+            if getattr(item, "naics_description", None):
+                content_parts.append(item.naics_description)
+        return "\n\n".join(content_parts)
+
+    return None
+
+
 async def _index_item(
     pg_index_service,
     session: AsyncSession,
     org_id: UUID,
     phase_key: str,
     item,
+    embedding: Optional[List[float]] = None,
 ) -> bool:
-    """Index a single item based on its phase type. Returns True on success."""
+    """Index a single item based on its phase type. Returns True on success.
+
+    When ``embedding`` is provided, it is passed through to the corresponding
+    ``index_*()`` method so that the embedding generation step is skipped
+    (the vector was already computed in a cross-item batch).
+    """
     if phase_key == "assets":
         return await pg_index_service.index_asset(session, item.id)
 
@@ -1034,6 +1513,7 @@ async def _index_item(
             posted_date=item.posted_date,
             response_deadline=item.response_deadline,
             url=item.ui_link,
+            embedding=embedding,
         )
 
     elif phase_key == "sam_notices":
@@ -1047,6 +1527,7 @@ async def _index_item(
             notice_type=item.notice_type or "",
             posted_date=item.posted_date,
             response_deadline=item.response_deadline,
+            embedding=embedding,
         )
 
     elif phase_key == "salesforce_accounts":
@@ -1059,6 +1540,7 @@ async def _index_item(
             industry=item.industry,
             description=item.description,
             website=item.website,
+            embedding=embedding,
         )
 
     elif phase_key == "salesforce_contacts":
@@ -1078,6 +1560,7 @@ async def _index_item(
             title=item.title,
             account_name=account_name,
             department=item.department,
+            embedding=embedding,
         )
 
     elif phase_key == "salesforce_opportunities":
@@ -1098,6 +1581,7 @@ async def _index_item(
             account_name=account_name,
             description=item.description,
             close_date=item.close_date,
+            embedding=embedding,
         )
 
     elif phase_key == "ag_forecasts":
@@ -1114,6 +1598,7 @@ async def _index_item(
             fiscal_year=item.estimated_award_fy,
             estimated_award_quarter=item.estimated_award_quarter,
             url=item.source_url,
+            embedding=embedding,
         )
 
     elif phase_key == "apfs_forecasts":
@@ -1132,6 +1617,7 @@ async def _index_item(
             set_aside_type=item.small_business_set_aside,
             fiscal_year=item.fiscal_year,
             estimated_award_quarter=item.award_quarter,
+            embedding=embedding,
         )
 
     elif phase_key == "state_forecasts":
@@ -1149,6 +1635,7 @@ async def _index_item(
             set_aside_type=item.set_aside_type,
             fiscal_year=item.fiscal_year,
             estimated_award_quarter=item.estimated_award_quarter,
+            embedding=embedding,
         )
 
     return False

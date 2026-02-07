@@ -39,6 +39,42 @@ def _markdown_to_html(text: str) -> str:
     return md.convert(str(text) if text else "")
 
 
+def _compact(value):
+    """
+    Filter out None/null values from a list.
+
+    Useful for safely iterating over foreach results where some items may have failed.
+
+    Example:
+        {% for result in steps.process_each | compact %}
+        {{ result }}
+        {% endfor %}
+
+    Args:
+        value: List that may contain None values
+
+    Returns:
+        List with None values removed
+    """
+    if isinstance(value, (list, tuple)):
+        return [item for item in value if item is not None]
+    return value
+
+
+def _default_if_none(value, default=""):
+    """
+    Return a default value if the input is None.
+
+    Args:
+        value: The value to check
+        default: The default to return if value is None
+
+    Returns:
+        The original value or the default
+    """
+    return default if value is None else value
+
+
 @dataclass
 class FunctionContext:
     """
@@ -251,6 +287,8 @@ class FunctionContext:
 
         # Register custom filters
         env.filters["md_to_html"] = _markdown_to_html
+        env.filters["compact"] = _compact  # Filter None values from lists
+        env.filters["d"] = _default_if_none  # Shorthand for default if None
 
         # Register globals (functions available in templates)
         def now_et():

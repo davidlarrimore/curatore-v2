@@ -16,6 +16,8 @@ import {
   FolderPlus,
   MoreHorizontal,
   Upload,
+  Copy,
+  Check,
 } from 'lucide-react'
 import { objectStorageApi, organizationsApi, utils } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
@@ -69,6 +71,7 @@ export default function StorageFolderBrowser({
   const [isCreatingFolder, setIsCreatingFolder] = useState<boolean>(false)
   const [deletingFolder, setDeletingFolder] = useState<string | null>(null)
   const [deletingFile, setDeletingFile] = useState<string | null>(null)
+  const [copiedPath, setCopiedPath] = useState<string | null>(null)
 
   // Organization data for folder name mapping
   const [currentOrganization, setCurrentOrganization] = useState<{ id: string; name: string; display_name: string } | null>(null)
@@ -96,6 +99,25 @@ export default function StorageFolderBrowser({
 
     // Return the folder name as-is for non-org folders
     return folderName
+  }
+
+  // Strip the org_id prefix (first path segment) from a storage path
+  const stripOrgPrefix = (path: string): string => {
+    const parts = path.split('/')
+    // First segment is the org_id UUID — remove it
+    if (parts.length > 1 && isUUID(parts[0])) {
+      return parts.slice(1).join('/')
+    }
+    return path
+  }
+
+  // Copy a folder path to clipboard with feedback
+  const handleCopyPath = (path: string) => {
+    const cleanPath = stripOrgPrefix(path).replace(/\/$/, '')
+    navigator.clipboard.writeText(cleanPath)
+    setCopiedPath(path)
+    toast.success('Folder path copied')
+    setTimeout(() => setCopiedPath(null), 2000)
   }
 
   // Load current organization on mount
@@ -396,13 +418,26 @@ export default function StorageFolderBrowser({
           </div>
 
           {/* Breadcrumb Navigation */}
-          <div className="flex-1 overflow-hidden">
+          <div className="flex-1 overflow-hidden flex items-center gap-2">
             <FolderBreadcrumb
               bucket={currentBucket}
               bucketDisplayName={currentBucketDisplay}
               prefix={currentPrefix}
               onNavigate={handleNavigateToPath}
             />
+            {currentPrefix && (
+              <button
+                onClick={() => handleCopyPath(currentPrefix)}
+                className="flex-shrink-0 p-1.5 text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-md transition-colors"
+                title="Copy folder path"
+              >
+                {copiedPath === currentPrefix ? (
+                  <Check className="w-3.5 h-3.5 text-emerald-500" />
+                ) : (
+                  <Copy className="w-3.5 h-3.5" />
+                )}
+              </button>
+            )}
           </div>
 
           {/* Actions */}
@@ -514,6 +549,20 @@ export default function StorageFolderBrowser({
                       —
                     </div>
                     <div className="col-span-1 flex items-center justify-end gap-1">
+                      <button
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleCopyPath(currentPrefix + folder + '/')
+                        }}
+                        className="opacity-0 group-hover:opacity-100 p-2 text-gray-600 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg transition-all"
+                        title="Copy folder path"
+                      >
+                        {copiedPath === currentPrefix + folder + '/' ? (
+                          <Check className="w-4 h-4 text-emerald-500" />
+                        ) : (
+                          <Copy className="w-4 h-4" />
+                        )}
+                      </button>
                       {!isProtected && (
                         <button
                           onClick={() => handleDeleteFolder(folder)}

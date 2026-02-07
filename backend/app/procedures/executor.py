@@ -22,6 +22,7 @@ from .base import ProcedureDefinition, StepDefinition, OnErrorPolicy
 from .loader import procedure_loader
 from ..functions import fn, FunctionContext, FunctionResult
 from ..functions.base import FlowResult
+from ..services.database_service import database_service
 
 logger = logging.getLogger("curatore.procedures.executor")
 
@@ -616,13 +617,31 @@ class ProcedureExecutor:
         semaphore = asyncio.Semaphore(max_concurrency) if max_concurrency > 0 else None
 
         async def run_branch(branch_name: str) -> tuple:
-            """Run a single branch with optional semaphore."""
-            if semaphore:
-                async with semaphore:
-                    result = await self._execute_branch_steps(ctx, step.branches[branch_name])
-            else:
-                result = await self._execute_branch_steps(ctx, step.branches[branch_name])
-            return branch_name, result
+            """Run a single branch with its own database session."""
+            try:
+                async with database_service.get_session() as branch_session:
+                    # Create a new context with its own session for this branch
+                    branch_ctx = await FunctionContext.create(
+                        session=branch_session,
+                        organization_id=ctx.organization_id,
+                        user_id=ctx.user_id,
+                        run_id=ctx.run_id,
+                        dry_run=ctx.dry_run,
+                    )
+                    # Copy step results from parent context
+                    for key, value in ctx.variables.items():
+                        if key.startswith("steps."):
+                            branch_ctx.variables[key] = value
+
+                    if semaphore:
+                        async with semaphore:
+                            result = await self._execute_branch_steps(branch_ctx, step.branches[branch_name])
+                    else:
+                        result = await self._execute_branch_steps(branch_ctx, step.branches[branch_name])
+                    return branch_name, result
+            except Exception as e:
+                logger.exception(f"[parallel {step.name}] branch '{branch_name}' raised exception: {e}")
+                return branch_name, {"status": "failed", "error": str(e), "data": None}
 
         # Run all branches concurrently
         tasks = [run_branch(name) for name in branch_names]
@@ -730,27 +749,49 @@ class ProcedureExecutor:
                     if on_error == OnErrorPolicy.FAIL:
                         break
         else:
-            # Concurrent execution
+            # Concurrent execution - each task gets its own database session
+            # to avoid SQLAlchemy async session conflicts
             semaphore = asyncio.Semaphore(concurrency) if concurrency > 0 else None
 
             async def run_item(orig_idx: int, item: Any) -> tuple:
-                if semaphore:
-                    async with semaphore:
-                        result = await self._execute_branch_steps(ctx, each_steps, item=item, item_index=orig_idx)
-                else:
-                    result = await self._execute_branch_steps(ctx, each_steps, item=item, item_index=orig_idx)
-                return orig_idx, result
+                """Run a single foreach item with its own database session."""
+                try:
+                    async with database_service.get_session() as item_session:
+                        # Create a new context with its own session for this item
+                        item_ctx = await FunctionContext.create(
+                            session=item_session,
+                            organization_id=ctx.organization_id,
+                            user_id=ctx.user_id,
+                            run_id=ctx.run_id,
+                            dry_run=ctx.dry_run,
+                        )
+                        # Copy step results from parent context so templates can reference them
+                        for key, value in ctx.variables.items():
+                            if key.startswith("steps."):
+                                item_ctx.variables[key] = value
+
+                        if semaphore:
+                            async with semaphore:
+                                result = await self._execute_branch_steps(item_ctx, each_steps, item=item, item_index=orig_idx)
+                        else:
+                            result = await self._execute_branch_steps(item_ctx, each_steps, item=item, item_index=orig_idx)
+                        return orig_idx, result
+                except Exception as e:
+                    logger.exception(f"[foreach {step.name}] item {orig_idx} raised exception: {e}")
+                    return orig_idx, {"status": "failed", "error": str(e), "data": None}
 
             tasks = [run_item(orig_idx, item) for orig_idx, item in filtered_items]
             task_results = await asyncio.gather(*tasks, return_exceptions=True)
 
             for task_result in task_results:
                 if isinstance(task_result, Exception):
+                    logger.error(f"[foreach {step.name}] concurrent task exception: {task_result}")
                     failed_count += 1
                     continue
                 orig_idx, result = task_result
                 results[orig_idx] = result.get("data")
                 if result.get("status") == "failed":
+                    logger.warning(f"[foreach {step.name}] item {orig_idx} failed: {result.get('error', 'unknown')}")
                     failed_count += 1
 
         # Determine status

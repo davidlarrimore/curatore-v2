@@ -372,8 +372,86 @@ function FunctionsContent() {
                             </div>
                           )}
 
-                          {/* Returns */}
-                          {fn.returns && (
+                          {/* Output Schema */}
+                          {fn.output_schema && (
+                            <div>
+                              <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                                Returns
+                              </h4>
+                              <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900/50 space-y-3">
+                                <div className="flex items-center gap-2">
+                                  <span className="text-sm font-mono font-medium text-gray-900 dark:text-white">
+                                    {fn.output_schema.type}
+                                  </span>
+                                </div>
+                                <p className="text-sm text-gray-600 dark:text-gray-400">
+                                  {fn.output_schema.description}
+                                </p>
+                                {fn.output_schema.fields && fn.output_schema.fields.length > 0 && (
+                                  <div className="mt-2 space-y-1.5">
+                                    {fn.output_schema.fields.map((field) => (
+                                      <div key={field.name} className="flex items-start gap-2 text-sm">
+                                        <span className="font-mono text-indigo-600 dark:text-indigo-400">
+                                          {field.name}
+                                        </span>
+                                        <span className="text-xs px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                                          {field.type}
+                                        </span>
+                                        {field.nullable && (
+                                          <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-500">
+                                            nullable
+                                          </span>
+                                        )}
+                                        <span className="text-gray-500 dark:text-gray-400 flex-1">
+                                          {field.description}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+
+                              {/* Output Variants */}
+                              {fn.output_variants && fn.output_variants.length > 0 && (
+                                <div className="mt-3 space-y-2">
+                                  {fn.output_variants.map((variant, idx) => (
+                                    <div key={idx} className="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-900/50">
+                                      <div className="flex items-center gap-2 mb-2">
+                                        <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300 uppercase">
+                                          {variant.mode} mode
+                                        </span>
+                                        <span className="text-xs text-indigo-600 dark:text-indigo-400">
+                                          ({variant.condition})
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center gap-2 mb-1">
+                                        <span className="text-sm font-mono text-gray-900 dark:text-white">
+                                          {variant.schema.type}
+                                        </span>
+                                      </div>
+                                      {variant.schema.fields && variant.schema.fields.length > 0 && (
+                                        <div className="mt-2 space-y-1">
+                                          {variant.schema.fields.map((field) => (
+                                            <div key={field.name} className="flex items-start gap-2 text-xs">
+                                              <span className="font-mono text-indigo-600 dark:text-indigo-400">
+                                                {field.name}
+                                              </span>
+                                              <span className="text-gray-500 dark:text-gray-400">
+                                                ({field.type})
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                          )}
+
+                          {/* Fallback: Returns string if no output_schema */}
+                          {!fn.output_schema && fn.returns && (
                             <div>
                               <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
                                 Returns

@@ -111,6 +111,14 @@ class TaskRunListResponse(BaseModel):
     total: int
 
 
+class TriggerTaskRequest(BaseModel):
+    """Optional request body for triggering a task with config overrides."""
+    config_overrides: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Override task config values for this run only. Merged on top of the task's stored config."
+    )
+
+
 class TriggerTaskResponse(BaseModel):
     """Response model for task trigger."""
     message: str
@@ -461,15 +469,18 @@ async def disable_task(
 )
 async def trigger_task(
     task_id: UUID,
+    body: Optional[TriggerTaskRequest] = None,
     current_user: User = Depends(require_org_admin),
 ) -> TriggerTaskResponse:
     """
     Trigger a scheduled task to run immediately.
 
     Creates a Run with origin="user" and enqueues the task for execution.
+    Optionally accepts config_overrides to customize this run.
 
     Args:
         task_id: Task UUID
+        body: Optional request body with config overrides
         current_user: Current authenticated user (must be org_admin)
 
     Returns:
@@ -494,9 +505,11 @@ async def trigger_task(
                 detail="Access denied to this task"
             )
 
+        config_overrides = body.config_overrides if body else None
         run = await scheduled_task_service.trigger_task_now(
             session, task_id, triggered_by=current_user.id,
-            user_organization_id=current_user.organization_id
+            user_organization_id=current_user.organization_id,
+            config_overrides=config_overrides,
         )
         await session.commit()
 

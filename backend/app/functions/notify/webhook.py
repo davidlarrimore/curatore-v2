@@ -16,6 +16,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -84,6 +86,18 @@ class WebhookFunction(BaseFunction):
             ),
         ],
         returns="dict: Response status and body",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Webhook call result with HTTP response",
+            fields=[
+                OutputFieldDoc(name="status_code", type="int",
+                              description="HTTP response status code",
+                              example=200),
+                OutputFieldDoc(name="response", type="any",
+                              description="Response body (JSON object or text string)",
+                              nullable=True),
+            ],
+        ),
         tags=["notify", "webhook", "http"],
         requires_llm=False,
         examples=[

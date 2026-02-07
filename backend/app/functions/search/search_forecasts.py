@@ -16,6 +16,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -114,6 +116,29 @@ class SearchForecastsFunction(BaseFunction):
             ),
         ],
         returns="list[dict]: List of forecast records with search scores and highlights",
+        output_schema=OutputSchema(
+            type="list[dict]",
+            description="List of matching acquisition forecasts",
+            fields=[
+                OutputFieldDoc(name="id", type="str", description="Forecast UUID"),
+                OutputFieldDoc(name="title", type="str", description="Forecast title/description"),
+                OutputFieldDoc(name="source_type", type="str", description="Source type",
+                              example="ag"),
+                OutputFieldDoc(name="agency", type="str", description="Agency name", nullable=True),
+                OutputFieldDoc(name="fiscal_year", type="int", description="Fiscal year",
+                              example=2026, nullable=True),
+                OutputFieldDoc(name="naics_code", type="str", description="NAICS industry code",
+                              nullable=True),
+                OutputFieldDoc(name="estimated_value", type="float",
+                              description="Estimated contract value", nullable=True),
+                OutputFieldDoc(name="url", type="str", description="Source URL", nullable=True),
+                OutputFieldDoc(name="score", type="float", description="Relevance score"),
+                OutputFieldDoc(name="highlights", type="dict",
+                              description="Highlighted search matches", nullable=True),
+                OutputFieldDoc(name="detail_url", type="str",
+                              description="Link to Curatore detail page"),
+            ],
+        ),
         tags=["search", "forecasts", "acquisition", "hybrid"],
         requires_llm=False,
         examples=[

@@ -14,6 +14,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -80,6 +82,27 @@ class SendEmailFunction(BaseFunction):
             ),
         ],
         returns="dict: Email send result",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Email send operation result",
+            fields=[
+                OutputFieldDoc(name="to", type="list[str]",
+                              description="List of recipient email addresses"),
+                OutputFieldDoc(name="subject", type="str",
+                              description="Email subject line"),
+                OutputFieldDoc(name="status", type="str",
+                              description="Send status (sent, logged)",
+                              example="sent"),
+                OutputFieldDoc(name="success", type="bool",
+                              description="Whether the email was sent successfully"),
+                OutputFieldDoc(name="message_id", type="str",
+                              description="Email service message ID",
+                              nullable=True),
+                OutputFieldDoc(name="error", type="str",
+                              description="Error message if send failed",
+                              nullable=True),
+            ],
+        ),
         tags=["notify", "email"],
         requires_llm=False,
         examples=[

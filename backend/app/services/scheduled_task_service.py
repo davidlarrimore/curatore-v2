@@ -378,6 +378,7 @@ class ScheduledTaskService:
         task_id: UUID,
         triggered_by: Optional[UUID] = None,
         user_organization_id: Optional[UUID] = None,
+        config_overrides: Optional[Dict] = None,
     ) -> Optional[Run]:
         """
         Trigger a task to run immediately.
@@ -390,6 +391,8 @@ class ScheduledTaskService:
             task_id: Task UUID
             triggered_by: User ID who triggered the task
             user_organization_id: Organization ID for global tasks (from current user)
+            config_overrides: Optional dict merged on top of task's stored config
+                for this run only
 
         Returns:
             Created Run object or None if task not found
@@ -406,6 +409,11 @@ class ScheduledTaskService:
             logger.error(f"Cannot trigger task without organization context: {task_id}")
             return None
 
+        # Merge config overrides on top of the task's stored config
+        task_config = dict(task.config or {})
+        if config_overrides:
+            task_config.update(config_overrides)
+
         # Create a Run for this execution
         run = Run(
             id=uuid4(),
@@ -417,7 +425,7 @@ class ScheduledTaskService:
                 "scheduled_task_id": str(task.id),
                 "scheduled_task_name": task.name,
                 "task_type": task.task_type,
-                "task_config": task.config,
+                "task_config": task_config,
             },
             created_by=triggered_by,
         )

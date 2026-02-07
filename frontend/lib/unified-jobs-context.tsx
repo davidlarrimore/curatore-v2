@@ -246,7 +246,7 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
             validatedJobs.push({
               ...job,
               status: run.status,
-              progress: run.progress,
+              progress: run.progress ?? undefined,
               errorMessage: run.error_message || undefined,
             })
           }

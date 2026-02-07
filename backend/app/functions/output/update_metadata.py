@@ -17,6 +17,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -77,6 +79,21 @@ class UpdateMetadataFunction(BaseFunction):
             ),
         ],
         returns="dict: Updated metadata record",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Result of metadata update operation",
+            fields=[
+                OutputFieldDoc(name="asset_id", type="str",
+                              description="UUID of the updated asset"),
+                OutputFieldDoc(name="metadata_type", type="str",
+                              description="Type of metadata that was updated",
+                              example="tags.llm.v1"),
+                OutputFieldDoc(name="is_canonical", type="bool",
+                              description="Whether this is the canonical metadata for this type"),
+                OutputFieldDoc(name="content", type="dict",
+                              description="The metadata content that was saved"),
+            ],
+        ),
         tags=["output", "metadata", "assets"],
         requires_llm=False,
         examples=[

@@ -19,6 +19,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -71,6 +73,28 @@ class AnalyzeSolicitationFunction(BaseFunction):
             ),
         ],
         returns="dict: Structured analysis including summary, requirements, and recommendations",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Comprehensive solicitation analysis for business development",
+            fields=[
+                OutputFieldDoc(name="solicitation_id", type="str",
+                              description="UUID of the analyzed solicitation"),
+                OutputFieldDoc(name="notice_id", type="str",
+                              description="SAM.gov notice ID"),
+                OutputFieldDoc(name="title", type="str",
+                              description="Solicitation title"),
+                OutputFieldDoc(name="analysis", type="str",
+                              description="Markdown-formatted analysis with executive summary, requirements, evaluation criteria, timeline, and recommendations"),
+                OutputFieldDoc(name="analysis_depth", type="str",
+                              description="Depth of analysis (brief, standard, detailed)",
+                              example="standard"),
+                OutputFieldDoc(name="model", type="str",
+                              description="LLM model used for analysis"),
+                OutputFieldDoc(name="cached", type="bool",
+                              description="True if returned from cache (brief analysis only)",
+                              nullable=True),
+            ],
+        ),
         tags=["compound", "sam", "analysis", "bd"],
         requires_llm=True,
         examples=[

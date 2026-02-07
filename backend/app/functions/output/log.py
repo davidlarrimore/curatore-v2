@@ -38,6 +38,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -203,6 +205,24 @@ class LogFunction(BaseFunction):
             ),
         ],
         returns="dict: {message: str, level: str, logged: bool}",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Log operation result with status information",
+            fields=[
+                OutputFieldDoc(name="message", type="str",
+                              description="The message that was logged"),
+                OutputFieldDoc(name="level", type="str",
+                              description="Log level (INFO, WARN, ERROR)",
+                              example="INFO"),
+                OutputFieldDoc(name="label", type="str",
+                              description="Custom label/tag for the log entry",
+                              nullable=True),
+                OutputFieldDoc(name="logged_to_run", type="bool",
+                              description="Whether the message was logged to the run activity log"),
+                OutputFieldDoc(name="has_data", type="bool",
+                              description="Whether data was included in the log entry"),
+            ],
+        ),
         tags=["output", "debug", "logging", "inspect"],
         requires_llm=False,
         examples=[

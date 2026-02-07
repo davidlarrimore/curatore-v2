@@ -152,18 +152,30 @@ Generates system health summary:
 
 ### `search.reindex`
 
-Rebuilds the search index:
-- Reprocesses all indexed content
-- Updates embeddings if model changed
-- Can be filtered by source type
+Rebuilds the PostgreSQL full-text + semantic search index across 9 content types. Supports incremental mode (only re-embeds changed items) and selective data source targeting.
+
+See [Search & Indexing](SEARCH_INDEXING.md) for full details on the indexing pipeline, chunking, embeddings, and hybrid search.
+
+- Processes: assets, SAM solicitations/notices, Salesforce records, forecasts
+- Incremental by default: skips items where `indexed_at >= updated_at`
+- Batch embeds non-asset items (50 per API call) for ~50x fewer OpenAI round-trips
+- 30-second heartbeat to prevent inactivity timeout
+- 60-minute Celery soft time limit
 
 **Config:**
 ```json
 {
-  "source_types": ["asset", "solicitation"],  // optional filter
-  "batch_size": 100
+  "data_sources": ["assets", "sam", "salesforce", "forecasts"],
+  "force": false,
+  "organization_id": null
 }
 ```
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| `data_sources` | All four | Which content groups to reindex |
+| `force` | `false` | `true` = reindex everything, `false` = incremental |
+| `organization_id` | `null` | `null` = all orgs, UUID = specific org |
 
 ---
 

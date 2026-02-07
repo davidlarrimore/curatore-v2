@@ -143,6 +143,7 @@ export default function JobDetailPage() {
   const [refreshing, setRefreshing] = useState(false);
   const [autoRefresh, setAutoRefresh] = useState(true);
   const [cancelling, setCancelling] = useState(false);
+  const [forceKilling, setForceKilling] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
   const fetchData = useCallback(async (showRefreshing = false) => {
@@ -223,6 +224,42 @@ export default function JobDetailPage() {
       setCancelling(false);
     }
   };
+
+  // Handle force kill for stuck jobs
+  const handleForceKill = async () => {
+    if (!confirm(
+      'Force Kill will terminate database connections and revoke the Celery task.\n\n' +
+      'This is a destructive action that should only be used for stuck jobs.\n\n' +
+      'Are you sure you want to force-kill this job?'
+    )) return;
+
+    setForceKilling(true);
+    setError(null);
+    setSuccessMessage(null);
+
+    try {
+      const result = await queueAdminApi.forceKillJob(undefined, runId);
+      setSuccessMessage(result.message);
+      // Refresh data to show updated status
+      await fetchData(false);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to force-kill job');
+    } finally {
+      setForceKilling(false);
+    }
+  };
+
+  // Check if job appears stuck (running but no activity for 2+ minutes)
+  const isJobStuck = useCallback(() => {
+    if (!data?.run) return false;
+    const { run } = data;
+    if (!['running', 'submitted'].includes(run.status)) return false;
+    if (!run.last_activity_at) return true; // No activity ever
+    const lastActivity = new Date(run.last_activity_at).getTime();
+    const now = Date.now();
+    const inactiveMinutes = (now - lastActivity) / 60000;
+    return inactiveMinutes >= 2;
+  }, [data]);
 
   // Clear success message after a delay
   useEffect(() => {
@@ -345,6 +382,22 @@ export default function JobDetailPage() {
                     <StopCircle className="h-4 w-4" />
                   )}
                   <span>Cancel</span>
+                </button>
+              )}
+              {/* Force Kill Button - for stuck jobs */}
+              {isActive && isJobStuck() && (
+                <button
+                  onClick={handleForceKill}
+                  disabled={forceKilling}
+                  className="px-4 py-2 rounded-lg border border-orange-300 dark:border-orange-700 bg-orange-50 dark:bg-orange-900/30 text-orange-700 dark:text-orange-300 hover:bg-orange-100 dark:hover:bg-orange-900/50 transition-colors disabled:opacity-50 flex items-center gap-2"
+                  title="Force-terminate stuck database connections and Celery task"
+                >
+                  {forceKilling ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Zap className="h-4 w-4" />
+                  )}
+                  <span>Force Kill</span>
                 </button>
               )}
               {isActive && (

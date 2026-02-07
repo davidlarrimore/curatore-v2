@@ -17,6 +17,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -72,6 +74,20 @@ class BulkUpdateMetadataFunction(BaseFunction):
             ),
         ],
         returns="dict: Summary of updates",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Summary of bulk metadata update operation",
+            fields=[
+                OutputFieldDoc(name="processed", type="int",
+                              description="Number of assets successfully updated"),
+                OutputFieldDoc(name="failed", type="int",
+                              description="Number of assets that failed to update",
+                              nullable=True),
+                OutputFieldDoc(name="errors", type="list[str]",
+                              description="List of error messages (limited to first 10)",
+                              nullable=True),
+            ],
+        ),
         tags=["output", "metadata", "bulk"],
         requires_llm=False,
         examples=[

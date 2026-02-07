@@ -94,6 +94,7 @@ function AssetDetailContent() {
   // Track extraction ID to detect when extraction result changes
   const [lastExtractionId, setLastExtractionId] = useState<string | null>(null)
   const [copied, setCopied] = useState(false)
+  const [copiedFolderPath, setCopiedFolderPath] = useState(false)
   const [contentLoadProgress, setContentLoadProgress] = useState<number>(0)
 
   // State for rendering .docx files
@@ -1042,6 +1043,32 @@ function AssetDetailContent() {
                       {asset.raw_object_key}
                     </span>
                   </div>
+                  {asset.raw_object_key && asset.raw_object_key.split('/').length > 2 && (
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-gray-500 dark:text-gray-400">Folder Path</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-mono text-xs text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 px-2 py-0.5 rounded truncate max-w-[260px]">
+                          {asset.raw_object_key.split('/').slice(1, -1).join('/')}
+                        </span>
+                        <button
+                          onClick={() => {
+                            const folderPath = asset.raw_object_key!.split('/').slice(1, -1).join('/')
+                            navigator.clipboard.writeText(folderPath)
+                            setCopiedFolderPath(true)
+                            setTimeout(() => setCopiedFolderPath(false), 2000)
+                          }}
+                          className="p-1 rounded-md text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 transition-colors"
+                          title="Copy folder path for use in procedures"
+                        >
+                          {copiedFolderPath ? (
+                            <Check className="w-3.5 h-3.5 text-emerald-500" />
+                          ) : (
+                            <Copy className="w-3.5 h-3.5" />
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  )}
                   {asset.file_hash && (
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-gray-500 dark:text-gray-400">File Hash (SHA-256)</span>

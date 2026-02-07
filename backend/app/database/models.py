@@ -2112,6 +2112,9 @@ class SamSolicitation(Base):
     summary_status = Column(String(50), nullable=True, default="pending", index=True)
     summary_generated_at = Column(DateTime, nullable=True)
 
+    # Search indexing
+    indexed_at = Column(DateTime, nullable=True)
+
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
@@ -2241,6 +2244,9 @@ class SamNotice(Base):
     summary_status = Column(String(50), nullable=True, default="pending")
     # Values: pending, generating, ready, failed, no_llm
     summary_generated_at = Column(DateTime, nullable=True)
+
+    # Search indexing
+    indexed_at = Column(DateTime, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -3038,6 +3044,9 @@ class SalesforceContact(Base):
 
     # Audit trail
     raw_data = Column(JSON, nullable=True)
+
+    # Search indexing
+    indexed_at = Column(DateTime, nullable=True)
 
     # Timestamps
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

@@ -38,8 +38,13 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
+    OutputVariant,
 )
 from ..context import FunctionContext
+from ...models.llm_models import LLMTaskType
+from ...services.config_loader import config_loader
 
 logger = logging.getLogger("curatore.functions.llm.decide")
 
@@ -143,6 +148,48 @@ class DecideFunction(BaseFunction):
             ),
         ],
         returns="dict: {decision: bool, confidence: float, reasoning: str}",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Boolean decision result with confidence and reasoning",
+            fields=[
+                OutputFieldDoc(name="decision", type="bool",
+                              description="The yes/no decision (true=yes, false=no)",
+                              example=True),
+                OutputFieldDoc(name="confidence", type="float",
+                              description="Confidence score (0.0-1.0)",
+                              example=0.92),
+                OutputFieldDoc(name="reasoning", type="str",
+                              description="Explanation for the decision",
+                              nullable=True),
+                OutputFieldDoc(name="below_threshold", type="bool",
+                              description="True if confidence was below threshold and default was used",
+                              nullable=True),
+            ],
+        ),
+        output_variants=[
+            OutputVariant(
+                mode="collection",
+                condition="when `items` parameter is provided",
+                schema=OutputSchema(
+                    type="list[dict]",
+                    description="List of decision results for each item",
+                    fields=[
+                        OutputFieldDoc(name="item_id", type="str",
+                                      description="ID of the processed item"),
+                        OutputFieldDoc(name="decision", type="bool",
+                                      description="The yes/no decision"),
+                        OutputFieldDoc(name="confidence", type="float",
+                                      description="Confidence score (0.0-1.0)"),
+                        OutputFieldDoc(name="reasoning", type="str",
+                                      description="Explanation", nullable=True),
+                        OutputFieldDoc(name="success", type="bool",
+                                      description="Whether evaluation succeeded"),
+                        OutputFieldDoc(name="error", type="str",
+                                      description="Error message if failed", nullable=True),
+                    ],
+                ),
+            ),
+        ],
         tags=["llm", "decision", "gate", "conditional", "boolean"],
         requires_llm=True,
         examples=[
@@ -308,14 +355,19 @@ DATA TO EVALUATE:
 
 Respond with JSON only:"""
 
+            # Get model and temperature from task type routing (QUICK for decisions)
+            task_config = config_loader.get_task_type_config(LLMTaskType.QUICK)
+            resolved_model = model or task_config.model
+            temperature = task_config.temperature if task_config.temperature is not None else 0.1
+
             # Generate
             response = ctx.llm_service._client.chat.completions.create(
-                model=model or ctx.llm_service._get_model(),
+                model=resolved_model,
                 messages=[
                     {"role": "system", "content": final_system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.1,  # Low temperature for consistent decisions
+                temperature=temperature,
                 max_tokens=300,
             )
 
@@ -382,6 +434,11 @@ Respond with JSON only:"""
 
         final_system_prompt = self._build_system_prompt(system_prompt, criteria)
 
+        # Get model and temperature from task type routing (BULK for collection mode)
+        task_config = config_loader.get_task_type_config(LLMTaskType.BULK)
+        resolved_model = model or task_config.model
+        temperature = task_config.temperature if task_config.temperature is not None else 0.1
+
         for idx, item in enumerate(items):
             try:
                 # Render data with item context
@@ -398,12 +455,12 @@ Respond with JSON only:"""
 
                 # Generate
                 response = ctx.llm_service._client.chat.completions.create(
-                    model=model or ctx.llm_service._get_model(),
+                    model=resolved_model,
                     messages=[
                         {"role": "system", "content": final_system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    temperature=0.1,
+                    temperature=temperature,
                     max_tokens=300,
                 )
 

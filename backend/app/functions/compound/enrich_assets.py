@@ -18,6 +18,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -109,6 +111,18 @@ class EnrichAssetsFunction(BaseFunction):
             ),
         ],
         returns="dict: Enrichment results",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Asset enrichment operation results",
+            fields=[
+                OutputFieldDoc(name="processed", type="int",
+                              description="Number of assets processed"),
+                OutputFieldDoc(name="enriched", type="int",
+                              description="Number of assets that received new metadata"),
+                OutputFieldDoc(name="skipped", type="int",
+                              description="Number of assets skipped (already enriched)"),
+            ],
+        ),
         tags=["compound", "enrichment", "metadata"],
         requires_llm=False,
         examples=[

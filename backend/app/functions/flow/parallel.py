@@ -31,6 +31,8 @@ from ..base import (
     FunctionCategory,
     FlowResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -70,6 +72,14 @@ class ParallelFunction(BaseFunction):
             ),
         ],
         returns="FlowResult with branches_to_run listing all branch names",
+        output_schema=OutputSchema(
+            type="FlowResult",
+            description="Flow control result for parallel branch execution",
+            fields=[
+                OutputFieldDoc(name="max_concurrency", type="int",
+                              description="Maximum number of branches to run simultaneously (0 = unlimited)"),
+            ],
+        ),
         tags=["flow", "parallel", "concurrent", "branching"],
         requires_llm=False,
         examples=[

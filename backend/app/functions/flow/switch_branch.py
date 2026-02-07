@@ -31,6 +31,8 @@ from ..base import (
     FunctionCategory,
     FlowResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -66,6 +68,19 @@ class SwitchBranchFunction(BaseFunction):
             ),
         ],
         returns="FlowResult with branch_key set to matched case or 'default'",
+        output_schema=OutputSchema(
+            type="FlowResult",
+            description="Flow control result indicating which branch to execute",
+            fields=[
+                OutputFieldDoc(name="value", type="any",
+                              description="The original value that was evaluated"),
+                OutputFieldDoc(name="string_value", type="str",
+                              description="String-coerced value used for matching"),
+                OutputFieldDoc(name="branch", type="str",
+                              description="Branch key to execute (matches a case or 'default')",
+                              example="contract"),
+            ],
+        ),
         tags=["flow", "branching", "routing", "switch", "case"],
         requires_llm=False,
         examples=[

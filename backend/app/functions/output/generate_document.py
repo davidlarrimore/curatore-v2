@@ -21,6 +21,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -132,6 +134,28 @@ class GenerateDocumentFunction(BaseFunction):
             ),
         ],
         returns="dict: Document bytes (base64), filename, format, and optionally storage URL",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Generated document with content and optional storage info",
+            fields=[
+                OutputFieldDoc(name="format", type="str",
+                              description="Document format (pdf, docx, csv)",
+                              example="pdf"),
+                OutputFieldDoc(name="filename", type="str",
+                              description="Generated filename",
+                              example="report_20240115_123456.pdf"),
+                OutputFieldDoc(name="content_type", type="str",
+                              description="MIME type of the document",
+                              example="application/pdf"),
+                OutputFieldDoc(name="size", type="int",
+                              description="Size of the document in bytes"),
+                OutputFieldDoc(name="document_base64", type="str",
+                              description="Base64-encoded document content"),
+                OutputFieldDoc(name="storage", type="dict",
+                              description="Storage info if save_to_storage=true (bucket, object_key, download_url)",
+                              nullable=True),
+            ],
+        ),
         tags=["output", "document", "pdf", "docx", "csv", "generation"],
         requires_llm=False,
         examples=[

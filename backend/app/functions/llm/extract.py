@@ -20,8 +20,13 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
+    OutputVariant,
 )
 from ..context import FunctionContext
+from ...models.llm_models import LLMTaskType
+from ...services.config_loader import config_loader
 
 logger = logging.getLogger("curatore.functions.llm.extract")
 
@@ -96,6 +101,36 @@ class ExtractFunction(BaseFunction):
             ),
         ],
         returns="dict or list: Extracted fields (single) or list of extractions (collection)",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Dictionary with extracted field values (keys match requested fields)",
+            fields=[
+                OutputFieldDoc(name="<field_name>", type="any",
+                              description="Each requested field is returned as a key. Value is null if not found.",
+                              example="John Smith", nullable=True),
+            ],
+            example={"name": "John Smith", "email": "john@example.com", "phone": "555-1234"},
+        ),
+        output_variants=[
+            OutputVariant(
+                mode="collection",
+                condition="when `items` parameter is provided",
+                schema=OutputSchema(
+                    type="list[dict]",
+                    description="List of extraction results for each item",
+                    fields=[
+                        OutputFieldDoc(name="item_id", type="str",
+                                      description="ID of the processed item"),
+                        OutputFieldDoc(name="result", type="dict",
+                                      description="Extracted fields dictionary"),
+                        OutputFieldDoc(name="success", type="bool",
+                                      description="Whether extraction succeeded"),
+                        OutputFieldDoc(name="error", type="str",
+                                      description="Error message if failed", nullable=True),
+                    ],
+                ),
+            ),
+        ],
         tags=["llm", "extraction", "structured"],
         requires_llm=True,
         examples=[
@@ -196,14 +231,19 @@ Text to extract from:
 
 Return ONLY the JSON object:"""
 
+            # Get model and temperature from task type routing (STANDARD for extraction)
+            task_config = config_loader.get_task_type_config(LLMTaskType.STANDARD)
+            resolved_model = model or task_config.model
+            temperature = task_config.temperature if task_config.temperature is not None else 0.1
+
             # Generate
             response = ctx.llm_service._client.chat.completions.create(
-                model=model or ctx.llm_service._get_model(),
+                model=resolved_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.1,  # Low temperature for consistent extraction
+                temperature=temperature,
                 max_tokens=1000,
             )
 
@@ -262,6 +302,11 @@ Return ONLY the JSON object:"""
 Return ONLY a valid JSON object with the extracted fields. If a field cannot be found, use null.
 Do not include any explanation or markdown formatting."""
 
+        # Get model and temperature from task type routing (BULK for collection mode)
+        task_config = config_loader.get_task_type_config(LLMTaskType.BULK)
+        resolved_model = model or task_config.model
+        temperature = task_config.temperature if task_config.temperature is not None else 0.1
+
         for idx, item in enumerate(items):
             try:
                 # Render text with item context
@@ -282,12 +327,12 @@ Return ONLY the JSON object:"""
 
                 # Generate
                 response = ctx.llm_service._client.chat.completions.create(
-                    model=model or ctx.llm_service._get_model(),
+                    model=resolved_model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    temperature=0.1,
+                    temperature=temperature,
                     max_tokens=1000,
                 )
 

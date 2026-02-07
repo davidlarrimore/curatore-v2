@@ -36,7 +36,7 @@ const AG_AGENCIES = [
   { id: 21, name: 'Department of State' },
 ]
 
-const frequencyOptions = [
+const frequencyOptions: Array<{ id: 'manual' | 'hourly' | 'daily', name: string, description: string }> = [
   { id: 'manual', name: 'Manual', description: 'Sync only when manually triggered' },
   { id: 'hourly', name: 'Hourly', description: 'Sync every hour' },
   { id: 'daily', name: 'Daily', description: 'Sync once per day' },
@@ -71,7 +71,7 @@ function EditSyncForm() {
 
   // Form state
   const [name, setName] = useState('')
-  const [frequency, setFrequency] = useState('manual')
+  const [frequency, setFrequency] = useState<'manual' | 'hourly' | 'daily'>('manual')
   const [selectedAgencyId, setSelectedAgencyId] = useState<number | null>(null)
   const [naicsCodes, setNaicsCodes] = useState<string[]>([])
   const [newNaicsCode, setNewNaicsCode] = useState('')
@@ -91,7 +91,7 @@ function EditSyncForm() {
 
       // Populate form with existing values
       setName(syncData.name)
-      setFrequency(syncData.sync_frequency)
+      setFrequency(syncData.sync_frequency as 'manual' | 'hourly' | 'daily')
 
       const filterConfig = syncData.filter_config || {}
       if (filterConfig.agency_ids && filterConfig.agency_ids.length > 0) {

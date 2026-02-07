@@ -24,11 +24,13 @@ import {
   Clock,
   Code,
   BookOpen,
-  Settings2,
   FileCode,
   AlertTriangle,
   Zap,
   Server,
+  Eye,
+  ChevronRight,
+  ChevronDown,
 } from 'lucide-react'
 
 export default function FunctionLabPage() {
@@ -38,6 +40,365 @@ export default function FunctionLabPage() {
     </ProtectedRoute>
   )
 }
+
+// ============================================================================
+// Smart Output Viewer Component
+// ============================================================================
+
+type OutputViewMode = 'code' | 'formatted' | 'tree'
+
+interface OutputViewerProps {
+  data: any
+  className?: string
+}
+
+function OutputViewer({ data, className = '' }: OutputViewerProps) {
+  const [viewMode, setViewMode] = useState<OutputViewMode>('tree')
+
+  // Detect content type
+  const contentType = useMemo(() => {
+    if (data === null || data === undefined) return 'empty'
+    if (typeof data === 'string') {
+      // Check if it's HTML
+      if (data.trim().startsWith('<') && (data.includes('</') || data.includes('/>'))) {
+        return 'html'
+      }
+      // Check if it's markdown (has common markdown patterns)
+      if (data.includes('# ') || data.includes('**') || data.includes('- ') || data.includes('```')) {
+        return 'markdown'
+      }
+      return 'text'
+    }
+    if (typeof data === 'object') {
+      return 'json'
+    }
+    return 'text'
+  }, [data])
+
+  // Set initial view mode based on content type
+  useEffect(() => {
+    if (contentType === 'json') {
+      setViewMode('tree')
+    } else if (contentType === 'html' || contentType === 'markdown') {
+      setViewMode('formatted')
+    } else {
+      setViewMode('code')
+    }
+  }, [contentType])
+
+  const showViewToggle = contentType === 'html' || contentType === 'markdown' || contentType === 'json'
+
+  return (
+    <div className={`flex flex-col h-full ${className}`}>
+      {/* View Mode Toggle */}
+      {showViewToggle && (
+        <div className="flex items-center gap-1 mb-3">
+          {contentType === 'json' && (
+            <>
+              <button
+                onClick={() => setViewMode('tree')}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  viewMode === 'tree'
+                    ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}
+              >
+                <ChevronRight className="w-3 h-3" />
+                Tree
+              </button>
+              <button
+                onClick={() => setViewMode('code')}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  viewMode === 'code'
+                    ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}
+              >
+                <Code className="w-3 h-3" />
+                Code
+              </button>
+            </>
+          )}
+          {(contentType === 'html' || contentType === 'markdown') && (
+            <>
+              <button
+                onClick={() => setViewMode('formatted')}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  viewMode === 'formatted'
+                    ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}
+              >
+                <Eye className="w-3 h-3" />
+                Preview
+              </button>
+              <button
+                onClick={() => setViewMode('code')}
+                className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                  viewMode === 'code'
+                    ? 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300'
+                    : 'bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600'
+                }`}
+              >
+                <Code className="w-3 h-3" />
+                Code
+              </button>
+            </>
+          )}
+        </div>
+      )}
+
+      {/* Content Display */}
+      <div className="flex-1 overflow-auto">
+        {contentType === 'empty' && (
+          <p className="text-sm text-gray-500 dark:text-gray-400 italic">No data returned</p>
+        )}
+
+        {contentType === 'json' && viewMode === 'tree' && (
+          <JsonTreeView data={data} />
+        )}
+
+        {contentType === 'json' && viewMode === 'code' && (
+          <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 bg-gray-900 dark:bg-gray-950 text-emerald-300 p-3 rounded-lg overflow-auto">
+            {JSON.stringify(data, null, 2)}
+          </pre>
+        )}
+
+        {contentType === 'html' && viewMode === 'formatted' && (
+          <div
+            className="prose prose-sm dark:prose-invert max-w-none p-3 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700"
+            dangerouslySetInnerHTML={{ __html: data }}
+          />
+        )}
+
+        {contentType === 'html' && viewMode === 'code' && (
+          <pre className="text-xs font-mono bg-gray-900 dark:bg-gray-950 text-emerald-300 p-3 rounded-lg overflow-auto whitespace-pre-wrap">
+            {data}
+          </pre>
+        )}
+
+        {contentType === 'markdown' && viewMode === 'formatted' && (
+          <div className="prose prose-sm dark:prose-invert max-w-none p-3 bg-white dark:bg-gray-900 rounded-lg border border-gray-200 dark:border-gray-700">
+            <MarkdownRenderer content={data} />
+          </div>
+        )}
+
+        {contentType === 'markdown' && viewMode === 'code' && (
+          <pre className="text-xs font-mono bg-gray-900 dark:bg-gray-950 text-emerald-300 p-3 rounded-lg overflow-auto whitespace-pre-wrap">
+            {data}
+          </pre>
+        )}
+
+        {contentType === 'text' && (
+          <pre className="text-sm font-mono text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg overflow-auto whitespace-pre-wrap">
+            {String(data)}
+          </pre>
+        )}
+      </div>
+    </div>
+  )
+}
+
+// ============================================================================
+// JSON Tree View Component
+// ============================================================================
+
+interface JsonTreeViewProps {
+  data: any
+  depth?: number
+}
+
+function JsonTreeView({ data, depth = 0 }: JsonTreeViewProps) {
+  const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
+
+  // Auto-expand first two levels
+  useEffect(() => {
+    if (depth === 0) {
+      const keys = new Set<string>()
+      const addKeys = (obj: any, prefix: string, currentDepth: number) => {
+        if (currentDepth > 1) return
+        if (Array.isArray(obj)) {
+          obj.forEach((_, i) => {
+            const key = `${prefix}[${i}]`
+            keys.add(key)
+            if (typeof obj[i] === 'object' && obj[i] !== null) {
+              addKeys(obj[i], key, currentDepth + 1)
+            }
+          })
+        } else if (typeof obj === 'object' && obj !== null) {
+          Object.keys(obj).forEach(k => {
+            const key = `${prefix}.${k}`
+            keys.add(key)
+            if (typeof obj[k] === 'object' && obj[k] !== null) {
+              addKeys(obj[k], key, currentDepth + 1)
+            }
+          })
+        }
+      }
+      addKeys(data, 'root', 0)
+      setExpandedKeys(keys)
+    }
+  }, [data, depth])
+
+  const toggleExpand = (key: string) => {
+    setExpandedKeys(prev => {
+      const next = new Set(prev)
+      if (next.has(key)) {
+        next.delete(key)
+      } else {
+        next.add(key)
+      }
+      return next
+    })
+  }
+
+  const renderValue = (value: any, key: string, name: string) => {
+    if (value === null) {
+      return <span className="text-gray-400 italic">null</span>
+    }
+    if (value === undefined) {
+      return <span className="text-gray-400 italic">undefined</span>
+    }
+    if (typeof value === 'boolean') {
+      return <span className="text-amber-600 dark:text-amber-400">{value.toString()}</span>
+    }
+    if (typeof value === 'number') {
+      return <span className="text-blue-600 dark:text-blue-400">{value}</span>
+    }
+    if (typeof value === 'string') {
+      const displayValue = value.length > 100 ? value.slice(0, 100) + '...' : value
+      return <span className="text-emerald-600 dark:text-emerald-400">"{displayValue}"</span>
+    }
+    if (Array.isArray(value)) {
+      const isExpanded = expandedKeys.has(key)
+      return (
+        <div>
+          <button
+            onClick={() => toggleExpand(key)}
+            className="flex items-center gap-1 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+          >
+            {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            <span className="text-purple-600 dark:text-purple-400">Array</span>
+            <span className="text-gray-400">({value.length})</span>
+          </button>
+          {isExpanded && (
+            <div className="ml-4 border-l border-gray-200 dark:border-gray-700 pl-3 mt-1">
+              {value.map((item, i) => (
+                <div key={i} className="py-0.5">
+                  <span className="text-gray-500 dark:text-gray-500 text-xs mr-2">{i}:</span>
+                  {renderValue(item, `${key}[${i}]`, String(i))}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )
+    }
+    if (typeof value === 'object') {
+      const isExpanded = expandedKeys.has(key)
+      const keys = Object.keys(value)
+      return (
+        <div>
+          <button
+            onClick={() => toggleExpand(key)}
+            className="flex items-center gap-1 text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-white"
+          >
+            {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            <span className="text-indigo-600 dark:text-indigo-400">Object</span>
+            <span className="text-gray-400">({keys.length} keys)</span>
+          </button>
+          {isExpanded && (
+            <div className="ml-4 border-l border-gray-200 dark:border-gray-700 pl-3 mt-1">
+              {keys.map(k => (
+                <div key={k} className="py-0.5">
+                  <span className="text-gray-700 dark:text-gray-300 text-sm mr-2">{k}:</span>
+                  {renderValue(value[k], `${key}.${k}`, k)}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )
+    }
+    return <span className="text-gray-600 dark:text-gray-400">{String(value)}</span>
+  }
+
+  if (Array.isArray(data)) {
+    return (
+      <div className="text-sm font-mono">
+        <span className="text-purple-600 dark:text-purple-400">Array</span>
+        <span className="text-gray-400 ml-1">({data.length} items)</span>
+        <div className="ml-2 border-l border-gray-200 dark:border-gray-700 pl-3 mt-1">
+          {data.map((item, i) => (
+            <div key={i} className="py-0.5">
+              <span className="text-gray-500 dark:text-gray-500 text-xs mr-2">{i}:</span>
+              {renderValue(item, `root[${i}]`, String(i))}
+            </div>
+          ))}
+        </div>
+      </div>
+    )
+  }
+
+  if (typeof data === 'object' && data !== null) {
+    const keys = Object.keys(data)
+    return (
+      <div className="text-sm font-mono">
+        {keys.map(k => (
+          <div key={k} className="py-0.5">
+            <span className="text-gray-700 dark:text-gray-300 mr-2">{k}:</span>
+            {renderValue(data[k], `root.${k}`, k)}
+          </div>
+        ))}
+      </div>
+    )
+  }
+
+  return <span className="text-sm font-mono">{renderValue(data, 'root', 'root')}</span>
+}
+
+// ============================================================================
+// Simple Markdown Renderer
+// ============================================================================
+
+function MarkdownRenderer({ content }: { content: string }) {
+  // Simple markdown to HTML conversion
+  const html = useMemo(() => {
+    let result = content
+      // Escape HTML
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      // Headers
+      .replace(/^### (.*$)/gm, '<h3>$1</h3>')
+      .replace(/^## (.*$)/gm, '<h2>$1</h2>')
+      .replace(/^# (.*$)/gm, '<h1>$1</h1>')
+      // Bold
+      .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+      // Italic
+      .replace(/\*(.*?)\*/g, '<em>$1</em>')
+      // Code blocks
+      .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
+      // Inline code
+      .replace(/`([^`]+)`/g, '<code>$1</code>')
+      // Lists
+      .replace(/^\s*-\s+(.*)$/gm, '<li>$1</li>')
+      // Links
+      .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-indigo-600 hover:underline">$1</a>')
+      // Paragraphs (simple - wrap text blocks)
+      .replace(/\n\n/g, '</p><p>')
+
+    // Wrap list items
+    result = result.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
+
+    return `<p>${result}</p>`
+  }, [content])
+
+  return <div dangerouslySetInnerHTML={{ __html: html }} />
+}
+
+// ============================================================================
+// Main Content Component
+// ============================================================================
 
 function FunctionLabContent() {
   const params = useParams()
@@ -49,7 +410,7 @@ function FunctionLabContent() {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
 
-  // LLM connection status (for functions that require LLM)
+  // LLM connection status
   const [llmStatus, setLlmStatus] = useState<LLMConnectionStatus | null>(null)
   const [isLoadingLlm, setIsLoadingLlm] = useState(false)
 
@@ -60,7 +421,6 @@ function FunctionLabContent() {
   const [isExecuting, setIsExecuting] = useState(false)
   const [isDryRun, setIsDryRun] = useState(false)
   const [result, setResult] = useState<FunctionExecuteResult | null>(null)
-  const [executionKey, setExecutionKey] = useState(0)
 
   // YAML copy state
   const [copied, setCopied] = useState(false)
@@ -71,14 +431,11 @@ function FunctionLabContent() {
     try {
       const status = await systemApi.getLLMStatus()
       setLlmStatus(status)
-
-      // Pre-populate the model parameter with the default LLM model
       if (status.connected && status.model) {
         setParamValues((prev) => ({ ...prev, model: status.model }))
       }
     } catch (err) {
       console.error('Failed to load LLM status:', err)
-      // Don't show error to user - LLM status is optional info
     } finally {
       setIsLoadingLlm(false)
     }
@@ -95,7 +452,6 @@ function FunctionLabContent() {
       const data = await functionsApi.getFunction(token, functionName)
       setFunc(data)
 
-      // Initialize default values
       const defaults: Record<string, any> = {}
       for (const param of data.parameters || []) {
         if (param.default !== undefined) {
@@ -104,7 +460,6 @@ function FunctionLabContent() {
       }
       setParamValues(defaults)
 
-      // Load LLM status if function requires LLM
       if (data.requires_llm) {
         loadLlmStatus()
       }
@@ -119,19 +474,16 @@ function FunctionLabContent() {
     loadFunction()
   }, [loadFunction])
 
-  // Update a parameter value
   const handleParamChange = (name: string, value: any) => {
     setParamValues((prev) => ({ ...prev, [name]: value }))
   }
 
-  // Execute the function
   const handleExecute = async (dryRun: boolean) => {
     if (!token || !func) return
 
     setIsExecuting(true)
     setIsDryRun(dryRun)
     setResult(null)
-    setExecutionKey((k) => k + 1)
 
     try {
       const execResult = await functionsApi.executeFunction(
@@ -151,13 +503,11 @@ function FunctionLabContent() {
     }
   }
 
-  // Generate YAML output
   const yamlOutput = useMemo(() => {
     if (!func) return ''
     return generateFunctionYaml(func.name, paramValues)
   }, [func, paramValues])
 
-  // Copy YAML to clipboard
   const handleCopyYaml = async () => {
     try {
       await navigator.clipboard.writeText(yamlOutput)
@@ -168,16 +518,11 @@ function FunctionLabContent() {
     }
   }
 
-  // Check if required params are filled
   const canExecute = useMemo(() => {
     if (!func) return false
-
-    // Check LLM connection if required
     if (func.requires_llm && (!llmStatus || !llmStatus.connected)) {
       return false
     }
-
-    // Check required params are filled
     const requiredParams = func.parameters?.filter((p) => p.required) || []
     return requiredParams.every((p) => {
       const val = paramValues[p.name]
@@ -188,11 +533,12 @@ function FunctionLabContent() {
     })
   }, [func, paramValues, llmStatus])
 
+  // Loading state
   if (isLoading) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="flex flex-col items-center justify-center py-16">
+        <div className="flex items-center justify-center h-screen">
+          <div className="flex flex-col items-center">
             <div className="w-12 h-12 rounded-full border-4 border-gray-200 dark:border-gray-700 border-t-indigo-500 animate-spin"></div>
             <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Loading function...</p>
           </div>
@@ -201,11 +547,12 @@ function FunctionLabContent() {
     )
   }
 
+  // Error state
   if (error || !func) {
     return (
       <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-12 text-center">
+        <div className="flex items-center justify-center h-screen">
+          <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-12 text-center max-w-md">
             <AlertTriangle className="w-12 h-12 mx-auto mb-4 text-red-400" />
             <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-2">
               Function Not Found
@@ -223,389 +570,444 @@ function FunctionLabContent() {
     )
   }
 
+  // Calculate header height for layout
+  const hasLlmWarning = func.requires_llm && llmStatus && !llmStatus.connected
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
-        {/* Header */}
-        <div className="mb-8">
-          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
-            <div className="flex items-start gap-4">
-              <button
-                onClick={() => router.push('/admin/functions')}
-                className="mt-1 p-2 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
-              >
-                <ArrowLeft className="w-5 h-5" />
-              </button>
-              <div className="flex items-center justify-center w-12 h-12 rounded-xl bg-gradient-to-br from-purple-500 to-indigo-600 text-white shadow-lg shadow-purple-500/25 flex-shrink-0">
-                <FlaskConical className="w-6 h-6" />
-              </div>
-              <div>
-                <h1 className="text-2xl sm:text-3xl font-bold text-gray-900 dark:text-white font-mono">
-                  {func.name}
-                </h1>
-                <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                  Functions Lab - Test and generate YAML
-                </p>
-              </div>
+    <div className="h-screen flex flex-col overflow-hidden bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
+      {/* Header - Fixed */}
+      <div className="flex-shrink-0 border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-3">
+          <div className="flex items-center gap-4">
+            <button
+              onClick={() => router.push('/admin/functions')}
+              className="p-2 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors"
+            >
+              <ArrowLeft className="w-5 h-5" />
+            </button>
+            <div className="flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-to-br from-purple-500 to-indigo-600 text-white shadow-lg shadow-purple-500/25">
+              <FlaskConical className="w-5 h-5" />
             </div>
-            <div className="flex items-center gap-3">
-              <Button
-                variant="secondary"
-                onClick={() => handleExecute(true)}
-                disabled={isExecuting || !canExecute}
-                className="gap-2"
-              >
-                {isExecuting && isDryRun ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <FlaskConical className="w-4 h-4" />
-                )}
-                Dry Run
-              </Button>
-              <Button
-                variant="primary"
-                onClick={() => handleExecute(false)}
-                disabled={isExecuting || !canExecute}
-                className="gap-2"
-              >
-                {isExecuting && !isDryRun ? (
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                ) : (
-                  <Play className="w-4 h-4" />
-                )}
-                Run
-              </Button>
+            <div>
+              <h1 className="text-xl font-bold text-gray-900 dark:text-white font-mono">
+                {func.name}
+              </h1>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                Function Lab
+              </p>
+            </div>
+
+            {/* Category & Tags in header */}
+            <div className="flex items-center gap-2 ml-4">
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 capitalize">
+                <Code className="w-3 h-3" />
+                {func.category}
+              </span>
+              {func.requires_llm && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
+                  <Brain className="w-3 h-3" />
+                  LLM
+                </span>
+              )}
             </div>
           </div>
         </div>
+      </div>
 
-        {/* LLM Not Connected Warning */}
-        {func.requires_llm && llmStatus && !llmStatus.connected && (
-          <div className="mb-6 rounded-xl bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/50 p-4">
-            <div className="flex items-center gap-3">
-              <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
-              <div>
-                <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                  LLM Connection Required
-                </p>
-                <p className="text-sm text-amber-700 dark:text-amber-300 mt-0.5">
-                  This function requires an LLM connection. Configure one in{' '}
-                  <a href="/connections" className="underline hover:text-amber-900 dark:hover:text-amber-100">
-                    Connections
-                  </a>{' '}
-                  to execute this function.
-                </p>
-              </div>
-            </div>
+      {/* LLM Warning Banner - Fixed */}
+      {hasLlmWarning && (
+        <div className="flex-shrink-0 bg-amber-50 dark:bg-amber-900/20 border-b border-amber-100 dark:border-amber-900/50 px-4 py-2">
+          <div className="max-w-[1800px] mx-auto flex items-center gap-3">
+            <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400 flex-shrink-0" />
+            <p className="text-sm text-amber-700 dark:text-amber-300">
+              This function requires an LLM connection. Configure one in{' '}
+              <a href="/connections" className="underline font-medium hover:text-amber-900 dark:hover:text-amber-100">
+                Connections
+              </a>{' '}
+              to execute.
+            </p>
           </div>
-        )}
+        </div>
+      )}
 
-        {/* Main Content Grid */}
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-          {/* Left Column: Documentation */}
-          <div className="space-y-6">
-            {/* Description Card */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-              <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
-                <div className="flex items-center gap-2">
-                  <BookOpen className="w-4 h-4 text-gray-500 dark:text-gray-400" />
-                  <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                    Documentation
-                  </h2>
-                </div>
+      {/* Main Content: Documentation (30%) + Lab Panel (70%) - Fills remaining space */}
+      <div className="flex-1 min-h-0 overflow-hidden">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-4 h-full">
+          <div className="flex gap-4 h-full">
+
+            {/* Documentation Panel (30%) */}
+            <div className="w-[30%] flex-shrink-0 flex flex-col bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+              {/* Panel Header - Fixed height */}
+              <div className="flex-shrink-0 h-11 px-4 flex items-center gap-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+                <BookOpen className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                  Documentation
+                </h2>
               </div>
-              <div className="p-6 space-y-4">
-                <p className="text-sm text-gray-700 dark:text-gray-300">{func.description}</p>
-
-                {/* Metadata */}
-                <div className="flex flex-wrap gap-2">
-                  <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 capitalize">
-                    <Code className="w-3 h-3" />
-                    {func.category}
-                  </span>
-                  {func.requires_llm && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
-                      <Brain className="w-3 h-3" />
-                      Requires LLM
-                    </span>
-                  )}
-                  {func.version && (
-                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
-                      v{func.version}
-                    </span>
-                  )}
+              {/* Panel Content - Scrollable */}
+              <div className="flex-1 overflow-y-auto p-4 space-y-6">
+                {/* Description */}
+                <div>
+                  <p className="text-sm text-gray-700 dark:text-gray-300 leading-relaxed">
+                    {func.description}
+                  </p>
                 </div>
 
                 {/* Tags */}
                 {func.tags && func.tags.length > 0 && (
-                  <div className="flex flex-wrap gap-2">
+                  <div className="flex flex-wrap gap-1.5">
                     {func.tags.map((tag) => (
                       <span
                         key={tag}
                         className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
                       >
-                        <Tag className="w-3 h-3" />
+                        <Tag className="w-2.5 h-2.5" />
                         {tag}
                       </span>
                     ))}
                   </div>
                 )}
 
-                {/* Returns */}
-                {func.returns && (
-                  <div className="pt-3 border-t border-gray-200 dark:border-gray-700">
-                    <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
-                      Returns
-                    </h4>
-                    <p className="text-sm font-mono text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 px-3 py-2 rounded-lg">
-                      {func.returns}
-                    </p>
+                {/* Parameters Documentation */}
+                {func.parameters && func.parameters.length > 0 && (
+                  <div>
+                    <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+                      Parameters
+                    </h3>
+                    <div className="space-y-3">
+                      {func.parameters.map((param) => (
+                        <div key={param.name} className="text-sm">
+                          <div className="flex items-center gap-2 mb-1">
+                            <code className="text-xs font-mono font-medium text-indigo-600 dark:text-indigo-400">
+                              {param.name}
+                            </code>
+                            <span className="text-xs text-gray-400">{param.type}</span>
+                            {param.required && (
+                              <span className="text-xs text-red-500">*</span>
+                            )}
+                          </div>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
+                            {param.description}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
                   </div>
                 )}
 
-                {/* LLM Connection Info */}
-                {func.requires_llm && (
-                  <div className="pt-3 border-t border-gray-200 dark:border-gray-700">
-                    <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
-                      LLM Connection
-                    </h4>
-                    {isLoadingLlm ? (
-                      <div className="flex items-center gap-2 text-sm text-gray-500 dark:text-gray-400">
-                        <Loader2 className="w-4 h-4 animate-spin" />
-                        Loading LLM status...
-                      </div>
-                    ) : llmStatus ? (
-                      <div className={`p-3 rounded-lg ${llmStatus.connected ? 'bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/50' : 'bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/50'}`}>
-                        <div className="flex items-center gap-2 mb-2">
-                          {llmStatus.connected ? (
-                            <Zap className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                          ) : (
-                            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
-                          )}
-                          <span className={`text-sm font-medium ${llmStatus.connected ? 'text-emerald-700 dark:text-emerald-300' : 'text-amber-700 dark:text-amber-300'}`}>
-                            {llmStatus.connected ? 'Connected' : 'Not Connected'}
-                          </span>
-                        </div>
-                        {llmStatus.connected && (
-                          <div className="space-y-1.5">
-                            <div className="flex items-center gap-2 text-sm">
-                              <Brain className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
-                              <span className="text-gray-600 dark:text-gray-400">Model:</span>
-                              <span className="font-mono font-medium text-gray-900 dark:text-white">
-                                {llmStatus.model}
-                              </span>
+                {/* Output Schema */}
+                {func.output_schema && (
+                  <div>
+                    <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+                      Returns
+                    </h3>
+                    <div className="text-sm">
+                      <code className="text-xs font-mono font-medium text-emerald-600 dark:text-emerald-400">
+                        {func.output_schema.type}
+                      </code>
+                      <p className="text-xs text-gray-500 dark:text-gray-400 mt-1 leading-relaxed">
+                        {func.output_schema.description}
+                      </p>
+                      {func.output_schema.fields && func.output_schema.fields.length > 0 && (
+                        <div className="mt-3 space-y-2">
+                          {func.output_schema.fields.map((field) => (
+                            <div key={field.name} className="flex items-start gap-2 text-xs">
+                              <code className="font-mono text-indigo-600 dark:text-indigo-400 flex-shrink-0">
+                                .{field.name}
+                              </code>
+                              <span className="text-gray-400">{field.type}</span>
+                              {field.nullable && (
+                                <span className="text-amber-500 text-[10px]">?</span>
+                              )}
                             </div>
-                            {llmStatus.endpoint && (
-                              <div className="flex items-center gap-2 text-sm">
-                                <Server className="w-3.5 h-3.5 text-gray-500 dark:text-gray-400" />
-                                <span className="text-gray-600 dark:text-gray-400">Endpoint:</span>
-                                <span className="font-mono text-xs text-gray-700 dark:text-gray-300 truncate max-w-[200px]" title={llmStatus.endpoint}>
-                                  {llmStatus.endpoint}
-                                </span>
-                              </div>
-                            )}
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Output Variants */}
+                    {func.output_variants && func.output_variants.length > 0 && (
+                      <div className="mt-4 space-y-3">
+                        {func.output_variants.map((variant, idx) => (
+                          <div key={idx} className="p-2 rounded-lg bg-gray-50 dark:bg-gray-900/50 border border-gray-100 dark:border-gray-700">
+                            <div className="text-xs font-medium text-gray-600 dark:text-gray-400 mb-1">
+                              {variant.mode} mode
+                            </div>
+                            <div className="text-[10px] text-gray-400 mb-2">
+                              {variant.condition}
+                            </div>
+                            <code className="text-xs font-mono text-emerald-600 dark:text-emerald-400">
+                              {variant.schema.type}
+                            </code>
                           </div>
-                        )}
-                        {!llmStatus.connected && llmStatus.error && (
-                          <p className="text-xs text-amber-600 dark:text-amber-400 mt-1">
-                            {llmStatus.error}
-                          </p>
-                        )}
-                      </div>
-                    ) : (
-                      <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900/50 border border-gray-200 dark:border-gray-700">
-                        <p className="text-sm text-gray-500 dark:text-gray-400">
-                          Unable to load LLM connection status
-                        </p>
+                        ))}
                       </div>
                     )}
+                  </div>
+                )}
+
+                {/* LLM Connection */}
+                {func.requires_llm && llmStatus && llmStatus.connected && (
+                  <div>
+                    <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
+                      LLM Connection
+                    </h3>
+                    <div className="flex items-center gap-2 text-xs">
+                      <Zap className="w-3 h-3 text-emerald-500" />
+                      <span className="text-gray-600 dark:text-gray-400">
+                        {llmStatus.model}
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>
             </div>
 
-            {/* YAML Output Card */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-              <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <FileCode className="w-4 h-4 text-gray-500 dark:text-gray-400" />
-                    <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                      YAML Output
+            {/* Lab Panel (70%) */}
+            <div className="flex-1 min-w-0 flex flex-col bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+              <div className="flex-1 min-h-0 flex">
+
+                {/* Left Side: Parameters + YAML */}
+                <div className="w-1/2 border-r border-gray-200 dark:border-gray-700 flex flex-col min-h-0">
+                  {/* Parameters Header - Fixed height */}
+                  <div className="flex-shrink-0 h-11 px-4 flex items-center border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+                    <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                      Parameters
                     </h2>
                   </div>
-                  <button
-                    onClick={handleCopyYaml}
-                    className="flex items-center gap-1.5 px-2.5 py-1 text-xs font-medium rounded-lg bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-                  >
-                    {copied ? (
-                      <>
-                        <Check className="w-3 h-3 text-emerald-500" />
-                        Copied!
-                      </>
+                  {/* Parameters Content - Scrollable */}
+                  <div className="flex-1 overflow-y-auto p-4">
+                    {!func.parameters || func.parameters.length === 0 ? (
+                      <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">
+                        This function has no parameters.
+                      </p>
                     ) : (
-                      <>
-                        <Copy className="w-3 h-3" />
-                        Copy
-                      </>
+                      <div className="space-y-4">
+                        {func.parameters.map((param) => {
+                          const isLlmModelParam = param.name === 'model' && func.requires_llm
+                          const isDisabled = isExecuting || isLlmModelParam
+
+                          return (
+                            <div key={param.name} className="space-y-1.5">
+                              <div className="flex items-center gap-2">
+                                <label className="text-sm font-medium text-gray-900 dark:text-white font-mono">
+                                  {param.name}
+                                </label>
+                                <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
+                                  {param.type}
+                                </span>
+                                {param.required && (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400">
+                                    required
+                                  </span>
+                                )}
+                                {isLlmModelParam && (
+                                  <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400">
+                                    auto
+                                  </span>
+                                )}
+                                <ParameterTooltip param={param} />
+                              </div>
+                              <FunctionInput
+                                param={param}
+                                value={paramValues[param.name]}
+                                onChange={(value) => handleParamChange(param.name, value)}
+                                disabled={isDisabled}
+                              />
+                            </div>
+                          )
+                        })}
+                      </div>
                     )}
-                  </button>
-                </div>
-              </div>
-              <div className="p-4">
-                <pre className="text-sm font-mono bg-gray-900 dark:bg-gray-950 text-emerald-300 p-4 rounded-lg overflow-x-auto">
-                  {yamlOutput}
-                </pre>
-                <p className="mt-3 text-xs text-gray-500 dark:text-gray-400">
-                  Use this YAML in your procedure or pipeline definitions.
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Right Column: Parameters & Results */}
-          <div className="space-y-6">
-            {/* Parameters Card */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-              <div className="px-6 py-4 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
-                <div className="flex items-center gap-2">
-                  <Settings2 className="w-4 h-4 text-gray-500 dark:text-gray-400" />
-                  <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                    Parameters
-                  </h2>
-                </div>
-              </div>
-              <div className="p-6">
-                {!func.parameters || func.parameters.length === 0 ? (
-                  <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
-                    This function has no parameters.
-                  </p>
-                ) : (
-                  <div className="space-y-5">
-                    {func.parameters.map((param) => {
-                      // Check if this is the model param for an LLM function
-                      const isLlmModelParam = param.name === 'model' && func.requires_llm
-                      const isDisabled = isExecuting || isLlmModelParam
-
-                      return (
-                        <div key={param.name} className="space-y-2">
-                          <div className="flex items-center gap-2">
-                            <label className="text-sm font-medium text-gray-900 dark:text-white font-mono">
-                              {param.name}
-                            </label>
-                            <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400">
-                              {param.type}
-                            </span>
-                            {param.required && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400">
-                                required
-                              </span>
-                            )}
-                            {isLlmModelParam && (
-                              <span className="text-xs px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400">
-                                from LLM connection
-                              </span>
-                            )}
-                            <ParameterTooltip param={param} />
-                          </div>
-                          <FunctionInput
-                            param={param}
-                            value={paramValues[param.name]}
-                            onChange={(value) => handleParamChange(param.name, value)}
-                            disabled={isDisabled}
-                          />
-                        </div>
-                      )
-                    })}
                   </div>
-                )}
-              </div>
-            </div>
 
-            {/* Execution Result Card */}
-            {result && (
-              <div key={executionKey} className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-                <div
-                  className={`px-6 py-4 border-b ${
-                    result.status === 'success' || result.status === 'completed'
-                      ? 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-100 dark:border-emerald-900/50'
-                      : result.status === 'partial'
-                      ? 'bg-amber-50 dark:bg-amber-900/20 border-amber-100 dark:border-amber-900/50'
-                      : 'bg-red-50 dark:bg-red-900/20 border-red-100 dark:border-red-900/50'
-                  }`}
-                >
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      {result.status === 'success' || result.status === 'completed' ? (
-                        <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                      ) : result.status === 'partial' ? (
-                        <AlertTriangle className="w-5 h-5 text-amber-600 dark:text-amber-400" />
-                      ) : (
-                        <XCircle className="w-5 h-5 text-red-600 dark:text-red-400" />
-                      )}
-                      <span
-                        className={`text-sm font-medium ${
-                          result.status === 'success' || result.status === 'completed'
-                            ? 'text-emerald-700 dark:text-emerald-300'
-                            : result.status === 'partial'
-                            ? 'text-amber-700 dark:text-amber-300'
-                            : 'text-red-700 dark:text-red-300'
-                        }`}
+                  {/* YAML Output Section - Fixed at bottom with max height */}
+                  <div className="flex-shrink-0 max-h-52 flex flex-col border-t border-gray-200 dark:border-gray-700 overflow-hidden">
+                    <div className="flex-shrink-0 h-9 px-4 flex items-center justify-between bg-gray-50 dark:bg-gray-900/50">
+                      <div className="flex items-center gap-2">
+                        <FileCode className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                        <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                          YAML
+                        </h2>
+                      </div>
+                      <button
+                        onClick={handleCopyYaml}
+                        className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
                       >
-                        {result.status === 'success' || result.status === 'completed'
-                          ? 'Success'
-                          : result.status === 'partial'
-                          ? 'Partial Success'
-                          : 'Failed'}
-                        {isDryRun && ' (Dry Run)'}
-                      </span>
-                    </div>
-                    {result.duration_ms && (
-                      <span className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400">
-                        <Clock className="w-3 h-3" />
-                        {result.duration_ms}ms
-                      </span>
-                    )}
-                  </div>
-                </div>
-                <div className="p-4 space-y-3">
-                  {result.message && (
-                    <p className="text-sm text-gray-700 dark:text-gray-300">{result.message}</p>
-                  )}
-                  {result.error && (
-                    <p className="text-sm text-red-600 dark:text-red-400">{result.error}</p>
-                  )}
-                  {result.data !== undefined && (
-                    <div>
-                      <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
-                        Result Data
-                        {Array.isArray(result.data) && (
-                          <span className="ml-2 text-gray-400 normal-case font-normal">
-                            ({result.data.length} item{result.data.length !== 1 ? 's' : ''})
-                          </span>
+                        {copied ? (
+                          <>
+                            <Check className="w-3 h-3 text-emerald-500" />
+                            Copied
+                          </>
+                        ) : (
+                          <>
+                            <Copy className="w-3 h-3" />
+                            Copy
+                          </>
                         )}
-                      </h4>
-                      <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg overflow-auto max-h-64">
-                        {JSON.stringify(result.data, null, 2)}
+                      </button>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-3">
+                      <pre className="text-xs font-mono bg-gray-900 dark:bg-gray-950 text-emerald-300 p-3 rounded-lg overflow-x-auto">
+                        {yamlOutput}
                       </pre>
                     </div>
+                  </div>
+                </div>
+
+                {/* Right Side: Controls + Output */}
+                <div className="w-1/2 flex flex-col min-h-0">
+                  {/* Control Bar - Fixed height */}
+                  <div className="flex-shrink-0 h-11 px-4 flex items-center justify-between border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+                    <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                      Output
+                    </h2>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => handleExecute(true)}
+                        disabled={isExecuting || !canExecute}
+                        className="gap-1.5 text-xs"
+                      >
+                        {isExecuting && isDryRun ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <FlaskConical className="w-3 h-3" />
+                        )}
+                        Dry Run
+                      </Button>
+                      <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => handleExecute(false)}
+                        disabled={isExecuting || !canExecute}
+                        className="gap-1.5 text-xs"
+                      >
+                        {isExecuting && !isDryRun ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <Play className="w-3 h-3" />
+                        )}
+                        Run
+                      </Button>
+                    </div>
+                  </div>
+
+                  {/* Output Panel - Scrollable */}
+                  <div className="flex-1 overflow-y-auto p-4">
+                  {!result && !isExecuting && (
+                    <div className="flex flex-col items-center justify-center h-full text-center">
+                      <FlaskConical className="w-12 h-12 text-gray-200 dark:text-gray-700 mb-4" />
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        Configure parameters and click Run to execute
+                      </p>
+                    </div>
                   )}
-                  {(result.items_processed !== undefined || result.items_failed !== undefined) && (
-                    <div className="flex gap-4 text-xs text-gray-500 dark:text-gray-400 pt-2 border-t border-gray-200 dark:border-gray-700">
-                      {result.items_processed !== undefined && (
-                        <span>Processed: {result.items_processed}</span>
+
+                  {isExecuting && (
+                    <div className="flex flex-col items-center justify-center h-full">
+                      <Loader2 className="w-8 h-8 text-indigo-500 animate-spin mb-4" />
+                      <p className="text-sm text-gray-500 dark:text-gray-400">
+                        {isDryRun ? 'Running dry run...' : 'Executing function...'}
+                      </p>
+                    </div>
+                  )}
+
+                  {result && !isExecuting && (
+                    <div className="space-y-4 h-full flex flex-col">
+                      {/* Status Header */}
+                      <div
+                        className={`px-4 py-3 rounded-lg flex items-center justify-between ${
+                          result.status === 'success' || result.status === 'completed'
+                            ? 'bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/50'
+                            : result.status === 'partial'
+                            ? 'bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/50'
+                            : 'bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/50'
+                        }`}
+                      >
+                        <div className="flex items-center gap-2">
+                          {result.status === 'success' || result.status === 'completed' ? (
+                            <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                          ) : result.status === 'partial' ? (
+                            <AlertTriangle className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                          ) : (
+                            <XCircle className="w-4 h-4 text-red-600 dark:text-red-400" />
+                          )}
+                          <span
+                            className={`text-sm font-medium ${
+                              result.status === 'success' || result.status === 'completed'
+                                ? 'text-emerald-700 dark:text-emerald-300'
+                                : result.status === 'partial'
+                                ? 'text-amber-700 dark:text-amber-300'
+                                : 'text-red-700 dark:text-red-300'
+                            }`}
+                          >
+                            {result.status === 'success' || result.status === 'completed'
+                              ? 'Success'
+                              : result.status === 'partial'
+                              ? 'Partial'
+                              : 'Failed'}
+                            {isDryRun && ' (Dry Run)'}
+                          </span>
+                        </div>
+                        <div className="flex items-center gap-3 text-xs text-gray-500 dark:text-gray-400">
+                          {result.duration_ms && (
+                            <span className="flex items-center gap-1">
+                              <Clock className="w-3 h-3" />
+                              {result.duration_ms}ms
+                            </span>
+                          )}
+                          {result.items_processed !== undefined && (
+                            <span>{result.items_processed} processed</span>
+                          )}
+                          {result.items_failed !== undefined && result.items_failed > 0 && (
+                            <span className="text-red-500">{result.items_failed} failed</span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Message */}
+                      {result.message && (
+                        <p className="text-sm text-gray-700 dark:text-gray-300">
+                          {result.message}
+                        </p>
                       )}
-                      {result.items_failed !== undefined && result.items_failed > 0 && (
-                        <span className="text-red-500">Failed: {result.items_failed}</span>
+
+                      {/* Error */}
+                      {result.error && (
+                        <div className="p-3 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/50">
+                          <p className="text-sm text-red-600 dark:text-red-400 font-mono">
+                            {result.error}
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Data Output */}
+                      {result.data !== undefined && (
+                        <div className="flex-1 min-h-0">
+                          <div className="flex items-center gap-2 mb-2">
+                            <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider">
+                              Result Data
+                            </h4>
+                            {Array.isArray(result.data) && (
+                              <span className="text-xs text-gray-400">
+                                ({result.data.length} item{result.data.length !== 1 ? 's' : ''})
+                              </span>
+                            )}
+                          </div>
+                          <OutputViewer data={result.data} className="h-[calc(100%-24px)]" />
+                        </div>
                       )}
                     </div>
                   )}
                 </div>
               </div>
-            )}
+            </div>
           </div>
         </div>
       </div>
+    </div>
     </div>
   )
 }

@@ -14,38 +14,30 @@ from pydantic import BaseModel, Field, validator, ConfigDict
 import os
 
 
-class EmbeddingModelConfig(BaseModel):
+class LLMTaskTypeConfig(BaseModel):
     """
-    Configuration for embedding model used in semantic search.
+    Configuration for a specific LLM task type.
 
-    Supports OpenAI embedding models (text-embedding-3-small, text-embedding-3-large).
-    Uses the parent LLM connection settings (api_key, base_url).
-    """
-    model_config = ConfigDict(extra='forbid')
+    Task types allow different models to be used for different purposes:
+    - embedding: Vector representations for semantic search
+    - quick: Fast, simple decisions (classify, decide, route)
+    - standard: Balanced quality/cost (summarize, extract, generate)
+    - quality: High-stakes outputs (evaluate, final reports)
+    - bulk: High-volume batch processing (map phase of chunked processing)
+    - reasoning: Complex multi-step analysis (procedure generation)
 
-    model: str = Field(
-        default="text-embedding-3-small",
-        description="Embedding model identifier (e.g., text-embedding-3-small, text-embedding-3-large)"
-    )
-
-
-class TaskModelConfig(BaseModel):
-    """
-    Configuration for a task-specific LLM model.
-
-    Used for summarization, evaluation, and general tasks.
     Uses the parent LLM connection settings (api_key, base_url, provider).
     """
     model_config = ConfigDict(extra='forbid')
 
     model: str = Field(
-        description="Model identifier (e.g., gpt-4o-mini, gpt-4o)"
+        description="Model identifier (e.g., claude-haiku-4-5, claude-sonnet-4-5)"
     )
     temperature: Optional[float] = Field(
         default=None,
         ge=0.0,
         le=2.0,
-        description="Generation temperature (inherits from llm.temperature if not set)"
+        description="Generation temperature (inherits from parent if not set)"
     )
     max_tokens: Optional[int] = Field(
         default=None,
@@ -53,53 +45,34 @@ class TaskModelConfig(BaseModel):
         le=128000,
         description="Maximum tokens to generate"
     )
-
-
-class ModelsConfig(BaseModel):
-    """
-    Use-case-specific model configuration.
-
-    Allows configuring different models for different tasks:
-    - embedding: Semantic search vector generation
-    - summarization: Document and SAM.gov summaries
-    - evaluation: Document quality assessment
-    - general: Default model for other tasks
-
-    Each model can override the parent LLM connection settings or inherit them.
-    """
-    model_config = ConfigDict(extra='forbid')
-
-    embedding: Optional[EmbeddingModelConfig] = Field(
+    timeout: Optional[int] = Field(
         default=None,
-        description="Model for generating semantic search embeddings"
-    )
-    summarization: Optional[TaskModelConfig] = Field(
-        default=None,
-        description="Model for document and SAM.gov summarization"
-    )
-    evaluation: Optional[TaskModelConfig] = Field(
-        default=None,
-        description="Model for document quality evaluation"
-    )
-    general: Optional[TaskModelConfig] = Field(
-        default=None,
-        description="Default model for general LLM tasks"
+        ge=1,
+        le=600,
+        description="Request timeout in seconds (overrides parent)"
     )
 
 
 class LLMConfig(BaseModel):
     """
-    LLM service configuration.
+    LLM service configuration with task-type-based model routing.
 
     Supports OpenAI, Ollama, OpenWebUI, LM Studio, and compatible endpoints.
 
-    The 'models' section allows configuring different models for different use cases:
-    - embedding: For semantic search (default: text-embedding-3-small)
-    - summarization: For SAM.gov and document summaries
-    - evaluation: For document quality assessment
-    - general: For other LLM tasks
+    Task Type Routing:
+    Each task type can use a different model optimized for its specific needs:
+    - embedding: Vector representations for semantic search
+    - quick: Fast, simple decisions (classify, decide, route)
+    - standard: Balanced quality/cost (summarize, extract, generate)
+    - quality: High-stakes outputs (evaluate, final reports)
+    - bulk: High-volume batch processing (map phase of chunked processing)
+    - reasoning: Complex multi-step analysis (procedure generation)
 
-    If models are not configured, the default 'model' is used for all tasks.
+    Resolution Priority:
+    1. Procedure YAML override (model param in step)
+    2. Organization settings (database)
+    3. Task type config (below)
+    4. Default model (fallback)
     """
     model_config = ConfigDict(extra='forbid')
 
@@ -113,8 +86,8 @@ class LLMConfig(BaseModel):
     base_url: str = Field(
         description="API endpoint URL"
     )
-    model: str = Field(
-        description="Default model identifier (e.g., gpt-4o-mini, llama2)"
+    default_model: str = Field(
+        description="Default model identifier used when task type not configured"
     )
     timeout: int = Field(
         default=60,
@@ -128,12 +101,6 @@ class LLMConfig(BaseModel):
         le=10,
         description="Maximum retry attempts"
     )
-    temperature: float = Field(
-        default=0.7,
-        ge=0.0,
-        le=2.0,
-        description="Default generation temperature"
-    )
     verify_ssl: bool = Field(
         default=True,
         description="Verify SSL certificates"
@@ -142,9 +109,9 @@ class LLMConfig(BaseModel):
         default=None,
         description="Provider-specific options"
     )
-    models: Optional[ModelsConfig] = Field(
+    task_types: Optional[Dict[str, LLMTaskTypeConfig]] = Field(
         default=None,
-        description="Use-case-specific model configuration"
+        description="Task-type-specific model configuration (embedding, quick, standard, quality, bulk, reasoning)"
     )
 
 

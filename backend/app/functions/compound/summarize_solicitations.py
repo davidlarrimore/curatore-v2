@@ -17,6 +17,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -64,6 +66,19 @@ class SummarizeSolicitationsFunction(BaseFunction):
             ),
         ],
         returns="dict: Summary of summarization results",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Batch summarization results with individual summaries",
+            fields=[
+                OutputFieldDoc(name="processed", type="int",
+                              description="Number of solicitations successfully summarized"),
+                OutputFieldDoc(name="failed", type="int",
+                              description="Number of solicitations that failed to summarize",
+                              nullable=True),
+                OutputFieldDoc(name="summaries", type="list[dict]",
+                              description="List of generated summaries with id, notice_id, and summary text"),
+            ],
+        ),
         tags=["compound", "sam", "batch", "summarization"],
         requires_llm=True,
         examples=[

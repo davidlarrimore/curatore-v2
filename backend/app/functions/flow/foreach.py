@@ -37,6 +37,8 @@ from ..base import (
     FunctionCategory,
     FlowResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -91,6 +93,18 @@ class ForeachFunction(BaseFunction):
             ),
         ],
         returns="FlowResult with items_to_iterate and skipped_indices",
+        output_schema=OutputSchema(
+            type="FlowResult",
+            description="Flow control result with items to iterate over",
+            fields=[
+                OutputFieldDoc(name="item_count", type="int",
+                              description="Number of items to iterate over"),
+                OutputFieldDoc(name="concurrency", type="int",
+                              description="Maximum concurrent executions"),
+                OutputFieldDoc(name="has_condition", type="bool",
+                              description="Whether a per-item filter condition is set"),
+            ],
+        ),
         tags=["flow", "iteration", "loop", "foreach", "batch"],
         requires_llm=False,
         examples=[

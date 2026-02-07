@@ -18,7 +18,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, and_, func, or_
+from sqlalchemy import select, and_, func, or_, text
 
 from ....database.models import Run, Asset, ExtractionResult, User
 from ....services.database_service import database_service
@@ -186,6 +186,15 @@ class CancelResponse(BaseModel):
     reason: Optional[str]
     children_cancelled: int = 0
     children_skipped: int = 0
+
+
+class ForceKillResponse(BaseModel):
+    """Force kill response for stuck jobs."""
+    status: str
+    run_id: str
+    message: str
+    connections_terminated: int = 0
+    celery_task_revoked: bool = False
 
 
 # ============================================================================
@@ -1215,4 +1224,146 @@ async def cancel_job(
             reason=f"Cancelled by user {current_user.email}",
             children_cancelled=result.get("children_cancelled", 0),
             children_skipped=result.get("children_skipped", 0),
+        )
+
+
+@router.post(
+    "/jobs/{run_id}/force-kill",
+    response_model=ForceKillResponse,
+    summary="Force kill a stuck job",
+    description="Force-terminate a stuck job by killing database connections and revoking the Celery task. "
+                "Use this when a job is unresponsive and normal cancellation doesn't work.",
+)
+async def force_kill_job(
+    run_id: UUID,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Force-terminate a stuck job.
+
+    This is a more aggressive action than normal cancellation:
+    1. Terminates any PostgreSQL connections holding locks for this run
+    2. Revokes the Celery task (if still running)
+    3. Marks the run as 'failed' with an error message
+
+    Use this when:
+    - A job shows "stale" or no activity for a long time
+    - Normal cancel doesn't work (blocks indefinitely)
+    - You need to clear a deadlock situation
+    """
+    from ....celery_app import celery_app
+
+    async with database_service.get_session() as session:
+        # Verify run exists and belongs to user's organization
+        run = await session.get(Run, run_id)
+        if not run:
+            raise HTTPException(status_code=404, detail="Run not found")
+
+        if run.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=403, detail="Access denied")
+
+        # Only allow force-kill for active jobs
+        if run.status not in ["pending", "submitted", "running", "stale"]:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Cannot force-kill job in '{run.status}' status"
+            )
+
+        connections_terminated = 0
+        celery_revoked = False
+        run_id_str = str(run_id)
+
+        # 1. Find and terminate PostgreSQL connections holding locks for this run
+        # Look for connections with queries mentioning this run_id
+        try:
+            # Find connections that might be related to this run
+            # This looks for any active query or idle-in-transaction that mentions the run_id
+            find_pids_query = text("""
+                SELECT pid
+                FROM pg_stat_activity
+                WHERE state IN ('active', 'idle in transaction')
+                  AND pid != pg_backend_pid()
+                  AND (
+                    query LIKE :run_pattern
+                    OR query LIKE :celery_pattern
+                  )
+            """)
+            result = await session.execute(
+                find_pids_query,
+                {
+                    "run_pattern": f"%{run_id_str}%",
+                    "celery_pattern": f"%{run.celery_task_id}%" if run.celery_task_id else "NOMATCH",
+                }
+            )
+            pids_to_kill = [row[0] for row in result.fetchall()]
+
+            # Terminate each found connection
+            for pid in pids_to_kill:
+                try:
+                    await session.execute(
+                        text("SELECT pg_terminate_backend(:pid)"),
+                        {"pid": pid}
+                    )
+                    connections_terminated += 1
+                    logger.info(f"Terminated PostgreSQL connection {pid} for run {run_id}")
+                except Exception as e:
+                    logger.warning(f"Failed to terminate connection {pid}: {e}")
+
+        except Exception as e:
+            logger.error(f"Error finding/terminating connections: {e}")
+
+        # 2. Revoke the Celery task if we have a task ID
+        if run.celery_task_id:
+            try:
+                celery_app.control.revoke(run.celery_task_id, terminate=True, signal='SIGKILL')
+                celery_revoked = True
+                logger.info(f"Revoked Celery task {run.celery_task_id} for run {run_id}")
+            except Exception as e:
+                logger.warning(f"Failed to revoke Celery task: {e}")
+
+        # 3. Update the run status to failed
+        # Use a fresh query since the session might be in a bad state
+        try:
+            await session.execute(
+                text("""
+                    UPDATE runs
+                    SET status = 'failed',
+                        error_message = :error_msg,
+                        completed_at = NOW()
+                    WHERE id = :run_id
+                """),
+                {
+                    "run_id": run_id,
+                    "error_msg": f"Force-killed by {current_user.email} (connections: {connections_terminated}, celery revoked: {celery_revoked})",
+                }
+            )
+            await session.commit()
+        except Exception as e:
+            logger.error(f"Failed to update run status: {e}")
+            # Try one more time with a completely new session
+            try:
+                async with database_service.get_session() as fresh_session:
+                    await fresh_session.execute(
+                        text("""
+                            UPDATE runs
+                            SET status = 'failed',
+                                error_message = :error_msg,
+                                completed_at = NOW()
+                            WHERE id = :run_id
+                        """),
+                        {
+                            "run_id": run_id,
+                            "error_msg": f"Force-killed by {current_user.email}",
+                        }
+                    )
+                    await fresh_session.commit()
+            except Exception as e2:
+                logger.error(f"Failed to update run status on retry: {e2}")
+
+        return ForceKillResponse(
+            status="killed",
+            run_id=run_id_str,
+            message=f"Job force-killed: {connections_terminated} connection(s) terminated, Celery task {'revoked' if celery_revoked else 'not revoked'}",
+            connections_terminated=connections_terminated,
+            celery_task_revoked=celery_revoked,
         )

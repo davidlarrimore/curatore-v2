@@ -627,6 +627,7 @@ class PgSearchService:
         sync_config_ids: Optional[List[UUID]] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
+        folder_path: Optional[str] = None,
         limit: int = 20,
         offset: int = 0,
     ) -> SearchResults:
@@ -645,6 +646,7 @@ class PgSearchService:
             sync_config_ids: Filter by sync config IDs
             date_from: Filter by creation date >=
             date_to: Filter by creation date <=
+            folder_path: Filter by storage folder path (prefix match on metadata storage_folder)
             limit: Maximum results to return
             offset: Offset for pagination
 
@@ -731,6 +733,21 @@ class PgSearchService:
             if date_to:
                 filters.append("sc.created_at <= :date_to")
                 params["date_to"] = date_to
+
+            if folder_path:
+                from .storage_path_service import slugify
+                clean = folder_path.strip("/")
+                # Slugify each path component for normalization
+                slugified = "/".join(slugify(p) for p in clean.split("/") if p)
+
+                if any(slugified.startswith(prefix) for prefix in ("sharepoint/", "uploads/", "scrape/", "sam/")):
+                    # Full storage path — prefix match
+                    filters.append("sc.metadata->>'storage_folder' LIKE :folder_path_prefix")
+                    params["folder_path_prefix"] = f"{slugified}%"
+                else:
+                    # Partial path (e.g., "shared-documents/opportunities") — match within folder hierarchy
+                    filters.append("sc.metadata->>'storage_folder' LIKE :folder_path_prefix")
+                    params["folder_path_prefix"] = f"%/{slugified}%"
 
             filter_clause = " AND ".join(filters)
 

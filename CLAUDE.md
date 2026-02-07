@@ -6,7 +6,7 @@ Development guidance for Claude Code working with Curatore v2.
 
 **Getting Started**: [Quick Start](#quick-start) | [Project Structure](#project-structure) | [Dev Commands](#development-commands)
 
-**Core Systems**: [Architecture](#architecture-principles) | [Data Models](#key-data-models) | [Queue System](docs/QUEUE_SYSTEM.md)
+**Core Systems**: [Architecture](#architecture-principles) | [Data Models](#key-data-models) | [Search & Indexing](docs/SEARCH_INDEXING.md) | [Queue System](docs/QUEUE_SYSTEM.md)
 
 **Integrations**: [SAM.gov](docs/SAM_INTEGRATION.md) | [Salesforce](docs/SALESFORCE_INTEGRATION.md) | [SharePoint](docs/SHAREPOINT_INTEGRATION.md) | [Forecasts](docs/FORECAST_INTEGRATION.md) | [Web Scraping](docs/DATA_CONNECTIONS.md#web-scraping)
 
@@ -371,6 +371,7 @@ docker exec -it curatore-postgres psql -U curatore -d curatore -c "\dt"
 
 | Document | Description |
 |----------|-------------|
+| [Search & Indexing](docs/SEARCH_INDEXING.md) | Hybrid search, pgvector, chunking, embeddings, reindexing |
 | [Queue System](docs/QUEUE_SYSTEM.md) | Queue architecture, job groups, cancellation |
 | [SAM.gov Integration](docs/SAM_INTEGRATION.md) | SAM.gov data model and API |
 | [Salesforce Integration](docs/SALESFORCE_INTEGRATION.md) | Salesforce CRM integration |

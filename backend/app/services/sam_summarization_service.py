@@ -51,7 +51,9 @@ from ..database.models import (
     SamSolicitation,
     SamSolicitationSummary,
 )
+from ..models.llm_models import LLMTaskType
 from .llm_service import LLMService
+from .llm_routing_service import llm_routing_service
 from .sam_service import sam_service
 
 logger = logging.getLogger("curatore.sam_summarization_service")
@@ -468,9 +470,15 @@ class SamSummarizationService:
         context = self._build_context(solicitation, extracted_content)
         prompt = prompt_template.format(**context)
 
-        # Get model from config or use default
-        if not model:
-            model = getattr(settings, "openai_model", "gpt-4o-mini")
+        # Get LLM configuration for STANDARD task type (summarization)
+        task_config = await llm_routing_service.get_config_for_task(
+            task_type=LLMTaskType.STANDARD,
+            organization_id=organization_id,
+            session=session,
+            explicit_model=model,
+        )
+        model = task_config.model
+        temperature = task_config.temperature if task_config.temperature is not None else 0.3
 
         # Call LLM
         try:
@@ -487,7 +495,7 @@ class SamSummarizationService:
                     },
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.3,
+                temperature=temperature,
                 max_tokens=4000,
             )
 
@@ -666,21 +674,27 @@ Provide a concise bullet-point summary of the key changes. Focus on:
 
 Keep the summary brief and actionable."""
 
-        # Get model
-        if not model:
-            model = getattr(settings, "openai_model", "gpt-4o-mini")
+        # Get LLM configuration for STANDARD task type
+        task_config = await llm_routing_service.get_config_for_task(
+            task_type=LLMTaskType.STANDARD,
+            organization_id=organization_id,
+            session=session,
+            explicit_model=model,
+        )
+        resolved_model = task_config.model
+        temperature = task_config.temperature if task_config.temperature is not None else 0.3
 
         try:
             if not self.llm_service._client:
                 return None
 
             response = self.llm_service._client.chat.completions.create(
-                model=model,
+                model=resolved_model,
                 messages=[
                     {"role": "system", "content": "You are a federal contracting analyst."},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0.3,
+                temperature=temperature,
                 max_tokens=1000,
             )
 

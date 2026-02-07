@@ -18,6 +18,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 from ..content import ContentItem
@@ -145,6 +147,48 @@ class SearchSalesforceFunction(BaseFunction):
             ),
         ],
         returns="list[ContentItem]: Search results as ContentItem instances",
+        output_schema=OutputSchema(
+            type="list[ContentItem]",
+            description="List of matching Salesforce records (accounts, contacts, opportunities)",
+            fields=[
+                OutputFieldDoc(name="id", type="str", description="Record UUID"),
+                OutputFieldDoc(name="title", type="str", description="Record name"),
+                OutputFieldDoc(name="type", type="str",
+                              description="Entity type: salesforce_account, salesforce_contact, salesforce_opportunity",
+                              example="salesforce_opportunity"),
+                OutputFieldDoc(name="salesforce_id", type="str",
+                              description="Salesforce record ID", nullable=True),
+                # Account fields
+                OutputFieldDoc(name="account_type", type="str",
+                              description="Account type (for accounts)", nullable=True),
+                OutputFieldDoc(name="industry", type="str",
+                              description="Industry (for accounts)", nullable=True),
+                OutputFieldDoc(name="website", type="str",
+                              description="Website URL (for accounts)", nullable=True),
+                # Contact fields
+                OutputFieldDoc(name="first_name", type="str",
+                              description="First name (for contacts)", nullable=True),
+                OutputFieldDoc(name="last_name", type="str",
+                              description="Last name (for contacts)", nullable=True),
+                OutputFieldDoc(name="email", type="str",
+                              description="Email address (for contacts)", nullable=True),
+                OutputFieldDoc(name="phone", type="str",
+                              description="Phone number", nullable=True),
+                # Opportunity fields
+                OutputFieldDoc(name="stage_name", type="str",
+                              description="Sales stage (for opportunities)", nullable=True),
+                OutputFieldDoc(name="amount", type="float",
+                              description="Deal amount (for opportunities)", nullable=True),
+                OutputFieldDoc(name="close_date", type="str",
+                              description="Expected close date (for opportunities)", nullable=True),
+                OutputFieldDoc(name="is_closed", type="bool",
+                              description="Whether opportunity is closed", nullable=True),
+                OutputFieldDoc(name="is_won", type="bool",
+                              description="Whether opportunity was won", nullable=True),
+                OutputFieldDoc(name="score", type="float", description="Relevance score",
+                              nullable=True),
+            ],
+        ),
         tags=["search", "salesforce", "crm", "content", "hybrid"],
         requires_llm=False,
         examples=[

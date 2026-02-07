@@ -34,9 +34,12 @@ import yaml
 
 from ..config import settings
 from ..functions.registry import function_registry
-from ..functions.base import FunctionCategory
+from ..functions.base import FunctionCategory, OutputSchema, OutputVariant
+from ..models.llm_models import LLMTaskType
 from ..procedures.validator import validate_procedure, ValidationResult
 from ..services.llm_service import llm_service
+from ..services.llm_routing_service import llm_routing_service
+from ..services.config_loader import config_loader
 
 logger = logging.getLogger("curatore.services.procedure_generator")
 
@@ -81,6 +84,32 @@ class ProcedureGeneratorService:
             function_registry.initialize()
             self._function_registry = function_registry
         return self._function_registry
+
+    def _format_output_schema(self, schema: OutputSchema, indent: str = "") -> List[str]:
+        """
+        Format an output schema for the function catalog.
+
+        Args:
+            schema: The OutputSchema to format
+            indent: Optional indentation prefix
+
+        Returns:
+            List of formatted lines
+        """
+        lines = []
+        lines.append(f"{indent}**Type**: `{schema.type}`")
+        lines.append(f"{indent}{schema.description}")
+
+        if schema.fields:
+            lines.append(f"")
+            lines.append(f"{indent}**Fields** (access via `{{{{ item.field_name }}}}`:")
+            for f in schema.fields:
+                nullable = " (nullable)" if f.nullable else ""
+                lines.append(f"{indent}- `{f.name}` ({f.type}{nullable}): {f.description}")
+                if f.example is not None:
+                    lines.append(f"{indent}  - Example: `{f.example}`")
+
+        return lines
 
     def _build_function_catalog(self) -> str:
         """
@@ -162,6 +191,19 @@ class ProcedureGeneratorService:
                     lines.append("")
                     lines.append("**Note:** See FLOW CONTROL FUNCTIONS section for complete examples with `branches`.")
 
+                # Include structured output schema
+                if meta.output_schema:
+                    lines.append("")
+                    lines.append("**Returns:**")
+                    lines.extend(self._format_output_schema(meta.output_schema))
+
+                    # Document variants (e.g., collection mode)
+                    if meta.output_variants:
+                        for variant in meta.output_variants:
+                            lines.append("")
+                            lines.append(f"**{variant.mode.title()} Mode** ({variant.condition}):")
+                            lines.extend(self._format_output_schema(variant.schema, indent="  "))
+
                 lines.append("")
 
         return "\n".join(lines)
@@ -217,9 +259,24 @@ Use Jinja2 templates to reference dynamic values:
 - `{{{{ steps.step_name.field }}}}` - Access a field from step output
 - `{{{{ steps.step_name | length }}}}` - Get list length
 - `{{{{ steps.step_name | md_to_html }}}}` - Convert markdown to HTML (for email bodies)
+- `{{{{ steps.step_name | compact }}}}` - Filter out None/null values from lists (use after foreach)
 - `{{{{ params.param_name }}}}` - Reference a procedure parameter
 - `{{{{ today() }}}}` - Current date (YYYY-MM-DD)
 - `{{{{ now() }}}}` - Current datetime
+
+**IMPORTANT - Null-safe iteration over foreach results:**
+When using `on_error: continue` with foreach, failed items return `null`. Always use one of these patterns:
+```yaml
+# Option 1: Use the compact filter
+{{% for result in steps.foreach_step | compact %}}
+{{{{ result }}}}
+{{% endfor %}}
+
+# Option 2: Use if filter in for loop
+{{% for result in steps.foreach_step if result %}}
+{{{{ result }}}}
+{{% endfor %}}
+```
 
 # AVAILABLE FUNCTIONS
 {function_catalog}
@@ -260,6 +317,7 @@ Use Jinja2 templates to reference dynamic values:
 - ✅ "Find SAM.gov opportunities" → `function: search_solicitations`
 - ✅ "Get recent contract notices" → `function: search_notices`
 - ✅ "Search uploaded documents" → `function: search_assets`
+- ✅ "Search documents in a specific folder" → `function: search_assets` with `folder_path: "sharepoint/site/shared-documents/folder"`
 - ✅ "Find Salesforce accounts" → `function: search_salesforce`
 
 ## Decision Tree:
@@ -275,6 +333,9 @@ Use Jinja2 templates to reference dynamic values:
 Each search function returns a list of items. Use these EXACT field names in templates:
 
 ## search_assets (Documents/Files)
+
+**Key parameter: `folder_path`** — Filter results to a specific storage folder. Accepts paths like `sharepoint/my-site/shared-documents/opportunities` or human-friendly paths like `Shared Documents/Opportunities` (auto-slugified). Users can copy the exact path from the Storage Browser or Asset Detail page.
+
 ```yaml
 {{% for doc in steps.search_results %}}
   {{{{ doc.title }}}}              # Full path/title (e.g., "Folder/SubFolder/file.pdf")
@@ -492,6 +553,58 @@ Iterate over a list with multiple steps per item.
 # {{{{ item }}}} and {{{{ item_index }}}} available inside branches.each
 ```
 
+**CRITICAL: Understanding foreach Output**
+
+Foreach returns a **list of the last step's output** for each item, NOT a structured object with item and step data.
+
+Example: If your foreach has steps `get_content` → `summarize`, the result is a list of summaries (strings):
+```python
+["Summary for item 1...", "Summary for item 2...", null, "Summary for item 4..."]
+```
+
+NOT a list of dicts like `[{{"item": ..., "summarize": ...}}]`.
+
+**If you need the original item data in later steps**, include it in your last step's output:
+
+```yaml
+- name: process_each
+  function: foreach
+  params:
+    items: "{{{{ steps.search_results }}}}"
+  branches:
+    each:
+      - name: get_content
+        function: get_asset
+        params:
+          asset_id: "{{{{ item.id }}}}"
+      - name: build_result
+        function: llm_generate
+        params:
+          # Include item title in the LLM prompt so it appears in output
+          prompt: "Summarize this document titled '{{{{ item.title }}}}':\\n{{{{ steps.get_content.content }}}}"
+```
+
+**IMPORTANT: Handling Failed Items**
+
+When using `on_error: continue` with foreach, items that fail will have `null` in the results array.
+Always filter out null values using `| compact` or `if result`:
+
+```yaml
+# Option 1: Use compact filter
+{{% for summary in steps.process_each | compact %}}
+{{{{ summary }}}}
+{{% endfor %}}
+
+# Option 2: Use if filter
+{{% for summary in steps.process_each if summary %}}
+{{{{ summary }}}}
+{{% endfor %}}
+```
+
+- ✅ CORRECT: `{{% for result in steps.foreach_step | compact %}}`
+- ✅ CORRECT: `{{% for result in steps.foreach_step if result %}}`
+- ❌ WRONG: `{{% for result in steps.foreach_step %}}` - Will fail on null values
+
 ## When to Use Flow Functions
 
 | Scenario | Function |
@@ -508,6 +621,7 @@ Iterate over a list with multiple steps per item.
 3. **Use parallel** only when branches are truly independent (no shared state)
 4. **Use foreach** when you need multiple steps per item (for single-step iteration, use the legacy `foreach:` field)
 5. **Nesting is supported**: You can put flow functions inside other flow function branches
+6. **Handle partial failures**: When using `on_error: continue` with foreach/parallel, some items may fail and return `null`. Always filter nulls in templates: `{{% for result in steps.foreach_step if result %}}`
 
 # EXAMPLES
 
@@ -548,23 +662,29 @@ tags:
   - email
 ```
 
-## Example 2: Document Classification with Logging
+## Example 2: Document Classification with Folder Path Filter
 
-Prompt: "Classify uploaded documents and log the results"
+Prompt: "Classify documents in the SharePoint opportunities folder and log the results"
 
 ```yaml
 name: Document Classifier
 slug: document_classifier
-description: Classify documents using AI and log classification results.
+description: Classify documents from the opportunities folder and log results.
+
+parameters:
+  - name: folder
+    type: string
+    description: Storage folder path to search (copy from Storage Browser)
+    required: false
+    default: "sharepoint/contoso/shared-documents/opportunities"
 
 steps:
   - name: get_documents
     function: search_assets
     params:
       query: "*"
+      folder_path: "{{{{ params.folder }}}}"
       limit: 50
-      filters:
-        created_within_days: 1
 
   - name: classify
     function: classify_document
@@ -819,7 +939,20 @@ steps:
     params:
       to: "team@company.com"
       subject: "Document Processing Complete"
-      body: "Processed {{{{ params.asset_ids | length }}}} documents."
+      html: true
+      body: |
+        <html>
+        <body>
+          <h1>Document Processing Complete</h1>
+          <p>Processed {{{{ params.asset_ids | length }}}} documents.</p>
+          <h2>Results</h2>
+          <ul>
+          {{% for result in steps.process_documents | compact %}}
+            <li>{{{{ result | md_to_html }}}}</li>
+          {{% endfor %}}
+          </ul>
+        </body>
+        </html>
 
 on_error: fail
 tags:
@@ -827,6 +960,11 @@ tags:
   - classification
   - batch
 ```
+
+**Note:**
+- The `| compact` filter removes null values from the results array. This is critical when using `on_error: continue` - failed items return null.
+- Each `result` is the output of the last step in the branch (either contract details or basic summary), NOT a structured object with item data.
+- If you need to correlate results with original items, design your last step to include that info in its output.
 
 ## Example 7: Multi-Source Search with parallel
 
@@ -1237,8 +1375,10 @@ Return the complete modified YAML procedure. Keep all existing functionality unl
                         "validation_errors": [],
                     }
 
-                # Get model from config
-                model = llm_service._get_model()
+                # Get model and temperature for REASONING task type (complex analysis)
+                task_config = config_loader.get_task_type_config(LLMTaskType.REASONING)
+                model = task_config.model
+                temperature = task_config.temperature if task_config.temperature is not None else 0.2
 
                 # Run LLM call in thread pool
                 def _sync_generate():
@@ -1246,7 +1386,7 @@ Return the complete modified YAML procedure. Keep all existing functionality unl
                         model=model,
                         messages=messages,
                         max_tokens=4000,
-                        temperature=0.2,  # Low temperature for consistent, structured output
+                        temperature=temperature,
                     )
 
                 response = await asyncio.to_thread(_sync_generate)

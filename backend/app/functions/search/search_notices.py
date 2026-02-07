@@ -19,6 +19,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 from ..content import ContentItem
@@ -145,6 +147,34 @@ class SearchNoticesFunction(BaseFunction):
             ),
         ],
         returns="list[ContentItem]: Matching notices as ContentItem instances",
+        output_schema=OutputSchema(
+            type="list[ContentItem]",
+            description="List of matching SAM.gov notices",
+            fields=[
+                OutputFieldDoc(name="id", type="str", description="Notice UUID"),
+                OutputFieldDoc(name="title", type="str", description="Notice title"),
+                OutputFieldDoc(name="sam_notice_id", type="str", description="SAM.gov notice ID"),
+                OutputFieldDoc(name="notice_type", type="str", description="Notice type code",
+                              example="r"),
+                OutputFieldDoc(name="version_number", type="int", description="Amendment version number",
+                              example=1),
+                OutputFieldDoc(name="agency_name", type="str", description="Federal agency name"),
+                OutputFieldDoc(name="bureau_name", type="str", description="Bureau name", nullable=True),
+                OutputFieldDoc(name="posted_date", type="str", description="Date posted (ISO format)"),
+                OutputFieldDoc(name="response_deadline", type="str",
+                              description="Response deadline (ISO format)", nullable=True),
+                OutputFieldDoc(name="naics_code", type="str", description="NAICS industry code",
+                              nullable=True),
+                OutputFieldDoc(name="set_aside_code", type="str", description="Set-aside type",
+                              nullable=True),
+                OutputFieldDoc(name="description", type="str",
+                              description="Notice description/synopsis", nullable=True),
+                OutputFieldDoc(name="score", type="float", description="Relevance score",
+                              nullable=True),
+                OutputFieldDoc(name="detail_url", type="str",
+                              description="Link to Curatore detail page"),
+            ],
+        ),
         tags=["search", "sam", "notices", "content", "hybrid"],
         requires_llm=False,
         examples=[

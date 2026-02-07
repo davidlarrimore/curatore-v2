@@ -1055,6 +1055,23 @@ export const queueAdminApi = {
     })
     return handleJson(res)
   },
+
+  /**
+   * Force-kill a stuck job (terminates database connections and revokes Celery task)
+   */
+  async forceKillJob(token: string | undefined, runId: string): Promise<{
+    status: string
+    run_id: string
+    message: string
+    connections_terminated: number
+    celery_task_revoked: boolean
+  }> {
+    const res = await fetch(apiUrl(`/queue/jobs/${runId}/force-kill`), {
+      method: 'POST',
+      headers: authHeaders(token),
+    })
+    return handleJson(res)
+  },
 }
 
 // -------------------- Auth API --------------------
@@ -2980,11 +2997,12 @@ export const scheduledTasksApi = {
   /**
    * Trigger a scheduled task immediately
    */
-  async triggerTask(token: string | undefined, taskId: string): Promise<{ message: string; task_id: string; task_name: string; run_id: string }> {
+  async triggerTask(token: string | undefined, taskId: string, configOverrides?: Record<string, any>): Promise<{ message: string; task_id: string; task_name: string; run_id: string }> {
     const url = apiUrl(`/scheduled-tasks/${taskId}/trigger`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(configOverrides ? { config_overrides: configOverrides } : {}),
     })
     return handleJson(res)
   },
@@ -4376,12 +4394,35 @@ export interface FunctionParameter {
   example?: any
 }
 
+export interface OutputField {
+  name: string
+  type: string
+  description: string
+  example?: any
+  nullable: boolean
+}
+
+export interface OutputSchema {
+  type: string
+  description: string
+  fields: OutputField[]
+  example?: any
+}
+
+export interface OutputVariant {
+  mode: string
+  condition: string
+  schema: OutputSchema
+}
+
 export interface FunctionMeta {
   name: string
   description: string
   category: string
   parameters: FunctionParameter[]
   returns: string
+  output_schema?: OutputSchema
+  output_variants?: OutputVariant[]
   examples?: Array<Record<string, any>>
   tags: string[]
   is_async: boolean

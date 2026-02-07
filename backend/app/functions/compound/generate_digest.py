@@ -15,6 +15,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -77,6 +79,11 @@ class GenerateDigestFunction(BaseFunction):
             ),
         ],
         returns="str: Formatted digest content",
+        output_schema=OutputSchema(
+            type="str",
+            description="Formatted digest content in markdown, HTML, or plain text",
+            example="# Daily Opportunities\n\n**Total Opportunities: 5**\n\n...",
+        ),
         tags=["compound", "report", "digest"],
         requires_llm=False,  # LLM is optional
         examples=[

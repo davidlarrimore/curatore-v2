@@ -47,6 +47,30 @@ class ParameterSchema(BaseModel):
     example: Any = None
 
 
+class OutputFieldSchema(BaseModel):
+    """Output field documentation schema."""
+    name: str
+    type: str
+    description: str
+    example: Any = None
+    nullable: bool = False
+
+
+class OutputSchemaResponse(BaseModel):
+    """Output schema documentation."""
+    type: str
+    description: str
+    fields: List[OutputFieldSchema] = []
+    example: Any = None
+
+
+class OutputVariantResponse(BaseModel):
+    """Output variant for dual-mode functions."""
+    mode: str
+    condition: str
+    schema: OutputSchemaResponse
+
+
 class FunctionSchema(BaseModel):
     """Function metadata schema."""
     name: str
@@ -60,6 +84,8 @@ class FunctionSchema(BaseModel):
     requires_session: bool = True
     is_async: bool = True
     version: str = "1.0.0"
+    output_schema: Optional[OutputSchemaResponse] = None
+    output_variants: List[OutputVariantResponse] = []
 
 
 class FunctionListResponse(BaseModel):
@@ -93,6 +119,68 @@ class ExecuteFunctionResponse(BaseModel):
 
 
 # =============================================================================
+# HELPER FUNCTIONS
+# =============================================================================
+
+
+def _convert_output_schema(meta) -> tuple[Optional[OutputSchemaResponse], List[OutputVariantResponse]]:
+    """
+    Convert FunctionMeta output_schema and output_variants to API response models.
+
+    Args:
+        meta: FunctionMeta instance
+
+    Returns:
+        Tuple of (output_schema, output_variants) in API response format
+    """
+    output_schema = None
+    output_variants = []
+
+    if meta.output_schema:
+        output_schema = OutputSchemaResponse(
+            type=meta.output_schema.type,
+            description=meta.output_schema.description,
+            fields=[
+                OutputFieldSchema(
+                    name=f.name,
+                    type=f.type,
+                    description=f.description,
+                    example=f.example,
+                    nullable=f.nullable,
+                )
+                for f in meta.output_schema.fields
+            ],
+            example=meta.output_schema.example,
+        )
+
+    if meta.output_variants:
+        output_variants = [
+            OutputVariantResponse(
+                mode=v.mode,
+                condition=v.condition,
+                schema=OutputSchemaResponse(
+                    type=v.schema.type,
+                    description=v.schema.description,
+                    fields=[
+                        OutputFieldSchema(
+                            name=f.name,
+                            type=f.type,
+                            description=f.description,
+                            example=f.example,
+                            nullable=f.nullable,
+                        )
+                        for f in v.schema.fields
+                    ],
+                    example=v.schema.example,
+                ),
+            )
+            for v in meta.output_variants
+        ]
+
+    return output_schema, output_variants
+
+
+# =============================================================================
 # ENDPOINTS
 # =============================================================================
 
@@ -120,33 +208,37 @@ async def list_functions(
     else:
         metas = fn.list_all()
 
-    functions = [
-        FunctionSchema(
-            name=m.name,
-            category=m.category.value,
-            description=m.description,
-            parameters=[
-                ParameterSchema(
-                    name=p.name,
-                    type=p.type,
-                    description=p.description,
-                    required=p.required,
-                    default=p.default,
-                    enum_values=p.enum_values,
-                    example=p.example,
-                )
-                for p in m.parameters
-            ],
-            returns=m.returns,
-            examples=m.examples,
-            tags=m.tags,
-            requires_llm=m.requires_llm,
-            requires_session=m.requires_session,
-            is_async=m.is_async,
-            version=m.version,
+    functions = []
+    for m in metas:
+        output_schema, output_variants = _convert_output_schema(m)
+        functions.append(
+            FunctionSchema(
+                name=m.name,
+                category=m.category.value,
+                description=m.description,
+                parameters=[
+                    ParameterSchema(
+                        name=p.name,
+                        type=p.type,
+                        description=p.description,
+                        required=p.required,
+                        default=p.default,
+                        enum_values=p.enum_values,
+                        example=p.example,
+                    )
+                    for p in m.parameters
+                ],
+                returns=m.returns,
+                examples=m.examples,
+                tags=m.tags,
+                requires_llm=m.requires_llm,
+                requires_session=m.requires_session,
+                is_async=m.is_async,
+                version=m.version,
+                output_schema=output_schema,
+                output_variants=output_variants,
+            )
         )
-        for m in metas
-    ]
 
     return FunctionListResponse(
         functions=functions,
@@ -176,6 +268,7 @@ async def get_function(name: str):
         raise HTTPException(status_code=404, detail=f"Function not found: {name}")
 
     m = func.meta
+    output_schema, output_variants = _convert_output_schema(m)
     return FunctionSchema(
         name=m.name,
         category=m.category.value,
@@ -199,6 +292,8 @@ async def get_function(name: str):
         requires_session=m.requires_session,
         is_async=m.is_async,
         version=m.version,
+        output_schema=output_schema,
+        output_variants=output_variants,
     )
 
 

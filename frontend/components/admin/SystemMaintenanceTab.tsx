@@ -45,6 +45,19 @@ const TASK_TYPE_COLORS: Record<string, string> = {
   'health.report': 'from-emerald-500 to-teal-500',
 }
 
+// Default config for search.reindex dialog
+interface ReindexConfig {
+  force: boolean
+  data_sources: string[]
+}
+
+const ALL_DATA_SOURCES = [
+  { key: 'assets', label: 'Assets', description: 'Documents, uploads, and scraped pages' },
+  { key: 'sam', label: 'SAM.gov', description: 'Solicitations and notices' },
+  { key: 'salesforce', label: 'Salesforce', description: 'Accounts, contacts, and opportunities' },
+  { key: 'forecasts', label: 'Forecasts', description: 'AG, APFS, and State forecasts' },
+]
+
 export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabProps) {
   const { token } = useAuth()
   const { addJob } = useActiveJobs()
@@ -55,6 +68,13 @@ export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabPr
   const [taskRuns, setTaskRuns] = useState<Record<string, TaskRun[]>>({})
   const [loadingRuns, setLoadingRuns] = useState<Record<string, boolean>>({})
   const [actionLoading, setActionLoading] = useState<string | null>(null)
+
+  // Reindex config dialog state
+  const [reindexDialogTask, setReindexDialogTask] = useState<ScheduledTask | null>(null)
+  const [reindexConfig, setReindexConfig] = useState<ReindexConfig>({
+    force: false,
+    data_sources: ['assets', 'sam', 'salesforce', 'forecasts'],
+  })
 
   const loadData = useCallback(async () => {
     if (!token) return
@@ -125,11 +145,36 @@ export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabPr
 
   const handleTriggerTask = async (task: ScheduledTask) => {
     if (!token) return
+
+    // For search.reindex, show config dialog instead of simple confirm
+    if (task.task_type === 'search.reindex') {
+      setReindexConfig({
+        force: false,
+        data_sources: ['assets', 'sam', 'salesforce', 'forecasts'],
+      })
+      setReindexDialogTask(task)
+      return
+    }
+
     if (!confirm(`Are you sure you want to trigger "${task.display_name}" now?`)) return
+    await executeTrigger(task)
+  }
+
+  const handleReindexConfirm = async () => {
+    if (!reindexDialogTask) return
+    const overrides: Record<string, any> = {}
+    if (reindexConfig.force) overrides.force = true
+    if (reindexConfig.data_sources.length < 4) overrides.data_sources = reindexConfig.data_sources
+    setReindexDialogTask(null)
+    await executeTrigger(reindexDialogTask, Object.keys(overrides).length > 0 ? overrides : undefined)
+  }
+
+  const executeTrigger = async (task: ScheduledTask, configOverrides?: Record<string, any>) => {
+    if (!token) return
 
     setActionLoading(task.id)
     try {
-      const result = await scheduledTasksApi.triggerTask(token, task.id)
+      const result = await scheduledTasksApi.triggerTask(token, task.id, configOverrides)
       addJob({
         runId: result.run_id,
         jobType: 'system_maintenance',
@@ -468,6 +513,101 @@ export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabPr
           </div>
         )}
       </div>
+
+      {/* Search Reindex Config Dialog */}
+      {reindexDialogTask && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div className="fixed inset-0 bg-black/50" onClick={() => setReindexDialogTask(null)} />
+          <div className="relative bg-white dark:bg-gray-800 rounded-xl shadow-xl border border-gray-200 dark:border-gray-700 w-full max-w-md mx-4 p-6">
+            <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
+              Search Index Rebuild
+            </h3>
+            <p className="text-sm text-gray-500 dark:text-gray-400 mb-5">
+              Re-indexes content for full-text and semantic search. Only items that have changed since the last index will be processed unless force rebuild is enabled.
+            </p>
+
+            {/* Data Sources */}
+            <div className="mb-5">
+              <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                Data Sources
+              </label>
+              <p className="text-xs text-gray-500 dark:text-gray-400 mb-3">
+                Select which content types to include in the rebuild.
+              </p>
+              <div className="space-y-2">
+                {ALL_DATA_SOURCES.map((source) => (
+                  <label
+                    key={source.key}
+                    className="flex items-start gap-3 p-2.5 rounded-lg border border-gray-200 dark:border-gray-600 hover:bg-gray-50 dark:hover:bg-gray-700/50 cursor-pointer transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={reindexConfig.data_sources.includes(source.key)}
+                      onChange={(e) => {
+                        setReindexConfig(prev => ({
+                          ...prev,
+                          data_sources: e.target.checked
+                            ? [...prev.data_sources, source.key]
+                            : prev.data_sources.filter(s => s !== source.key),
+                        }))
+                      }}
+                      className="mt-0.5 h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                    />
+                    <div>
+                      <span className="text-sm font-medium text-gray-900 dark:text-white">
+                        {source.label}
+                      </span>
+                      <p className="text-xs text-gray-500 dark:text-gray-400">
+                        {source.description}
+                      </p>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {/* Force Rebuild */}
+            <div className="mb-6">
+              <label className="flex items-start gap-3 p-2.5 rounded-lg border border-amber-200 dark:border-amber-800/50 bg-amber-50 dark:bg-amber-900/20 cursor-pointer transition-colors">
+                <input
+                  type="checkbox"
+                  checked={reindexConfig.force}
+                  onChange={(e) => setReindexConfig(prev => ({ ...prev, force: e.target.checked }))}
+                  className="mt-0.5 h-4 w-4 rounded border-gray-300 text-amber-600 focus:ring-amber-500"
+                />
+                <div>
+                  <span className="text-sm font-medium text-gray-900 dark:text-white">
+                    Force full rebuild
+                  </span>
+                  <p className="text-xs text-gray-500 dark:text-gray-400">
+                    Re-index all items even if they haven&apos;t changed. Use this after updating indexing logic or to fix a corrupted index. Significantly slower on large datasets.
+                  </p>
+                </div>
+              </label>
+            </div>
+
+            {/* Actions */}
+            <div className="flex justify-end gap-3">
+              <Button
+                variant="secondary"
+                size="sm"
+                onClick={() => setReindexDialogTask(null)}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                size="sm"
+                onClick={handleReindexConfirm}
+                disabled={reindexConfig.data_sources.length === 0}
+              >
+                <Play className="w-4 h-4 mr-1" />
+                Start Rebuild
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

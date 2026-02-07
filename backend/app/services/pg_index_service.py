@@ -177,10 +177,13 @@ class PgIndexService:
                 )
 
             # Update asset.indexed_at timestamp
+            # Set both indexed_at and updated_at to the same value to prevent
+            # onupdate=datetime.utcnow from making updated_at slightly later
+            _now = datetime.utcnow()
             await session.execute(
                 update(Asset)
                 .where(Asset.id == asset_id)
-                .values(indexed_at=datetime.utcnow())
+                .values(indexed_at=_now, updated_at=_now)
             )
 
             await session.commit()
@@ -189,6 +192,161 @@ class PgIndexService:
 
         except Exception as e:
             logger.error(f"Error indexing asset {asset_id}: {e}")
+            await session.rollback()
+            return False
+
+    async def prepare_asset_for_indexing(
+        self,
+        session: AsyncSession,
+        asset_id: UUID,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Prepare an asset for indexing without generating embeddings or writing to DB.
+
+        Extracts the read-only preparation from index_asset() so that chunks
+        from multiple assets can be embedded in a single batched API call.
+
+        Args:
+            session: Database session
+            asset_id: Asset UUID to prepare
+
+        Returns:
+            Dict with all data needed for indexing, or None if asset can't be indexed.
+            Keys: asset_id, organization_id, original_filename, source_type,
+                  content_type, title, url, collection_id, sync_config_id,
+                  metadata, chunks
+        """
+        if not _is_search_enabled():
+            return None
+
+        try:
+            result = await asset_service.get_asset_with_latest_extraction(
+                session, asset_id
+            )
+            if not result:
+                logger.warning(f"Asset {asset_id} not found for indexing")
+                return None
+
+            asset, extraction = result
+
+            if not extraction or extraction.status != "completed":
+                logger.info(
+                    f"Asset {asset_id} has no completed extraction, skipping index"
+                )
+                return None
+
+            # Download markdown content from MinIO
+            content = ""
+            if extraction.extracted_bucket and extraction.extracted_object_key:
+                minio = get_minio_service()
+                if minio:
+                    try:
+                        content_bytes = minio.get_object(
+                            extraction.extracted_bucket,
+                            extraction.extracted_object_key,
+                        )
+                        content = content_bytes.getvalue().decode("utf-8")
+                        # Remove null bytes - they're invalid in PostgreSQL TEXT columns
+                        # but can appear in some PDF extractions
+                        if "\x00" in content:
+                            logger.debug(f"Removing null bytes from content for {asset_id}")
+                            content = content.replace("\x00", "")
+                    except Exception as e:
+                        logger.warning(f"Failed to fetch content for {asset_id}: {e}")
+
+            # Build document metadata
+            title, url, collection_id, sync_config_id, metadata = self._build_asset_metadata(
+                asset
+            )
+
+            # Chunk the content
+            chunks = chunking_service.chunk_document(content, title=title)
+
+            if not chunks:
+                chunks = [DocumentChunk(
+                    content=title or asset.original_filename or "",
+                    chunk_index=0,
+                    title=title,
+                )]
+
+            return {
+                "asset_id": asset_id,
+                "organization_id": asset.organization_id,
+                "original_filename": asset.original_filename,
+                "source_type": asset.source_type,
+                "content_type": asset.content_type,
+                "title": title,
+                "url": url,
+                "collection_id": collection_id,
+                "sync_config_id": sync_config_id,
+                "metadata": metadata,
+                "chunks": chunks,
+            }
+
+        except Exception as e:
+            logger.error(f"Error preparing asset {asset_id} for indexing: {e}")
+            return None
+
+    async def index_asset_prepared(
+        self,
+        session: AsyncSession,
+        prepared: Dict[str, Any],
+        embeddings: List[List[float]],
+    ) -> bool:
+        """
+        Write a prepared asset to the search index with pre-computed embeddings.
+
+        This is the write phase counterpart to prepare_asset_for_indexing().
+        It deletes old chunks, inserts new ones, and updates the asset timestamp.
+
+        Args:
+            session: Database session
+            prepared: Dict returned by prepare_asset_for_indexing()
+            embeddings: Pre-computed embeddings, one per chunk
+
+        Returns:
+            True if indexed successfully, False otherwise
+        """
+        asset_id = prepared["asset_id"]
+        try:
+            # Delete existing chunks for this asset
+            await self._delete_chunks(session, "asset", asset_id)
+
+            # Insert chunks with pre-computed embeddings
+            chunks = prepared["chunks"]
+            for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+                await self._insert_chunk(
+                    session=session,
+                    source_type="asset",
+                    source_id=asset_id,
+                    organization_id=prepared["organization_id"],
+                    chunk_index=i,
+                    content=chunk.content,
+                    title=prepared["title"],
+                    filename=prepared["original_filename"],
+                    url=prepared["url"],
+                    embedding=embedding,
+                    source_type_filter=prepared["source_type"],
+                    content_type=prepared["content_type"],
+                    collection_id=prepared["collection_id"],
+                    sync_config_id=prepared["sync_config_id"],
+                    metadata=prepared["metadata"],
+                )
+
+            # Update asset.indexed_at timestamp
+            _now = datetime.utcnow()
+            await session.execute(
+                update(Asset)
+                .where(Asset.id == asset_id)
+                .values(indexed_at=_now, updated_at=_now)
+            )
+
+            await session.commit()
+            logger.info(f"Indexed asset {asset_id} with {len(chunks)} chunks")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error indexing prepared asset {asset_id}: {e}")
             await session.rollback()
             return False
 
@@ -206,6 +364,18 @@ class PgIndexService:
         collection_id = None
         sync_config_id = None
         metadata = {}
+
+        # Derive storage_folder from raw_object_key for all asset types
+        # Strip org_id prefix (first segment) and filename (last segment)
+        # e.g. "{org_id}/sharepoint/site/docs/file.pdf" → "sharepoint/site/docs"
+        if asset.raw_object_key:
+            parts = asset.raw_object_key.split("/")
+            if len(parts) > 2:
+                # Strip first segment (org_id) and last segment (filename)
+                metadata["storage_folder"] = "/".join(parts[1:-1])
+            elif len(parts) == 2:
+                # Only org_id/filename — no folder
+                metadata["storage_folder"] = ""
 
         source_meta = asset.source_metadata or {}
 
@@ -381,6 +551,7 @@ class PgIndexService:
         posted_date: Optional[datetime] = None,
         response_deadline: Optional[datetime] = None,
         url: Optional[str] = None,
+        embedding: Optional[List[float]] = None,
     ) -> bool:
         """
         Index a SAM.gov notice.
@@ -409,8 +580,9 @@ class PgIndexService:
             # Build content for indexing
             content = f"{title}\n\n{description}"
 
-            # Generate embedding
-            embedding = await embedding_service.get_embedding(content)
+            # Generate embedding (skip if pre-computed)
+            if embedding is None:
+                embedding = await embedding_service.get_embedding(content)
 
             # Build metadata
             metadata = {
@@ -441,6 +613,15 @@ class PgIndexService:
                 metadata=metadata,
             )
 
+            # Update indexed_at timestamp
+            # SamNotice has no updated_at (immutable records), so only set indexed_at
+            from ..database.models import SamNotice as SamNoticeModel
+            await session.execute(
+                update(SamNoticeModel)
+                .where(SamNoticeModel.id == notice_id)
+                .values(indexed_at=datetime.utcnow())
+            )
+
             await session.commit()
             logger.debug(f"Indexed SAM notice {notice_id}")
             return True
@@ -465,6 +646,7 @@ class PgIndexService:
         posted_date: Optional[datetime] = None,
         response_deadline: Optional[datetime] = None,
         url: Optional[str] = None,
+        embedding: Optional[List[float]] = None,
     ) -> bool:
         """
         Index a SAM.gov solicitation.
@@ -496,8 +678,9 @@ class PgIndexService:
             if agency:
                 content = f"{agency}\n{content}"
 
-            # Generate embedding
-            embedding = await embedding_service.get_embedding(content)
+            # Generate embedding (skip if pre-computed)
+            if embedding is None:
+                embedding = await embedding_service.get_embedding(content)
 
             # Build metadata
             metadata = {
@@ -527,6 +710,16 @@ class PgIndexService:
                 source_type_filter="sam_gov",
                 content_type="solicitation",
                 metadata=metadata,
+            )
+
+            # Update indexed_at timestamp
+            # Set both to same value so onupdate doesn't create a gap
+            from ..database.models import SamSolicitation as SamSolicitationModel
+            _now = datetime.utcnow()
+            await session.execute(
+                update(SamSolicitationModel)
+                .where(SamSolicitationModel.id == solicitation_id)
+                .values(indexed_at=_now, updated_at=_now)
             )
 
             await session.commit()
@@ -587,6 +780,7 @@ class PgIndexService:
         fiscal_year: Optional[int] = None,
         estimated_award_quarter: Optional[str] = None,
         url: Optional[str] = None,
+        embedding: Optional[List[float]] = None,
     ) -> bool:
         """
         Index an acquisition forecast.
@@ -631,8 +825,9 @@ class PgIndexService:
 
             content = "\n\n".join(content_parts)
 
-            # Generate embedding
-            embedding = await embedding_service.get_embedding(content)
+            # Generate embedding (skip if pre-computed)
+            if embedding is None:
+                embedding = await embedding_service.get_embedding(content)
 
             # Build metadata
             metadata = {
@@ -665,26 +860,28 @@ class PgIndexService:
             )
 
             # Update indexed_at timestamp on the forecast record
+            # Set both to same value so onupdate doesn't create a gap
+            _now = datetime.utcnow()
             if source_type == "ag":
                 from ..database.models import AgForecast
                 await session.execute(
                     update(AgForecast)
                     .where(AgForecast.id == forecast_id)
-                    .values(indexed_at=datetime.utcnow())
+                    .values(indexed_at=_now, updated_at=_now)
                 )
             elif source_type == "apfs":
                 from ..database.models import ApfsForecast
                 await session.execute(
                     update(ApfsForecast)
                     .where(ApfsForecast.id == forecast_id)
-                    .values(indexed_at=datetime.utcnow())
+                    .values(indexed_at=_now, updated_at=_now)
                 )
             elif source_type == "state":
                 from ..database.models import StateForecast
                 await session.execute(
                     update(StateForecast)
                     .where(StateForecast.id == forecast_id)
-                    .values(indexed_at=datetime.utcnow())
+                    .values(indexed_at=_now, updated_at=_now)
                 )
 
             await session.commit()
@@ -867,6 +1064,7 @@ class PgIndexService:
         industry: Optional[str] = None,
         description: Optional[str] = None,
         website: Optional[str] = None,
+        embedding: Optional[List[float]] = None,
     ) -> bool:
         """
         Index a Salesforce account for search.
@@ -900,8 +1098,9 @@ class PgIndexService:
 
             content = "\n\n".join(content_parts)
 
-            # Generate embedding
-            embedding = await embedding_service.get_embedding(content)
+            # Generate embedding (skip if pre-computed)
+            if embedding is None:
+                embedding = await embedding_service.get_embedding(content)
 
             # Build metadata
             metadata = {
@@ -930,6 +1129,16 @@ class PgIndexService:
                 metadata=metadata,
             )
 
+            # Update indexed_at timestamp
+            # Set both to same value so onupdate doesn't create a gap
+            from ..database.models import SalesforceAccount as SalesforceAccountModel
+            _now = datetime.utcnow()
+            await session.execute(
+                update(SalesforceAccountModel)
+                .where(SalesforceAccountModel.id == account_id)
+                .values(indexed_at=_now, updated_at=_now)
+            )
+
             await session.commit()
             logger.debug(f"Indexed Salesforce account {account_id}")
             return True
@@ -952,6 +1161,7 @@ class PgIndexService:
         account_name: Optional[str] = None,
         description: Optional[str] = None,
         close_date: Optional[datetime] = None,
+        embedding: Optional[List[float]] = None,
     ) -> bool:
         """
         Index a Salesforce opportunity for search.
@@ -991,8 +1201,9 @@ class PgIndexService:
 
             content = "\n\n".join(content_parts)
 
-            # Generate embedding
-            embedding = await embedding_service.get_embedding(content)
+            # Generate embedding (skip if pre-computed)
+            if embedding is None:
+                embedding = await embedding_service.get_embedding(content)
 
             # Build metadata
             metadata = {
@@ -1021,6 +1232,16 @@ class PgIndexService:
                 source_type_filter="salesforce",
                 content_type=opportunity_type or "Opportunity",
                 metadata=metadata,
+            )
+
+            # Update indexed_at timestamp
+            # Set both to same value so onupdate doesn't create a gap
+            from ..database.models import SalesforceOpportunity as SalesforceOpportunityModel
+            _now = datetime.utcnow()
+            await session.execute(
+                update(SalesforceOpportunityModel)
+                .where(SalesforceOpportunityModel.id == opportunity_id)
+                .values(indexed_at=_now, updated_at=_now)
             )
 
             await session.commit()
@@ -1074,6 +1295,7 @@ class PgIndexService:
         title: Optional[str] = None,
         account_name: Optional[str] = None,
         department: Optional[str] = None,
+        embedding: Optional[List[float]] = None,
     ) -> bool:
         """
         Index a Salesforce contact for search.
@@ -1113,8 +1335,9 @@ class PgIndexService:
 
             content = "\n\n".join(content_parts)
 
-            # Generate embedding
-            embedding = await embedding_service.get_embedding(content)
+            # Generate embedding (skip if pre-computed)
+            if embedding is None:
+                embedding = await embedding_service.get_embedding(content)
 
             # Build metadata
             metadata = {
@@ -1143,6 +1366,16 @@ class PgIndexService:
                 source_type_filter="salesforce",
                 content_type=title or "Contact",
                 metadata=metadata,
+            )
+
+            # Update indexed_at timestamp
+            # Set both to same value so onupdate doesn't create a gap
+            from ..database.models import SalesforceContact as SalesforceContactModel
+            _now = datetime.utcnow()
+            await session.execute(
+                update(SalesforceContactModel)
+                .where(SalesforceContactModel.id == contact_id)
+                .values(indexed_at=_now, updated_at=_now)
             )
 
             await session.commit()

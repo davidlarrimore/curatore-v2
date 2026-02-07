@@ -57,6 +57,72 @@ class ParameterDoc:
 
 
 @dataclass
+class OutputFieldDoc:
+    """
+    Documentation for a single output field.
+
+    Used within OutputSchema to document the structure of function outputs,
+    making it easier for engineers and AI to understand and use the fields
+    in templates.
+
+    Attributes:
+        name: Field name (used in templates as {{ item.name }})
+        type: Data type ("str", "int", "float", "bool", "list[str]", "dict", etc.)
+        description: Human-readable description of the field
+        example: Optional example value
+        nullable: Whether the field can be None/null
+    """
+    name: str
+    type: str
+    description: str
+    example: Any = None
+    nullable: bool = False
+
+
+@dataclass
+class OutputSchema:
+    """
+    Structured documentation for function output.
+
+    Provides machine-readable documentation of what a function returns,
+    including field names, types, and descriptions. This enables:
+    - Engineers to know exact field names when writing procedures
+    - AI procedure generator to reliably generate correct template references
+    - API consumers to understand the output structure programmatically
+
+    Attributes:
+        type: Top-level return type ("str", "dict", "list[ContentItem]", etc.)
+        description: Human-readable description of the output
+        fields: List of field documentation for structured types
+        example: Optional complete example of the output
+    """
+    type: str
+    description: str
+    fields: List[OutputFieldDoc] = field(default_factory=list)
+    example: Any = None
+
+
+@dataclass
+class OutputVariant:
+    """
+    Alternative output schema for dual-mode functions.
+
+    Some functions (like LLM functions) return different types depending on
+    their mode of operation. For example, llm_generate returns a string in
+    single mode but a list of dicts in collection mode. OutputVariant allows
+    documenting these alternative outputs.
+
+    Attributes:
+        mode: Mode name (e.g., "single", "collection")
+        condition: When this variant applies (e.g., "when items parameter provided")
+        schema: The OutputSchema for this mode
+    """
+    mode: str
+    condition: str
+    schema: OutputSchema
+
+
+@dataclass
 class FunctionMeta:
     """
     Metadata about a function for discovery and documentation.
@@ -77,10 +143,13 @@ class FunctionMeta:
     requires_session: bool = True
     is_async: bool = True
     version: str = "1.0.0"
+    # Structured output documentation (optional, supplements 'returns' string)
+    output_schema: Optional[OutputSchema] = None
+    output_variants: List[OutputVariant] = field(default_factory=list)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
-        return {
+        result = {
             "name": self.name,
             "category": self.category.value,
             "description": self.description,
@@ -104,6 +173,51 @@ class FunctionMeta:
             "is_async": self.is_async,
             "version": self.version,
         }
+
+        # Add output_schema if present
+        if self.output_schema:
+            result["output_schema"] = {
+                "type": self.output_schema.type,
+                "description": self.output_schema.description,
+                "fields": [
+                    {
+                        "name": f.name,
+                        "type": f.type,
+                        "description": f.description,
+                        "example": f.example,
+                        "nullable": f.nullable,
+                    }
+                    for f in self.output_schema.fields
+                ],
+                "example": self.output_schema.example,
+            }
+
+        # Add output_variants if present
+        if self.output_variants:
+            result["output_variants"] = [
+                {
+                    "mode": v.mode,
+                    "condition": v.condition,
+                    "schema": {
+                        "type": v.schema.type,
+                        "description": v.schema.description,
+                        "fields": [
+                            {
+                                "name": f.name,
+                                "type": f.type,
+                                "description": f.description,
+                                "example": f.example,
+                                "nullable": f.nullable,
+                            }
+                            for f in v.schema.fields
+                        ],
+                        "example": v.schema.example,
+                    },
+                }
+                for v in self.output_variants
+            ]
+
+        return result
 
 
 @dataclass

@@ -312,13 +312,15 @@ class ExtractionOrchestrator:
             )
 
             # Extract using triage-selected engine
-            if triage_plan.engine == "fast_pdf":
+            # Use triage engine for all supported types (fast_pdf, docling, extraction-service)
+            if triage_plan.engine in ("fast_pdf", "docling", "extraction-service"):
                 extraction_result = await self._extract_with_triage_engine(
                     file_path=temp_input_file,
                     triage_plan=triage_plan,
                 )
             else:
-                # Fall back to existing extraction logic (document_service)
+                # Fall back to existing extraction logic for unknown engines
+                logger.warning(f"Unknown triage engine '{triage_plan.engine}', falling back to document_service")
                 extraction_result = await self._extract_content(
                     file_path=temp_input_file,
                     filename=asset.original_filename,
@@ -866,25 +868,37 @@ class ExtractionOrchestrator:
                         },
                     }
                 else:
-                    # Docling failed, fall back to extraction-service
-                    logger.warning(f"Docling extraction failed for {file_path.name}, falling back to extraction-service")
-                    extraction_url = self._get_extraction_service_url()
-                    fallback_engine = ExtractionServiceEngine(
-                        name="extraction-service-fallback",
-                        service_url=extraction_url,
-                    )
-                    result = await fallback_engine.extract(file_path)
+                    # Docling failed, fall back to appropriate engine based on file type
+                    # PDFs should use fast_pdf, other files use extraction-service
+                    file_ext = file_path.suffix.lower()
+                    if file_ext == ".pdf":
+                        logger.warning(f"Docling extraction failed for {file_path.name}, falling back to fast_pdf")
+                        fallback_engine = FastPdfEngine(name="fast-pdf-fallback")
+                        result = await fallback_engine.extract(file_path)
+                        fallback_name = "fast_pdf"
+                        fallback_display = "Fast PDF (Fallback)"
+                    else:
+                        logger.warning(f"Docling extraction failed for {file_path.name}, falling back to extraction-service")
+                        extraction_url = self._get_extraction_service_url()
+                        fallback_engine = ExtractionServiceEngine(
+                            name="extraction-service-fallback",
+                            service_url=extraction_url,
+                        )
+                        result = await fallback_engine.extract(file_path)
+                        fallback_name = "extraction-service"
+                        fallback_display = "Extraction Service (Fallback)"
+
                     if result.success:
                         return {
                             "markdown": result.content,
-                            "warnings": ["Docling failed, used extraction-service fallback"],
+                            "warnings": [f"Docling failed, used {fallback_name} fallback"],
                             "extraction_info": {
-                                "engine": "extraction-service",
-                                "engine_name": "Extraction Service (Fallback)",
+                                "engine": fallback_name,
+                                "engine_name": fallback_display,
                             },
                         }
                     else:
-                        raise Exception(f"Both Docling and extraction-service failed: {result.error}")
+                        raise Exception(f"Both Docling and {fallback_name} failed: {result.error}")
             else:
                 # Unknown engine, fall back to document_service
                 logger.warning(f"Unknown triage engine: {engine_type}, falling back to document_service")

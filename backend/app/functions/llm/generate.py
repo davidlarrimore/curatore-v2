@@ -20,8 +20,13 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
+    OutputVariant,
 )
 from ..context import FunctionContext
+from ...models.llm_models import LLMTaskType
+from ...services.config_loader import config_loader
 
 logger = logging.getLogger("curatore.functions.llm.generate")
 
@@ -122,7 +127,32 @@ class GenerateFunction(BaseFunction):
                 example=[{"title": "Item 1"}, {"title": "Item 2"}],
             ),
         ],
-        returns="str: The generated text",
+        returns="str: The generated text (single mode) or list[dict] (collection mode)",
+        output_schema=OutputSchema(
+            type="str",
+            description="The generated text content",
+            example="Based on the analysis, the key findings are...",
+        ),
+        output_variants=[
+            OutputVariant(
+                mode="collection",
+                condition="when `items` parameter is provided",
+                schema=OutputSchema(
+                    type="list[dict]",
+                    description="List of generation results for each item",
+                    fields=[
+                        OutputFieldDoc(name="item_id", type="str",
+                                      description="ID of the processed item"),
+                        OutputFieldDoc(name="result", type="str",
+                                      description="Generated text for this item"),
+                        OutputFieldDoc(name="success", type="bool",
+                                      description="Whether generation succeeded"),
+                        OutputFieldDoc(name="error", type="str",
+                                      description="Error message if failed", nullable=True),
+                    ],
+                ),
+            ),
+        ],
         tags=["llm", "text", "generation"],
         requires_llm=True,
         examples=[
@@ -196,11 +226,17 @@ class GenerateFunction(BaseFunction):
                 messages.append({"role": "system", "content": system_prompt})
             messages.append({"role": "user", "content": prompt})
 
+            # Get model from task type routing (STANDARD for generation)
+            task_config = config_loader.get_task_type_config(LLMTaskType.STANDARD)
+            resolved_model = model or task_config.model
+            # Use provided temperature or fall back to task type default
+            resolved_temperature = temperature if temperature != 0.7 else (task_config.temperature or temperature)
+
             # Generate
             response = ctx.llm_service._client.chat.completions.create(
-                model=model or ctx.llm_service._get_model(),
+                model=resolved_model,
                 messages=messages,
-                temperature=temperature,
+                temperature=resolved_temperature,
                 max_tokens=max_tokens,
             )
 
@@ -241,6 +277,12 @@ class GenerateFunction(BaseFunction):
         failed_count = 0
         total_chars = 0
 
+        # Get model from task type routing (BULK for collection mode)
+        task_config = config_loader.get_task_type_config(LLMTaskType.BULK)
+        resolved_model = model or task_config.model
+        # Use provided temperature or fall back to task type default
+        resolved_temperature = temperature if temperature != 0.7 else (task_config.temperature or temperature)
+
         for idx, item in enumerate(items):
             try:
                 # Render prompt with item context
@@ -254,9 +296,9 @@ class GenerateFunction(BaseFunction):
 
                 # Generate
                 response = ctx.llm_service._client.chat.completions.create(
-                    model=model or ctx.llm_service._get_model(),
+                    model=resolved_model,
                     messages=messages,
-                    temperature=temperature,
+                    temperature=resolved_temperature,
                     max_tokens=max_tokens,
                 )
 

@@ -18,6 +18,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -107,6 +109,25 @@ class ClassifyDocumentFunction(BaseFunction):
             ),
         ],
         returns="dict: Classification result with category and confidence",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Document classification result with confidence scores",
+            fields=[
+                OutputFieldDoc(name="asset_id", type="str",
+                              description="UUID of the classified asset"),
+                OutputFieldDoc(name="category", type="str",
+                              description="Assigned category name",
+                              example="contract"),
+                OutputFieldDoc(name="confidence", type="float",
+                              description="Confidence score (0.0-1.0)",
+                              example=0.85),
+                OutputFieldDoc(name="all_scores", type="dict",
+                              description="Confidence scores for all categories"),
+                OutputFieldDoc(name="method", type="str",
+                              description="Classification method used (rules or llm)",
+                              example="rules"),
+            ],
+        ),
         tags=["compound", "classification", "document"],
         requires_llm=False,  # LLM is optional
         examples=[

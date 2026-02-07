@@ -33,6 +33,8 @@ from ..base import (
     FunctionCategory,
     FlowResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -71,6 +73,19 @@ class IfBranchFunction(BaseFunction):
             ),
         ],
         returns="FlowResult with branch_key='then' or 'else'",
+        output_schema=OutputSchema(
+            type="FlowResult",
+            description="Flow control result indicating which branch to execute",
+            fields=[
+                OutputFieldDoc(name="condition_value", type="any",
+                              description="The rendered condition value that was evaluated"),
+                OutputFieldDoc(name="evaluated", type="bool",
+                              description="True if condition was truthy, False if falsy"),
+                OutputFieldDoc(name="branch", type="str",
+                              description="Branch to execute: 'then' or 'else'",
+                              example="then"),
+            ],
+        ),
         tags=["flow", "branching", "conditional", "if", "else"],
         requires_llm=False,
         examples=[

@@ -170,6 +170,32 @@ The `search_solicitations` and `search_notices` functions support an `include_as
 
 Results include both notices/solicitations (type: `notice`/`solicitation`) and documents (type: `asset`, display: `SAM Document`).
 
+### Folder Path Filtering (search_assets)
+
+The `search_assets` function supports a `folder_path` parameter to limit results to a specific storage folder. This is useful for procedures that should only search within a specific SharePoint folder, upload directory, or SAM.gov attachment path.
+
+```yaml
+# Search only within a specific SharePoint folder
+- name: search_proposals
+  function: search_assets
+  params:
+    query: "security assessment"
+    folder_path: "sharepoint/my-site/shared-documents/opportunities"
+    limit: 20
+```
+
+**Path format**: Use the storage path as shown in the Storage Browser or Asset Detail page. The path strips the org_id prefix automatically. Examples:
+- `sharepoint/contoso/shared-documents/opps` - SharePoint folder
+- `uploads/{uuid}` - Upload folder
+- `scrape/amivero/pages` - Scraped pages folder
+- `sam/dept-of-defense/army/solicitations` - SAM.gov attachments
+
+**Auto-normalization**: Human-friendly paths (e.g., `Shared Documents/Opportunities`) are automatically slugified to match storage paths. You can also provide partial paths (e.g., `shared-documents/opportunities`) which will match anywhere in the folder hierarchy.
+
+**Discovering paths**: Copy folder paths from:
+- **Storage Browser** (`/storage`): Use the copy button in the breadcrumb or on individual folder rows
+- **Asset Detail** (`/assets/{id}`): Use the "Folder Path" copy button in the File Details section
+
 ### Function Registry
 
 **Location**: `backend/app/functions/registry.py`
@@ -185,6 +211,93 @@ all_functions = fn.list_all()
 
 # List by category
 llm_functions = fn.list_by_category(FunctionCategory.LLM)
+```
+
+### Output Schemas
+
+Functions document their return types using structured `OutputSchema` objects. This provides machine-readable documentation that:
+- Helps engineers know exact field names when writing procedures
+- Enables AI procedure generation to reliably use correct template references
+- Allows API consumers to understand output structure programmatically
+
+**Location**: `backend/app/functions/base.py`
+
+```python
+from app.functions.base import OutputFieldDoc, OutputSchema, OutputVariant
+
+# Simple output (e.g., llm_generate returns a string)
+output_schema = OutputSchema(
+    type="str",
+    description="The generated text content",
+)
+
+# Structured output (e.g., search_assets returns a list of ContentItems)
+output_schema = OutputSchema(
+    type="list[ContentItem]",
+    description="List of matching documents",
+    fields=[
+        OutputFieldDoc(name="id", type="str", description="Asset UUID"),
+        OutputFieldDoc(name="title", type="str", description="Full document path/title"),
+        OutputFieldDoc(name="original_filename", type="str", description="File name only"),
+        OutputFieldDoc(name="score", type="float", description="Relevance score"),
+        OutputFieldDoc(name="snippet", type="str", description="Highlighted excerpt", nullable=True),
+    ],
+)
+
+# Dual-mode output (e.g., LLM functions in single vs collection mode)
+output_variants = [
+    OutputVariant(
+        mode="collection",
+        condition="when `items` parameter is provided",
+        schema=OutputSchema(
+            type="list[dict]",
+            description="List of results for each item",
+            fields=[
+                OutputFieldDoc(name="item_id", type="str", description="ID of processed item"),
+                OutputFieldDoc(name="result", type="str", description="Generated text"),
+                OutputFieldDoc(name="success", type="bool", description="Whether generation succeeded"),
+                OutputFieldDoc(name="error", type="str", description="Error message if failed", nullable=True),
+            ],
+        ),
+    ),
+]
+```
+
+**API Response**: Output schemas are included in the `/api/v1/functions/{name}` response:
+
+```json
+{
+  "name": "search_assets",
+  "output_schema": {
+    "type": "list[ContentItem]",
+    "description": "List of matching documents",
+    "fields": [
+      {"name": "id", "type": "str", "description": "Asset UUID", "nullable": false},
+      {"name": "title", "type": "str", "description": "Full document path/title", "nullable": false}
+    ]
+  },
+  "output_variants": []
+}
+```
+
+**Using in Templates**: The schema tells you the exact field names to use:
+
+```yaml
+steps:
+  - name: search_docs
+    function: search_assets
+    params:
+      query: "quarterly report"
+
+  - name: send_results
+    function: send_email
+    params:
+      subject: "Found {{ steps.search_docs | length }} documents"
+      body: |
+        {% for doc in steps.search_docs %}
+        - {{ doc.title }} ({{ doc.original_filename }})
+          Score: {{ doc.score }}
+        {% endfor %}
 ```
 
 ---

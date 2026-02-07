@@ -19,6 +19,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 from ..content import ContentItem
@@ -133,6 +135,28 @@ class SearchScrapedAssetsFunction(BaseFunction):
             ),
         ],
         returns="list[ContentItem]: Matching scraped assets as ContentItem instances",
+        output_schema=OutputSchema(
+            type="list[ContentItem]",
+            description="List of matching scraped web pages and records",
+            fields=[
+                OutputFieldDoc(name="id", type="str", description="Scraped asset UUID"),
+                OutputFieldDoc(name="title", type="str", description="Page title or filename"),
+                OutputFieldDoc(name="url", type="str", description="Full URL of the page"),
+                OutputFieldDoc(name="url_path", type="str", description="URL path portion"),
+                OutputFieldDoc(name="parent_url", type="str",
+                              description="URL of the parent page", nullable=True),
+                OutputFieldDoc(name="asset_subtype", type="str",
+                              description="Asset type: page or record", example="page"),
+                OutputFieldDoc(name="crawl_depth", type="int",
+                              description="Depth from seed URL", example=2),
+                OutputFieldDoc(name="is_promoted", type="bool",
+                              description="Whether asset is promoted to main collection"),
+                OutputFieldDoc(name="score", type="float", description="Relevance score",
+                              nullable=True),
+                OutputFieldDoc(name="highlights", type="dict",
+                              description="Highlighted search matches", nullable=True),
+            ],
+        ),
         tags=["search", "scrape", "web", "content", "hybrid"],
         requires_llm=False,
         examples=[

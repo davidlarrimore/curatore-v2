@@ -16,6 +16,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 from ..content import ContentItem
@@ -40,20 +42,7 @@ class SearchAssetsFunction(BaseFunction):
     meta = FunctionMeta(
         name="search_assets",
         category=FunctionCategory.SEARCH,
-        description="""Search assets (documents, files) using full-text and semantic search.
-
-Returns a list of ContentItem objects. Each item has these fields accessible in templates:
-- id: Asset UUID
-- title: Full path/title of the document
-- type: Always "asset"
-- display_type: Always "Document"
-- original_filename: The file name (e.g., "report.pdf")
-- folder_path: Folder path for SharePoint files (e.g., "Opportunities/DHS/Project")
-- source_url: Direct URL to the file (SharePoint web URL for SharePoint files)
-- content_type: MIME type (e.g., "application/pdf")
-- source_type: Source type ("sharepoint", "upload", "web_scrape", "sam_gov")
-- score: Search relevance score
-- snippet: Text snippet with search term highlights""",
+        description="Search assets (documents, files) using full-text and semantic search. Returns matching documents as ContentItem objects with metadata and relevance scores.",
         parameters=[
             ParameterDoc(
                 name="query",
@@ -84,6 +73,14 @@ Returns a list of ContentItem objects. Each item has these fields accessible in 
                 default=None,
             ),
             ParameterDoc(
+                name="folder_path",
+                type="str",
+                description="Filter by folder path. Accepts storage paths (e.g., 'sharepoint/my-site/shared-documents/opportunities') or human-friendly paths (e.g., 'Shared Documents/Opportunities') which are auto-slugified. Copy from the storage browser or asset detail page.",
+                required=False,
+                default=None,
+                example="sharepoint/my-site/shared-documents/opportunities",
+            ),
+            ParameterDoc(
                 name="search_mode",
                 type="str",
                 description="Search mode",
@@ -106,15 +103,31 @@ Returns a list of ContentItem objects. Each item has these fields accessible in 
                 default=20,
             ),
         ],
-        returns="""list[ContentItem]: Search results. Template fields:
-- {{ item.title }} - Full document path/title
-- {{ item.original_filename }} - File name only
-- {{ item.folder_path }} - Folder path (SharePoint)
-- {{ item.source_url }} - Direct link to document
-- {{ item.content_type }} - MIME type
-- {{ item.source_type }} - Source ("sharepoint", "upload", etc.)
-- {{ item.score }} - Relevance score
-- {{ item.snippet }} - Highlighted excerpt""",
+        returns="list[ContentItem]: Search results with document metadata",
+        output_schema=OutputSchema(
+            type="list[ContentItem]",
+            description="List of matching documents as ContentItem objects",
+            fields=[
+                OutputFieldDoc(name="id", type="str", description="Asset UUID",
+                              example="550e8400-e29b-41d4-a716-446655440000"),
+                OutputFieldDoc(name="title", type="str", description="Full document path/title",
+                              example="Opportunities/DHS/TSA/proposal.pdf"),
+                OutputFieldDoc(name="original_filename", type="str", description="File name only",
+                              example="proposal.pdf"),
+                OutputFieldDoc(name="folder_path", type="str", description="Folder path for SharePoint",
+                              example="Opportunities/DHS/TSA", nullable=True),
+                OutputFieldDoc(name="source_url", type="str", description="Direct URL to document",
+                              nullable=True),
+                OutputFieldDoc(name="content_type", type="str", description="MIME type",
+                              example="application/pdf"),
+                OutputFieldDoc(name="source_type", type="str", description="Source type",
+                              example="sharepoint"),
+                OutputFieldDoc(name="score", type="float", description="Relevance score (0-1)",
+                              example=0.85),
+                OutputFieldDoc(name="snippet", type="str", description="Highlighted text excerpt",
+                              nullable=True),
+            ],
+        ),
         tags=["search", "assets", "hybrid", "content"],
         requires_llm=False,
         examples=[
@@ -135,6 +148,7 @@ Returns a list of ContentItem objects. Each item has these fields accessible in 
         source_type = params.get("source_type")
         collection_id = params.get("collection_id")
         sync_config_id = params.get("sync_config_id")
+        folder_path = params.get("folder_path")
         search_mode = params.get("search_mode", "hybrid")
         keyword_weight = params.get("keyword_weight", 0.5)
         limit = min(params.get("limit", 20), 100)
@@ -179,6 +193,7 @@ Returns a list of ContentItem objects. Each item has these fields accessible in 
                 source_types=source_types,
                 collection_ids=collection_ids,
                 sync_config_ids=sync_config_ids,
+                folder_path=folder_path,
                 limit=limit,
             )
 
@@ -231,6 +246,7 @@ Returns a list of ContentItem objects. Each item has these fields accessible in 
                         "source_type": source_type,
                         "collection_id": str(collection_id) if collection_id else None,
                         "sync_config_id": str(sync_config_id) if sync_config_id else None,
+                        "folder_path": folder_path,
                     },
                     "result_type": "ContentItem",
                 },

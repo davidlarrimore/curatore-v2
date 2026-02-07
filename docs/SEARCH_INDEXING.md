@@ -1,0 +1,767 @@
+# Search & Indexing
+
+Curatore v2 provides hybrid full-text + semantic search powered by PostgreSQL with the pgvector extension. Content is chunked, embedded via OpenAI, and stored in a unified `search_chunks` table that supports keyword search, vector similarity, and a combined hybrid mode.
+
+---
+
+## Table of Contents
+
+1. [Architecture Overview](#architecture-overview)
+2. [Indexed Content Types](#indexed-content-types)
+3. [Indexing Pipeline](#indexing-pipeline)
+4. [Chunking](#chunking)
+5. [Embeddings](#embeddings)
+6. [Database Schema](#database-schema)
+7. [Search Modes](#search-modes)
+8. [Hybrid Scoring](#hybrid-scoring)
+9. [Incremental Reindexing](#incremental-reindexing)
+10. [Batch Embedding Optimization](#batch-embedding-optimization)
+11. [API Endpoints](#api-endpoints)
+12. [Configuration](#configuration)
+13. [Monitoring & Health](#monitoring--health)
+14. [Extending Search to New Data Sources](#extending-search-to-new-data-sources)
+15. [Troubleshooting](#troubleshooting)
+
+---
+
+## Architecture Overview
+
+```
+Content Sources              Indexing Pipeline              Search Query
+─────────────────     ──────────────────────────     ─────────────────────
+                      ┌──────────┐
+ Assets (documents)──>│ Chunking │──> ~1500 char chunks
+ SAM Notices ────────>│ Service  │        │
+ SAM Solicitations ──>└──────────┘        ▼
+ Salesforce Records ─>             ┌────────────┐
+ Forecasts ──────────>             │ Embedding  │──> 1536-dim vectors
+ Scraped Pages ──────>             │ Service    │       │
+                                   └────────────┘       ▼
+                                                ┌──────────────┐
+                                                │search_chunks │
+                                                │  (PostgreSQL)│
+                                                │              │
+                                                │ tsvector ────│──> Keyword search
+                                                │ vector(1536) │──> Semantic search
+                                                └──────────────┘       │
+                                                        ▲              ▼
+                                                        │      Combined hybrid
+                                                        │        ranking
+                                                   Search API ◄────────┘
+```
+
+**Key components:**
+
+| Component | File | Purpose |
+|-----------|------|---------|
+| PgIndexService | `backend/app/services/pg_index_service.py` | Index content to `search_chunks` |
+| PgSearchService | `backend/app/services/pg_search_service.py` | Execute search queries |
+| ChunkingService | `backend/app/services/chunking_service.py` | Split documents into chunks |
+| EmbeddingService | `backend/app/services/embedding_service.py` | Generate OpenAI embeddings |
+| Search Router | `backend/app/api/v1/routers/search.py` | REST API endpoints |
+| Maintenance Handler | `backend/app/services/maintenance_handlers.py` | Bulk reindexing |
+
+---
+
+## Indexed Content Types
+
+All searchable content is stored in the `search_chunks` table with a `source_type` discriminator and a `source_type_filter` for UI filtering.
+
+| Source Type | Filter Category | Chunked? | Description |
+|-------------|----------------|----------|-------------|
+| `asset` | `upload`, `sharepoint`, `web_scrape` | Yes | Documents, PDFs, web pages |
+| `sam_notice` | `sam_gov` | No (single chunk) | Individual SAM.gov notice |
+| `sam_solicitation` | `sam_gov` | No (single chunk) | SAM.gov solicitation group |
+| `ag_forecast` | `forecast` | No (single chunk) | AG acquisition forecast |
+| `apfs_forecast` | `forecast` | No (single chunk) | APFS acquisition forecast |
+| `state_forecast` | `forecast` | No (single chunk) | State acquisition forecast |
+| `salesforce_account` | `salesforce` | No (single chunk) | Salesforce account |
+| `salesforce_contact` | `salesforce` | No (single chunk) | Salesforce contact |
+| `salesforce_opportunity` | `salesforce` | No (single chunk) | Salesforce opportunity |
+
+**Assets** are the only content type that gets chunked into multiple pieces. All other types produce a single chunk per record because their content is short enough to embed as a single text.
+
+---
+
+## Indexing Pipeline
+
+### Per-Item Indexing (real-time)
+
+When a document is uploaded or a record is synced, it is indexed immediately:
+
+```
+1. Content Assembly
+   - Assets: Download markdown from MinIO, extract title/filename
+   - SAM/Salesforce/Forecasts: Build content string from model fields
+
+2. Chunking (assets only)
+   - Split into ~1500 char chunks with 200 char overlap
+   - Non-asset types use the full content as a single chunk
+
+3. Embedding Generation
+   - Call OpenAI text-embedding-3-small API
+   - Returns 1536-dimensional vector per chunk
+
+4. Database Insert
+   - INSERT INTO search_chunks with ON CONFLICT (upsert)
+   - PostgreSQL trigger auto-populates tsvector from content
+   - Delete any orphaned chunks (if chunk count decreased)
+
+5. Timestamp Update
+   - Set indexed_at = NOW() on source record
+   - Also set updated_at = NOW() to prevent reindex race condition
+```
+
+### Bulk Reindexing (maintenance task)
+
+The `search.reindex` maintenance handler reprocesses all content. See [Incremental Reindexing](#incremental-reindexing).
+
+---
+
+## Chunking
+
+The `ChunkingService` splits long documents into chunks optimized for semantic search. Embeddings work best on coherent, focused text segments rather than entire documents.
+
+### Parameters
+
+| Parameter | Default | Description |
+|-----------|---------|-------------|
+| `MAX_CHUNK_SIZE` | 1500 chars | Target maximum chunk size |
+| `MIN_CHUNK_SIZE` | 100 chars | Minimum to form a standalone chunk |
+| `OVERLAP_SIZE` | 200 chars | Overlap between consecutive chunks |
+
+### Algorithm
+
+1. **Normalize**: Fix line endings, collapse excessive blank lines and spaces
+2. **Paragraph split**: Split on double newlines (paragraph boundaries)
+3. **Merge small paragraphs**: Accumulate paragraphs until `MAX_CHUNK_SIZE` is reached
+4. **Split large paragraphs**: Break at sentence boundaries (`(?<=[.!?])\s+(?=[A-Z])`)
+5. **Word-level fallback**: If a single sentence exceeds `MAX_CHUNK_SIZE`, split at word boundaries
+6. **Add overlap**: Prepend the last 200 chars of the previous chunk to the next chunk (at word boundaries)
+7. **Filter**: Discard chunks smaller than `MIN_CHUNK_SIZE` unless it's the only chunk
+
+### Why overlap matters
+
+Without overlap, information near chunk boundaries could be missed by search. The 200-character overlap ensures that content at the boundary of chunk N is also present in chunk N+1, so a search query matching that region will find at least one chunk.
+
+### Example
+
+A 5000-character document with 10 paragraphs produces ~3-4 chunks:
+- Chunk 0: chars 0-1500 (paragraphs 1-4)
+- Chunk 1: chars 1300-2800 (200 char overlap + paragraphs 5-7)
+- Chunk 2: chars 2600-4100 (200 char overlap + paragraphs 8-9)
+- Chunk 3: chars 3900-5000 (200 char overlap + paragraph 10)
+
+---
+
+## Embeddings
+
+### Model
+
+| Setting | Value |
+|---------|-------|
+| Default model | `text-embedding-3-small` |
+| Dimensions | 1536 |
+| Cost | ~$0.02 per 1M tokens |
+| Max input | 8191 tokens (~30,000 chars) |
+| Provider | OpenAI API |
+
+The model is configurable via `config.yml` under `llm.models.embedding.model`. Supported models:
+
+| Model | Dimensions |
+|-------|-----------|
+| `text-embedding-3-small` | 1536 |
+| `text-embedding-3-large` | 3072 |
+| `text-embedding-ada-002` | 1536 |
+
+### Batch Processing
+
+The `EmbeddingService` batches texts for efficient API usage:
+
+- **Batch size**: 50 texts per API call (internal to `get_embeddings_batch()`)
+- **Text truncation**: Each text capped at 8,000 chars to stay within token limits
+- **Fallback**: If a batch request fails, retries texts individually
+- **Error handling**: Returns a zero vector for any text that fails embedding
+
+### Important: Embedding Determinism
+
+OpenAI's embedding API generates the **exact same vector** for a given text regardless of whether it's sent alone or in a batch. There is no cross-attention or context bleed between batch items. Batching is purely a throughput optimization.
+
+---
+
+## Database Schema
+
+### `search_chunks` Table
+
+Created by migration `20260201_0900_add_pgvector_search.py`. Requires the `pgvector` PostgreSQL extension.
+
+```sql
+CREATE TABLE search_chunks (
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    source_type     VARCHAR(50) NOT NULL,     -- 'asset', 'sam_notice', etc.
+    source_id       UUID NOT NULL,            -- FK to source entity
+    organization_id UUID NOT NULL,            -- Multi-tenancy
+    chunk_index     INTEGER NOT NULL DEFAULT 0,
+    content         TEXT NOT NULL,            -- Chunk text
+    title           TEXT,                     -- Document/entity title
+    filename        VARCHAR(500),             -- Original filename
+    url             VARCHAR(2048),            -- URL for web scrapes
+    search_vector   tsvector,                 -- Auto-populated by trigger
+    embedding       vector(1536),             -- OpenAI embedding
+    source_type_filter VARCHAR(50),           -- UI filter: upload, sharepoint, etc.
+    content_type    VARCHAR(255),             -- MIME type or entity type
+    collection_id   UUID,                     -- Web scrape collection
+    sync_config_id  UUID,                     -- SharePoint sync config
+    metadata        JSONB,                    -- Extra fields (agency, posted_date, etc.)
+    created_at      TIMESTAMP DEFAULT NOW(),
+
+    UNIQUE (source_type, source_id, chunk_index)
+);
+```
+
+### Indexes
+
+| Index | Type | Purpose |
+|-------|------|---------|
+| `uq_search_chunks_source` | UNIQUE B-tree | Dedup: (source_type, source_id, chunk_index) |
+| `ix_search_chunks_org` | B-tree | Organization filtering |
+| `ix_search_chunks_source` | B-tree | Source lookups (source_type, source_id) |
+| `ix_search_chunks_fts` | GIN | Full-text search on `search_vector` |
+| `ix_search_chunks_embedding` | IVFFlat | Vector similarity (cosine ops, 100 lists) |
+| `ix_search_chunks_filters` | B-tree | Filter facets (source_type_filter, content_type) |
+| `ix_search_chunks_collection` | Partial B-tree | Collection filtering (WHERE collection_id IS NOT NULL) |
+| `ix_search_chunks_sync_config` | Partial B-tree | Sync config filtering (WHERE sync_config_id IS NOT NULL) |
+
+### Full-Text Search Trigger
+
+A PostgreSQL trigger automatically computes `search_vector` on every INSERT/UPDATE:
+
+```sql
+NEW.search_vector :=
+    setweight(to_tsvector('english', COALESCE(NEW.title, '')), 'A') ||
+    setweight(to_tsvector('english', COALESCE(NEW.filename, '')), 'B') ||
+    setweight(to_tsvector('english', COALESCE(NEW.content, '')), 'C');
+```
+
+**Weight priorities**: Title matches (A) rank highest, filename matches (B) rank medium, content matches (C) rank lowest.
+
+### `indexed_at` Column on Source Tables
+
+Each indexable model has an `indexed_at` timestamp column used for incremental reindexing:
+
+| Table | Has `indexed_at` | Has `updated_at` | Incremental Strategy |
+|-------|-----------------|-----------------|---------------------|
+| `assets` | Yes | Yes | Reindex when `indexed_at < updated_at` |
+| `sam_solicitations` | Yes | Yes | Reindex when `indexed_at < updated_at` |
+| `sam_notices` | Yes | No (immutable) | Reindex only when `indexed_at IS NULL` |
+| `salesforce_accounts` | Yes | Yes | Reindex when `indexed_at < updated_at` |
+| `salesforce_contacts` | Yes | Yes | Reindex when `indexed_at < updated_at` |
+| `salesforce_opportunities` | Yes | Yes | Reindex when `indexed_at < updated_at` |
+| `ag_forecasts` | Yes | Yes | Reindex when `indexed_at < updated_at` |
+| `apfs_forecasts` | Yes | Yes | Reindex when `indexed_at < updated_at` |
+| `state_forecasts` | Yes | Yes | Reindex when `indexed_at < updated_at` |
+
+**Important implementation detail**: When setting `indexed_at`, the code also explicitly sets `updated_at` to the same timestamp value. This prevents SQLAlchemy's `onupdate=datetime.utcnow` from creating a sub-millisecond gap where `updated_at` would be slightly later than `indexed_at`, which would cause every item to appear as needing reindexing.
+
+---
+
+## Search Modes
+
+### Keyword Search (`keyword`)
+
+Uses PostgreSQL's built-in full-text search (`tsvector` + `tsquery`).
+
+- **How it works**: Query is parsed into a `tsquery` with prefix matching (e.g., `"government contracts"` becomes `government:* & contracts:*`)
+- **Scoring**: `ts_rank()` function with weighted fields (title > filename > content)
+- **Highlighting**: `ts_headline()` generates snippets with `<mark>` tags around matches
+- **Best for**: Exact term matching, known keywords, specific phrases
+
+### Semantic Search (`semantic`)
+
+Uses pgvector cosine similarity on OpenAI embeddings.
+
+- **How it works**: Query text is embedded via OpenAI API, then compared against stored embeddings using cosine distance (`<=>` operator)
+- **Scoring**: `1 - cosine_distance` (0 to 1 scale)
+- **Threshold**: Minimum 0.3 similarity to be included in results
+- **Index**: IVFFlat with 100 lists scans the nearest approximate neighbors
+- **Best for**: Conceptual/semantic queries, finding related content, natural language questions
+
+### Hybrid Search (`hybrid`) — Default
+
+Combines keyword and semantic results with configurable weighting.
+
+- **How it works**: Runs both searches in parallel (as CTEs), then combines scores
+- **Best for**: Most queries — catches both exact matches and semantically related content
+
+---
+
+## Hybrid Scoring
+
+The hybrid search combines keyword and semantic scores using a configurable weight:
+
+```
+combined_score = (1 - semantic_weight) × keyword_score + semantic_weight × semantic_score
+```
+
+| `semantic_weight` | Behavior |
+|-------------------|----------|
+| `0.0` | Pure keyword search (fast, exact matches only) |
+| `0.3` | Keyword-heavy hybrid |
+| `0.5` | Equal weight (default) |
+| `0.7` | Semantic-heavy hybrid |
+| `1.0` | Pure semantic search (understanding-based) |
+
+### SQL Implementation
+
+```sql
+WITH keyword_results AS (
+    SELECT source_id, ts_rank(search_vector, query) as keyword_score
+    FROM search_chunks
+    WHERE search_vector @@ to_tsquery('english', :query)
+),
+semantic_candidates AS (
+    SELECT source_id, 1 - (embedding <=> :query_embedding) as semantic_score
+    FROM search_chunks
+    WHERE 1 - (embedding <=> :query_embedding) > 0.3
+    ORDER BY embedding <=> :query_embedding
+    LIMIT 200
+),
+combined AS (
+    SELECT COALESCE(k.source_id, s.source_id),
+           :kw_weight * COALESCE(k.keyword_score, 0) +
+           :sem_weight * COALESCE(s.semantic_score, 0) as score
+    FROM keyword_results k
+    FULL OUTER JOIN semantic_candidates s ON k.source_id = s.source_id
+)
+SELECT * FROM combined ORDER BY score DESC LIMIT :limit
+```
+
+Results from keyword and semantic are combined via `FULL OUTER JOIN`, so items found by either method appear in results. Items found by both methods receive a boosted combined score.
+
+---
+
+## Incremental Reindexing
+
+The `search.reindex` maintenance task supports incremental mode to avoid re-embedding unchanged content.
+
+### How It Works
+
+The `_needs_reindex_filter()` function determines which items need reindexing:
+
+```python
+def _needs_reindex_filter(model):
+    if force:
+        return True  # Full reindex — process everything
+    if not hasattr(model, "indexed_at"):
+        return True  # Can't track — always include
+    if not hasattr(model, "updated_at"):
+        # Immutable model (e.g., SamNotice)
+        return model.indexed_at.is_(None)  # Only if never indexed
+    return or_(
+        model.indexed_at.is_(None),         # Never indexed
+        model.indexed_at < model.updated_at  # Changed since last index
+    )
+```
+
+### Triggering from the UI
+
+The System Maintenance tab at `/admin` provides controls for search reindex:
+
+| Option | Config Key | Effect |
+|--------|-----------|--------|
+| Full Reindex | `force: true` | Reindex everything regardless of `indexed_at` |
+| Incremental | `force: false` | Only reindex new or modified items |
+| Data Sources | `data_sources` | Select which types: `assets`, `sam`, `salesforce`, `forecasts` |
+
+### Phase Processing Order
+
+The reindex processes content in 9 phases, grouped by data source selection:
+
+1. **Assets** (`data_sources` includes `"assets"`) — Assets with `status='ready'`
+2. **SAM Solicitations** (`"sam"`) — All solicitations for the org
+3. **SAM Notices** (`"sam"`) — Linked + standalone notices
+4. **Salesforce Accounts** (`"salesforce"`)
+5. **Salesforce Contacts** (`"salesforce"`)
+6. **Salesforce Opportunities** (`"salesforce"`)
+7. **AG Forecasts** (`"forecasts"`)
+8. **APFS Forecasts** (`"forecasts"`)
+9. **State Forecasts** (`"forecasts"`)
+
+### Progress Tracking
+
+- **Heartbeat**: Every 30 seconds, the handler commits a progress update to prevent the inactivity timeout (300s threshold)
+- **Phase logging**: Start and completion log events for each phase with indexed/failed counts
+- **Run progress**: Current item count and phase name visible in the Job Monitor
+
+### Celery Time Limits
+
+The `execute_scheduled_task_async` Celery task has a 60-minute soft time limit and 65-minute hard limit. For very large datasets, a full reindex should complete within this window.
+
+---
+
+## Batch Embedding Optimization
+
+For non-asset content types during bulk reindexing, content strings are collected into batches of 50 and embedded in a single OpenAI API call, rather than one call per item.
+
+### Before (N API calls)
+
+```
+Item 1 → build content → embed (API call) → index
+Item 2 → build content → embed (API call) → index
+Item 3 → build content → embed (API call) → index
+...
+```
+
+### After (N/50 API calls)
+
+```
+Items 1-50 → build 50 content strings → embed batch (1 API call) → index each with pre-computed embedding
+Items 51-100 → build 50 content strings → embed batch (1 API call) → index each with pre-computed embedding
+...
+```
+
+### Performance Impact
+
+| Content Type | Items | Before | After | Speedup |
+|-------------|-------|--------|-------|---------|
+| SAM notices | 5000 | 5000 API calls (~25 min) | 100 API calls (~30s) | ~50x |
+| Salesforce | 500 | 500 API calls (~2.5 min) | 10 API calls (~3s) | ~50x |
+| Forecasts | 1000 | 1000 API calls (~5 min) | 20 API calls (~6s) | ~50x |
+| Assets | 1200 | 1200 API calls (~6 min) | 1200 API calls (~6 min) | 1x (unchanged) |
+
+Asset indexing is not batched across items because each asset requires downloading markdown from object storage and chunking before embedding. Assets already batch their own chunks within each call.
+
+### Implementation
+
+Each `index_*()` method in `PgIndexService` accepts an optional `embedding` parameter. When provided, the method skips the OpenAI API call and uses the pre-computed embedding:
+
+```python
+async def index_sam_notice(self, session, notice_id, embedding=None):
+    content = f"{notice.title}\n\n{notice.description}"
+    if embedding is None:
+        embedding = await embedding_service.get_embedding(content)
+    # ... insert chunk with embedding
+```
+
+The maintenance handler's `_build_content_for_item()` function mirrors the content-building logic in each `index_*()` method to pre-compute content strings for batch embedding.
+
+---
+
+## API Endpoints
+
+### General Search
+
+```
+POST /api/v1/search
+```
+
+**Request body:**
+```json
+{
+    "query": "government contract services",
+    "search_mode": "hybrid",
+    "semantic_weight": 0.5,
+    "source_types": ["upload", "sam_gov"],
+    "limit": 20,
+    "offset": 0,
+    "include_facets": true
+}
+```
+
+**Response:**
+```json
+{
+    "total": 42,
+    "limit": 20,
+    "offset": 0,
+    "query": "government contract services",
+    "hits": [
+        {
+            "asset_id": "uuid",
+            "score": 87.5,
+            "title": "Contract Requirements",
+            "filename": "requirements.pdf",
+            "source_type": "Document",
+            "content_type": "application/pdf",
+            "highlights": {
+                "content": ["...federal <mark>government</mark> <mark>contract</mark>..."]
+            },
+            "keyword_score": 0.82,
+            "semantic_score": 0.91
+        }
+    ],
+    "facets": {
+        "source_type": {
+            "values": [{"value": "upload", "count": 30}, {"value": "sam_gov", "count": 12}]
+        }
+    }
+}
+```
+
+### Domain-Specific Search
+
+```
+POST /api/v1/search/sam          # SAM.gov notices + solicitations
+POST /api/v1/search/salesforce   # Salesforce accounts, contacts, opportunities
+POST /api/v1/search/forecasts    # Acquisition forecasts
+```
+
+### Admin Operations
+
+```
+GET  /api/v1/search/stats     # Index statistics (doc count, chunk count, size)
+GET  /api/v1/search/health    # Search health check
+POST /api/v1/search/reindex   # Trigger background reindex
+```
+
+### Search Filters
+
+| Filter | Type | Description |
+|--------|------|-------------|
+| `source_types` | `string[]` | Filter by: `upload`, `sharepoint`, `web_scrape`, `sam_gov`, `salesforce`, `forecast` |
+| `content_types` | `string[]` | Filter by MIME type (e.g., `application/pdf`) |
+| `collection_ids` | `UUID[]` | Filter by web scrape collection |
+| `sync_config_ids` | `UUID[]` | Filter by SharePoint sync config |
+| `date_from` | `datetime` | Created at or after |
+| `date_to` | `datetime` | Created at or before |
+
+---
+
+## Configuration
+
+### config.yml
+
+```yaml
+search:
+  enabled: true              # Enable/disable search
+  default_mode: hybrid       # keyword, semantic, or hybrid
+  semantic_weight: 0.5       # 0.0 (keyword only) to 1.0 (semantic only)
+  chunk_size: 1500           # Max characters per chunk
+  chunk_overlap: 200         # Overlap between chunks
+  max_content_length: 100000 # Truncate content over this length
+  batch_size: 50             # Items per bulk indexing batch
+  timeout: 30                # Search request timeout (seconds)
+
+llm:
+  api_key: ${OPENAI_API_KEY}
+  base_url: https://api.openai.com/v1
+  models:
+    embedding:
+      model: text-embedding-3-small  # 1536 dimensions
+```
+
+### Environment Variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `OPENAI_API_KEY` | (required) | OpenAI API key for embeddings |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API endpoint (fallback if not in config.yml) |
+| `SEARCH_ENABLED` | `true` | Enable/disable search functionality |
+
+---
+
+## Monitoring & Health
+
+### Health Check
+
+```
+GET /api/v1/search/health
+```
+
+Returns:
+```json
+{
+    "enabled": true,
+    "status": "healthy",
+    "backend": "postgresql+pgvector",
+    "embedding_model": "text-embedding-3-small",
+    "default_mode": "hybrid"
+}
+```
+
+### Index Statistics
+
+```
+GET /api/v1/search/stats
+```
+
+Returns:
+```json
+{
+    "enabled": true,
+    "status": "healthy",
+    "document_count": 1500,
+    "chunk_count": 4200,
+    "size_bytes": 524288000
+}
+```
+
+### Database Queries for Debugging
+
+```bash
+# Count chunks by source type
+docker exec curatore-postgres psql -U curatore -d curatore -c \
+  "SELECT source_type, COUNT(*) FROM search_chunks GROUP BY source_type ORDER BY count DESC;"
+
+# Check indexing coverage
+docker exec curatore-postgres psql -U curatore -d curatore -c \
+  "SELECT COUNT(*) as total,
+          COUNT(indexed_at) as indexed,
+          COUNT(*) - COUNT(indexed_at) as unindexed
+   FROM assets WHERE status = 'ready';"
+
+# Check for items needing reindex (indexed_at < updated_at)
+docker exec curatore-postgres psql -U curatore -d curatore -c \
+  "SELECT COUNT(*) as needs_reindex
+   FROM sam_solicitations
+   WHERE indexed_at IS NULL OR indexed_at < updated_at;"
+
+# Verify pgvector extension
+docker exec curatore-postgres psql -U curatore -d curatore -c \
+  "SELECT extversion FROM pg_extension WHERE extname = 'vector';"
+```
+
+---
+
+## Extending Search to New Data Sources
+
+To add a new searchable content type (e.g., "widgets"):
+
+### 1. Add index method to PgIndexService
+
+```python
+async def index_widget(self, session, widget_id, embedding=None):
+    widget = await session.get(Widget, widget_id)
+    content = f"{widget.name}\n\n{widget.description}"
+
+    if embedding is None:
+        embedding = await embedding_service.get_embedding(content)
+
+    await self._upsert_chunk(
+        session,
+        source_type="widget",
+        source_id=widget_id,
+        organization_id=widget.organization_id,
+        chunk_index=0,
+        content=content,
+        title=widget.name,
+        embedding=embedding,
+        source_type_filter="widget",
+        content_type="widget",
+        metadata={"category": widget.category},
+    )
+
+    # Update indexed_at (and updated_at to same value)
+    _now = datetime.utcnow()
+    await session.execute(
+        update(Widget).where(Widget.id == widget_id)
+        .values(indexed_at=_now, updated_at=_now)
+    )
+    await session.commit()
+```
+
+### 2. Add `indexed_at` column to the model
+
+```python
+class Widget(Base):
+    # ...
+    indexed_at = Column(DateTime, nullable=True)
+```
+
+### 3. Add search method to PgSearchService
+
+```python
+async def search_widgets(self, session, organization_id, query, ...):
+    # Filter to source_type = 'widget'
+    # Use _hybrid_search_generic() or _execute_typed_search()
+```
+
+### 4. Add API endpoint
+
+```python
+@router.post("/widgets")
+async def search_widgets(request: SearchRequest, ...):
+    results = await pg_search_service.search_widgets(...)
+    return SearchResponse(...)
+```
+
+### 5. Add to reindex handler
+
+Add the widget phase to `handle_search_reindex()` in `maintenance_handlers.py`, including the `_build_content_for_item()` case and `_index_item()` branch.
+
+### 6. Add display type mapper
+
+```python
+WIDGET_DISPLAY_TYPES = {"widget": "Widget"}
+```
+
+---
+
+## Troubleshooting
+
+### pgvector extension not installed
+
+```
+ERROR: type "vector" does not exist
+```
+
+**Fix**: Use the `pgvector/pgvector` Docker image (already configured in `docker-compose.yml`) or install the extension manually:
+```sql
+CREATE EXTENSION vector;
+```
+
+### Embeddings failing
+
+```
+ValueError: OPENAI_API_KEY not set
+```
+
+**Fix**: Set `OPENAI_API_KEY` in `.env` or configure `llm.api_key` in `config.yml`.
+
+### Reindex job times out
+
+If the job shows "timed_out" after running for a while:
+- **Celery time limit**: The `execute_scheduled_task_async` task has a 60-minute soft limit. For extremely large datasets, consider running reindex per-organization.
+- **Heartbeat timeout**: The handler sends a heartbeat every 30 seconds. If the worker crashes or hangs, the 300-second inactivity timeout will mark the run as timed_out.
+
+### Reindex always processes all items (not incremental)
+
+This was caused by a race condition where setting `indexed_at` triggered SQLAlchemy's `onupdate` on `updated_at`, making `updated_at` always slightly later. **Fixed** by explicitly setting both columns to the same timestamp value.
+
+If you still see this, verify the fix is deployed:
+```bash
+docker exec curatore-postgres psql -U curatore -d curatore -c \
+  "SELECT id, indexed_at, updated_at,
+          indexed_at < updated_at as needs_reindex
+   FROM sam_solicitations
+   WHERE indexed_at IS NOT NULL
+   LIMIT 5;"
+```
+
+`needs_reindex` should be `false` for items that were indexed after the fix.
+
+### Search returns no results
+
+1. Check that search is enabled: `GET /api/v1/search/health`
+2. Check that content is indexed: `GET /api/v1/search/stats`
+3. Verify the organization filter — search is scoped per-organization
+4. For semantic search, verify the embedding model is accessible
+
+### Slow search queries
+
+1. Verify indexes exist: `\di search_chunks` in psql
+2. Run `ANALYZE search_chunks` to update PostgreSQL statistics
+3. For very large indexes, consider increasing IVFFlat lists (requires index rebuild)
+4. Check if the query is too broad — add source_type or content_type filters
+
+---
+
+## Related Documentation
+
+| Document | Description |
+|----------|-------------|
+| [Configuration](CONFIGURATION.md) | config.yml settings including search and LLM |
+| [Maintenance Tasks](MAINTENANCE_TASKS.md) | Scheduled task system, including search.reindex |
+| [Document Processing](DOCUMENT_PROCESSING.md) | Extraction pipeline that feeds indexing |
+| [API Documentation](API_DOCUMENTATION.md) | Complete API reference |
+| [Queue System](QUEUE_SYSTEM.md) | Celery queue architecture |

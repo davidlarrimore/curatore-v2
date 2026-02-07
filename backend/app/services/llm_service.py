@@ -40,8 +40,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from ..config import settings
 from ..models import LLMEvaluation, LLMConnectionStatus
+from ..models.llm_models import LLMTaskType
 from ..utils.text_utils import clean_llm_response
 from ..services.config_loader import config_loader
+from ..services.llm_routing_service import llm_routing_service
 
 logger = logging.getLogger(__name__)
 
@@ -159,17 +161,29 @@ class LLMService:
             print(f"Warning: Failed to initialize OpenAI client: {e}")
             self._client = None
 
-    def _get_model(self) -> str:
+    def _get_model(self, task_type: LLMTaskType = LLMTaskType.STANDARD) -> str:
         """
-        Get the default LLM model name.
+        Get the LLM model name for a specific task type.
+
+        Args:
+            task_type: The type of task (defaults to STANDARD)
 
         Returns:
-            str: Model name from config.yml or settings.
+            str: Model name from config.yml task_types or default_model.
         """
-        llm_config = config_loader.get_llm_config()
-        if llm_config and llm_config.model:
-            return llm_config.model
-        return settings.openai_model
+        return config_loader.get_model_for_task(task_type)
+
+    def _get_temperature(self, task_type: LLMTaskType = LLMTaskType.STANDARD) -> float:
+        """
+        Get the temperature for a specific task type.
+
+        Args:
+            task_type: The type of task (defaults to STANDARD)
+
+        Returns:
+            float: Temperature value for the task type.
+        """
+        return config_loader.get_temperature_for_task(task_type)
 
     async def _get_llm_config(
         self,
@@ -401,18 +415,24 @@ class LLMService:
             >>> if evaluation and evaluation.clarity_score >= 7:
             >>>     print(f"Document clarity is good: {evaluation.clarity_feedback}")
         """
+        # Get LLM configuration for QUALITY task type (high-stakes evaluation)
+        task_config = await llm_routing_service.get_config_for_task(
+            task_type=LLMTaskType.QUALITY,
+            organization_id=organization_id,
+            session=session,
+        )
+
         # Get client (from database connection or fallback to ENV-based client)
         client = self._client
-        model = settings.openai_model
+        model = task_config.model
 
         if organization_id and session:
             config = await self._get_llm_config(organization_id, session)
             client = await self._create_client_from_config(config)
-            model = config.get("model", settings.openai_model)
 
         if not client:
             return None
-        
+
         try:
             system_prompt = (
                 "You are an expert documentation reviewer. "
@@ -515,14 +535,21 @@ class LLMService:
             >>> if improved != content:
             >>>     print("Document was successfully improved")
         """
+        # Get LLM configuration for STANDARD task type (balanced improvement)
+        task_config = await llm_routing_service.get_config_for_task(
+            task_type=LLMTaskType.STANDARD,
+            organization_id=organization_id,
+            session=session,
+        )
+
         # Get client (from database connection or fallback to ENV-based client)
         client = self._client
-        model = settings.openai_model
+        model = task_config.model
+        temperature = task_config.temperature if task_config.temperature is not None else 0.2
 
         if organization_id and session:
             config = await self._get_llm_config(organization_id, session)
             client = await self._create_client_from_config(config)
-            model = config.get("model", settings.openai_model)
 
         if not client:
             return markdown_text
@@ -538,7 +565,7 @@ class LLMService:
 
             resp = client.chat.completions.create(
                 model=model,
-                temperature=0.2,  # Allow controlled creativity for editing
+                temperature=temperature,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -551,7 +578,7 @@ class LLMService:
             return clean_llm_response(improved_content)
 
         except Exception as e:
-            print(f"LLM improvement failed: {e}")
+            logger.error(f"LLM improvement failed: {e}")
             return markdown_text
     
     async def optimize_for_vector_db(
@@ -676,14 +703,21 @@ class LLMService:
             >>> print(f"Document summary: {summary}")
             >>> # Output: "This technical user guide covers software installation..."
         """
+        # Get LLM configuration for STANDARD task type (summarization)
+        task_config = await llm_routing_service.get_config_for_task(
+            task_type=LLMTaskType.STANDARD,
+            organization_id=organization_id,
+            session=session,
+        )
+
         # Get client (from database connection or fallback to ENV-based client)
         client = self._client
-        model = settings.openai_model
+        model = task_config.model
+        temperature = task_config.temperature if task_config.temperature is not None else 0.1
 
         if organization_id and session:
             config = await self._get_llm_config(organization_id, session)
             client = await self._create_client_from_config(config)
-            model = config.get("model", settings.openai_model)
 
         if not client:
             return f"Unable to generate summary - LLM not available"
@@ -702,7 +736,7 @@ class LLMService:
 
             resp = client.chat.completions.create(
                 model=model,
-                temperature=0.1,  # Deterministic summaries
+                temperature=temperature,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
@@ -717,7 +751,7 @@ class LLMService:
             return summary.strip()
 
         except Exception as e:
-            print(f"Summary generation failed: {e}")
+            logger.error(f"Summary generation failed: {e}")
             return f"Summary generation failed: {str(e)[:100]}..."
 
 

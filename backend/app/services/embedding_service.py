@@ -29,7 +29,7 @@ Configuration (config.yml):
     llm:
       api_key: ${OPENAI_API_KEY}
       base_url: https://api.openai.com/v1
-      models:
+      task_types:
         embedding:
           model: text-embedding-3-small  # 1536 dimensions
 
@@ -40,10 +40,17 @@ Version: 2.0.0
 import asyncio
 import logging
 import os
+import time
 from functools import lru_cache
 from typing import List, Optional
 
 logger = logging.getLogger("curatore.embedding_service")
+
+# Rate limit handling constants
+MAX_RETRIES = 5
+INITIAL_BACKOFF_SECONDS = 1.0
+MAX_BACKOFF_SECONDS = 60.0
+BACKOFF_MULTIPLIER = 2.0
 
 # Known embedding dimensions for common models
 EMBEDDING_DIMENSIONS = {
@@ -97,6 +104,30 @@ class EmbeddingService:
             self._model_name = self.DEFAULT_MODEL
 
         return self._model_name
+
+    def _is_rate_limit_error(self, error: Exception) -> bool:
+        """Check if an exception is a rate limit error."""
+        error_str = str(error).lower()
+        return (
+            "rate limit" in error_str
+            or "429" in error_str
+            or "ratelimit" in error_str
+            or "too many requests" in error_str
+        )
+
+    def _get_retry_after(self, error: Exception) -> float:
+        """Extract retry-after time from error message if available."""
+        error_str = str(error)
+        # Look for patterns like "try again in 1.049s" or "retry after 2 seconds"
+        import re
+
+        match = re.search(r"try again in (\d+\.?\d*)s", error_str)
+        if match:
+            return float(match.group(1))
+        match = re.search(r"retry.?after.?(\d+)", error_str, re.IGNORECASE)
+        if match:
+            return float(match.group(1))
+        return INITIAL_BACKOFF_SECONDS
 
     def _get_client(self):
         """
@@ -181,6 +212,8 @@ class EmbeddingService:
         a token limit per request (~300K tokens). We use smaller batches to
         stay safely under the limit.
 
+        Includes exponential backoff retry for rate limit errors.
+
         Args:
             texts: List of texts to embed
 
@@ -209,24 +242,116 @@ class EmbeddingService:
 
         for i in range(0, len(cleaned_texts), batch_size):
             batch = cleaned_texts[i : i + batch_size]
+            batch_embeddings = self._embed_batch_with_retry(client, model, batch)
+            all_embeddings.extend(batch_embeddings)
+
+        return all_embeddings
+
+    def _embed_batch_with_retry(
+        self, client, model: str, batch: List[str]
+    ) -> List[List[float]]:
+        """
+        Embed a batch of texts with exponential backoff retry for rate limits.
+
+        Args:
+            client: OpenAI client
+            model: Model name
+            batch: List of texts to embed
+
+        Returns:
+            List of embeddings for the batch
+        """
+        backoff = INITIAL_BACKOFF_SECONDS
+
+        for attempt in range(MAX_RETRIES):
             try:
                 response = client.embeddings.create(model=model, input=batch)
                 # Response data is in same order as input
-                batch_embeddings = [item.embedding for item in response.data]
-                all_embeddings.extend(batch_embeddings)
-            except Exception as e:
-                # If batch fails, try one at a time
-                logger.warning(f"Batch embedding failed, trying one at a time: {e}")
-                for text in batch:
-                    try:
-                        response = client.embeddings.create(model=model, input=text)
-                        all_embeddings.append(response.data[0].embedding)
-                    except Exception as e2:
-                        logger.error(f"Single embedding failed: {e2}")
-                        # Return zeros for failed embeddings
-                        all_embeddings.append([0.0] * self.embedding_dim)
+                return [item.embedding for item in response.data]
 
-        return all_embeddings
+            except Exception as e:
+                if self._is_rate_limit_error(e):
+                    if attempt < MAX_RETRIES - 1:
+                        # Get retry time from error or use exponential backoff
+                        wait_time = self._get_retry_after(e)
+                        wait_time = max(wait_time, backoff)
+                        wait_time = min(wait_time, MAX_BACKOFF_SECONDS)
+
+                        logger.warning(
+                            f"Rate limit hit, waiting {wait_time:.1f}s before retry "
+                            f"(attempt {attempt + 1}/{MAX_RETRIES})"
+                        )
+                        time.sleep(wait_time)
+                        backoff = min(backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF_SECONDS)
+                        continue
+                    else:
+                        logger.error(
+                            f"Rate limit persists after {MAX_RETRIES} retries, "
+                            f"falling back to individual requests"
+                        )
+                else:
+                    logger.warning(f"Batch embedding failed: {e}")
+
+                # Fall back to one-at-a-time processing
+                return self._embed_individually_with_retry(client, model, batch)
+
+        # Should not reach here, but return zeros as fallback
+        return [[0.0] * self.embedding_dim for _ in batch]
+
+    def _embed_individually_with_retry(
+        self, client, model: str, texts: List[str]
+    ) -> List[List[float]]:
+        """
+        Embed texts one at a time with rate limit handling.
+
+        Args:
+            client: OpenAI client
+            model: Model name
+            texts: List of texts to embed
+
+        Returns:
+            List of embeddings
+        """
+        results = []
+        backoff = INITIAL_BACKOFF_SECONDS
+
+        for text in texts:
+            embedding = None
+
+            for attempt in range(MAX_RETRIES):
+                try:
+                    response = client.embeddings.create(model=model, input=text)
+                    embedding = response.data[0].embedding
+                    # Reset backoff on success
+                    backoff = INITIAL_BACKOFF_SECONDS
+                    break
+
+                except Exception as e:
+                    if self._is_rate_limit_error(e):
+                        if attempt < MAX_RETRIES - 1:
+                            wait_time = self._get_retry_after(e)
+                            wait_time = max(wait_time, backoff)
+                            wait_time = min(wait_time, MAX_BACKOFF_SECONDS)
+
+                            logger.debug(
+                                f"Rate limit on single embed, waiting {wait_time:.1f}s"
+                            )
+                            time.sleep(wait_time)
+                            backoff = min(
+                                backoff * BACKOFF_MULTIPLIER, MAX_BACKOFF_SECONDS
+                            )
+                            continue
+                    else:
+                        logger.error(f"Single embedding failed: {e}")
+                        break
+
+            if embedding is None:
+                # Use zero vector for failed embeddings
+                embedding = [0.0] * self.embedding_dim
+
+            results.append(embedding)
+
+        return results
 
     async def get_embedding(self, text: str) -> List[float]:
         """
@@ -271,6 +396,78 @@ class EmbeddingService:
         return await loop.run_in_executor(
             None, self._generate_embeddings_batch_sync, texts
         )
+
+    async def get_embeddings_batch_concurrent(
+        self,
+        texts: List[str],
+        max_concurrent: int = 10,
+        batch_size: int = 50,
+    ) -> List[List[float]]:
+        """
+        Generate embeddings for many texts using concurrent API calls.
+
+        Splits texts into sub-batches and fires them concurrently (bounded
+        by a semaphore) via run_in_executor. This achieves true concurrency
+        since each call runs in its own thread. Useful for large re-index
+        operations where hundreds/thousands of texts need embedding.
+
+        Args:
+            texts: List of texts to embed
+            max_concurrent: Maximum number of concurrent API calls
+            batch_size: Number of texts per API call (default 50)
+
+        Returns:
+            List of embeddings, one per input text, in the same order
+        """
+        if not texts:
+            return []
+
+        # Split into sub-batches
+        batches = [texts[i:i + batch_size] for i in range(0, len(texts), batch_size)]
+        results: List[Optional[List[List[float]]]] = [None] * len(batches)
+
+        loop = asyncio.get_event_loop()
+        semaphore = asyncio.Semaphore(max_concurrent)
+
+        async def _embed_batch(idx: int, batch: List[str]):
+            async with semaphore:
+                try:
+                    embeddings = await loop.run_in_executor(
+                        None, self._generate_embeddings_batch_sync, batch
+                    )
+                    results[idx] = embeddings
+                except Exception as e:
+                    logger.warning(
+                        f"Concurrent batch {idx} failed ({len(batch)} texts): {e}"
+                    )
+                    results[idx] = None
+
+        # Fire all batches concurrently
+        tasks = [_embed_batch(i, batch) for i, batch in enumerate(batches)]
+        await asyncio.gather(*tasks)
+
+        # Collect results; retry failed batches sequentially as fallback
+        all_embeddings: List[List[float]] = []
+        for idx, batch_result in enumerate(results):
+            if batch_result is not None:
+                all_embeddings.extend(batch_result)
+            else:
+                # Retry this batch sequentially
+                logger.info(f"Retrying batch {idx} sequentially")
+                batch = batches[idx]
+                try:
+                    fallback = await loop.run_in_executor(
+                        None, self._generate_embeddings_batch_sync, batch
+                    )
+                    all_embeddings.extend(fallback)
+                except Exception as e:
+                    logger.error(f"Sequential retry of batch {idx} also failed: {e}")
+                    # Use zero vectors for the entire failed batch
+                    all_embeddings.extend(
+                        [[0.0] * self.embedding_dim for _ in batch]
+                    )
+
+        return all_embeddings
 
     @property
     def embedding_dim(self) -> int:

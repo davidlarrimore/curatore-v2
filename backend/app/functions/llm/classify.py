@@ -20,8 +20,13 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
+    OutputVariant,
 )
 from ..context import FunctionContext
+from ...models.llm_models import LLMTaskType
+from ...services.config_loader import config_loader
 
 logger = logging.getLogger("curatore.functions.llm.classify")
 
@@ -102,6 +107,56 @@ class ClassifyFunction(BaseFunction):
             ),
         ],
         returns="dict or list: Classification result (single) or list of classifications (collection)",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Classification result with category, confidence, and optional reasoning",
+            fields=[
+                OutputFieldDoc(name="category", type="str",
+                              description="The assigned category name",
+                              example="technology"),
+                OutputFieldDoc(name="confidence", type="float",
+                              description="Confidence score (0.0-1.0)",
+                              example=0.92),
+                OutputFieldDoc(name="reasoning", type="str",
+                              description="Explanation for the classification",
+                              nullable=True),
+            ],
+        ),
+        output_variants=[
+            OutputVariant(
+                mode="multi_label",
+                condition="when `multi_label` parameter is true",
+                schema=OutputSchema(
+                    type="dict",
+                    description="Multi-label classification with multiple categories",
+                    fields=[
+                        OutputFieldDoc(name="categories", type="list[dict]",
+                                      description="List of {name, confidence} for each matching category"),
+                        OutputFieldDoc(name="reasoning", type="str",
+                                      description="Explanation for the classifications",
+                                      nullable=True),
+                    ],
+                ),
+            ),
+            OutputVariant(
+                mode="collection",
+                condition="when `items` parameter is provided",
+                schema=OutputSchema(
+                    type="list[dict]",
+                    description="List of classification results for each item",
+                    fields=[
+                        OutputFieldDoc(name="item_id", type="str",
+                                      description="ID of the processed item"),
+                        OutputFieldDoc(name="result", type="dict",
+                                      description="Classification result (category, confidence, reasoning)"),
+                        OutputFieldDoc(name="success", type="bool",
+                                      description="Whether classification succeeded"),
+                        OutputFieldDoc(name="error", type="str",
+                                      description="Error message if failed", nullable=True),
+                    ],
+                ),
+            ),
+        ],
         tags=["llm", "classification", "categorization"],
         requires_llm=True,
         examples=[
@@ -223,14 +278,19 @@ Text to classify:
 
 Classification:"""
 
+            # Get model and temperature from task type routing (QUICK for classification)
+            task_config = config_loader.get_task_type_config(LLMTaskType.QUICK)
+            resolved_model = model or task_config.model
+            temperature = task_config.temperature if task_config.temperature is not None else 0.1
+
             # Generate
             response = ctx.llm_service._client.chat.completions.create(
-                model=model or ctx.llm_service._get_model(),
+                model=resolved_model,
                 messages=[
                     {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_prompt},
                 ],
-                temperature=0.1,
+                temperature=temperature,
                 max_tokens=500,
             )
 
@@ -310,6 +370,11 @@ Confidence should be between 0.0 and 1.0.
 {output_format}
 Return ONLY valid JSON, no explanation or markdown."""
 
+        # Get model and temperature from task type routing (BULK for collection mode)
+        task_config = config_loader.get_task_type_config(LLMTaskType.BULK)
+        resolved_model = model or task_config.model
+        temperature = task_config.temperature if task_config.temperature is not None else 0.1
+
         for idx, item in enumerate(items):
             try:
                 # Render text with item context
@@ -327,12 +392,12 @@ Classification:"""
 
                 # Generate
                 response = ctx.llm_service._client.chat.completions.create(
-                    model=model or ctx.llm_service._get_model(),
+                    model=resolved_model,
                     messages=[
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    temperature=0.1,
+                    temperature=temperature,
                     max_tokens=500,
                 )
 

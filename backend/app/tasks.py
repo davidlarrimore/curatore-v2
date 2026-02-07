@@ -1227,7 +1227,7 @@ async def _check_scheduled_tasks() -> Dict[str, Any]:
     }
 
 
-@celery_app.task(bind=True, max_retries=0)
+@celery_app.task(bind=True, max_retries=0, soft_time_limit=3600, time_limit=3900)  # 60 minute soft limit, 65 minute hard limit
 def execute_scheduled_task_async(
     self,
     task_id: str,
@@ -1376,18 +1376,24 @@ async def _execute_scheduled_task(
 
         try:
             # 4. Update Run status to running
+            # IMPORTANT: Use commit() not flush() to release the row lock.
+            # flush() keeps the transaction open, which blocks heartbeat
+            # updates from other connections attempting to update the same row.
             run.status = "running"
             run.started_at = datetime.utcnow()
-            await session.flush()
+            await session.commit()
 
             # 5. Get the handler for this task type
             handler = MAINTENANCE_HANDLERS.get(task.task_type)
             if not handler:
                 raise ValueError(f"Unknown task type: {task.task_type}")
 
-            # 6. Execute the handler
+            # 6. Execute the handler — use the Run's task_config (which includes
+            #    any user-supplied config_overrides merged on top of the
+            #    ScheduledTask's stored config) rather than the bare task.config.
             logger.info(f"Executing handler for task type: {task.task_type}")
-            result = await handler(session, run, task.config or {})
+            effective_config = (run.config or {}).get("task_config", task.config or {})
+            result = await handler(session, run, effective_config)
 
             # 7. Update Run with success
             run.status = "completed"

@@ -25,9 +25,7 @@ from pathlib import Path
 from app.models.config_models import (
     AppConfig,
     LLMConfig,
-    EmbeddingModelConfig,
-    TaskModelConfig,
-    ModelsConfig,
+    LLMTaskTypeConfig,
     ExtractionConfig,
     ExtractionEngineConfig,
     PlaywrightConfig,
@@ -38,6 +36,7 @@ from app.models.config_models import (
     SearchConfig,
     SamConfig,
 )
+from app.models.llm_models import LLMTaskType, LLMTaskConfig, DEFAULT_TEMPERATURES
 
 logger = logging.getLogger(__name__)
 
@@ -336,84 +335,114 @@ class ConfigLoader:
         return self.get_llm_config() is not None
 
     # -------------------------------------------------------------------------
-    # Task-specific model getters
+    # Task Type Model Routing
     # -------------------------------------------------------------------------
 
-    def get_embedding_model(self) -> str:
+    def get_task_type_config(self, task_type: LLMTaskType) -> LLMTaskConfig:
         """
-        Get the embedding model name from config.
+        Get the LLM configuration for a specific task type.
 
-        Returns model from llm.models.embedding.model, or default text-embedding-3-small.
+        Resolution order:
+        1. config.yml task_types.{task_type}
+        2. Default model with recommended temperature
+
+        Args:
+            task_type: The LLM task type (embedding, quick, standard, quality, bulk, reasoning)
+
+        Returns:
+            LLMTaskConfig with model, temperature, and other settings
         """
         llm_config = self.get_llm_config()
-        if llm_config and llm_config.models and llm_config.models.embedding:
-            return llm_config.models.embedding.model
-        return "text-embedding-3-small"
+        if not llm_config:
+            # Return sensible defaults if no config
+            return LLMTaskConfig(
+                model="claude-sonnet-4-5",
+                temperature=DEFAULT_TEMPERATURES.get(task_type, 0.5)
+            )
+
+        # Check if this task type is configured
+        task_type_key = task_type.value if isinstance(task_type, LLMTaskType) else task_type
+        if llm_config.task_types and task_type_key in llm_config.task_types:
+            config = llm_config.task_types[task_type_key]
+            return LLMTaskConfig(
+                model=config.model,
+                temperature=config.temperature if config.temperature is not None else DEFAULT_TEMPERATURES.get(task_type, 0.5),
+                max_tokens=config.max_tokens,
+                timeout=config.timeout
+            )
+
+        # Fallback to default model with recommended temperature
+        return LLMTaskConfig(
+            model=llm_config.default_model,
+            temperature=DEFAULT_TEMPERATURES.get(task_type, 0.5)
+        )
+
+    def get_model_for_task(self, task_type: LLMTaskType) -> str:
+        """
+        Get the model name for a specific task type.
+
+        Convenience method that just returns the model name.
+
+        Args:
+            task_type: The LLM task type
+
+        Returns:
+            Model name string
+        """
+        return self.get_task_type_config(task_type).model
+
+    def get_temperature_for_task(self, task_type: LLMTaskType) -> float:
+        """
+        Get the temperature for a specific task type.
+
+        Args:
+            task_type: The LLM task type
+
+        Returns:
+            Temperature value (0.0 - 2.0)
+        """
+        config = self.get_task_type_config(task_type)
+        return config.temperature if config.temperature is not None else DEFAULT_TEMPERATURES.get(task_type, 0.5)
+
+    def get_default_model(self) -> str:
+        """
+        Get the default model name from config.
+
+        Returns the default_model from llm config, or a sensible default.
+        """
+        llm_config = self.get_llm_config()
+        if llm_config:
+            return llm_config.default_model
+        return "claude-sonnet-4-5"
+
+    # Legacy method aliases for backward compatibility during migration
+    def get_embedding_model(self) -> str:
+        """Get embedding model. Use get_model_for_task(LLMTaskType.EMBEDDING) instead."""
+        return self.get_model_for_task(LLMTaskType.EMBEDDING)
 
     def get_summarization_model(self) -> str:
-        """
-        Get the summarization model name from config.
-
-        Returns model from llm.models.summarization.model, or falls back to llm.model.
-        """
-        llm_config = self.get_llm_config()
-        if llm_config:
-            if llm_config.models and llm_config.models.summarization:
-                return llm_config.models.summarization.model
-            return llm_config.model
-        return "gpt-4o-mini"
+        """Get summarization model. Use get_model_for_task(LLMTaskType.STANDARD) instead."""
+        return self.get_model_for_task(LLMTaskType.STANDARD)
 
     def get_summarization_temperature(self) -> float:
-        """Get the summarization temperature, defaulting to 0.3 for consistency."""
-        llm_config = self.get_llm_config()
-        if llm_config and llm_config.models and llm_config.models.summarization:
-            if llm_config.models.summarization.temperature is not None:
-                return llm_config.models.summarization.temperature
-        return 0.3
+        """Get summarization temperature. Use get_temperature_for_task(LLMTaskType.STANDARD) instead."""
+        return self.get_temperature_for_task(LLMTaskType.STANDARD)
 
     def get_evaluation_model(self) -> str:
-        """
-        Get the evaluation model name from config.
-
-        Returns model from llm.models.evaluation.model, or falls back to llm.model.
-        """
-        llm_config = self.get_llm_config()
-        if llm_config:
-            if llm_config.models and llm_config.models.evaluation:
-                return llm_config.models.evaluation.model
-            return llm_config.model
-        return "gpt-4o-mini"
+        """Get evaluation model. Use get_model_for_task(LLMTaskType.QUALITY) instead."""
+        return self.get_model_for_task(LLMTaskType.QUALITY)
 
     def get_evaluation_temperature(self) -> float:
-        """Get the evaluation temperature, defaulting to 0.3 for consistency."""
-        llm_config = self.get_llm_config()
-        if llm_config and llm_config.models and llm_config.models.evaluation:
-            if llm_config.models.evaluation.temperature is not None:
-                return llm_config.models.evaluation.temperature
-        return 0.3
+        """Get evaluation temperature. Use get_temperature_for_task(LLMTaskType.QUALITY) instead."""
+        return self.get_temperature_for_task(LLMTaskType.QUALITY)
 
     def get_general_model(self) -> str:
-        """
-        Get the general/default model name from config.
-
-        Returns model from llm.models.general.model, or falls back to llm.model.
-        """
-        llm_config = self.get_llm_config()
-        if llm_config:
-            if llm_config.models and llm_config.models.general:
-                return llm_config.models.general.model
-            return llm_config.model
-        return "gpt-4o-mini"
+        """Get general model. Use get_default_model() instead."""
+        return self.get_default_model()
 
     def get_general_temperature(self) -> float:
-        """Get the general model temperature."""
-        llm_config = self.get_llm_config()
-        if llm_config:
-            if llm_config.models and llm_config.models.general:
-                if llm_config.models.general.temperature is not None:
-                    return llm_config.models.general.temperature
-            return llm_config.temperature
-        return 0.7
+        """Get general temperature. Use get_temperature_for_task(LLMTaskType.STANDARD) instead."""
+        return self.get_temperature_for_task(LLMTaskType.STANDARD)
 
     def has_extraction_config(self) -> bool:
         """Check if extraction configuration is available."""

@@ -17,6 +17,8 @@ from ..base import (
     FunctionCategory,
     FunctionResult,
     ParameterDoc,
+    OutputFieldDoc,
+    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -77,6 +79,26 @@ class CreateArtifactFunction(BaseFunction):
             ),
         ],
         returns="dict: Artifact info with bucket, key, and URL",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Created artifact information with storage location",
+            fields=[
+                OutputFieldDoc(name="bucket", type="str",
+                              description="MinIO bucket where artifact is stored"),
+                OutputFieldDoc(name="object_key", type="str",
+                              description="Full object key/path in the bucket"),
+                OutputFieldDoc(name="filename", type="str",
+                              description="Original filename of the artifact"),
+                OutputFieldDoc(name="content_type", type="str",
+                              description="MIME type of the content",
+                              example="text/markdown"),
+                OutputFieldDoc(name="size", type="int",
+                              description="Size of the artifact in bytes"),
+                OutputFieldDoc(name="download_url", type="str",
+                              description="Presigned URL for downloading (valid for 1 hour)",
+                              nullable=True),
+            ],
+        ),
         tags=["output", "storage", "artifact"],
         requires_llm=False,
         examples=[
