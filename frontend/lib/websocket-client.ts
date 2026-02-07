@@ -44,6 +44,7 @@ export interface RunStatusData {
   created_at: string | null
   started_at: string | null
   completed_at: string | null
+  display_name?: string  // Human-readable job name
 }
 
 // Queue stats from backend

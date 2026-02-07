@@ -173,6 +173,7 @@ class SamSolicitationResponse(BaseModel):
     full_parent_path: Optional[str]
     notice_count: int
     attachment_count: int
+    raw_data: Optional[Any] = None
     created_at: datetime
     updated_at: datetime
 
@@ -634,6 +635,7 @@ def _solicitation_with_summary_to_response(sol: SamSolicitation) -> SamSolicitat
         full_parent_path=sol.full_parent_path,
         notice_count=sol.notice_count,
         attachment_count=sol.attachment_count,
+        raw_data=sol.raw_data,
         created_at=sol.created_at,
         updated_at=sol.updated_at,
         summary_status=sol.summary_status,

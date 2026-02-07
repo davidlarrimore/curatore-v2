@@ -21,6 +21,7 @@ import {
   FileText,
   Clock,
   Tag,
+  Code,
 } from 'lucide-react'
 
 interface PageProps {
@@ -395,7 +396,7 @@ function ForecastDetailContent({ params }: PageProps) {
 
             {/* Source Link */}
             {forecast.source_url && (
-              <div className="text-center">
+              <div className="text-center mb-6">
                 <a
                   href={forecast.source_url}
                   target="_blank"
@@ -407,6 +408,21 @@ function ForecastDetailContent({ params }: PageProps) {
                 </a>
               </div>
             )}
+
+            {/* Raw Source Data (collapsible) */}
+            <details className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 mb-6">
+              <summary className="flex items-center gap-2 p-4 cursor-pointer select-none text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white">
+                <Code className="w-4 h-4 text-gray-400" />
+                Raw Source Data
+              </summary>
+              <div className="px-4 pb-4">
+                <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 overflow-auto max-h-[600px]">
+                  <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
+                    {JSON.stringify(forecast, null, 2)}
+                  </pre>
+                </div>
+              </div>
+            </details>
           </>
         ) : (
           <div className="text-center py-16">

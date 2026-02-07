@@ -499,12 +499,33 @@ function AssetDetailContent() {
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {/* Header */}
         <div className="mb-8">
-          <div className="flex items-center gap-4 mb-6">
-            <Button variant="secondary" onClick={handleBack} className="gap-2">
-              <ArrowLeft className="w-4 h-4" />
-              <span className="hidden sm:inline">Back</span>
-            </Button>
-          </div>
+          {/* Breadcrumb navigation to storage folder */}
+          <nav className="flex items-center space-x-1 text-sm mb-6 overflow-x-auto">
+            <Link
+              href={`/storage/${asset.raw_bucket}`}
+              className="flex items-center gap-1.5 px-2 py-1 rounded-md text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-gray-200 transition-colors whitespace-nowrap"
+            >
+              <FolderOpen className="w-3.5 h-3.5" />
+              <span>Storage</span>
+            </Link>
+            {asset.raw_object_key.split('/').slice(0, -1).map((segment, index, arr) => (
+              <span key={index} className="flex items-center">
+                <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0 mx-1" />
+                <Link
+                  href={`/storage/${asset.raw_bucket}/${arr.slice(0, index + 1).join('/')}`}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded-md text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700 hover:text-gray-900 dark:hover:text-gray-200 transition-colors whitespace-nowrap"
+                >
+                  <FolderOpen className="w-3.5 h-3.5" />
+                  <span className="truncate max-w-[150px]">{segment}</span>
+                </Link>
+              </span>
+            ))}
+            <ChevronRight className="w-4 h-4 text-gray-400 flex-shrink-0 mx-1" />
+            <span className="flex items-center gap-1.5 px-2 py-1 rounded-md bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400 font-medium whitespace-nowrap">
+              <FileText className="w-3.5 h-3.5" />
+              <span className="truncate max-w-[200px]">{asset.original_filename}</span>
+            </span>
+          </nav>
 
           <div className="flex flex-col sm:flex-row sm:items-start sm:justify-between gap-4">
             <div className="flex items-start gap-4">

@@ -38,8 +38,10 @@ Author: Curatore v2 Development Team
 Version: 2.1.0
 """
 
+import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
@@ -158,13 +160,33 @@ class PgSearchService:
         - Semantic understanding (finds related content)
         - Configurable balance between the two
 
-    Attributes:
-        _embedding_dim: Dimension of embeddings (768 for all-mpnet-base-v2)
     """
+
+    # Filterable fields per namespace (derived from builder knowledge).
+    # Only these fields get sample-value queries in get_metadata_schema().
+    FILTERABLE_FIELDS: Dict[str, List[str]] = {
+        "sam": ["agency", "notice_type", "naics_code", "set_aside"],
+        "salesforce": ["account_type", "stage_name", "industry"],
+        "forecast": ["agency_name", "fiscal_year", "source_type"],
+        "sharepoint": ["folder", "created_by"],
+        "source": ["storage_folder"],
+    }
+
+    # Namespace → source_types mapping for doc count aggregation
+    NAMESPACE_SOURCE_TYPES: Dict[str, List[str]] = {
+        "sam": ["sam_notice", "sam_solicitation"],
+        "salesforce": ["salesforce_account", "salesforce_contact", "salesforce_opportunity"],
+        "forecast": ["ag_forecast", "apfs_forecast", "state_forecast"],
+        "sharepoint": ["asset"],  # sharepoint assets have source_type='asset'
+        "source": ["asset"],
+    }
+
+    # Schema cache: {org_id: (timestamp, schema_dict)}
+    SCHEMA_CACHE_TTL = 300  # 5 minutes
 
     def __init__(self):
         """Initialize the PostgreSQL search service."""
-        self._embedding_dim = 768  # Must match embedding model
+        self._metadata_schema_cache: Dict[str, Tuple[float, dict]] = {}
 
     # =========================================================================
     # Helper Methods
@@ -590,6 +612,232 @@ class PgSearchService:
         return SearchResults(total=total, hits=hits)
 
     # =========================================================================
+    # Metadata Schema Discovery
+    # =========================================================================
+
+    def invalidate_metadata_cache(self, organization_id: UUID) -> None:
+        """Invalidate the cached metadata schema for an organization."""
+        cache_key = str(organization_id)
+        self._metadata_schema_cache.pop(cache_key, None)
+        logger.debug(f"Invalidated metadata schema cache for org {organization_id}")
+
+    async def get_metadata_schema(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        max_sample_values: int = 20,
+    ) -> Dict[str, Any]:
+        """
+        Discover metadata schema from builder registry + targeted DB queries.
+
+        Returns a dict describing available namespaces, their fields,
+        sample values, and document counts. Results are cached for 5 minutes.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            max_sample_values: Max sample values per field
+
+        Returns:
+            Dict with namespaces, total_indexed_docs, cached_at
+        """
+        cache_key = str(organization_id)
+        now = time.time()
+
+        # Check cache
+        if cache_key in self._metadata_schema_cache:
+            cached_at, cached_schema = self._metadata_schema_cache[cache_key]
+            if now - cached_at < self.SCHEMA_CACHE_TTL:
+                return cached_schema
+
+        try:
+            schema = await self._build_metadata_schema(
+                session, organization_id, max_sample_values
+            )
+            self._metadata_schema_cache[cache_key] = (now, schema)
+            return schema
+        except Exception as e:
+            logger.error(f"Failed to build metadata schema: {e}")
+            return {
+                "namespaces": {},
+                "total_indexed_docs": 0,
+                "cached_at": None,
+            }
+
+    async def _build_metadata_schema(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        max_sample_values: int,
+    ) -> Dict[str, Any]:
+        """Build the metadata schema from registry + DB queries."""
+        from .metadata_builders import metadata_builder_registry
+
+        org_id_str = str(organization_id)
+
+        # Query 1: Per-source_type chunk counts (uses B-tree index, no JSONB)
+        count_sql = text("""
+            SELECT source_type, COUNT(DISTINCT source_id) as doc_count, COUNT(*) as chunk_count
+            FROM search_chunks
+            WHERE organization_id = :org_id
+            GROUP BY source_type
+        """)
+        count_result = await session.execute(count_sql, {"org_id": org_id_str})
+        source_type_counts: Dict[str, Dict[str, int]] = {}
+        total_docs = 0
+        for row in count_result.fetchall():
+            source_type_counts[row.source_type] = {
+                "doc_count": row.doc_count,
+                "chunk_count": row.chunk_count,
+            }
+            total_docs += row.doc_count
+
+        # Build namespace info from builder registry
+        builders = metadata_builder_registry.list_builders()
+
+        # Group builders by namespace
+        namespace_builders: Dict[str, List] = {}
+        for builder in builders:
+            ns = builder.namespace
+            if ns not in namespace_builders:
+                namespace_builders[ns] = []
+            namespace_builders[ns].append(builder)
+
+        namespaces: Dict[str, Any] = {}
+
+        for ns, ns_builders in namespace_builders.items():
+            # Compute doc count for this namespace from source_type_counts
+            ns_source_types = self.NAMESPACE_SOURCE_TYPES.get(ns, [])
+            ns_doc_count = 0
+            for st in ns_source_types:
+                if st in source_type_counts:
+                    ns_doc_count += source_type_counts[st]["doc_count"]
+
+            # Get display name from first builder
+            display_name = ns_builders[0].display_name.split(" ")[0] if ns_builders else ns
+            # Better display names for known namespaces
+            display_names = {
+                "sam": "SAM.gov",
+                "salesforce": "Salesforce",
+                "forecast": "Forecast",
+                "sharepoint": "SharePoint",
+                "source": "Source",
+            }
+            display_name = display_names.get(ns, display_name)
+
+            # Collect source_types for this namespace
+            builder_source_types = [b.source_type for b in ns_builders]
+
+            # Get filterable fields and sample values
+            filterable = self.FILTERABLE_FIELDS.get(ns, [])
+            fields: Dict[str, Any] = {}
+
+            for field_name in filterable:
+                sample_values = await self._get_sample_values(
+                    session, org_id_str, ns, field_name,
+                    ns_source_types, max_sample_values
+                )
+                fields[field_name] = {
+                    "type": "string",
+                    "sample_values": sample_values,
+                    "filterable": True,
+                }
+
+            namespaces[ns] = {
+                "display_name": display_name,
+                "source_types": builder_source_types,
+                "doc_count": ns_doc_count,
+                "fields": fields,
+            }
+
+        # Query 3: Custom namespace field discovery (dynamic LLM-generated metadata)
+        custom_fields = await self._discover_custom_fields(session, org_id_str, max_sample_values)
+        if custom_fields:
+            # Count assets with custom metadata
+            custom_doc_count = 0
+            if "asset" in source_type_counts:
+                custom_doc_count = source_type_counts["asset"]["doc_count"]
+
+            namespaces["custom"] = {
+                "display_name": "Custom (LLM-generated)",
+                "source_types": ["asset"],
+                "doc_count": custom_doc_count,
+                "fields": custom_fields,
+            }
+
+        cached_at = datetime.utcnow().isoformat()
+        return {
+            "namespaces": namespaces,
+            "total_indexed_docs": total_docs,
+            "cached_at": cached_at,
+        }
+
+    async def _get_sample_values(
+        self,
+        session: AsyncSession,
+        org_id_str: str,
+        namespace: str,
+        field_name: str,
+        source_types: List[str],
+        max_samples: int,
+    ) -> List[Any]:
+        """Get sample distinct values for a specific metadata field."""
+        try:
+            sql = text(f"""
+                SELECT DISTINCT sc.metadata->:namespace->>:field as val
+                FROM search_chunks sc
+                WHERE sc.organization_id = :org_id
+                  AND sc.source_type = ANY(:source_types)
+                  AND sc.metadata->:namespace->>:field IS NOT NULL
+                LIMIT :max_sample
+            """)
+            result = await session.execute(sql, {
+                "org_id": org_id_str,
+                "namespace": namespace,
+                "field": field_name,
+                "source_types": source_types,
+                "max_sample": max_samples,
+            })
+            return [row.val for row in result.fetchall() if row.val]
+        except Exception as e:
+            logger.debug(f"Failed to get sample values for {namespace}.{field_name}: {e}")
+            return []
+
+    async def _discover_custom_fields(
+        self,
+        session: AsyncSession,
+        org_id_str: str,
+        max_samples: int,
+    ) -> Dict[str, Any]:
+        """Discover fields in the dynamic 'custom' namespace."""
+        try:
+            sql = text("""
+                SELECT DISTINCT f.key, jsonb_typeof(f.value) as value_type
+                FROM search_chunks sc,
+                     jsonb_each(sc.metadata->'custom') AS f
+                WHERE sc.organization_id = :org_id
+                  AND sc.metadata ? 'custom'
+                LIMIT 50
+            """)
+            result = await session.execute(sql, {"org_id": org_id_str})
+            rows = result.fetchall()
+
+            if not rows:
+                return {}
+
+            fields: Dict[str, Any] = {}
+            for row in rows:
+                fields[row.key] = {
+                    "type": row.value_type or "object",
+                    "sample_values": [],
+                    "filterable": True,
+                }
+            return fields
+        except Exception as e:
+            logger.debug(f"Failed to discover custom fields: {e}")
+            return {}
+
+    # =========================================================================
     # Health Check
     # =========================================================================
 
@@ -628,6 +876,7 @@ class PgSearchService:
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
         folder_path: Optional[str] = None,
+        metadata_filters: Optional[Dict[str, Any]] = None,
         limit: int = 20,
         offset: int = 0,
     ) -> SearchResults:
@@ -647,6 +896,8 @@ class PgSearchService:
             date_from: Filter by creation date >=
             date_to: Filter by creation date <=
             folder_path: Filter by storage folder path (prefix match on metadata storage_folder)
+            metadata_filters: Namespaced JSONB containment filters.
+                Example: {"sam": {"agency": "GSA"}, "custom": {"tags_llm_v1": {"tags": ["cyber"]}}}
             limit: Maximum results to return
             offset: Offset for pagination
 
@@ -742,12 +993,16 @@ class PgSearchService:
 
                 if any(slugified.startswith(prefix) for prefix in ("sharepoint/", "uploads/", "scrape/", "sam/")):
                     # Full storage path — prefix match
-                    filters.append("sc.metadata->>'storage_folder' LIKE :folder_path_prefix")
+                    filters.append("sc.metadata->'source'->>'storage_folder' LIKE :folder_path_prefix")
                     params["folder_path_prefix"] = f"{slugified}%"
                 else:
                     # Partial path (e.g., "shared-documents/opportunities") — match within folder hierarchy
-                    filters.append("sc.metadata->>'storage_folder' LIKE :folder_path_prefix")
+                    filters.append("sc.metadata->'source'->>'storage_folder' LIKE :folder_path_prefix")
                     params["folder_path_prefix"] = f"%/{slugified}%"
+
+            if metadata_filters:
+                filters.append("sc.metadata @> CAST(:metadata_filter AS jsonb)")
+                params["metadata_filter"] = json.dumps(metadata_filters)
 
             filter_clause = " AND ".join(filters)
 
@@ -850,16 +1105,16 @@ class PgSearchService:
                     filters.append("sc.source_type IN ('sam_notice', 'sam_solicitation')")
 
             if notice_types:
-                filters.append("sc.metadata->>'notice_type' = ANY(:notice_types)")
+                filters.append("sc.metadata->'sam'->>'notice_type' = ANY(:notice_types)")
                 params["notice_types"] = notice_types
 
             if agencies:
-                filters.append("sc.metadata->>'agency' = ANY(:agencies)")
+                filters.append("sc.metadata->'sam'->>'agency' = ANY(:agencies)")
                 params["agencies"] = agencies
 
             # NAICS code filter (check metadata field)
             if naics_codes:
-                filters.append("sc.metadata->>'naics_code' = ANY(:naics_codes)")
+                filters.append("sc.metadata->'sam'->>'naics_code' = ANY(:naics_codes)")
                 params["naics_codes"] = naics_codes
 
             # Set-aside filter (partial match using ILIKE with ANY)
@@ -867,7 +1122,7 @@ class PgSearchService:
                 set_aside_conditions = []
                 for i, sa in enumerate(set_asides):
                     param_name = f"set_aside_{i}"
-                    set_aside_conditions.append(f"sc.metadata->>'set_aside_code' ILIKE :{param_name}")
+                    set_aside_conditions.append(f"sc.metadata->'sam'->>'set_aside' ILIKE :{param_name}")
                     params[param_name] = f"%{sa}%"
                 if set_aside_conditions:
                     filters.append(f"({' OR '.join(set_aside_conditions)})")
@@ -877,7 +1132,7 @@ class PgSearchService:
                 cutoff_date = (datetime.utcnow() - timedelta(days=posted_within_days)).replace(
                     hour=0, minute=0, second=0, microsecond=0
                 )
-                filters.append("(sc.metadata->>'posted_date')::timestamp >= :posted_cutoff")
+                filters.append("(sc.metadata->'sam'->>'posted_date')::timestamp >= :posted_cutoff")
                 params["posted_cutoff"] = cutoff_date
 
             # Response deadline filter
@@ -886,7 +1141,7 @@ class PgSearchService:
                     deadline_date = datetime.utcnow().date()
                 else:
                     deadline_date = datetime.strptime(response_deadline_after, "%Y-%m-%d").date()
-                filters.append("(sc.metadata->>'response_deadline')::date >= :deadline_date")
+                filters.append("(sc.metadata->'sam'->>'response_deadline')::date >= :deadline_date")
                 params["deadline_date"] = deadline_date
 
             if date_from:
@@ -971,11 +1226,11 @@ class PgSearchService:
                 filters.append("sc.source_type IN ('salesforce_account', 'salesforce_contact', 'salesforce_opportunity')")
 
             if account_types:
-                filters.append("sc.metadata->>'account_type' = ANY(:account_types)")
+                filters.append("sc.metadata->'salesforce'->>'account_type' = ANY(:account_types)")
                 params["account_types"] = account_types
 
             if stages:
-                filters.append("sc.metadata->>'stage_name' = ANY(:stages)")
+                filters.append("sc.metadata->'salesforce'->>'stage_name' = ANY(:stages)")
                 params["stages"] = stages
 
             filter_clause = " AND ".join(filters)
@@ -1051,17 +1306,17 @@ class PgSearchService:
                 filters.append("sc.source_type IN ('ag_forecast', 'apfs_forecast', 'state_forecast')")
 
             if fiscal_year:
-                filters.append("(sc.metadata->>'fiscal_year')::int = :fiscal_year")
+                filters.append("(sc.metadata->'forecast'->>'fiscal_year')::int = :fiscal_year")
                 params["fiscal_year"] = fiscal_year
 
             if agency_name:
-                filters.append("sc.metadata->>'agency_name' ILIKE :agency_pattern")
+                filters.append("sc.metadata->'forecast'->>'agency_name' ILIKE :agency_pattern")
                 params["agency_pattern"] = f"%{agency_name}%"
 
             if naics_code:
                 filters.append("""(
-                    sc.metadata->>'naics_codes' LIKE :naics_pattern
-                    OR sc.metadata->>'naics_code' = :naics_code
+                    sc.metadata->'forecast'->>'naics_codes' LIKE :naics_pattern
+                    OR sc.metadata->'forecast'->>'naics_code' = :naics_code
                 )""")
                 params["naics_pattern"] = f"%{naics_code}%"
                 params["naics_code"] = naics_code
@@ -1101,6 +1356,7 @@ class PgSearchService:
         sync_config_ids: Optional[List[UUID]] = None,
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
+        metadata_filters: Optional[Dict[str, Any]] = None,
         limit: int = 20,
         offset: int = 0,
         facet_size: int = 10,
@@ -1123,6 +1379,7 @@ class PgSearchService:
             sync_config_ids=sync_config_ids,
             date_from=date_from,
             date_to=date_to,
+            metadata_filters=metadata_filters,
             limit=limit,
             offset=offset,
         )

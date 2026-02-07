@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { settingsApi, systemApi, usersApi } from '@/lib/api'
+import { settingsApi, systemApi, usersApi, organizationsApi } from '@/lib/api'
 import { formatDate } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -27,6 +27,8 @@ import {
   UserPlus,
   Wrench,
   Link2,
+  Globe,
+  Check,
 } from 'lucide-react'
 import ConnectionsTab from '@/components/connections/ConnectionsTab'
 
@@ -69,6 +71,14 @@ function SettingsAdminContent() {
   const [showInviteForm, setShowInviteForm] = useState(false)
   const [editingUser, setEditingUser] = useState<UserData | null>(null)
 
+  // Organization details state
+  const [orgDisplayName, setOrgDisplayName] = useState('')
+  const [orgSlug, setOrgSlug] = useState('')
+  const [orgName, setOrgName] = useState('')
+  const [isSavingOrgDetails, setIsSavingOrgDetails] = useState(false)
+  const [orgDetailsError, setOrgDetailsError] = useState('')
+  const [orgDetailsSaved, setOrgDetailsSaved] = useState(false)
+
   // Extraction engine settings
   const [availableEngines, setAvailableEngines] = useState<Array<{
     id: string
@@ -99,11 +109,17 @@ function SettingsAdminContent() {
     setError('')
 
     try {
-      // Load organization settings and extraction engines
-      const [orgData, enginesData] = await Promise.all([
+      // Load organization settings, details, and extraction engines
+      const [orgData, orgDetails, enginesData] = await Promise.all([
         settingsApi.getOrganizationSettings(token),
+        organizationsApi.getCurrentOrganization(token),
         systemApi.getExtractionEngines(),
       ])
+
+      // Set organization details
+      setOrgDisplayName(orgDetails.display_name || '')
+      setOrgSlug(orgDetails.slug || '')
+      setOrgName(orgDetails.name || '')
 
       // Try to load user settings, but don't fail if endpoint doesn't exist
       let userData = { settings: {} }
@@ -262,6 +278,31 @@ function SettingsAdminContent() {
       setIsSaving(false)
     }
   }
+
+  const handleSaveOrgDetails = async () => {
+    if (!token) return
+
+    setIsSavingOrgDetails(true)
+    setOrgDetailsError('')
+    setOrgDetailsSaved(false)
+
+    try {
+      const updated = await organizationsApi.updateOrganization(token, {
+        display_name: orgDisplayName,
+        slug: orgSlug,
+      })
+      setOrgDisplayName(updated.display_name || '')
+      setOrgSlug(updated.slug || '')
+      setOrgDetailsSaved(true)
+      setTimeout(() => setOrgDetailsSaved(false), 3000)
+    } catch (err: any) {
+      setOrgDetailsError(err.message || 'Failed to save organization details')
+    } finally {
+      setIsSavingOrgDetails(false)
+    }
+  }
+
+  const isSlugValid = (slug: string) => /^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(slug)
 
   const getMergedSettings = () => {
     return { ...orgSettings, ...userSettings }
@@ -422,6 +463,106 @@ function SettingsAdminContent() {
               <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
                 These settings apply to all users in your organization. They can be overridden by individual user settings.
               </p>
+            </div>
+
+            {/* Organization Details Section */}
+            <div className="border-b border-gray-200 dark:border-gray-700 pb-6">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white shadow-lg">
+                  <Globe className="w-5 h-5" />
+                </div>
+                <div className="flex-1">
+                  <h3 className="text-base font-semibold text-gray-900 dark:text-white">
+                    Organization Details
+                  </h3>
+                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                    Manage your organization&apos;s identity and URL slug
+                  </p>
+                </div>
+              </div>
+
+              {orgDetailsError && (
+                <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-lg p-3">
+                  <p className="text-sm text-red-800 dark:text-red-200">{orgDetailsError}</p>
+                </div>
+              )}
+
+              {orgDetailsSaved && (
+                <div className="mb-4 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50 rounded-lg p-3">
+                  <div className="flex items-center gap-2">
+                    <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                    <p className="text-sm text-emerald-800 dark:text-emerald-200">Organization details saved successfully!</p>
+                  </div>
+                </div>
+              )}
+
+              <div className="space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Organization Name
+                  </label>
+                  <input
+                    type="text"
+                    value={orgName}
+                    disabled
+                    className="w-full max-w-lg px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800/50 text-gray-500 dark:text-gray-400 cursor-not-allowed"
+                  />
+                  <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">Internal name (not editable)</p>
+                </div>
+
+                <div>
+                  <label htmlFor="org-display-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    Display Name
+                  </label>
+                  <input
+                    id="org-display-name"
+                    type="text"
+                    value={orgDisplayName}
+                    onChange={(e) => setOrgDisplayName(e.target.value)}
+                    className="w-full max-w-lg px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label htmlFor="org-slug" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                    URL Slug
+                  </label>
+                  <input
+                    id="org-slug"
+                    type="text"
+                    value={orgSlug}
+                    onChange={(e) => setOrgSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                    placeholder="e.g. acme-corp"
+                    className={`w-full max-w-lg px-3 py-2 border rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${
+                      orgSlug && !isSlugValid(orgSlug)
+                        ? 'border-red-300 dark:border-red-600'
+                        : 'border-gray-300 dark:border-gray-600'
+                    }`}
+                  />
+                  {orgSlug && !isSlugValid(orgSlug) && (
+                    <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                      Slug must be lowercase letters, numbers, and hyphens only (e.g. &quot;acme-corp&quot;)
+                    </p>
+                  )}
+                  {orgSlug && isSlugValid(orgSlug) && (
+                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                      Your organization will appear as: <span className="font-mono font-medium text-indigo-600 dark:text-indigo-400">{orgSlug}</span> in storage URLs
+                    </p>
+                  )}
+                </div>
+              </div>
+
+              <div className="flex gap-3 pt-4">
+                <Button
+                  onClick={handleSaveOrgDetails}
+                  disabled={isSavingOrgDetails || (orgSlug !== '' && !isSlugValid(orgSlug))}
+                >
+                  {isSavingOrgDetails ? 'Saving...' : 'Save Organization Details'}
+                </Button>
+                <Button variant="secondary" onClick={loadSettings}>
+                  Reset
+                </Button>
+              </div>
             </div>
 
             {/* Default Extraction Engine Section */}

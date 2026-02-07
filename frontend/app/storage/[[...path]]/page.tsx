@@ -1,8 +1,9 @@
 'use client'
 
 import React, { useState, useEffect } from 'react'
+import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { objectStorageApi, utils } from '@/lib/api'
+import { objectStorageApi, organizationsApi, utils } from '@/lib/api'
 import { formatDateTime } from '@/lib/date-utils'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import FilePreview from '@/components/storage/FilePreview'
@@ -68,7 +69,27 @@ interface Artifact {
 
 function StorageContent() {
   const { token } = useAuth()
+  const params = useParams()
+  const router = useRouter()
+
+  // Organization data for slug ↔ UUID translation
+  const [orgData, setOrgData] = useState<{ id: string; slug: string } | null>(null)
+
+  // Parse URL path segments: /storage/[bucket]/[prefix/segments...]
+  const pathSegments = (params.path as string[] | undefined) || []
+  const urlBucket = pathSegments.length > 0 ? pathSegments[0] : null
+  const rawPrefix = pathSegments.length > 1
+    ? pathSegments.slice(1).join('/') + '/'
+    : ''
+
+  // Translate slug → UUID for S3 API calls
+  const urlPrefix = orgData && rawPrefix.startsWith(orgData.slug + '/')
+    ? orgData.id + '/' + rawPrefix.slice(orgData.slug.length + 1)
+    : rawPrefix
+
   const [healthData, setHealthData] = useState<any>(null)
+  const [buckets, setBuckets] = useState<{ name: string; is_default: boolean }[]>([])
+  const [bucketsLoaded, setBucketsLoaded] = useState(false)
   const [selectedBucket, setSelectedBucket] = useState<string | null>(null)
   const [artifacts, setArtifacts] = useState<Artifact[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -94,11 +115,56 @@ function StorageContent() {
   const [uploadTargetPrefix, setUploadTargetPrefix] = useState<string>('')
   const [showUploadModal, setShowUploadModal] = useState(false)
 
+  // Load organization data for slug mapping
+  useEffect(() => {
+    const loadOrgData = async () => {
+      try {
+        const org = await organizationsApi.getCurrentOrganization(token ?? undefined)
+        setOrgData({ id: org.id, slug: org.slug })
+      } catch {
+        // Non-critical — slug translation just won't apply
+      }
+    }
+    if (token) loadOrgData()
+  }, [token])
+
   useEffect(() => {
     if (token) {
       loadHealthData()
     }
   }, [token])
+
+  // Load bucket list for redirect logic
+  useEffect(() => {
+    const loadBucketList = async () => {
+      try {
+        const result = await objectStorageApi.listBuckets()
+        setBuckets(result.buckets)
+        setBucketsLoaded(true)
+      } catch {
+        setBucketsLoaded(true)
+      }
+    }
+    loadBucketList()
+  }, [])
+
+  // If at /storage with no bucket in URL, redirect to default bucket
+  useEffect(() => {
+    if (bucketsLoaded && !urlBucket && buckets.length > 0) {
+      const defaultBucket = buckets.find(b => b.is_default) || buckets[0]
+      router.replace(`/storage/${defaultBucket.name}`)
+    }
+  }, [bucketsLoaded, urlBucket, buckets, router])
+
+  // Navigate handler: updates URL when user clicks folders/breadcrumbs/bucket selector
+  // Translates org UUID → slug for human-readable URLs
+  const handleNavigate = (bucket: string, prefix: string) => {
+    const displayPrefix = orgData && prefix.startsWith(orgData.id + '/')
+      ? orgData.slug + '/' + prefix.slice(orgData.id.length + 1)
+      : prefix
+    const prefixPath = displayPrefix ? '/' + displayPrefix.replace(/\/$/, '') : ''
+    router.push(`/storage/${bucket}${prefixPath}`)
+  }
 
   const loadHealthData = async () => {
     if (!token) return
@@ -559,11 +625,14 @@ function StorageContent() {
         )}
 
         {/* Storage Enabled Content */}
-        {healthData && healthData.enabled && (
+        {healthData && healthData.enabled && urlBucket && (
           <>
             {/* Folder Browser View */}
             <div className="mb-8">
               <StorageFolderBrowser
+                bucket={urlBucket}
+                prefix={urlPrefix}
+                onNavigate={handleNavigate}
                 onFileUpload={handleOpenUpload}
                 onFilePreview={async (bucket, key, filename) => {
                     try {

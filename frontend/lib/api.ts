@@ -386,6 +386,24 @@ export const organizationsApi = {
     })
     return handleJson(res)
   },
+
+  async updateOrganization(token: string, data: { display_name?: string; slug?: string }): Promise<{
+    id: string
+    name: string
+    display_name: string
+    slug: string
+    is_active: boolean
+    settings: Record<string, any>
+    created_at: string
+    updated_at: string
+  }> {
+    const res = await fetch(apiUrl('/organizations/me'), {
+      method: 'PUT',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
 }
 
 // -------------------- Content API --------------------
@@ -1748,6 +1766,7 @@ export const objectStorageApi = {
       etag: string
       last_modified: string
       is_folder: boolean
+      asset_id: string | null
     }>
     is_protected: boolean
     parent_path: string | null
@@ -3048,6 +3067,7 @@ export interface SearchRequest {
   sync_config_ids?: string[]
   date_from?: string
   date_to?: string
+  metadata_filters?: Record<string, any>
   limit?: number
   offset?: number
   include_facets?: boolean
@@ -3114,6 +3134,34 @@ export interface SearchHealthResponse {
   embedding_model?: string
   default_mode?: string
   message?: string
+}
+
+/**
+ * Metadata field schema for a single field in a namespace
+ */
+export interface MetadataFieldSchema {
+  type: string
+  sample_values: any[]
+  filterable: boolean
+}
+
+/**
+ * Metadata namespace schema
+ */
+export interface MetadataNamespaceSchema {
+  display_name: string
+  source_types: string[]
+  doc_count: number
+  fields: Record<string, MetadataFieldSchema>
+}
+
+/**
+ * Metadata schema discovery response
+ */
+export interface MetadataSchemaResponse {
+  namespaces: Record<string, MetadataNamespaceSchema>
+  total_indexed_docs: number
+  cached_at?: string
 }
 
 export const searchApi = {
@@ -3192,6 +3240,17 @@ export const searchApi = {
    */
   async getHealth(token: string | undefined): Promise<SearchHealthResponse> {
     const url = apiUrl('/search/health')
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get metadata schema for the organization's search index
+   */
+  async getMetadataSchema(token: string | undefined): Promise<MetadataSchemaResponse> {
+    const url = apiUrl('/search/metadata-schema')
     const res = await fetch(url, {
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })

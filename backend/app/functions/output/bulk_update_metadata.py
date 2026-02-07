@@ -158,7 +158,8 @@ class BulkUpdateMetadataFunction(BaseFunction):
                             errors.append(f"Asset {asset_id} not found")
                             continue
 
-                        # Mark existing canonical as superseded
+                        # Merge with existing canonical content
+                        merged_content = content
                         if is_canonical:
                             existing_query = select(AssetMetadata).where(
                                 AssetMetadata.asset_id == asset_id,
@@ -169,6 +170,7 @@ class BulkUpdateMetadataFunction(BaseFunction):
                             existing_result = await ctx.session.execute(existing_query)
                             existing = existing_result.scalar_one_or_none()
                             if existing:
+                                merged_content = {**(existing.metadata_content or {}), **content}
                                 existing.status = "superseded"
 
                         # Create new metadata
@@ -179,7 +181,7 @@ class BulkUpdateMetadataFunction(BaseFunction):
                             producer_run_id=ctx.run_id,
                             is_canonical=is_canonical,
                             status="active",
-                            metadata_content=content,
+                            metadata_content=merged_content,
                         )
                         ctx.session.add(new_metadata)
                         processed += 1
@@ -191,6 +193,17 @@ class BulkUpdateMetadataFunction(BaseFunction):
 
                 # Flush batch
                 await ctx.session.flush()
+
+                # Propagate canonical metadata to search_chunks for searchability
+                if is_canonical:
+                    from ...services.pg_index_service import pg_index_service
+                    for update in batch:
+                        try:
+                            aid = UUID(update["asset_id"]) if isinstance(update["asset_id"], str) else update["asset_id"]
+                            if aid in valid_ids:
+                                await pg_index_service.propagate_asset_metadata(ctx.session, aid)
+                        except Exception as e:
+                            logger.warning(f"Failed to propagate metadata for asset: {e}")
 
             if failed > 0 and processed > 0:
                 return FunctionResult.partial_result(

@@ -290,7 +290,7 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
     // Use existing job data as base if available
     const baseJob = existingJob || {
       runId: run.run_id,
-      displayName: run.results_summary?.name || run.results_summary?.display_name || 'Unknown',
+      displayName: run.display_name || run.results_summary?.name || run.results_summary?.display_name || 'Unknown',
       resourceId: run.results_summary?.resource_id || run.run_id,
       resourceType: run.results_summary?.resource_type || run.run_type,
     }
@@ -356,9 +356,9 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
         return prev.map(j => j.runId === data.run_id ? updatedJob : j)
       }
 
-      // New job - don't add to tracked list automatically
-      // Jobs should be added explicitly via addJob()
-      return prev
+      // New job from backend - add to tracked list automatically
+      // This ensures all active jobs appear in the job monitor regardless of how they were started
+      return [...prev, updatedJob]
     })
 
     // Show notification after state update (outside of render)
@@ -432,7 +432,7 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
           const stillActiveJobs = prev.filter(job => activeRunIds.has(job.runId))
 
           // Update status for jobs that are still active
-          return stillActiveJobs.map(job => {
+          const updatedJobs = stillActiveJobs.map(job => {
             const run = initialData.active_runs?.find(r => r.run_id === job.runId)
             if (run) {
               const updatedJob = runToJob(run, job)
@@ -440,6 +440,21 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
             }
             return job
           })
+
+          // Add new jobs from backend that aren't in local state
+          // This ensures all active jobs appear in the job monitor
+          const localRunIds = new Set(prev.map(j => j.runId))
+          const newJobs: UnifiedJob[] = []
+          for (const run of initialData.active_runs || []) {
+            if (!localRunIds.has(run.run_id)) {
+              const newJob = runToJob(run)
+              if (newJob) {
+                newJobs.push(newJob)
+              }
+            }
+          }
+
+          return [...updatedJobs, ...newJobs]
         })
 
         // Check the final status of removed jobs and show notifications

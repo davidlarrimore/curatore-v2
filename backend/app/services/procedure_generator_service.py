@@ -102,7 +102,7 @@ class ProcedureGeneratorService:
 
         if schema.fields:
             lines.append(f"")
-            lines.append(f"{indent}**Fields** (access via `{{{{ item.field_name }}}}`:")
+            lines.append(f"{indent}**Fields** (access via `{{{{ item.fields.field_name }}}}`:")
             for f in schema.fields:
                 nullable = " (nullable)" if f.nullable else ""
                 lines.append(f"{indent}- `{f.name}` ({f.type}{nullable}): {f.description}")
@@ -338,56 +338,104 @@ Each search function returns a list of items. Use these EXACT field names in tem
 
 ```yaml
 {{% for doc in steps.search_results %}}
-  {{{{ doc.title }}}}              # Full path/title (e.g., "Folder/SubFolder/file.pdf")
-  {{{{ doc.original_filename }}}}  # Just the filename (e.g., "file.pdf")
-  {{{{ doc.folder_path }}}}        # Folder path (e.g., "Folder/SubFolder")
-  {{{{ doc.source_url }}}}         # Direct URL to file (SharePoint URL, etc.)
-  {{{{ doc.content_type }}}}       # MIME type (e.g., "application/pdf")
-  {{{{ doc.source_type }}}}        # Source: "sharepoint", "upload", "web_scrape", "sam_gov"
-  {{{{ doc.score }}}}              # Relevance score
-  {{{{ doc.snippet }}}}            # Text excerpt with highlights
+  {{{{ doc.title }}}}                       # Full path/title (e.g., "Folder/SubFolder/file.pdf")
+  {{{{ doc.id }}}}                          # Asset UUID
+  {{{{ doc.fields.original_filename }}}}    # Just the filename (e.g., "file.pdf")
+  {{{{ doc.fields.folder_path }}}}          # Folder path (e.g., "Folder/SubFolder")
+  {{{{ doc.fields.source_url }}}}           # Direct URL to file (SharePoint URL, etc.)
+  {{{{ doc.fields.content_type }}}}         # MIME type (e.g., "application/pdf")
+  {{{{ doc.fields.source_type }}}}          # Source: "sharepoint", "upload", "web_scrape", "sam_gov"
+  {{{{ doc.metadata.score }}}}              # Relevance score
+  {{{{ doc.metadata.snippet }}}}            # Text excerpt with highlights
 {{% endfor %}}
 ```
 
-## search_solicitations / search_notices (SAM.gov)
+## search_solicitations (SAM.gov Solicitations)
 ```yaml
 {{% for item in steps.search_results %}}
-  {{{{ item.title }}}}             # Solicitation/notice title
-  {{{{ item.solicitation_number }}}}  # SAM.gov solicitation number
-  {{{{ item.notice_id }}}}         # SAM.gov notice ID
-  {{{{ item.agency }}}}            # Agency name
-  {{{{ item.posted_date }}}}       # Date posted
-  {{{{ item.response_deadline }}}} # Response deadline
-  {{{{ item.set_aside }}}}         # Set-aside type
-  {{{{ item.naics_code }}}}        # NAICS code
-  {{{{ item.detail_url }}}}        # Link to Curatore detail page
-  {{{{ item.sam_url }}}}           # Link to SAM.gov
+  {{{{ item.title }}}}                       # Solicitation title
+  {{{{ item.display_type }}}}                # "Opportunity"
+  {{{{ item.fields.solicitation_number }}}}   # SAM.gov solicitation number
+  {{{{ item.fields.notice_id }}}}            # SAM.gov notice ID
+  {{{{ item.fields.notice_type }}}}          # Notice type (e.g., "Combined Synopsis/Solicitation")
+  {{{{ item.fields.agency_name }}}}          # Agency name
+  {{{{ item.fields.bureau_name }}}}          # Bureau name
+  {{{{ item.fields.office_name }}}}          # Office name
+  {{{{ item.fields.posted_date }}}}          # Date posted (ISO format)
+  {{{{ item.fields.response_deadline }}}}    # Response deadline (ISO format)
+  {{{{ item.fields.set_aside_code }}}}       # Set-aside type code
+  {{{{ item.fields.naics_code }}}}           # NAICS code
+  {{{{ item.fields.psc_code }}}}             # PSC code
+  {{{{ item.fields.status }}}}               # Status
+  {{{{ item.metadata.sam_url }}}}            # Link to SAM.gov
+  {{{{ item.metadata.ui_link }}}}            # Link to Curatore detail page
+  {{{{ item.metadata.description_preview }}}} # Description preview (first 500 chars)
+{{% endfor %}}
+```
+
+## search_notices (SAM.gov Notices)
+```yaml
+{{% for item in steps.search_results %}}
+  {{{{ item.title }}}}                       # Notice title
+  {{{{ item.display_type }}}}                # Notice type display name
+  {{{{ item.fields.sam_notice_id }}}}        # SAM.gov notice ID
+  {{{{ item.fields.notice_type }}}}          # Notice type
+  {{{{ item.fields.posted_date }}}}          # Date posted (ISO format)
+  {{{{ item.fields.response_deadline }}}}    # Response deadline (ISO format)
+  {{{{ item.fields.agency_name }}}}          # Agency name
+  {{{{ item.fields.bureau_name }}}}          # Bureau name
+  {{{{ item.fields.office_name }}}}          # Office name
+  {{{{ item.fields.naics_code }}}}           # NAICS code
+  {{{{ item.fields.psc_code }}}}             # PSC code
+  {{{{ item.fields.set_aside_code }}}}       # Set-aside type code
+  {{{{ item.metadata.ui_link }}}}            # Link to Curatore detail page
+  {{{{ item.metadata.description_preview }}}} # Description preview
 {{% endfor %}}
 ```
 
 ## search_forecasts (Acquisition Forecasts)
+Note: search_forecasts returns plain dicts (not ContentItems), so access fields directly.
 ```yaml
 {{% for forecast in steps.search_results %}}
   {{{{ forecast.title }}}}         # Forecast title/description
-  {{{{ forecast.agency }}}}        # Agency name
-  {{{{ forecast.source_type }}}}   # Source: "ag", "apfs", "state"
-  {{{{ forecast.fiscal_year }}}}   # Fiscal year
-  {{{{ forecast.naics_code }}}}    # NAICS code
-  {{{{ forecast.estimated_value }}}} # Estimated contract value
-  {{{{ forecast.detail_url }}}}    # Link to Curatore detail page
+  {{{{ forecast.source_type }}}}   # Source: "ag_forecast", "apfs_forecast", "state_forecast"
+  {{{{ forecast.url }}}}           # Source URL
+  {{{{ forecast.score }}}}         # Relevance score
+  {{{{ forecast.highlights }}}}    # Text highlights
+  {{{{ forecast.detail_url }}}}    # Link to Curatore detail page (/forecasts/{id})
 {{% endfor %}}
 ```
 
 ## search_salesforce (CRM Records)
+Results vary by entity type. Use `record.type` to distinguish:
 ```yaml
 {{% for record in steps.search_results %}}
-  {{{{ record.title }}}}           # Record name
-  {{{{ record.type }}}}            # "account", "contact", "opportunity"
-  {{{{ record.account_name }}}}    # Account name (for contacts/opportunities)
-  {{{{ record.stage }}}}           # Opportunity stage
-  {{{{ record.amount }}}}          # Opportunity amount
-  {{{{ record.email }}}}           # Contact email
-  {{{{ record.phone }}}}           # Contact phone
+  {{{{ record.title }}}}                   # Record name
+  {{{{ record.type }}}}                    # "salesforce_account", "salesforce_contact", "salesforce_opportunity"
+  {{{{ record.display_type }}}}            # "Account", "Contact", "Opportunity"
+
+  # Account fields (when type == "salesforce_account"):
+  {{{{ record.fields.salesforce_id }}}}    # Salesforce record ID
+  {{{{ record.fields.account_type }}}}     # Account type
+  {{{{ record.fields.industry }}}}         # Industry
+  {{{{ record.fields.website }}}}          # Website
+  {{{{ record.fields.phone }}}}            # Phone
+
+  # Contact fields (when type == "salesforce_contact"):
+  {{{{ record.fields.first_name }}}}       # First name
+  {{{{ record.fields.last_name }}}}        # Last name
+  {{{{ record.fields.email }}}}            # Email
+  {{{{ record.fields.title }}}}            # Job title
+  {{{{ record.fields.phone }}}}            # Phone
+
+  # Opportunity fields (when type == "salesforce_opportunity"):
+  {{{{ record.fields.stage_name }}}}       # Opportunity stage
+  {{{{ record.fields.amount }}}}           # Opportunity amount
+  {{{{ record.fields.probability }}}}      # Win probability
+  {{{{ record.fields.close_date }}}}       # Close date (ISO format)
+  {{{{ record.fields.opportunity_type }}}} # Opportunity type
+  {{{{ record.fields.is_closed }}}}        # Whether closed
+  {{{{ record.fields.is_won }}}}           # Whether won
 {{% endfor %}}
 ```
 
@@ -1173,9 +1221,87 @@ Output the single best YAML procedure for the request."""
         except Exception as e:
             logger.warning(f"Failed to fetch Salesforce connections: {e}")
 
+        # Add metadata filter context
+        try:
+            metadata_context = await self._build_metadata_context(
+                session, organization_id
+            )
+            if metadata_context:
+                lines.append(metadata_context)
+        except Exception as e:
+            logger.warning(f"Failed to build metadata context: {e}")
+
         if len(lines) <= 2:
             # No data sources found
             return ""
+
+        return "\n".join(lines)
+
+    async def _build_metadata_context(
+        self,
+        session: Any,
+        organization_id: UUID,
+    ) -> str:
+        """
+        Build context about available metadata filters for the organization.
+
+        Fetches the metadata schema (cached) and formats it as a compact text
+        block for the system prompt, so generated procedures can use
+        metadata_filters on search functions.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+
+        Returns:
+            str: Formatted metadata filter context, or empty string
+        """
+        from .pg_search_service import pg_search_service
+
+        schema = await pg_search_service.get_metadata_schema(
+            session, organization_id, max_sample_values=10,
+        )
+
+        namespaces = schema.get("namespaces", {})
+        if not namespaces:
+            return ""
+
+        lines = [
+            "\n## METADATA FILTERS\n",
+            "Search functions accept `metadata_filters` to constrain results by metadata fields.",
+            "Structure: `{namespace: {field: value}}`. Uses JSONB containment (exact match, array element match).\n",
+            "Available namespaces and fields:\n",
+        ]
+
+        for ns_name, ns_info in namespaces.items():
+            doc_count = ns_info.get("doc_count", 0)
+            source_types = ", ".join(ns_info.get("source_types", []))
+            display = ns_info.get("display_name", ns_name)
+            lines.append(f"### {ns_name} ({display}) — {source_types} ({doc_count} docs)")
+
+            fields = ns_info.get("fields", {})
+            for field_name, field_info in fields.items():
+                field_type = field_info.get("type", "string")
+                samples = field_info.get("sample_values", [])
+                if samples:
+                    sample_str = ", ".join(str(s) for s in samples[:5])
+                    if len(samples) > 5:
+                        sample_str += ", ..."
+                    lines.append(f"- {field_name}: {field_type} — {sample_str}")
+                else:
+                    lines.append(f"- {field_name}: {field_type}")
+
+            lines.append("")
+
+        lines.append("Example:")
+        lines.append("```yaml")
+        lines.append("metadata_filters:")
+        lines.append('  sam:')
+        lines.append('    agency: "GSA"')
+        lines.append('  custom:')
+        lines.append('    tags_llm_v1:')
+        lines.append('      tags: ["cybersecurity"]')
+        lines.append("```")
 
         return "\n".join(lines)
 

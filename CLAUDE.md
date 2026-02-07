@@ -176,6 +176,7 @@ playwright-service/         # Browser rendering microservice
 | `queue_registry.py` | Queue type definitions and capabilities |
 | `pg_search_service.py` | Hybrid full-text + semantic search |
 | `pg_index_service.py` | Document chunking, embedding, and indexing |
+| `metadata_builders.py` | Namespaced metadata builder registry for search indexing |
 | `minio_service.py` | Object storage operations |
 | `auth_service.py` | JWT/API key authentication |
 
@@ -232,6 +233,10 @@ PostgreSQL with pgvector for hybrid full-text + semantic search:
 - **Semantic search**: pgvector embeddings (1536-dim via OpenAI)
 - **Hybrid mode**: Configurable keyword/semantic weighting
 - **Chunking**: ~1500 char chunks with 200 char overlap
+- **Namespaced metadata**: `search_chunks.metadata` uses nested JSONB namespaces (`source`, `sharepoint`, `sam`, `salesforce`, `forecast`, `custom`) built via `MetadataBuilder` registry
+- **AssetMetadata bridge**: Canonical LLM-generated metadata is propagated to the `custom` namespace for searchability
+- **Metadata filtering**: Generic `metadata_filters` parameter on search uses JSONB `@>` containment on the GIN index
+- **Schema discovery**: `GET /api/v1/search/metadata-schema` returns available namespaces, fields, sample values, and doc counts (cached 5 min, invalidated on index operations)
 
 Indexed content types: assets, SAM solicitations/notices, forecasts, scraped pages.
 
@@ -333,7 +338,7 @@ function MyPage() {
 ```
 Assets:        GET/POST /api/v1/assets, POST /assets/{id}/reextract
 Runs:          GET /api/v1/runs, GET /runs/{id}/logs
-Search:        POST /api/v1/search
+Search:        POST /api/v1/search, GET /search/metadata-schema
 Storage:       POST /api/v1/storage/upload/proxy
 Queue:         GET /api/v1/queue/jobs, POST /queue/jobs/{id}/cancel
 SAM.gov:       GET /api/v1/sam/searches, /solicitations, /notices

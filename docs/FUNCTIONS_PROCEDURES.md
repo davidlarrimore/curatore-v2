@@ -170,6 +170,33 @@ The `search_solicitations` and `search_notices` functions support an `include_as
 
 Results include both notices/solicitations (type: `notice`/`solicitation`) and documents (type: `asset`, display: `SAM Document`).
 
+### Metadata Filtering (all search functions)
+
+All search functions (`search_assets`, `search_solicitations`, `search_notices`, `search_forecasts`) support a `metadata_filters` parameter for filtering by namespaced metadata fields using JSONB containment:
+
+```yaml
+# Filter SAM notices by agency
+- name: search_gsa_notices
+  function: search_notices
+  params:
+    keyword: "cloud services"
+    metadata_filters:
+      sam:
+        agency: "GSA"
+
+# Filter assets by LLM-generated tags
+- name: search_tagged_docs
+  function: search_assets
+  params:
+    query: "security assessment"
+    metadata_filters:
+      custom:
+        tags_llm_v1:
+          tags: ["cybersecurity"]
+```
+
+Use the metadata schema discovery endpoint (`GET /api/v1/search/metadata-schema`) to discover available namespaces, fields, and sample values. The procedure generator automatically includes metadata context when generating procedures, so AI-generated procedures can use `metadata_filters` with real field names and values.
+
 ### Folder Path Filtering (search_assets)
 
 The `search_assets` function supports a `folder_path` parameter to limit results to a specific storage folder. This is useful for procedures that should only search within a specific SharePoint folder, upload directory, or SAM.gov attachment path.

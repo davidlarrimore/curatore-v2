@@ -38,7 +38,7 @@ class LLMTaskConfig(BaseModel):
     Configuration for a specific LLM task type.
 
     Attributes:
-        model: Model identifier (e.g., "claude-haiku-4-5", "gpt-4o")
+        model: Model identifier (e.g., "claude-4-5-haiku", "gpt-4o")
         temperature: Sampling temperature (0.0-2.0, lower = more deterministic)
         max_tokens: Maximum tokens in response
         timeout: Request timeout in seconds

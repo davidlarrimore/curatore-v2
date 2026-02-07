@@ -60,6 +60,64 @@ from ..config import settings
 logger = logging.getLogger("curatore.run_service")
 
 
+def _get_display_name_for_run(run: "Run") -> str:
+    """
+    Get a human-readable display name for a run.
+
+    Extracts display name from run config based on run_type.
+    """
+    config = run.config or {}
+
+    if run.run_type == "extraction":
+        return config.get("filename", "Document extraction")
+
+    elif run.run_type == "sam_pull":
+        return config.get("search_name", "SAM.gov Pull")
+
+    elif run.run_type == "scrape":
+        return config.get("collection_name", "Web Scrape")
+
+    elif run.run_type in ("sharepoint_sync", "sharepoint_import", "sharepoint_delete"):
+        return (
+            config.get("sync_config_name")
+            or config.get("config_name")
+            or config.get("sync_name")
+            or config.get("folder_path")
+            or "SharePoint Job"
+        )
+
+    elif run.run_type == "system_maintenance":
+        task_name = config.get("scheduled_task_name", "Maintenance Task")
+        task_labels = {
+            "search_reindex": "Search Index Rebuild",
+            "queue_pending_assets": "Queue Pending Assets",
+            "stale_run_cleanup": "Stale Run Cleanup",
+            "system_health_report": "System Health Report",
+            "sharepoint_sync_hourly": "SharePoint Sync",
+            "sam_pull_hourly": "SAM Pull (Hourly)",
+            "sam_pull_daily": "SAM Pull (Daily)",
+        }
+        return task_labels.get(task_name, task_name.replace("_", " ").title())
+
+    elif run.run_type in ("procedure", "procedure_run"):
+        return (
+            config.get("procedure_name")
+            or config.get("procedure_slug", "Procedure").replace("_", " ").replace("-", " ").title()
+        )
+
+    elif run.run_type in ("pipeline", "pipeline_run"):
+        return config.get("pipeline_slug", "Pipeline").replace("_", " ").replace("-", " ").title()
+
+    elif run.run_type == "salesforce_import":
+        return config.get("connection_name", "Salesforce Import")
+
+    elif run.run_type == "forecast_sync":
+        return config.get("sync_name", "Forecast Sync")
+
+    else:
+        return run.run_type.replace("_", " ").title()
+
+
 async def _publish_run_event(
     organization_id: UUID,
     event_type: str,
@@ -92,6 +150,7 @@ async def _publish_run_event(
             "created_at": run.created_at.isoformat() if run.created_at else None,
             "started_at": run.started_at.isoformat() if run.started_at else None,
             "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+            "display_name": _get_display_name_for_run(run),
         }
 
         if extra_data:

@@ -31,7 +31,7 @@ class LLMTaskTypeConfig(BaseModel):
     model_config = ConfigDict(extra='forbid')
 
     model: str = Field(
-        description="Model identifier (e.g., claude-haiku-4-5, claude-sonnet-4-5)"
+        description="Model identifier (e.g., claude-4-5-haiku, claude-4-5-sonnet)"
     )
     temperature: Optional[float] = Field(
         default=None,

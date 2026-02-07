@@ -64,6 +64,66 @@ async def verify_websocket_token(token: str) -> Optional[Dict[str, Any]]:
         return None
 
 
+def get_display_name_for_run(run) -> str:
+    """
+    Get a human-readable display name for a run.
+
+    Extracts display name from run config based on run_type.
+    """
+    config = run.config or {}
+
+    if run.run_type == "extraction":
+        return config.get("filename", "Document extraction")
+
+    elif run.run_type == "sam_pull":
+        return config.get("search_name", "SAM.gov Pull")
+
+    elif run.run_type == "scrape":
+        return config.get("collection_name", "Web Scrape")
+
+    elif run.run_type in ("sharepoint_sync", "sharepoint_import", "sharepoint_delete"):
+        return (
+            config.get("sync_config_name")
+            or config.get("config_name")
+            or config.get("sync_name")
+            or config.get("folder_path")
+            or "SharePoint Job"
+        )
+
+    elif run.run_type == "system_maintenance":
+        # Use scheduled task display name from config, or format task_name
+        task_name = config.get("scheduled_task_name", "Maintenance Task")
+        # Common task name mappings
+        task_labels = {
+            "search_reindex": "Search Index Rebuild",
+            "queue_pending_assets": "Queue Pending Assets",
+            "stale_run_cleanup": "Stale Run Cleanup",
+            "system_health_report": "System Health Report",
+            "sharepoint_sync_hourly": "SharePoint Sync",
+            "sam_pull_hourly": "SAM Pull (Hourly)",
+            "sam_pull_daily": "SAM Pull (Daily)",
+        }
+        return task_labels.get(task_name, task_name.replace("_", " ").title())
+
+    elif run.run_type in ("procedure", "procedure_run"):
+        return (
+            config.get("procedure_name")
+            or config.get("procedure_slug", "Procedure").replace("_", " ").replace("-", " ").title()
+        )
+
+    elif run.run_type in ("pipeline", "pipeline_run"):
+        return config.get("pipeline_slug", "Pipeline").replace("_", " ").replace("-", " ").title()
+
+    elif run.run_type == "salesforce_import":
+        return config.get("connection_name", "Salesforce Import")
+
+    elif run.run_type == "forecast_sync":
+        return config.get("sync_name", "Forecast Sync")
+
+    else:
+        return run.run_type.replace("_", " ").title()
+
+
 async def get_initial_state(
     session: AsyncSession,
     organization_id: UUID,
@@ -101,6 +161,7 @@ async def get_initial_state(
                 "error_message": run.error_message,
                 "created_at": run.created_at.isoformat() if run.created_at else None,
                 "started_at": run.started_at.isoformat() if run.started_at else None,
+                "display_name": get_display_name_for_run(run),
             })
 
     # Queue stats will be sent via the regular polling mechanism

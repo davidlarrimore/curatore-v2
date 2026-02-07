@@ -1281,6 +1281,11 @@ async def handle_search_reindex(
         unit="items", phase="Complete",
     )
 
+    # Invalidate metadata schema cache for all reindexed organizations
+    from .pg_search_service import pg_search_service
+    for org in organizations:
+        pg_search_service.invalidate_metadata_cache(org.id)
+
     # Final summary
     summary = {
         "status": "completed",
@@ -1389,6 +1394,21 @@ async def _prepare_and_embed_asset_batch(
     return results
 
 
+def _phase_to_builder_key(phase_key: str) -> Optional[str]:
+    """Map reindex phase key to metadata builder source_type key."""
+    mapping = {
+        "sam_solicitations": "sam_solicitation",
+        "sam_notices": "sam_notice",
+        "salesforce_accounts": "salesforce_account",
+        "salesforce_contacts": "salesforce_contact",
+        "salesforce_opportunities": "salesforce_opportunity",
+        "ag_forecasts": "forecast",
+        "apfs_forecasts": "forecast",
+        "state_forecasts": "forecast",
+    }
+    return mapping.get(phase_key)
+
+
 async def _build_content_for_item(
     session: AsyncSession,
     phase_key: str,
@@ -1396,88 +1416,90 @@ async def _build_content_for_item(
 ) -> Optional[str]:
     """Build the indexable content string for a non-asset item (no embedding generation).
 
-    Mirrors the content-building logic in each pg_index_service.index_*() method
-    so we can batch-embed across items before calling the index methods with
-    pre-computed embeddings.
+    Uses MetadataBuilder registry to build content consistently with
+    the pg_index_service.index_*() methods.
 
     Returns None for asset items (they handle their own batching internally).
     """
+    from .metadata_builders import metadata_builder_registry
+
+    builder_key = _phase_to_builder_key(phase_key)
+    if not builder_key:
+        return None
+
+    builder = metadata_builder_registry.get(builder_key)
+    if not builder:
+        return None
+
+    # Extract kwargs from item based on phase type
     if phase_key == "sam_solicitations":
-        content = f"{item.title or ''}\n\n{item.description or ''}"
-        if item.agency_name:
-            content = f"{item.agency_name}\n{content}"
-        return content
+        return builder.build_content(
+            title=item.title or "",
+            description=item.description or "",
+            agency=item.agency_name,
+        )
 
     elif phase_key == "sam_notices":
-        return f"{item.title or ''}\n\n{item.description or ''}"
+        return builder.build_content(
+            title=item.title or "",
+            description=item.description or "",
+        )
 
     elif phase_key == "salesforce_accounts":
-        parts = [item.name]
-        if item.account_type:
-            parts.append(f"Type: {item.account_type}")
-        if item.industry:
-            parts.append(f"Industry: {item.industry}")
-        if item.description:
-            parts.append(item.description)
-        return "\n\n".join(parts)
+        return builder.build_content(
+            name=item.name,
+            account_type=item.account_type,
+            industry=item.industry,
+            description=item.description,
+        )
 
     elif phase_key == "salesforce_contacts":
-        full_name = f"{item.first_name or ''} {item.last_name or ''}".strip() or "Unknown Contact"
-        parts = [full_name]
-        if item.title:
-            parts.append(f"Title: {item.title}")
         # Resolve account name if linked
+        account_name = None
         if item.account_id:
             acct = await session.get(SalesforceAccount, item.account_id)
             if acct:
-                parts.append(f"Account: {acct.name}")
-        if item.department:
-            parts.append(f"Department: {item.department}")
-        if item.email:
-            parts.append(f"Email: {item.email}")
-        return "\n\n".join(parts)
+                account_name = acct.name
+        return builder.build_content(
+            first_name=item.first_name,
+            last_name=item.last_name,
+            title=item.title,
+            account_name=account_name,
+            department=item.department,
+            email=item.email,
+        )
 
     elif phase_key == "salesforce_opportunities":
-        parts = [item.name]
         # Resolve account name if linked
+        account_name = None
         if item.account_id:
             acct = await session.get(SalesforceAccount, item.account_id)
             if acct:
-                parts.append(f"Account: {acct.name}")
-        if item.stage_name:
-            parts.append(f"Stage: {item.stage_name}")
-        if item.opportunity_type:
-            parts.append(f"Type: {item.opportunity_type}")
-        if item.amount:
-            parts.append(f"Amount: ${item.amount:,.2f}")
-        if item.description:
-            parts.append(item.description)
-        return "\n\n".join(parts)
+                account_name = acct.name
+        return builder.build_content(
+            name=item.name,
+            account_name=account_name,
+            stage_name=item.stage_name,
+            opportunity_type=item.opportunity_type,
+            amount=item.amount,
+            description=item.description,
+        )
 
     elif phase_key in ("ag_forecasts", "apfs_forecasts", "state_forecasts"):
-        content_parts = [item.title or ""]
-        if getattr(item, "description", None):
-            content_parts.append(item.description)
-        if getattr(item, "agency_name", None):
-            content_parts.append(item.agency_name)
-        elif getattr(item, "component", None):
-            content_parts.append(item.component)
-        # Handle NAICS codes
+        # Normalize naics_codes across forecast types
         naics_codes = getattr(item, "naics_codes", None)
-        if naics_codes:
-            for nc in naics_codes:
-                if isinstance(nc, dict):
-                    code = nc.get("code", "")
-                    desc = nc.get("description", "")
-                    if code:
-                        content_parts.append(code)
-                    if desc:
-                        content_parts.append(desc)
-        elif getattr(item, "naics_code", None):
-            content_parts.append(item.naics_code)
-            if getattr(item, "naics_description", None):
-                content_parts.append(item.naics_description)
-        return "\n\n".join(content_parts)
+        if not naics_codes and getattr(item, "naics_code", None):
+            naics_codes = [{"code": item.naics_code, "description": getattr(item, "naics_description", "") or ""}]
+
+        # Use agency_name or component depending on forecast type
+        agency_name = getattr(item, "agency_name", None) or getattr(item, "component", None)
+
+        return builder.build_content(
+            title=item.title or "",
+            description=getattr(item, "description", None),
+            agency_name=agency_name,
+            naics_codes=naics_codes,
+        )
 
     return None
 

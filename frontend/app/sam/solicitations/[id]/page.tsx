@@ -30,6 +30,7 @@ import {
   Sparkles,
   Loader2,
   Eye,
+  Code,
 } from 'lucide-react'
 
 interface PageProps {
@@ -58,7 +59,7 @@ function SolicitationDetailContent({ params }: PageProps) {
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
-  const [activeTab, setActiveTab] = useState<'notices' | 'attachments'>('notices')
+  const [activeTab, setActiveTab] = useState<'notices' | 'attachments' | 'metadata'>('notices')
   const [isRegenerating, setIsRegenerating] = useState(false)
   const [isRefreshingFromSam, setIsRefreshingFromSam] = useState(false)
 
@@ -635,6 +636,19 @@ function SolicitationDetailContent({ params }: PageProps) {
                 Attachments ({attachments.length})
               </div>
             </button>
+            <button
+              onClick={() => setActiveTab('metadata')}
+              className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                activeTab === 'metadata'
+                  ? 'text-purple-600 dark:text-purple-400 border-b-2 border-purple-500 bg-purple-50/50 dark:bg-purple-900/10'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300'
+              }`}
+            >
+              <div className="flex items-center justify-center gap-2">
+                <Code className="w-4 h-4" />
+                Metadata
+              </div>
+            </button>
           </div>
 
           {/* Tab Content */}
@@ -805,6 +819,31 @@ function SolicitationDetailContent({ params }: PageProps) {
                         })}
                       </tbody>
                     </table>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Metadata Tab */}
+            {activeTab === 'metadata' && (
+              <div>
+                {solicitation.raw_data ? (
+                  <div className="space-y-4">
+                    <p className="text-xs text-gray-500 dark:text-gray-400 mb-4">
+                      Raw SAM.gov API response data
+                    </p>
+                    <div className="bg-gray-50 dark:bg-gray-900 rounded-lg p-4 overflow-auto max-h-[600px]">
+                      <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 whitespace-pre-wrap">
+                        {JSON.stringify(solicitation.raw_data, null, 2)}
+                      </pre>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-center py-8">
+                    <Code className="w-10 h-10 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      No metadata available. Run a refresh from SAM.gov to populate metadata.
+                    </p>
                   </div>
                 )}
               </div>

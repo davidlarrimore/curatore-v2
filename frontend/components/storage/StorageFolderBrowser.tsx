@@ -32,6 +32,7 @@ interface StorageFile {
   etag: string
   last_modified: string
   is_folder: boolean
+  asset_id: string | null
 }
 
 interface Bucket {
@@ -42,12 +43,18 @@ interface Bucket {
 }
 
 interface StorageFolderBrowserProps {
+  bucket: string
+  prefix: string
+  onNavigate: (bucket: string, prefix: string) => void
   onFilePreview?: (bucket: string, key: string, filename: string) => void
   onFileDownload?: (bucket: string, key: string, filename: string) => void
   onFileUpload?: (bucket: string, prefix: string) => void
 }
 
 export default function StorageFolderBrowser({
+  bucket,
+  prefix,
+  onNavigate,
   onFilePreview,
   onFileDownload,
   onFileUpload,
@@ -55,10 +62,8 @@ export default function StorageFolderBrowser({
   // Auth
   const { token } = useAuth()
 
-  // State
+  // State - bucket list (for dropdown), content listing, UI state
   const [buckets, setBuckets] = useState<Bucket[]>([])
-  const [currentBucket, setCurrentBucket] = useState<string>('')
-  const [currentPrefix, setCurrentPrefix] = useState<string>('')
   const [folders, setFolders] = useState<string[]>([])
   const [files, setFiles] = useState<StorageFile[]>([])
   const [isProtected, setIsProtected] = useState<boolean>(false)
@@ -74,10 +79,10 @@ export default function StorageFolderBrowser({
   const [copiedPath, setCopiedPath] = useState<string | null>(null)
 
   // Organization data for folder name mapping
-  const [currentOrganization, setCurrentOrganization] = useState<{ id: string; name: string; display_name: string } | null>(null)
+  const [currentOrganization, setCurrentOrganization] = useState<{ id: string; name: string; display_name: string; slug: string } | null>(null)
 
   // Get current bucket display name
-  const currentBucketDisplay = buckets.find(b => b.name === currentBucket)?.display_name || currentBucket
+  const currentBucketDisplay = buckets.find(b => b.name === bucket)?.display_name || bucket
 
   // Helper function to check if a string is a UUID
   const isUUID = (str: string): boolean => {
@@ -88,7 +93,7 @@ export default function StorageFolderBrowser({
   // Helper function to get display name for a folder
   const getFolderDisplayName = (folderName: string): string => {
     // Check if at root level and folder name is a UUID (organization folder)
-    if (currentPrefix === '' && isUUID(folderName) && currentOrganization) {
+    if (prefix === '' && isUUID(folderName) && currentOrganization) {
       // Check if this UUID matches the current organization
       if (folderName.toLowerCase() === currentOrganization.id.toLowerCase()) {
         return currentOrganization.display_name || currentOrganization.name
@@ -132,12 +137,12 @@ export default function StorageFolderBrowser({
     loadBuckets()
   }, [])
 
-  // Load bucket contents when bucket or prefix changes
+  // Load bucket contents when bucket or prefix changes (driven by URL)
   useEffect(() => {
-    if (currentBucket) {
-      loadContents(currentBucket, currentPrefix)
+    if (bucket) {
+      loadContents(bucket, prefix)
     }
-  }, [currentBucket, currentPrefix])
+  }, [bucket, prefix])
 
   const loadCurrentOrganization = async () => {
     if (!token) return
@@ -147,7 +152,8 @@ export default function StorageFolderBrowser({
       setCurrentOrganization({
         id: org.id,
         name: org.name,
-        display_name: org.display_name
+        display_name: org.display_name,
+        slug: org.slug,
       })
     } catch (err: any) {
       console.warn('Failed to load organization:', err)
@@ -160,15 +166,7 @@ export default function StorageFolderBrowser({
       setLoading(true)
       setError(null)
       const result = await objectStorageApi.listBuckets()
-
-      // Show all buckets (including protected) for admin view
       setBuckets(result.buckets)
-
-      // Set default bucket if available
-      if (result.buckets.length > 0) {
-        const defaultBucket = result.buckets.find(b => b.is_default) || result.buckets[0]
-        setCurrentBucket(defaultBucket.name)
-      }
     } catch (err: any) {
       setError(err.message || 'Failed to load storage buckets')
     } finally {
@@ -176,11 +174,11 @@ export default function StorageFolderBrowser({
     }
   }
 
-  const loadContents = async (bucket: string, prefix: string) => {
+  const loadContents = async (targetBucket: string, targetPrefix: string) => {
     try {
       setLoading(true)
       setError(null)
-      const result = await objectStorageApi.browse(bucket, prefix)
+      const result = await objectStorageApi.browse(targetBucket, targetPrefix)
       setFolders(result.folders)
       setFiles(result.files.filter(f => !f.is_folder))
       setIsProtected(result.is_protected)
@@ -192,24 +190,23 @@ export default function StorageFolderBrowser({
     }
   }
 
+  // Navigation handlers — all delegate to onNavigate which updates the URL
   const handleNavigateToFolder = (folderName: string) => {
-    const newPrefix = currentPrefix + folderName + '/'
-    setCurrentPrefix(newPrefix)
+    onNavigate(bucket, prefix + folderName + '/')
   }
 
   const handleNavigateToPath = (path: string) => {
-    setCurrentPrefix(path)
+    onNavigate(bucket, path)
   }
 
   const handleNavigateUp = () => {
     if (parentPath !== null) {
-      setCurrentPrefix(parentPath)
+      onNavigate(bucket, parentPath)
     }
   }
 
-  const handleBucketChange = (bucket: Bucket) => {
-    setCurrentBucket(bucket.name)
-    setCurrentPrefix('')
+  const handleBucketChange = (newBucket: Bucket) => {
+    onNavigate(newBucket.name, '')
     setBucketDropdownOpen(false)
   }
 
@@ -229,24 +226,22 @@ export default function StorageFolderBrowser({
 
     setIsCreatingFolder(true)
     try {
-      // Build folder path: currentPrefix + folderName (backend adds trailing /)
-      // Example: "" + "my-folder" = "my-folder"
-      // Example: "org-123/" + "my-folder" = "org-123/my-folder"
-      const folderPath = currentPrefix + trimmedName
+      // Build folder path: prefix + folderName (backend adds trailing /)
+      const folderPath = prefix + trimmedName
 
       console.log('Creating folder:', {
-        bucket: currentBucket,
-        prefix: currentPrefix,
+        bucket: bucket,
+        prefix: prefix,
         folderName: trimmedName,
         fullPath: folderPath
       })
 
-      await objectStorageApi.createFolder(currentBucket, folderPath)
+      await objectStorageApi.createFolder(bucket, folderPath)
       toast.success(`Folder "${trimmedName}" created`)
       setShowCreateFolderModal(false)
       setNewFolderName('')
       // Reload current folder
-      await loadContents(currentBucket, currentPrefix)
+      await loadContents(bucket, prefix)
     } catch (err: any) {
       console.error('Failed to create folder:', err)
       toast.error(`Failed to create folder: ${err.message}`)
@@ -268,11 +263,11 @@ export default function StorageFolderBrowser({
 
     setDeletingFolder(folderName)
     try {
-      const folderPath = currentPrefix + folderName
-      await objectStorageApi.deleteFolder(currentBucket, folderPath, true)
+      const folderPath = prefix + folderName
+      await objectStorageApi.deleteFolder(bucket, folderPath, true)
       toast.success(`Folder "${folderName}" deleted`)
       // Reload current folder
-      await loadContents(currentBucket, currentPrefix)
+      await loadContents(bucket, prefix)
     } catch (err: any) {
       console.error('Failed to delete folder:', err)
       toast.error(`Failed to delete folder: ${err.message}`)
@@ -294,10 +289,10 @@ export default function StorageFolderBrowser({
 
     setDeletingFile(file.key)
     try {
-      await objectStorageApi.deleteFile(currentBucket, file.key, token ?? undefined)
+      await objectStorageApi.deleteFile(bucket, file.key, token ?? undefined)
       toast.success(`File "${file.filename}" deleted`)
       // Reload current folder
-      await loadContents(currentBucket, currentPrefix)
+      await loadContents(bucket, prefix)
     } catch (err: any) {
       console.error('Failed to delete file:', err)
       toast.error(`Failed to delete file: ${err.message}`)
@@ -308,9 +303,9 @@ export default function StorageFolderBrowser({
 
   const handleFileAction = (file: StorageFile, action: 'preview' | 'download') => {
     if (action === 'preview' && onFilePreview) {
-      onFilePreview(currentBucket, file.key, file.filename)
+      onFilePreview(bucket, file.key, file.filename)
     } else if (action === 'download' && onFileDownload) {
-      onFileDownload(currentBucket, file.key, file.filename)
+      onFileDownload(bucket, file.key, file.filename)
     }
   }
 
@@ -356,7 +351,7 @@ export default function StorageFolderBrowser({
                   {currentBucketDisplay}
                 </div>
                 <div className="text-xs text-gray-500 dark:text-gray-400">
-                  {buckets.find(b => b.name === currentBucket)?.is_protected ? 'Read-only' : 'Writable'}
+                  {buckets.find(b => b.name === bucket)?.is_protected ? 'Read-only' : 'Writable'}
                 </div>
               </div>
               <ChevronDown className={`w-4 h-4 text-gray-400 transition-transform flex-shrink-0 ${bucketDropdownOpen ? 'rotate-180' : ''}`} />
@@ -369,42 +364,42 @@ export default function StorageFolderBrowser({
                     Storage Locations
                   </p>
                 </div>
-                {buckets.map(bucket => (
+                {buckets.map(b => (
                   <button
-                    key={bucket.name}
-                    onClick={() => handleBucketChange(bucket)}
+                    key={b.name}
+                    onClick={() => handleBucketChange(b)}
                     className={`w-full flex items-center gap-3 px-3 py-3 text-sm text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors ${
-                      bucket.name === currentBucket
+                      b.name === bucket
                         ? 'bg-indigo-50 dark:bg-indigo-900/20'
                         : ''
                     }`}
                   >
                     <div className={`w-10 h-10 rounded-lg flex items-center justify-center flex-shrink-0 ${
-                      bucket.name === currentBucket
+                      b.name === bucket
                         ? 'bg-gradient-to-br from-indigo-500 to-purple-600'
                         : 'bg-gray-100 dark:bg-gray-700'
                     }`}>
                       <HardDrive className={`w-5 h-5 ${
-                        bucket.name === currentBucket ? 'text-white' : 'text-gray-500 dark:text-gray-400'
+                        b.name === bucket ? 'text-white' : 'text-gray-500 dark:text-gray-400'
                       }`} />
                     </div>
                     <div className="flex-1 min-w-0">
                       <div className={`text-sm font-semibold truncate ${
-                        bucket.name === currentBucket
+                        b.name === bucket
                           ? 'text-indigo-600 dark:text-indigo-400'
                           : 'text-gray-900 dark:text-white'
                       }`}>
-                        {bucket.display_name}
+                        {b.display_name}
                       </div>
                       <div className="flex items-center gap-2 mt-0.5">
                         <span className={`text-xs px-2 py-0.5 rounded-full ${
-                          bucket.is_protected
+                          b.is_protected
                             ? 'bg-amber-50 dark:bg-amber-900/20 text-amber-700 dark:text-amber-400'
                             : 'bg-emerald-50 dark:bg-emerald-900/20 text-emerald-700 dark:text-emerald-400'
                         }`}>
-                          {bucket.is_protected ? 'Read-only' : 'Writable'}
+                          {b.is_protected ? 'Read-only' : 'Writable'}
                         </span>
-                        {bucket.is_default && (
+                        {b.is_default && (
                           <span className="text-xs px-2 py-0.5 rounded-full bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400">
                             Default
                           </span>
@@ -420,18 +415,19 @@ export default function StorageFolderBrowser({
           {/* Breadcrumb Navigation */}
           <div className="flex-1 overflow-hidden flex items-center gap-2">
             <FolderBreadcrumb
-              bucket={currentBucket}
+              bucket={bucket}
               bucketDisplayName={currentBucketDisplay}
-              prefix={currentPrefix}
+              prefix={prefix}
               onNavigate={handleNavigateToPath}
+              segmentLabelMap={currentOrganization ? { [currentOrganization.id]: currentOrganization.slug } : undefined}
             />
-            {currentPrefix && (
+            {prefix && (
               <button
-                onClick={() => handleCopyPath(currentPrefix)}
+                onClick={() => handleCopyPath(prefix)}
                 className="flex-shrink-0 p-1.5 text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-md transition-colors"
                 title="Copy folder path"
               >
-                {copiedPath === currentPrefix ? (
+                {copiedPath === prefix ? (
                   <Check className="w-3.5 h-3.5 text-emerald-500" />
                 ) : (
                   <Copy className="w-3.5 h-3.5" />
@@ -444,7 +440,7 @@ export default function StorageFolderBrowser({
           {!isProtected && (
             <div className="flex items-center gap-2">
               <button
-                onClick={() => onFileUpload?.(currentBucket, currentPrefix)}
+                onClick={() => onFileUpload?.(bucket, prefix)}
                 className="flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
               >
                 <Upload className="w-4 h-4" />
@@ -473,7 +469,7 @@ export default function StorageFolderBrowser({
             <AlertCircle className="w-10 h-10 text-red-500 mb-3" />
             <p className="text-sm text-red-600 dark:text-red-400 text-center">{error}</p>
             <button
-              onClick={() => loadContents(currentBucket, currentPrefix)}
+              onClick={() => loadContents(bucket, prefix)}
               className="mt-3 px-4 py-2 text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-lg transition-colors"
             >
               Try again
@@ -552,12 +548,12 @@ export default function StorageFolderBrowser({
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
-                          handleCopyPath(currentPrefix + folder + '/')
+                          handleCopyPath(prefix + folder + '/')
                         }}
                         className="opacity-0 group-hover:opacity-100 p-2 text-gray-600 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg transition-all"
                         title="Copy folder path"
                       >
-                        {copiedPath === currentPrefix + folder + '/' ? (
+                        {copiedPath === prefix + folder + '/' ? (
                           <Check className="w-4 h-4 text-emerald-500" />
                         ) : (
                           <Copy className="w-4 h-4" />
@@ -584,20 +580,36 @@ export default function StorageFolderBrowser({
               })}
 
               {/* Files */}
-              {files.map(file => (
+              {files.map(file => {
+                const assetId = file.asset_id
+                return (
                 <div
                   key={file.key}
                   className="px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group"
                 >
                   <div className="grid grid-cols-12 gap-4 items-center">
-                    <div className="col-span-5 flex items-center gap-3 min-w-0">
-                      <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-800 flex items-center justify-center flex-shrink-0">
-                        <FileText className="w-4 h-4 text-gray-500" />
+                    {assetId ? (
+                      <a
+                        href={`/assets/${assetId}`}
+                        className="col-span-5 flex items-center gap-3 min-w-0"
+                      >
+                        <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 flex items-center justify-center flex-shrink-0">
+                          <FileText className="w-4 h-4 text-indigo-500 dark:text-indigo-400" />
+                        </div>
+                        <span className="text-sm font-medium text-indigo-600 dark:text-indigo-400 hover:text-indigo-800 dark:hover:text-indigo-300 truncate">
+                          {file.filename}
+                        </span>
+                      </a>
+                    ) : (
+                      <div className="col-span-5 flex items-center gap-3 min-w-0">
+                        <div className="w-8 h-8 rounded-lg bg-gray-100 dark:bg-gray-800 flex items-center justify-center flex-shrink-0">
+                          <FileText className="w-4 h-4 text-gray-500" />
+                        </div>
+                        <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                          {file.filename}
+                        </span>
                       </div>
-                      <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                        {file.filename}
-                      </span>
-                    </div>
+                    )}
                     <div className="col-span-2 text-sm text-gray-500 dark:text-gray-400">
                       {file.content_type?.split('/')[1]?.toUpperCase() || 'File'}
                     </div>
@@ -608,20 +620,24 @@ export default function StorageFolderBrowser({
                       {new Date(file.last_modified).toLocaleDateString()}
                     </div>
                     <div className="col-span-1 flex items-center justify-end gap-1">
-                      <button
-                        onClick={() => handleFileAction(file, 'preview')}
-                        className="opacity-0 group-hover:opacity-100 p-2 text-gray-600 dark:text-gray-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:text-blue-600 dark:hover:text-blue-400 rounded-lg transition-all"
-                        title="Preview"
-                      >
-                        <Eye className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleFileAction(file, 'download')}
-                        className="opacity-0 group-hover:opacity-100 p-2 text-gray-600 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg transition-all"
-                        title="Download"
-                      >
-                        <Download className="w-4 h-4" />
-                      </button>
+                      {!assetId && (
+                        <>
+                          <button
+                            onClick={() => handleFileAction(file, 'preview')}
+                            className="opacity-0 group-hover:opacity-100 p-2 text-gray-600 dark:text-gray-400 hover:bg-blue-50 dark:hover:bg-blue-900/20 hover:text-blue-600 dark:hover:text-blue-400 rounded-lg transition-all"
+                            title="Preview"
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleFileAction(file, 'download')}
+                            className="opacity-0 group-hover:opacity-100 p-2 text-gray-600 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg transition-all"
+                            title="Download"
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
                       {!isProtected && (
                         <button
                           onClick={() => handleDeleteFile(file)}
@@ -639,7 +655,8 @@ export default function StorageFolderBrowser({
                     </div>
                   </div>
                 </div>
-              ))}
+                )
+              })}
 
               {/* Empty folder state */}
               {folders.length === 0 && files.length === 0 && (
@@ -651,7 +668,7 @@ export default function StorageFolderBrowser({
                   {!isProtected && (
                     <div className="flex items-center gap-3 mt-6">
                       <button
-                        onClick={() => onFileUpload?.(currentBucket, currentPrefix)}
+                        onClick={() => onFileUpload?.(bucket, prefix)}
                         className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-colors"
                       >
                         <Upload className="w-4 h-4" />
@@ -716,7 +733,7 @@ export default function StorageFolderBrowser({
                   <strong>Current location:</strong>
                 </p>
                 <p className="mt-1 font-mono text-xs bg-gray-50 dark:bg-gray-900 px-3 py-2 rounded">
-                  {currentBucket}/{currentPrefix || '(root)'}
+                  {bucket}/{prefix || '(root)'}
                 </p>
               </div>
             </div>

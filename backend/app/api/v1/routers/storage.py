@@ -42,9 +42,10 @@ from typing import Any, Dict, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import select
 
 from ....config import settings
-from ....database.models import User
+from ....database.models import Asset, User
 from ....dependencies import get_current_user
 from ....services.artifact_service import artifact_service
 from ....services.database_service import database_service
@@ -781,6 +782,7 @@ async def browse_bucket(
 
         # Convert ObjectInfo to StorageObjectInfo
         files = []
+        file_keys = []
         for obj in result.objects:
             # Extract filename from key
             filename = obj.key.split("/")[-1] if "/" in obj.key else obj.key
@@ -796,6 +798,20 @@ async def browse_bucket(
                 last_modified=obj.last_modified,
                 is_folder=obj.is_folder,
             ))
+            file_keys.append(obj.key)
+
+        # Look up asset IDs for files in this folder
+        if file_keys:
+            async with database_service.get_session() as session:
+                asset_result = await session.execute(
+                    select(Asset.id, Asset.raw_object_key).where(
+                        Asset.raw_bucket == bucket,
+                        Asset.raw_object_key.in_(file_keys),
+                    )
+                )
+                key_to_asset = {row.raw_object_key: str(row.id) for row in asset_result}
+                for f in files:
+                    f.asset_id = key_to_asset.get(f.key)
 
         return BrowseResponse(
             bucket=result.bucket,

@@ -21,6 +21,8 @@ Curatore v2 provides hybrid full-text + semantic search powered by PostgreSQL wi
 13. [Monitoring & Health](#monitoring--health)
 14. [Extending Search to New Data Sources](#extending-search-to-new-data-sources)
 15. [Troubleshooting](#troubleshooting)
+16. [Metadata Schema Discovery](#metadata-schema-discovery)
+17. [Metadata Filtering](#metadata-filtering)
 
 ---
 
@@ -212,7 +214,7 @@ CREATE TABLE search_chunks (
     content_type    VARCHAR(255),             -- MIME type or entity type
     collection_id   UUID,                     -- Web scrape collection
     sync_config_id  UUID,                     -- SharePoint sync config
-    metadata        JSONB,                    -- Extra fields (agency, posted_date, etc.)
+    metadata        JSONB,                    -- Namespaced metadata (see Metadata Namespaces below)
     created_at      TIMESTAMP DEFAULT NOW(),
 
     UNIQUE (source_type, source_id, chunk_index)
@@ -231,6 +233,7 @@ CREATE TABLE search_chunks (
 | `ix_search_chunks_filters` | B-tree | Filter facets (source_type_filter, content_type) |
 | `ix_search_chunks_collection` | Partial B-tree | Collection filtering (WHERE collection_id IS NOT NULL) |
 | `ix_search_chunks_sync_config` | Partial B-tree | Sync config filtering (WHERE sync_config_id IS NOT NULL) |
+| `ix_search_chunks_metadata_gin` | GIN (jsonb_path_ops) | Namespaced metadata containment queries |
 
 ### Full-Text Search Trigger
 
@@ -262,6 +265,75 @@ Each indexable model has an `indexed_at` timestamp column used for incremental r
 | `state_forecasts` | Yes | Yes | Reindex when `indexed_at < updated_at` |
 
 **Important implementation detail**: When setting `indexed_at`, the code also explicitly sets `updated_at` to the same timestamp value. This prevents SQLAlchemy's `onupdate=datetime.utcnow` from creating a sub-millisecond gap where `updated_at` would be slightly later than `indexed_at`, which would cause every item to appear as needing reindexing.
+
+---
+
+## Metadata Namespaces
+
+The `search_chunks.metadata` column uses **nested JSONB namespaces** to organize metadata by source type. This prevents key collisions across different source types and enables efficient querying via PostgreSQL's JSONB operators.
+
+### Namespace Convention
+
+| Namespace | Used By | Description |
+|-----------|---------|-------------|
+| `source` | All assets | Common fields: `storage_folder`, `uploaded_by` |
+| `sharepoint` | SharePoint assets | `path`, `folder`, `web_url`, `created_by`, `modified_by` |
+| `sam` | SAM notices & solicitations | `notice_id`, `agency`, `posted_date`, `naics_code`, etc. |
+| `salesforce` | Salesforce entities | `salesforce_id`, `account_type`, `stage_name`, etc. |
+| `forecast` | Acquisition forecasts | `source_type`, `agency_name`, `fiscal_year`, etc. |
+| `custom` | LLM-generated metadata | Bridged from `AssetMetadata` table (e.g., `tags_llm_v1`, `summary_short_v1`) |
+
+### Examples
+
+```json
+// Asset (SharePoint)
+{
+  "source": {"storage_folder": "sharepoint/site/docs"},
+  "sharepoint": {"path": "/Shared Documents/policies", "folder": "/Shared Documents", "web_url": "https://..."},
+  "custom": {"tags_llm_v1": {"tags": ["contract"]}}
+}
+
+// SAM Notice
+{"sam": {"notice_id": "abc", "notice_type": "Combined", "agency": "GSA", "posted_date": "2026-01-01"}}
+
+// Salesforce Account
+{"salesforce": {"salesforce_id": "001...", "account_type": "Customer", "industry": "Tech"}}
+
+// Forecast
+{"forecast": {"source_type": "ag", "agency_name": "DOD", "fiscal_year": 2026}}
+```
+
+### Querying Namespaced Metadata
+
+Use PostgreSQL's JSONB arrow operators to access nested values:
+
+```sql
+-- Filter by SAM agency
+SELECT * FROM search_chunks
+WHERE metadata->'sam'->>'agency' = 'GSA';
+
+-- Filter by forecast fiscal year
+SELECT * FROM search_chunks
+WHERE (metadata->'forecast'->>'fiscal_year')::int = 2026;
+
+-- Filter by storage folder prefix
+SELECT * FROM search_chunks
+WHERE metadata->'source'->>'storage_folder' LIKE 'sharepoint/%';
+
+-- Check for custom metadata existence
+SELECT * FROM search_chunks
+WHERE metadata->'custom' ? 'tags_llm_v1';
+```
+
+### MetadataBuilder Registry
+
+Metadata is built consistently by the `MetadataBuilder` registry (`backend/app/services/metadata_builders.py`). Each source type has a registered builder that produces both indexable content and namespaced metadata. See [Extending Search](#extending-search-to-new-data-sources) for how to add builders for new source types.
+
+### Custom Namespace (AssetMetadata Bridge)
+
+When canonical metadata is created via `update_metadata` or `bulk_update_metadata` functions (with `is_canonical=True`), it is automatically propagated to the `custom` namespace in `search_chunks.metadata`. This makes LLM-generated metadata searchable and filterable without a separate query path.
+
+The key format is the metadata type with dots replaced by underscores: `tags.llm.v1` becomes `tags_llm_v1`.
 
 ---
 
@@ -506,6 +578,71 @@ POST /api/v1/search/salesforce   # Salesforce accounts, contacts, opportunities
 POST /api/v1/search/forecasts    # Acquisition forecasts
 ```
 
+### Metadata Schema Discovery
+
+```
+GET /api/v1/search/metadata-schema
+```
+
+Returns the available metadata namespaces, their fields, sample values, and document counts. Useful for building dynamic filter UIs and for LLM procedure generation.
+
+**Response:**
+```json
+{
+    "namespaces": {
+        "sam": {
+            "display_name": "SAM.gov",
+            "source_types": ["sam_notice", "sam_solicitation"],
+            "doc_count": 342,
+            "fields": {
+                "agency": {
+                    "type": "string",
+                    "sample_values": ["GSA", "DOD", "HHS"],
+                    "filterable": true
+                },
+                "notice_type": {
+                    "type": "string",
+                    "sample_values": ["Combined Synopsis/Solicitation", "Presolicitation"],
+                    "filterable": true
+                }
+            }
+        },
+        "custom": {
+            "display_name": "Custom (LLM-generated)",
+            "source_types": ["asset"],
+            "doc_count": 150,
+            "fields": {
+                "tags_llm_v1": {
+                    "type": "object",
+                    "sample_values": [],
+                    "filterable": true
+                }
+            }
+        }
+    },
+    "total_indexed_docs": 1500,
+    "cached_at": "2026-02-07T12:00:00Z"
+}
+```
+
+**Caching:** Schema responses are cached in-memory for 5 minutes. The cache is automatically invalidated when documents are indexed (via `index_asset()`, `index_asset_prepared()`, `propagate_asset_metadata()`) or after a full reindex. The schema structure comes from the `MetadataBuilder` registry (code-derived), while sample values use lightweight targeted SQL queries (~250ms cold, <5ms warm).
+
+### Metadata Filtering
+
+The general search endpoint accepts a `metadata_filters` parameter for JSONB containment filtering using PostgreSQL's `@>` operator against the GIN index:
+
+```json
+{
+    "query": "cybersecurity assessment",
+    "metadata_filters": {
+        "sam": {"agency": "GSA"},
+        "custom": {"tags_llm_v1": {"tags": ["cyber"]}}
+    }
+}
+```
+
+This filters results to only chunks whose `metadata` column contains the specified nested values. Metadata filters combine with all existing filters (`source_types`, `date_from`, `content_types`, etc.).
+
 ### Admin Operations
 
 ```
@@ -524,6 +661,7 @@ POST /api/v1/search/reindex   # Trigger background reindex
 | `sync_config_ids` | `UUID[]` | Filter by SharePoint sync config |
 | `date_from` | `datetime` | Created at or after |
 | `date_to` | `datetime` | Created at or before |
+| `metadata_filters` | `object` | Namespaced JSONB containment filter (e.g., `{"sam": {"agency": "GSA"}}`) |
 
 ---
 
@@ -627,28 +765,45 @@ docker exec curatore-postgres psql -U curatore -d curatore -c \
 
 To add a new searchable content type (e.g., "widgets"):
 
-### 1. Add index method to PgIndexService
+### 1. Create a MetadataBuilder
+
+Define a builder in `backend/app/services/metadata_builders.py`:
+
+```python
+class WidgetBuilder(MetadataBuilder):
+    """Builder for widgets."""
+    def __init__(self):
+        super().__init__(source_type="widget", namespace="widget", display_name="Widget")
+
+    def build_content(self, *, name: str = "", description: str = "", **kwargs) -> str:
+        return f"{name}\n\n{description}"
+
+    def build_metadata(self, *, category: str = "", priority: int = 0, **kwargs) -> dict:
+        return {"widget": {"category": category, "priority": priority}}
+
+# Register it
+metadata_builder_registry.register(WidgetBuilder())
+```
+
+### 2. Add index method to PgIndexService
 
 ```python
 async def index_widget(self, session, widget_id, embedding=None):
     widget = await session.get(Widget, widget_id)
-    content = f"{widget.name}\n\n{widget.description}"
+    builder = metadata_builder_registry.get("widget")
+    content = builder.build_content(name=widget.name, description=widget.description)
+    metadata = builder.build_metadata(category=widget.category, priority=widget.priority)
 
     if embedding is None:
         embedding = await embedding_service.get_embedding(content)
 
-    await self._upsert_chunk(
-        session,
-        source_type="widget",
-        source_id=widget_id,
-        organization_id=widget.organization_id,
-        chunk_index=0,
-        content=content,
-        title=widget.name,
-        embedding=embedding,
-        source_type_filter="widget",
-        content_type="widget",
-        metadata={"category": widget.category},
+    await self._delete_chunks(session, "widget", widget_id)
+    await self._insert_chunk(
+        session, source_type="widget", source_id=widget_id,
+        organization_id=widget.organization_id, chunk_index=0,
+        content=content, title=widget.name, embedding=embedding,
+        source_type_filter="widget", content_type="widget",
+        metadata=metadata,
     )
 
     # Update indexed_at (and updated_at to same value)
@@ -660,7 +815,7 @@ async def index_widget(self, session, widget_id, embedding=None):
     await session.commit()
 ```
 
-### 2. Add `indexed_at` column to the model
+### 3. Add `indexed_at` column to the model
 
 ```python
 class Widget(Base):
@@ -668,15 +823,21 @@ class Widget(Base):
     indexed_at = Column(DateTime, nullable=True)
 ```
 
-### 3. Add search method to PgSearchService
+### 4. Add search method to PgSearchService
+
+Use namespaced metadata accessors for filters:
 
 ```python
-async def search_widgets(self, session, organization_id, query, ...):
-    # Filter to source_type = 'widget'
-    # Use _hybrid_search_generic() or _execute_typed_search()
+async def search_widgets(self, session, organization_id, query, category=None, ...):
+    filters, params = self._build_base_filters(organization_id)
+    filters.append("sc.source_type = 'widget'")
+    if category:
+        filters.append("sc.metadata->'widget'->>'category' = :category")
+        params["category"] = category
+    # Use _execute_typed_search()
 ```
 
-### 4. Add API endpoint
+### 5. Add API endpoint
 
 ```python
 @router.post("/widgets")
@@ -685,11 +846,13 @@ async def search_widgets(request: SearchRequest, ...):
     return SearchResponse(...)
 ```
 
-### 5. Add to reindex handler
+### 6. Add to reindex handler
 
-Add the widget phase to `handle_search_reindex()` in `maintenance_handlers.py`, including the `_build_content_for_item()` case and `_index_item()` branch.
+Add the widget phase to `handle_search_reindex()` in `maintenance_handlers.py`:
+- Add `"widgets": "widget"` mapping to `_phase_to_builder_key()`
+- Add `_index_item()` branch for `phase_key == "widgets"`
 
-### 6. Add display type mapper
+### 7. Add display type mapper
 
 ```python
 WIDGET_DISPLAY_TYPES = {"widget": "Widget"}

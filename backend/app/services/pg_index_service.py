@@ -44,6 +44,7 @@ from ..database.models import Asset, ExtractionResult
 from .asset_service import asset_service
 from .chunking_service import chunking_service, DocumentChunk
 from .embedding_service import embedding_service
+from .metadata_builders import metadata_builder_registry
 from .minio_service import get_minio_service
 
 logger = logging.getLogger("curatore.pg_index_service")
@@ -176,6 +177,9 @@ class PgIndexService:
                     metadata=metadata,
                 )
 
+            # Propagate canonical AssetMetadata into search_chunks.metadata.custom
+            await self.propagate_asset_metadata(session, asset_id)
+
             # Update asset.indexed_at timestamp
             # Set both indexed_at and updated_at to the same value to prevent
             # onupdate=datetime.utcnow from making updated_at slightly later
@@ -187,6 +191,11 @@ class PgIndexService:
             )
 
             await session.commit()
+
+            # Invalidate metadata schema cache after indexing
+            from .pg_search_service import pg_search_service
+            pg_search_service.invalidate_metadata_cache(asset.organization_id)
+
             logger.info(f"Indexed asset {asset_id} with {len(chunks)} chunks")
             return True
 
@@ -333,6 +342,9 @@ class PgIndexService:
                     metadata=prepared["metadata"],
                 )
 
+            # Propagate canonical AssetMetadata into search_chunks.metadata.custom
+            await self.propagate_asset_metadata(session, asset_id)
+
             # Update asset.indexed_at timestamp
             _now = datetime.utcnow()
             await session.execute(
@@ -342,6 +354,11 @@ class PgIndexService:
             )
 
             await session.commit()
+
+            # Invalidate metadata schema cache after indexing
+            from .pg_search_service import pg_search_service
+            pg_search_service.invalidate_metadata_cache(prepared["organization_id"])
+
             logger.info(f"Indexed asset {asset_id} with {len(chunks)} chunks")
             return True
 
@@ -350,11 +367,26 @@ class PgIndexService:
             await session.rollback()
             return False
 
+    def _derive_storage_folder(self, raw_object_key: Optional[str]) -> str:
+        """Derive storage_folder from raw_object_key.
+
+        Strips org_id prefix (first segment) and filename (last segment).
+        e.g. "{org_id}/sharepoint/site/docs/file.pdf" → "sharepoint/site/docs"
+        """
+        if not raw_object_key:
+            return ""
+        parts = raw_object_key.split("/")
+        if len(parts) > 2:
+            return "/".join(parts[1:-1])
+        return ""
+
     def _build_asset_metadata(
         self, asset: Asset
     ) -> tuple[Optional[str], Optional[str], Optional[UUID], Optional[UUID], Optional[Dict]]:
         """
         Extract metadata from asset for indexing.
+
+        Uses the MetadataBuilder registry to produce namespaced metadata.
 
         Returns:
             Tuple of (title, url, collection_id, sync_config_id, metadata)
@@ -363,22 +395,19 @@ class PgIndexService:
         url = None
         collection_id = None
         sync_config_id = None
-        metadata = {}
-
-        # Derive storage_folder from raw_object_key for all asset types
-        # Strip org_id prefix (first segment) and filename (last segment)
-        # e.g. "{org_id}/sharepoint/site/docs/file.pdf" → "sharepoint/site/docs"
-        if asset.raw_object_key:
-            parts = asset.raw_object_key.split("/")
-            if len(parts) > 2:
-                # Strip first segment (org_id) and last segment (filename)
-                metadata["storage_folder"] = "/".join(parts[1:-1])
-            elif len(parts) == 2:
-                # Only org_id/filename — no folder
-                metadata["storage_folder"] = ""
 
         source_meta = asset.source_metadata or {}
+        storage_folder = self._derive_storage_folder(asset.raw_object_key)
 
+        # Use builder for namespaced metadata
+        builder_key = f"asset_{asset.source_type}" if asset.source_type else "asset_default"
+        builder = metadata_builder_registry.get(builder_key) or metadata_builder_registry.get("asset_default")
+        metadata = builder.build_metadata(
+            storage_folder=storage_folder,
+            source_metadata=source_meta,
+        )
+
+        # Extract title/url/collection_id/sync_config_id (source-type-specific logic)
         if asset.source_type == "web_scrape":
             url = source_meta.get("url")
             if url:
@@ -396,24 +425,83 @@ class PgIndexService:
             if sp_path:
                 title = f"{sp_path}/{asset.original_filename}"
 
-            # Get SharePoint web URL for direct access
             url = source_meta.get("sharepoint_web_url")
 
-            # Store enhanced metadata
-            metadata = {
-                "sharepoint_path": sp_path,
-                "sharepoint_folder": source_meta.get("sharepoint_folder"),
-                "sharepoint_web_url": url,
-                "created_by": source_meta.get("created_by"),
-                "modified_by": source_meta.get("modified_by"),
-            }
-
-        elif asset.source_type == "upload":
-            metadata = {
-                "uploaded_by": source_meta.get("uploaded_by"),
-            }
-
         return title, url, collection_id, sync_config_id, metadata
+
+    async def propagate_asset_metadata(
+        self,
+        session: AsyncSession,
+        asset_id: UUID,
+    ) -> bool:
+        """
+        Merge canonical AssetMetadata into search_chunks.metadata.custom.
+
+        This bridges the AssetMetadata table (written by update_metadata /
+        bulk_update_metadata functions) into the search index so that
+        LLM-generated metadata becomes searchable and filterable.
+
+        Args:
+            session: Database session
+            asset_id: Asset UUID whose metadata to propagate
+
+        Returns:
+            True if propagation succeeded or no metadata to propagate
+        """
+        import json
+        from ..database.models import AssetMetadata
+
+        try:
+            from sqlalchemy import select as sa_select
+            query = sa_select(AssetMetadata).where(
+                AssetMetadata.asset_id == asset_id,
+                AssetMetadata.is_canonical == True,
+                AssetMetadata.status == "active",
+            )
+            result = await session.execute(query)
+            records = list(result.scalars().all())
+
+            if not records:
+                return True
+
+            custom = {}
+            for record in records:
+                # Convert dotted type to underscore key: "tags.llm.v1" → "tags_llm_v1"
+                type_key = record.metadata_type.replace(".", "_")
+                custom[type_key] = record.metadata_content
+
+            sql = text("""
+                UPDATE search_chunks
+                SET metadata = jsonb_set(
+                    COALESCE(metadata, '{}'::jsonb),
+                    '{custom}',
+                    CAST(:custom AS jsonb),
+                    true
+                )
+                WHERE source_type = 'asset' AND source_id = CAST(:aid AS UUID)
+            """)
+            await session.execute(sql, {
+                "custom": json.dumps(custom),
+                "aid": str(asset_id),
+            })
+
+            # Invalidate metadata schema cache (custom namespace changed)
+            # Look up the organization_id from the asset
+            from ..database.models import Asset as AssetModel
+            asset_result = await session.execute(
+                sa_select(AssetModel.organization_id).where(AssetModel.id == asset_id)
+            )
+            org_id = asset_result.scalar()
+            if org_id:
+                from .pg_search_service import pg_search_service
+                pg_search_service.invalidate_metadata_cache(org_id)
+
+            logger.debug(f"Propagated {len(records)} metadata records for asset {asset_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error propagating metadata for asset {asset_id}: {e}")
+            return False
 
     async def _insert_chunk(
         self,
@@ -462,7 +550,7 @@ class PgIndexService:
                 content_type = EXCLUDED.content_type,
                 collection_id = EXCLUDED.collection_id,
                 sync_config_id = EXCLUDED.sync_config_id,
-                metadata = EXCLUDED.metadata
+                metadata = COALESCE(search_chunks.metadata, '{}'::jsonb) || EXCLUDED.metadata
         """)
 
         await session.execute(sql, {
@@ -577,22 +665,21 @@ class PgIndexService:
             return False
 
         try:
-            # Build content for indexing
-            content = f"{title}\n\n{description}"
+            # Build content and metadata via builder
+            builder = metadata_builder_registry.get("sam_notice")
+            content = builder.build_content(title=title, description=description)
+            metadata = builder.build_metadata(
+                sam_notice_id=sam_notice_id,
+                solicitation_id=str(solicitation_id) if solicitation_id else None,
+                notice_type=notice_type,
+                agency=agency,
+                posted_date=posted_date.isoformat() if posted_date else None,
+                response_deadline=response_deadline.isoformat() if response_deadline else None,
+            )
 
             # Generate embedding (skip if pre-computed)
             if embedding is None:
                 embedding = await embedding_service.get_embedding(content)
-
-            # Build metadata
-            metadata = {
-                "sam_notice_id": sam_notice_id,
-                "solicitation_id": str(solicitation_id) if solicitation_id else None,
-                "notice_type": notice_type,
-                "agency": agency,
-                "posted_date": posted_date.isoformat() if posted_date else None,
-                "response_deadline": response_deadline.isoformat() if response_deadline else None,
-            }
 
             # Delete existing and insert new
             await self._delete_chunks(session, "sam_notice", notice_id)
@@ -673,25 +760,22 @@ class PgIndexService:
             return False
 
         try:
-            # Build content for indexing
-            content = f"{title}\n\n{description}"
-            if agency:
-                content = f"{agency}\n{content}"
+            # Build content and metadata via builder
+            builder = metadata_builder_registry.get("sam_solicitation")
+            content = builder.build_content(title=title, description=description, agency=agency)
+            metadata = builder.build_metadata(
+                solicitation_number=solicitation_number,
+                agency=agency,
+                office=office,
+                naics_code=naics_code,
+                set_aside=set_aside,
+                posted_date=posted_date.isoformat() if posted_date else None,
+                response_deadline=response_deadline.isoformat() if response_deadline else None,
+            )
 
             # Generate embedding (skip if pre-computed)
             if embedding is None:
                 embedding = await embedding_service.get_embedding(content)
-
-            # Build metadata
-            metadata = {
-                "solicitation_number": solicitation_number,
-                "agency": agency,
-                "office": office,
-                "naics_code": naics_code,
-                "set_aside": set_aside,
-                "posted_date": posted_date.isoformat() if posted_date else None,
-                "response_deadline": response_deadline.isoformat() if response_deadline else None,
-            }
 
             # Delete existing and insert new
             await self._delete_chunks(session, "sam_solicitation", solicitation_id)
@@ -807,37 +891,25 @@ class PgIndexService:
             return False
 
         try:
-            # Build content for indexing
-            content_parts = [title]
-            if description:
-                content_parts.append(description)
-            if agency_name:
-                content_parts.append(agency_name)
-            if naics_codes:
-                for nc in naics_codes:
-                    if isinstance(nc, dict):
-                        code = nc.get("code", "")
-                        desc = nc.get("description", "")
-                        if code:
-                            content_parts.append(code)
-                        if desc:
-                            content_parts.append(desc)
-
-            content = "\n\n".join(content_parts)
+            # Build content and metadata via builder
+            builder = metadata_builder_registry.get("forecast")
+            content = builder.build_content(
+                title=title, description=description,
+                agency_name=agency_name, naics_codes=naics_codes,
+            )
+            metadata = builder.build_metadata(
+                source_type=source_type,
+                source_id=source_id,
+                agency_name=agency_name,
+                naics_codes=naics_codes,
+                set_aside_type=set_aside_type,
+                fiscal_year=fiscal_year,
+                estimated_award_quarter=estimated_award_quarter,
+            )
 
             # Generate embedding (skip if pre-computed)
             if embedding is None:
                 embedding = await embedding_service.get_embedding(content)
-
-            # Build metadata
-            metadata = {
-                "source_type": source_type,
-                "source_id": source_id,
-                "agency_name": agency_name,
-                "set_aside_type": set_aside_type,
-                "fiscal_year": fiscal_year,
-                "estimated_award_quarter": estimated_award_quarter,
-            }
 
             # Delete existing chunk for this forecast
             await self._delete_chunks(session, f"{source_type}_forecast", forecast_id)
@@ -1087,28 +1159,22 @@ class PgIndexService:
             return False
 
         try:
-            # Build content for indexing
-            content_parts = [name]
-            if account_type:
-                content_parts.append(f"Type: {account_type}")
-            if industry:
-                content_parts.append(f"Industry: {industry}")
-            if description:
-                content_parts.append(description)
-
-            content = "\n\n".join(content_parts)
+            # Build content and metadata via builder
+            builder = metadata_builder_registry.get("salesforce_account")
+            content = builder.build_content(
+                name=name, account_type=account_type,
+                industry=industry, description=description,
+            )
+            metadata = builder.build_metadata(
+                salesforce_id=salesforce_id,
+                account_type=account_type,
+                industry=industry,
+                website=website,
+            )
 
             # Generate embedding (skip if pre-computed)
             if embedding is None:
                 embedding = await embedding_service.get_embedding(content)
-
-            # Build metadata
-            metadata = {
-                "salesforce_id": salesforce_id,
-                "account_type": account_type,
-                "industry": industry,
-                "website": website,
-            }
 
             # Delete existing and insert new
             await self._delete_chunks(session, "salesforce_account", account_id)
@@ -1186,34 +1252,25 @@ class PgIndexService:
             return False
 
         try:
-            # Build content for indexing
-            content_parts = [name]
-            if account_name:
-                content_parts.append(f"Account: {account_name}")
-            if stage_name:
-                content_parts.append(f"Stage: {stage_name}")
-            if opportunity_type:
-                content_parts.append(f"Type: {opportunity_type}")
-            if amount:
-                content_parts.append(f"Amount: ${amount:,.2f}")
-            if description:
-                content_parts.append(description)
-
-            content = "\n\n".join(content_parts)
+            # Build content and metadata via builder
+            builder = metadata_builder_registry.get("salesforce_opportunity")
+            content = builder.build_content(
+                name=name, account_name=account_name,
+                stage_name=stage_name, opportunity_type=opportunity_type,
+                amount=amount, description=description,
+            )
+            metadata = builder.build_metadata(
+                salesforce_id=salesforce_id,
+                stage_name=stage_name,
+                amount=amount,
+                opportunity_type=opportunity_type,
+                account_name=account_name,
+                close_date=close_date.isoformat() if close_date else None,
+            )
 
             # Generate embedding (skip if pre-computed)
             if embedding is None:
                 embedding = await embedding_service.get_embedding(content)
-
-            # Build metadata
-            metadata = {
-                "salesforce_id": salesforce_id,
-                "stage_name": stage_name,
-                "amount": amount,
-                "opportunity_type": opportunity_type,
-                "account_name": account_name,
-                "close_date": close_date.isoformat() if close_date else None,
-            }
 
             # Delete existing and insert new
             await self._delete_chunks(session, "salesforce_opportunity", opportunity_id)
@@ -1319,35 +1376,28 @@ class PgIndexService:
             return False
 
         try:
-            # Build full name
+            # Build content and metadata via builder
+            builder = metadata_builder_registry.get("salesforce_contact")
+            content = builder.build_content(
+                first_name=first_name, last_name=last_name,
+                title=title, account_name=account_name,
+                department=department, email=email,
+            )
+            metadata = builder.build_metadata(
+                salesforce_id=salesforce_id,
+                first_name=first_name,
+                last_name=last_name,
+                email=email,
+                title=title,
+                account_name=account_name,
+            )
+
+            # Build full name for title field
             full_name = f"{first_name or ''} {last_name or ''}".strip() or "Unknown Contact"
-
-            # Build content for indexing
-            content_parts = [full_name]
-            if title:
-                content_parts.append(f"Title: {title}")
-            if account_name:
-                content_parts.append(f"Account: {account_name}")
-            if department:
-                content_parts.append(f"Department: {department}")
-            if email:
-                content_parts.append(f"Email: {email}")
-
-            content = "\n\n".join(content_parts)
 
             # Generate embedding (skip if pre-computed)
             if embedding is None:
                 embedding = await embedding_service.get_embedding(content)
-
-            # Build metadata
-            metadata = {
-                "salesforce_id": salesforce_id,
-                "first_name": first_name,
-                "last_name": last_name,
-                "email": email,
-                "title": title,
-                "account_name": account_name,
-            }
 
             # Delete existing and insert new
             await self._delete_chunks(session, "salesforce_contact", contact_id)

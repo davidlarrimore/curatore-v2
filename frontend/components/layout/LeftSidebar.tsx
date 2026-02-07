@@ -89,7 +89,7 @@ export function LeftSidebar({
         name: 'Storage',
         href: '/storage',
         icon: HardDrive,
-        current: pathname === '/storage',
+        current: pathname?.startsWith('/storage'),
         gradient: 'from-emerald-500 to-teal-500'
       }
     ] : []),

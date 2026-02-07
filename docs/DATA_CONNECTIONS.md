@@ -114,9 +114,11 @@ Use this checklist when implementing a new data connection:
 - [ ] Run type in `backend/app/api/v1/routers/queue_admin.py` (`ALL_RUN_TYPES`)
 
 ### Backend - Search & Indexing
-- [ ] Indexing methods in `backend/app/services/pg_index_service.py` (index_*(), delete_*_index())
+- [ ] MetadataBuilder subclass in `backend/app/services/metadata_builders.py` (build_content + build_metadata with namespaced output)
+- [ ] Register builder in `metadata_builders.py` `_register_defaults()`
+- [ ] Indexing methods in `backend/app/services/pg_index_service.py` (index_*(), delete_*_index()) using builder
 - [ ] Call indexing in import service after successful import
-- [ ] Search method in `backend/app/services/pg_search_service.py` (search_*())
+- [ ] Search method in `backend/app/services/pg_search_service.py` (search_*()) with namespaced metadata filters
 - [ ] Search API endpoint in `backend/app/api/v1/routers/search.py` (POST and GET)
 - [ ] Display-friendly labels for source_type in search results
 

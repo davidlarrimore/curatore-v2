@@ -256,11 +256,13 @@ class OrganizationResponse(BaseModel):
 class OrganizationUpdateRequest(BaseModel):
     """Request to update organization details."""
     display_name: Optional[str] = Field(None, min_length=1, max_length=255, description="Display name")
+    slug: Optional[str] = Field(None, min_length=2, max_length=100, pattern=r'^[a-z0-9]+(?:-[a-z0-9]+)*$', description="URL-friendly slug (lowercase letters, numbers, hyphens)")
 
     class Config:
         json_schema_extra = {
             "example": {
-                "display_name": "Acme Corporation Ltd."
+                "display_name": "Acme Corporation Ltd.",
+                "slug": "acme-corp"
             }
         }
 
@@ -938,6 +940,7 @@ class StorageObjectInfo(BaseModel):
     etag: str = Field(..., description="Object ETag")
     last_modified: datetime = Field(..., description="Last modification timestamp")
     is_folder: bool = Field(default=False, description="Whether this is a folder marker")
+    asset_id: Optional[str] = Field(None, description="Associated asset ID if this file is a tracked asset")
 
     class Config:
         json_schema_extra = {
@@ -948,7 +951,8 @@ class StorageObjectInfo(BaseModel):
                 "content_type": "application/pdf",
                 "etag": "d41d8cd98f00b204e9800998ecf8427e",
                 "last_modified": "2026-01-20T10:00:00",
-                "is_folder": False
+                "is_folder": False,
+                "asset_id": "76bb6b82-f2c0-4467-a837-957c9c8aa40b"
             }
         }
 

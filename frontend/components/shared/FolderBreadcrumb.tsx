@@ -7,6 +7,8 @@ interface FolderBreadcrumbProps {
   bucketDisplayName?: string
   prefix: string
   onNavigate: (path: string) => void
+  /** Map of raw segment values to display labels (e.g., org UUID → slug) */
+  segmentLabelMap?: Record<string, string>
 }
 
 export default function FolderBreadcrumb({
@@ -14,25 +16,28 @@ export default function FolderBreadcrumb({
   bucketDisplayName,
   prefix,
   onNavigate,
+  segmentLabelMap,
 }: FolderBreadcrumbProps) {
   // Parse prefix into path segments
   const segments = prefix
     .split('/')
     .filter((s) => s.length > 0)
 
-  // Build breadcrumb items
-  const items = [
-    {
+  // Build breadcrumb items from prefix segments only (bucket is shown in the dropdown)
+  const items = segments.map((segment, index) => ({
+    label: segmentLabelMap?.[segment] ?? segment,
+    path: segments.slice(0, index + 1).join('/') + '/',
+    isRoot: index === 0,
+  }))
+
+  // If no prefix segments, show a single root item for the bucket
+  if (items.length === 0) {
+    items.push({
       label: bucketDisplayName || bucket,
       path: '',
       isRoot: true,
-    },
-    ...segments.map((segment, index) => ({
-      label: segment,
-      path: segments.slice(0, index + 1).join('/') + '/',
-      isRoot: false,
-    })),
-  ]
+    })
+  }
 
   return (
     <nav className="flex items-center space-x-1 text-sm overflow-x-auto">

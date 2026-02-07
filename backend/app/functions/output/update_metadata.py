@@ -152,9 +152,12 @@ class UpdateMetadataFunction(BaseFunction):
             existing_result = await ctx.session.execute(existing_query)
             existing = existing_result.scalar_one_or_none()
 
+            # Merge new content with existing canonical content
             if existing and is_canonical:
-                # Mark existing as superseded
+                merged_content = {**(existing.metadata_content or {}), **content}
                 existing.status = "superseded"
+            else:
+                merged_content = content
 
             # Create new metadata record
             new_metadata = AssetMetadata(
@@ -164,9 +167,15 @@ class UpdateMetadataFunction(BaseFunction):
                 producer_run_id=ctx.run_id,
                 is_canonical=is_canonical,
                 status="active",
-                metadata_content=content,
+                metadata_content=merged_content,
             )
             ctx.session.add(new_metadata)
+
+            # Propagate canonical metadata to search_chunks for searchability
+            if is_canonical:
+                from ...services.pg_index_service import pg_index_service
+                await ctx.session.flush()
+                await pg_index_service.propagate_asset_metadata(ctx.session, asset_uuid)
 
             return FunctionResult.success_result(
                 data={

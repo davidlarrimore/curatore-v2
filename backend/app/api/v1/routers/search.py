@@ -69,6 +69,13 @@ class SearchRequest(BaseModel):
     date_to: Optional[datetime] = Field(
         None, description="Filter by creation date <= (ISO format)"
     )
+    metadata_filters: Optional[Dict[str, Any]] = Field(
+        None,
+        description=(
+            "Namespaced metadata containment filters. "
+            'Example: {"sam": {"agency": "GSA"}, "custom": {"tags_llm_v1": {"tags": ["cyber"]}}}'
+        ),
+    )
     limit: int = Field(20, ge=1, le=100, description="Maximum results to return")
     offset: int = Field(0, ge=0, description="Offset for pagination")
     include_facets: bool = Field(True, description="Include faceted counts in response")
@@ -138,6 +145,33 @@ class ReindexResponse(BaseModel):
     status: str = Field(..., description="Reindex status")
     message: str = Field(..., description="Status message")
     task_id: Optional[str] = Field(None, description="Background task ID")
+
+
+class MetadataFieldSchema(BaseModel):
+    """Schema for a single metadata field."""
+
+    type: str = Field(..., description="Field type (string, number, array, object)")
+    sample_values: List[Any] = Field(default_factory=list, description="Sample values for enum-like fields")
+    filterable: bool = Field(True, description="Whether this field supports containment filtering")
+
+
+class MetadataNamespaceSchema(BaseModel):
+    """Schema for a metadata namespace."""
+
+    display_name: str = Field(..., description="Human-readable namespace name")
+    source_types: List[str] = Field(default_factory=list, description="Source types using this namespace")
+    doc_count: int = Field(0, description="Documents in this namespace")
+    fields: Dict[str, MetadataFieldSchema] = Field(default_factory=dict, description="Fields in this namespace")
+
+
+class MetadataSchemaResponse(BaseModel):
+    """Response for metadata schema discovery."""
+
+    namespaces: Dict[str, MetadataNamespaceSchema] = Field(
+        default_factory=dict, description="Available metadata namespaces"
+    )
+    total_indexed_docs: int = Field(0, description="Total indexed documents")
+    cached_at: Optional[str] = Field(None, description="When the schema was cached")
 
 
 # =========================================================================
@@ -220,6 +254,7 @@ async def search_assets(
                     sync_config_ids=sync_config_uuids,
                     date_from=request.date_from,
                     date_to=request.date_to,
+                    metadata_filters=request.metadata_filters,
                     limit=request.limit,
                     offset=request.offset,
                 )
@@ -236,6 +271,7 @@ async def search_assets(
                     sync_config_ids=sync_config_uuids,
                     date_from=request.date_from,
                     date_to=request.date_to,
+                    metadata_filters=request.metadata_filters,
                     limit=request.limit,
                     offset=request.offset,
                 )
@@ -486,6 +522,57 @@ async def check_search_health(
         "embedding_model": embedding_model,
         "default_mode": default_mode,
     }
+
+
+# =========================================================================
+# METADATA SCHEMA ENDPOINT
+# =========================================================================
+
+
+@router.get(
+    "/metadata-schema",
+    response_model=MetadataSchemaResponse,
+    summary="Discover metadata schema",
+    description="Returns available metadata namespaces, fields, sample values, and document counts.",
+)
+async def get_metadata_schema(
+    max_sample_values: int = Query(20, ge=1, le=50, description="Max sample values per field"),
+    current_user: User = Depends(get_current_user),
+) -> MetadataSchemaResponse:
+    """
+    Discover the metadata schema for the organization's search index.
+
+    Returns a description of all available metadata namespaces, their fields,
+    sample values for filterable fields, and document counts. This enables
+    LLMs, procedures, and the frontend to know what metadata exists for
+    building metadata_filters queries.
+
+    Results are cached for 5 minutes and refreshed after index operations.
+    """
+    if not _is_search_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail="Search is not enabled.",
+        )
+
+    try:
+        async with database_service.get_session() as session:
+            schema = await pg_search_service.get_metadata_schema(
+                session=session,
+                organization_id=current_user.organization_id,
+                max_sample_values=max_sample_values,
+            )
+
+        return MetadataSchemaResponse(**schema)
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to get metadata schema: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get metadata schema: {str(e)}",
+        )
 
 
 # =========================================================================

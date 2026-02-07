@@ -149,6 +149,22 @@ async def update_organization(
             )
 
         # Update fields
+        if request.slug is not None:
+            # Check uniqueness
+            existing = await session.execute(
+                select(Organization).where(
+                    Organization.slug == request.slug,
+                    Organization.id != user.organization_id
+                )
+            )
+            if existing.scalar_one_or_none():
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Slug already in use"
+                )
+            organization.slug = request.slug
+            logger.info(f"Updated slug to: {request.slug}")
+
         if request.display_name is not None:
             organization.display_name = request.display_name
             logger.info(f"Updated display_name to: {request.display_name}")

@@ -356,7 +356,7 @@ class ConfigLoader:
         if not llm_config:
             # Return sensible defaults if no config
             return LLMTaskConfig(
-                model="claude-sonnet-4-5",
+                model="claude-4-5-sonnet",
                 temperature=DEFAULT_TEMPERATURES.get(task_type, 0.5)
             )
 
@@ -413,7 +413,7 @@ class ConfigLoader:
         llm_config = self.get_llm_config()
         if llm_config:
             return llm_config.default_model
-        return "claude-sonnet-4-5"
+        return "claude-4-5-sonnet"
 
     # Legacy method aliases for backward compatibility during migration
     def get_embedding_model(self) -> str:

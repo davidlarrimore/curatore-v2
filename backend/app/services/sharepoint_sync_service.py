@@ -1220,6 +1220,7 @@ class SharePointSyncService:
                     has_selection_filter=has_selection_filter,
                     selected_folders=selected_folders,
                     selected_file_ids=selected_file_ids,
+                    group_id=group_id,
                 )
             except DeltaTokenExpiredError:
                 # Delta token expired - fall through to full sync
@@ -1728,6 +1729,7 @@ class SharePointSyncService:
         has_selection_filter: bool,
         selected_folders: List[str],
         selected_file_ids: set,
+        group_id: Optional[UUID] = None,
     ) -> Dict[str, Any]:
         """
         Execute sync using Microsoft Graph Delta API for incremental changes.
@@ -1932,9 +1934,16 @@ class SharePointSyncService:
                 }
                 await session.commit()
 
-            # Update delta token
-            config.delta_token = new_delta_token
-            config.last_delta_sync_at = datetime.utcnow()
+            # Update delta token only if there were no failures
+            # If files failed, keep the old token so the next sync retries them
+            if results["failed_files"] == 0:
+                config.delta_token = new_delta_token
+                config.last_delta_sync_at = datetime.utcnow()
+            else:
+                logger.warning(
+                    f"Delta token NOT advanced for {config.name}: "
+                    f"{results['failed_files']} files failed, will retry on next sync"
+                )
 
         except Exception as e:
             logger.error(f"Delta sync failed: {e}")
@@ -2849,7 +2858,7 @@ class SharePointSyncService:
 
         # Update source_metadata with latest info
         source_meta = asset.source_metadata or {}
-        source_meta.update({
+        updates = {
             "sharepoint_modified_at": modified_at.isoformat() if modified_at else None,
             "file_modified_at": fs_modified_at.isoformat() if fs_modified_at else None,
             "modified_by": modified_by,
@@ -2861,13 +2870,14 @@ class SharePointSyncService:
             "sharepoint_quick_xor_hash": quick_xor_hash,
             "sharepoint_sha1_hash": sha1_hash,
             "sharepoint_sha256_hash": sha256_hash,
-        })
-        # Remove None values
-        asset.source_metadata = {k: v for k, v in source_meta.items() if v is not None}
+        }
+        # Only merge non-None values — preserves existing keys
+        source_meta.update({k: v for k, v in updates.items() if v is not None})
+        asset.source_metadata = source_meta
 
         # Build updated sync_metadata
         sync_metadata = existing_doc.sync_metadata or {}
-        sync_metadata.update({
+        sync_updates = {
             "quick_xor_hash": quick_xor_hash,
             "sha1_hash": sha1_hash,
             "sha256_hash": sha256_hash,
@@ -2876,9 +2886,9 @@ class SharePointSyncService:
             "ctag": ctag,
             "description": description,
             "extension": extension,
-        })
-        # Remove None values
-        sync_metadata = {k: v for k, v in sync_metadata.items() if v is not None}
+        }
+        # Only merge non-None values — preserves existing keys
+        sync_metadata.update({k: v for k, v in sync_updates.items() if v is not None})
 
         # Update synced document record
         await self.update_synced_document(

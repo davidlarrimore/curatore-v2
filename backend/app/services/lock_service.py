@@ -82,7 +82,11 @@ class LockService:
         """
         loop = asyncio.get_running_loop()
         if self._redis is None or self._redis_loop is None or self._redis_loop is not loop:
-            if self._redis:
+            # When event loop changes (e.g., between asyncio.run() calls in Celery),
+            # we cannot close the old Redis client because it's bound to a closed loop.
+            # Just abandon it and create a new one - the old resources are already gone.
+            if self._redis is not None and self._redis_loop is loop:
+                # Only close if we're in the same loop (e.g., explicit cleanup)
                 await self._redis.close()
             self._redis_loop = loop
             broker_url = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
