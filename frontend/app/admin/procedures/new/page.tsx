@@ -32,6 +32,10 @@ import {
   Copy,
   Box,
   Sparkles,
+  Zap,
+  Brain,
+  Shield,
+  Tag,
 } from 'lucide-react'
 import { AIGeneratorPanel, type AIGeneratorPanelHandle } from '@/components/procedures/AIGeneratorPanel'
 
@@ -796,6 +800,51 @@ function ProcedureEditor() {
 
                                   {expandedFunctions.has(func.name) && (
                                     <div className="mt-2 ml-5 space-y-2">
+                                      {/* Governance badges */}
+                                      <div className="flex flex-wrap gap-1.5">
+                                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                          func.side_effects
+                                            ? 'bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-400'
+                                            : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'
+                                        }`}>
+                                          <Zap className="w-2.5 h-2.5" />
+                                          {func.side_effects ? 'Side Effects' : 'No Side Effects'}
+                                        </span>
+                                        {func.requires_llm && (
+                                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">
+                                            <Brain className="w-2.5 h-2.5" />
+                                            LLM Required
+                                          </span>
+                                        )}
+                                        <span className={`inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium ${
+                                          func.payload_profile === 'thin'
+                                            ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
+                                            : func.payload_profile === 'summary'
+                                              ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400'
+                                              : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400'
+                                        }`}>
+                                          Payload: {func.payload_profile || 'full'}
+                                        </span>
+                                        {!func.is_primitive && (
+                                          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                                            Compound
+                                          </span>
+                                        )}
+                                      </div>
+
+                                      {/* Tags */}
+                                      {func.tags && func.tags.length > 0 && (
+                                        <div className="flex flex-wrap gap-1">
+                                          {func.tags.map((tag) => (
+                                            <span key={tag} className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[10px] bg-indigo-50 dark:bg-indigo-900/20 text-indigo-600 dark:text-indigo-400">
+                                              <Tag className="w-2 h-2" />
+                                              {tag}
+                                            </span>
+                                          ))}
+                                        </div>
+                                      )}
+
+                                      {/* Parameters */}
                                       {func.parameters.length > 0 && (
                                         <div>
                                           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
@@ -819,7 +868,44 @@ function ProcedureEditor() {
                                           </div>
                                         </div>
                                       )}
-                                      {func.returns && (
+
+                                      {/* Output Schema */}
+                                      {func.output_schema && (
+                                        <div>
+                                          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+                                            Output
+                                          </p>
+                                          <p className="text-xs font-mono text-indigo-600 dark:text-indigo-400">
+                                            {func.output_schema.type}
+                                          </p>
+                                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                            {func.output_schema.description}
+                                          </p>
+                                          {func.output_schema.fields && func.output_schema.fields.length > 0 && (
+                                            <div className="mt-1 space-y-0.5">
+                                              {func.output_schema.fields.map((field) => (
+                                                <div key={field.name} className="flex items-start gap-1.5 text-[10px]">
+                                                  <span className="font-mono text-gray-600 dark:text-gray-400">.{field.name}</span>
+                                                  <span className="text-gray-400">({field.type})</span>
+                                                  <span className="text-gray-500 truncate">{field.description}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                          {/* Output variants */}
+                                          {func.output_variants && func.output_variants.length > 0 && (
+                                            <div className="mt-1.5">
+                                              {func.output_variants.map((variant) => (
+                                                <div key={variant.mode} className="text-[10px] text-gray-500 dark:text-gray-400 italic">
+                                                  {variant.mode} mode: {variant.condition}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                        </div>
+                                      )}
+                                      {/* Fallback: show returns string if no structured output_schema */}
+                                      {!func.output_schema && func.returns && (
                                         <div>
                                           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
                                             Returns
@@ -828,6 +914,31 @@ function ProcedureEditor() {
                                             {func.returns}
                                           </p>
                                         </div>
+                                      )}
+
+                                      {/* Examples (collapsible) */}
+                                      {func.examples && func.examples.length > 0 && (
+                                        <details className="group">
+                                          <summary className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider cursor-pointer hover:text-indigo-600 dark:hover:text-indigo-400">
+                                            Examples ({func.examples.length})
+                                          </summary>
+                                          <div className="mt-1 space-y-2">
+                                            {func.examples.map((ex, i) => (
+                                              <div key={i} className="text-[10px]">
+                                                {ex.description && (
+                                                  <p className="text-gray-500 dark:text-gray-400 mb-0.5">{ex.description}</p>
+                                                )}
+                                                <pre className="bg-gray-900 text-gray-200 p-2 rounded text-[10px] overflow-x-auto leading-relaxed">
+{`function: ${func.name}
+params:
+${Object.entries(ex.params || {}).map(([k, v]) =>
+  `  ${k}: ${typeof v === 'string' ? `"${v}"` : JSON.stringify(v)}`
+).join('\n')}`}
+                                                </pre>
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </details>
                                       )}
                                     </div>
                                   )}

@@ -9,8 +9,8 @@ import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-from app.services.chunking_service import ChunkingService, DocumentChunk
-from app.services.embedding_service import EmbeddingService, EMBEDDING_DIMENSIONS
+from app.core.search.chunking_service import ChunkingService, DocumentChunk
+from app.core.search.embedding_service import EmbeddingService, EMBEDDING_DIMENSIONS
 
 
 # =============================================================================
@@ -270,10 +270,10 @@ class TestEmbeddingServiceWithMocks:
 class TestSearchConfiguration:
     """Tests for search configuration from config.yml."""
 
-    @patch('app.services.config_loader.config_loader')
+    @patch('app.core.shared.config_loader.config_loader')
     def test_search_enabled_check(self, mock_config_loader):
         """Test checking if search is enabled."""
-        from app.models.config_models import SearchConfig
+        from app.core.models.config_models import SearchConfig
 
         mock_search_config = SearchConfig(enabled=True)
         mock_config_loader.get_search_config.return_value = mock_search_config
@@ -281,10 +281,10 @@ class TestSearchConfiguration:
         config = mock_config_loader.get_search_config()
         assert config.enabled is True
 
-    @patch('app.services.config_loader.config_loader')
+    @patch('app.core.shared.config_loader.config_loader')
     def test_search_disabled_check(self, mock_config_loader):
         """Test checking when search is disabled."""
-        from app.models.config_models import SearchConfig
+        from app.core.models.config_models import SearchConfig
 
         mock_search_config = SearchConfig(enabled=False)
         mock_config_loader.get_search_config.return_value = mock_search_config
@@ -294,7 +294,7 @@ class TestSearchConfiguration:
 
     def test_search_config_defaults(self):
         """Test search config default values."""
-        from app.models.config_models import SearchConfig
+        from app.core.models.config_models import SearchConfig
 
         config = SearchConfig()
 

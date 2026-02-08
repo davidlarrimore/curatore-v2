@@ -2,8 +2,8 @@
 
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react'
 import { useAuth } from '@/lib/auth-context'
-import { proceduresApi, type ValidationError } from '@/lib/api'
-import { Sparkles, Loader2, Send, Wand2, ArrowLeftRight } from 'lucide-react'
+import { proceduresApi, type ValidationError, type GenerationProfile, type PlanDiagnostics } from '@/lib/api'
+import { Sparkles, Loader2, Send, Wand2, ArrowLeftRight, ChevronDown, ChevronRight, Shield, Clock, Wrench, Code2 } from 'lucide-react'
 
 interface AIGeneratorPanelProps {
   currentYaml: string
@@ -21,13 +21,20 @@ export interface AIGeneratorPanelHandle {
   isGenerating: boolean
 }
 
+const PROFILE_INFO: Record<string, { label: string; icon: string; color: string }> = {
+  safe_readonly: { label: 'Safe (Read-only)', icon: 'shield', color: 'emerald' },
+  workflow_standard: { label: 'Standard', icon: 'wrench', color: 'indigo' },
+  admin_full: { label: 'Admin (Full)', icon: 'shield', color: 'amber' },
+}
+
 /**
  * AI Generator Panel for creating or refining procedure definitions.
  *
- * - If currentYaml is empty/default, generates a new procedure from scratch
- * - If currentYaml has content, refines the existing procedure based on the prompt
- * - Users can click on the mode badge to manually toggle between modes
- * - Exposes imperative handle for programmatic control (e.g., Fix with AI)
+ * Features:
+ * - Profile selector dropdown (3 generation profiles)
+ * - Collapsible diagnostics panel (profile, attempts, tools, clamps, timing)
+ * - Collapsible Plan JSON debug viewer
+ * - Auto-mode detection: generate vs refine
  */
 export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPanelProps>(function AIGeneratorPanel({
   currentYaml,
@@ -39,16 +46,25 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
   const [prompt, setPrompt] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
   const [manualModeOverride, setManualModeOverride] = useState<'generate' | 'refine' | null>(null)
+  const [selectedProfile, setSelectedProfile] = useState('workflow_standard')
+  const [profiles, setProfiles] = useState<GenerationProfile[]>([])
+  const [lastDiagnostics, setLastDiagnostics] = useState<PlanDiagnostics | null>(null)
+  const [lastPlanJson, setLastPlanJson] = useState<Record<string, any> | null>(null)
+  const [showDiagnostics, setShowDiagnostics] = useState(false)
+  const [showPlanJson, setShowPlanJson] = useState(false)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
+
+  // Load profiles on mount
+  useEffect(() => {
+    proceduresApi.getGenerationProfiles(token ?? undefined).then(setProfiles).catch(() => {})
+  }, [token])
 
   // Auto-resize textarea as content grows
   useEffect(() => {
     const textarea = textareaRef.current
     if (textarea) {
-      // Reset height to auto to get the correct scrollHeight
       textarea.style.height = 'auto'
-      // Set height to scrollHeight (with a minimum)
-      const minHeight = 80 // minimum height in pixels
+      const minHeight = 80
       textarea.style.height = `${Math.max(minHeight, textarea.scrollHeight)}px`
     }
   }, [prompt])
@@ -66,10 +82,8 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
   // Toggle between modes when user clicks the badge
   const handleModeToggle = () => {
     if (manualModeOverride === null) {
-      // First click: switch to opposite of auto-detected mode
       setManualModeOverride(hasExistingContent ? 'generate' : 'refine')
     } else {
-      // Subsequent clicks: toggle between modes
       setManualModeOverride(manualModeOverride === 'refine' ? 'generate' : 'refine')
     }
   }
@@ -105,12 +119,11 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
     return lines.join('\n')
   }
 
-  // Core generation logic (can be called internally or via ref)
+  // Core generation logic
   const doGenerate = async (promptText: string, forceRefine: boolean = false) => {
     if (!token || !promptText.trim()) return
 
     setIsGenerating(true)
-    // Force refine mode when fixing errors
     if (forceRefine) {
       setManualModeOverride('refine')
     }
@@ -120,16 +133,27 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
       const result = await proceduresApi.generateProcedure(
         token,
         promptText.trim(),
-        useRefineMode ? currentYaml : undefined
+        useRefineMode ? currentYaml : undefined,
+        true,
+        selectedProfile,
       )
+
+      // Store diagnostics and plan
+      if (result.diagnostics) {
+        setLastDiagnostics(result.diagnostics)
+      }
+      if (result.plan_json) {
+        setLastPlanJson(result.plan_json)
+      }
 
       if (result.success && result.yaml) {
         onYamlGenerated(result.yaml)
         setPrompt('')
+        const profileLabel = PROFILE_INFO[result.profile_used || selectedProfile]?.label || selectedProfile
         onSuccess?.(
           useRefineMode
-            ? `Procedure updated successfully (${result.attempts} attempt${result.attempts > 1 ? 's' : ''})`
-            : `Procedure generated successfully (${result.attempts} attempt${result.attempts > 1 ? 's' : ''})`
+            ? `Procedure updated (${result.attempts} attempts, ${profileLabel} profile)`
+            : `Procedure generated (${result.attempts} attempts, ${profileLabel} profile)`
         )
       } else {
         const errorMsg = result.error || 'Failed to generate procedure'
@@ -150,7 +174,6 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
     fixValidationErrors: async (errors: ValidationError[], warnings: ValidationError[] = []) => {
       const fixPrompt = buildFixPrompt(errors, warnings)
       setPrompt(fixPrompt)
-      // Small delay to let UI update before starting generation
       await new Promise(resolve => setTimeout(resolve, 50))
       await doGenerate(fixPrompt, true)
     },
@@ -162,7 +185,7 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
       }
     },
     isGenerating,
-  }), [token, currentYaml, isRefineMode, isGenerating, onYamlGenerated, onSuccess, onError])
+  }), [token, currentYaml, isRefineMode, isGenerating, selectedProfile, onYamlGenerated, onSuccess, onError])
 
   const handleGenerate = async () => {
     await doGenerate(prompt)
@@ -179,20 +202,44 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
     <div className="bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 dark:from-indigo-950/30 dark:via-purple-950/30 dark:to-pink-950/30 rounded-xl border border-indigo-200 dark:border-indigo-800 overflow-hidden">
       {/* Header */}
       <div className="px-4 py-3 border-b border-indigo-200 dark:border-indigo-800 bg-white/50 dark:bg-gray-900/50">
-        <div className="flex items-center gap-2">
-          <div className="p-1.5 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600">
-            <Sparkles className="w-4 h-4 text-white" />
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <div className="p-1.5 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600">
+              <Sparkles className="w-4 h-4 text-white" />
+            </div>
+            <div>
+              <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
+                AI Procedure Generator
+              </h2>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {isRefineMode
+                  ? 'Describe changes to make to the current procedure'
+                  : 'Describe the procedure you want to create'}
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
-              AI Procedure Generator
-            </h2>
-            <p className="text-xs text-gray-500 dark:text-gray-400">
-              {isRefineMode
-                ? 'Describe changes to make to the current procedure'
-                : 'Describe the procedure you want to create'}
-            </p>
-          </div>
+
+          {/* Profile Selector */}
+          <select
+            value={selectedProfile}
+            onChange={(e) => setSelectedProfile(e.target.value)}
+            disabled={isGenerating}
+            className="text-xs px-2 py-1 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
+          >
+            {profiles.length > 0 ? (
+              profiles.map(p => (
+                <option key={p.name} value={p.name}>
+                  {PROFILE_INFO[p.name]?.label || p.name}
+                </option>
+              ))
+            ) : (
+              <>
+                <option value="safe_readonly">Safe (Read-only)</option>
+                <option value="workflow_standard">Standard</option>
+                <option value="admin_full">Admin (Full)</option>
+              </>
+            )}
+          </select>
         </div>
       </div>
 
@@ -292,11 +339,84 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
                   {isRefineMode ? 'Refining procedure...' : 'Generating procedure...'}
                 </p>
                 <p className="text-xs text-indigo-600 dark:text-indigo-400">
-                  AI is analyzing your request and {isRefineMode ? 'updating' : 'creating'} the YAML definition
+                  AI is analyzing your request and {isRefineMode ? 'updating' : 'creating'} the procedure definition
                 </p>
               </div>
             </div>
           </div>
+        </div>
+      )}
+
+      {/* Diagnostics Panel */}
+      {lastDiagnostics && !isGenerating && (
+        <div className="px-4 pb-2">
+          <button
+            onClick={() => setShowDiagnostics(!showDiagnostics)}
+            className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+          >
+            {showDiagnostics ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            <Clock className="w-3 h-3" />
+            Diagnostics ({lastDiagnostics.timing_ms.toFixed(0)}ms, {lastDiagnostics.total_attempts} attempts)
+          </button>
+
+          {showDiagnostics && (
+            <div className="mt-2 rounded-lg bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 p-3 text-xs">
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <span className="text-gray-500 dark:text-gray-400">Profile:</span>{' '}
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{lastDiagnostics.profile_used}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 dark:text-gray-400">Tools available:</span>{' '}
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{lastDiagnostics.tools_available}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 dark:text-gray-400">Plan attempts:</span>{' '}
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{lastDiagnostics.plan_attempts}</span>
+                </div>
+                <div>
+                  <span className="text-gray-500 dark:text-gray-400">Procedure attempts:</span>{' '}
+                  <span className="font-medium text-gray-700 dark:text-gray-300">{lastDiagnostics.procedure_attempts}</span>
+                </div>
+              </div>
+              {lastDiagnostics.tools_referenced.length > 0 && (
+                <div className="mt-2">
+                  <span className="text-gray-500 dark:text-gray-400">Tools used:</span>{' '}
+                  <span className="font-mono text-gray-700 dark:text-gray-300">
+                    {lastDiagnostics.tools_referenced.join(', ')}
+                  </span>
+                </div>
+              )}
+              {lastDiagnostics.validation_error_types.length > 0 && (
+                <div className="mt-1">
+                  <span className="text-gray-500 dark:text-gray-400">Errors encountered:</span>{' '}
+                  <span className="text-red-600 dark:text-red-400 font-mono">
+                    {lastDiagnostics.validation_error_types.join(', ')}
+                  </span>
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Plan JSON Viewer */}
+      {lastPlanJson && !isGenerating && (
+        <div className="px-4 pb-4">
+          <button
+            onClick={() => setShowPlanJson(!showPlanJson)}
+            className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+          >
+            {showPlanJson ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+            <Code2 className="w-3 h-3" />
+            Plan JSON
+          </button>
+
+          {showPlanJson && (
+            <pre className="mt-2 rounded-lg bg-gray-900 text-gray-100 p-3 text-xs overflow-auto max-h-[300px] font-mono">
+              {JSON.stringify(lastPlanJson, null, 2)}
+            </pre>
+          )}
         </div>
       )}
     </div>

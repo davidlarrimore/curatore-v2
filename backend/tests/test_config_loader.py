@@ -9,8 +9,8 @@ import pytest
 import tempfile
 from pathlib import Path
 
-from app.services.config_loader import ConfigLoader
-from app.models.config_models import AppConfig, LLMConfig
+from app.core.shared.config_loader import ConfigLoader
+from app.core.models.config_models import AppConfig, LLMConfig
 
 
 class TestConfigLoader:
@@ -25,9 +25,7 @@ llm:
   provider: openai
   api_key: test-key
   base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-storage:
-  hierarchical: true
+  default_model: gpt-4o-mini
 queue:
   broker_url: redis://redis:6379/0
   result_backend: redis://redis:6379/1
@@ -40,7 +38,7 @@ queue:
         assert config.version == "2.0"
         assert config.llm.provider == "openai"
         assert config.llm.api_key == "test-key"
-        assert config.storage.hierarchical is True
+        assert config.llm.default_model == "gpt-4o-mini"
 
     def test_load_missing_file(self, tmp_path):
         """Test loading non-existent file raises error."""
@@ -60,9 +58,7 @@ llm:
   provider: openai
   api_key: ${TEST_API_KEY}
   base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-storage:
-  hierarchical: true
+  default_model: gpt-4o-mini
 queue:
   broker_url: redis://redis:6379/0
   result_backend: redis://redis:6379/1
@@ -74,7 +70,7 @@ queue:
         assert config.llm.api_key == "secret-key-123"
 
     def test_env_var_missing(self, tmp_path):
-        """Test missing environment variable raises error."""
+        """Test missing environment variable resolves to None."""
         config_file = tmp_path / "config.yml"
         config_file.write_text("""
 version: "2.0"
@@ -82,13 +78,17 @@ llm:
   provider: openai
   api_key: ${MISSING_VAR}
   base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
+  default_model: gpt-4o-mini
+queue:
+  broker_url: redis://redis:6379/0
+  result_backend: redis://redis:6379/1
 """)
 
         loader = ConfigLoader(str(config_file))
+        config = loader.load()
 
-        with pytest.raises(ValueError, match="Environment variable not set: MISSING_VAR"):
-            loader.load()
+        # Missing env vars resolve to None instead of raising
+        assert config.llm.api_key is None
 
     def test_invalid_yaml(self, tmp_path):
         """Test invalid YAML syntax raises error."""
@@ -114,7 +114,7 @@ llm:
   provider: invalid_provider  # Not in allowed values
   api_key: test-key
   base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
+  default_model: gpt-4o-mini
 """)
 
         loader = ConfigLoader(str(config_file))
@@ -131,9 +131,7 @@ llm:
   provider: openai
   api_key: test-key
   base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-storage:
-  hierarchical: true
+  default_model: gpt-4o-mini
 queue:
   broker_url: redis://redis:6379/0
   result_backend: redis://redis:6379/1
@@ -152,8 +150,6 @@ queue:
         config_file = tmp_path / "config.yml"
         config_file.write_text("""
 version: "2.0"
-storage:
-  hierarchical: true
 queue:
   broker_url: redis://redis:6379/0
   result_backend: redis://redis:6379/1
@@ -173,10 +169,8 @@ llm:
   provider: openai
   api_key: test-key
   base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
+  default_model: gpt-4o-mini
   timeout: 120
-storage:
-  hierarchical: true
 queue:
   broker_url: redis://redis:6379/0
   result_backend: redis://redis:6379/1
@@ -187,7 +181,7 @@ queue:
 
         assert loader.get("llm.api_key") == "test-key"
         assert loader.get("llm.timeout") == 120
-        assert loader.get("storage.hierarchical") is True
+        assert loader.get("queue.broker_url") == "redis://redis:6379/0"
         assert loader.get("nonexistent.path", "default") == "default"
 
     def test_reload_config(self, tmp_path):
@@ -199,9 +193,7 @@ llm:
   provider: openai
   api_key: old-key
   base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-storage:
-  hierarchical: true
+  default_model: gpt-4o-mini
 queue:
   broker_url: redis://redis:6379/0
   result_backend: redis://redis:6379/1
@@ -218,9 +210,7 @@ llm:
   provider: openai
   api_key: new-key
   base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-storage:
-  hierarchical: true
+  default_model: gpt-4o-mini
 queue:
   broker_url: redis://redis:6379/0
   result_backend: redis://redis:6379/1
@@ -239,9 +229,7 @@ llm:
   provider: openai
   api_key: test-key
   base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-storage:
-  hierarchical: true
+  default_model: gpt-4o-mini
 queue:
   broker_url: redis://redis:6379/0
   result_backend: redis://redis:6379/1
@@ -259,8 +247,6 @@ queue:
         config_file = tmp_path / "config.yml"
         config_file.write_text("""
 version: "2.0"
-storage:
-  hierarchical: true
 queue:
   broker_url: redis://redis:6379/0
   result_backend: redis://redis:6379/1
@@ -271,9 +257,7 @@ queue:
 
         assert config.llm is None
         assert config.extraction is None
-        assert config.sharepoint is None
         assert config.email is None
-        assert config.storage is not None
         assert config.queue is not None
 
 
@@ -286,12 +270,11 @@ class TestConfigModels:
             provider="openai",
             api_key="test",
             base_url="https://api.openai.com/v1",
-            model="gpt-4o-mini"
+            default_model="gpt-4o-mini"
         )
 
         assert config.timeout == 60
         assert config.max_retries == 3
-        assert config.temperature == 0.7
         assert config.verify_ssl is True
 
     def test_llm_config_validation(self):
@@ -301,7 +284,7 @@ class TestConfigModels:
             provider="openai",
             api_key="test",
             base_url="https://api.openai.com/v1",
-            model="gpt-4o-mini",
+            default_model="gpt-4o-mini",
             timeout=120
         )
         assert config.timeout == 120
@@ -312,7 +295,7 @@ class TestConfigModels:
                 provider="openai",
                 api_key="test",
                 base_url="https://api.openai.com/v1",
-                model="gpt-4o-mini",
+                default_model="gpt-4o-mini",
                 timeout=700  # > 600 max
             )
 
@@ -327,9 +310,7 @@ llm:
   provider: openai
   api_key: ${TEST_KEY}
   base_url: https://api.openai.com/v1
-  model: gpt-4o-mini
-storage:
-  hierarchical: true
+  default_model: gpt-4o-mini
 queue:
   broker_url: redis://redis:6379/0
   result_backend: redis://redis:6379/1

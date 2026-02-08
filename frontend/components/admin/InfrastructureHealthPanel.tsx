@@ -3,26 +3,36 @@
 
 import { useState, useEffect } from 'react'
 import { systemApi } from '@/lib/api'
-import { RefreshCw, CheckCircle, XCircle, AlertCircle, AlertTriangle, HelpCircle, Loader2, ExternalLink } from 'lucide-react'
+import { RefreshCw, CheckCircle, XCircle, AlertCircle, AlertTriangle, HelpCircle, Loader2, ExternalLink, Filter } from 'lucide-react'
 import { Button } from '@/components/ui/Button'
 import { formatTime, DISPLAY_TIMEZONE_ABBR } from '@/lib/date-utils'
 
 interface ComponentHealth {
-  status: 'healthy' | 'unhealthy' | 'degraded' | 'unknown' | 'not_configured' | 'checking'
+  status: 'healthy' | 'unhealthy' | 'degraded' | 'unknown' | 'not_configured' | 'not_enabled' | 'checking'
   message: string
   [key: string]: any
 }
 
-type ComponentKey = 'backend' | 'database' | 'redis' | 'celery_worker'
+type ComponentKey =
+  | 'backend'
+  | 'database'
+  | 'redis'
+  | 'celery_worker'
+  | 'extraction_service'
+  | 'docling'
+  | 'object_storage'
+  | 'llm'
+  | 'playwright'
+  | 'sharepoint'
+
+const CORE_COMPONENTS: ComponentKey[] = ['backend', 'database', 'redis', 'celery_worker']
 
 const COMPONENT_MAP: Record<ComponentKey, {
-  apiKey: 'backend' | 'database' | 'redis' | 'celery',
-  displayName: string,
-  description: string,
+  displayName: string
+  description: string
   docsUrl?: string | (() => string)
 }> = {
   backend: {
-    apiKey: 'backend',
     displayName: 'Backend API',
     description: 'FastAPI application server',
     docsUrl: () => {
@@ -31,44 +41,116 @@ const COMPONENT_MAP: Record<ComponentKey, {
     }
   },
   database: {
-    apiKey: 'database',
     displayName: 'Database',
-    description: 'SQLite/PostgreSQL data store'
+    description: 'PostgreSQL data store'
   },
   redis: {
-    apiKey: 'redis',
     displayName: 'Redis',
     description: 'Message broker and cache'
   },
   celery_worker: {
-    apiKey: 'celery',
     displayName: 'Celery Worker',
     description: 'Async task processor'
   },
+  extraction_service: {
+    displayName: 'Extraction Service',
+    description: 'Document conversion microservice'
+  },
+  docling: {
+    displayName: 'Docling',
+    description: 'Alternative extraction engine'
+  },
+  object_storage: {
+    displayName: 'Object Storage',
+    description: 'S3/MinIO file storage'
+  },
+  llm: {
+    displayName: 'LLM Connection',
+    description: 'AI language model provider'
+  },
+  playwright: {
+    displayName: 'Playwright',
+    description: 'Browser rendering service'
+  },
+  sharepoint: {
+    displayName: 'SharePoint',
+    description: 'Microsoft Graph API integration'
+  },
+}
+
+const ALL_COMPONENTS = Object.keys(COMPONENT_MAP) as ComponentKey[]
+
+const DEFAULT_CHECKING: ComponentHealth = { status: 'checking', message: 'Checking...' }
+
+function buildCheckingState(): Record<ComponentKey, ComponentHealth> {
+  const state: Partial<Record<ComponentKey, ComponentHealth>> = {}
+  for (const key of ALL_COMPONENTS) {
+    state[key] = { ...DEFAULT_CHECKING }
+  }
+  return state as Record<ComponentKey, ComponentHealth>
 }
 
 export default function InfrastructureHealthPanel() {
-  const [components, setComponents] = useState<Record<ComponentKey, ComponentHealth>>({
-    backend: { status: 'checking', message: 'Checking...' },
-    database: { status: 'checking', message: 'Checking...' },
-    redis: { status: 'checking', message: 'Checking...' },
-    celery_worker: { status: 'checking', message: 'Checking...' },
-  })
-
+  const [components, setComponents] = useState<Record<ComponentKey, ComponentHealth>>(buildCheckingState)
   const [lastChecked, setLastChecked] = useState<Date | null>(null)
   const [isRefreshing, setIsRefreshing] = useState(false)
   const [retesting, setRetesting] = useState<Set<ComponentKey>>(new Set())
+  const [showAll, setShowAll] = useState(false)
 
-  const checkComponentHealth = async (key: ComponentKey) => {
-    const componentConfig = COMPONENT_MAP[key]
+  const visibleComponents = showAll ? ALL_COMPONENTS : CORE_COMPONENTS
+
+  const loadAllHealthData = async () => {
+    setIsRefreshing(true)
+    setComponents(buildCheckingState())
+
     try {
-      const data = await systemApi.getComponentHealth(componentConfig.apiKey)
-      setComponents(prev => ({
-        ...prev,
-        [key]: data
-      }))
+      const data = await systemApi.getComprehensiveHealth()
+      const newComponents = buildCheckingState()
+
+      if (data.components) {
+        for (const [key, value] of Object.entries(data.components)) {
+          if (key in newComponents) {
+            newComponents[key as ComponentKey] = value as ComponentHealth
+          }
+        }
+      }
+
+      setComponents(newComponents)
     } catch (error) {
-      console.error(`Failed to load ${key} health:`, error)
+      console.error('Failed to load comprehensive health:', error)
+      // Mark all as unhealthy on error
+      const errorState = buildCheckingState()
+      for (const key of ALL_COMPONENTS) {
+        errorState[key] = {
+          status: 'unhealthy',
+          message: `Health check failed: ${error instanceof Error ? error.message : 'Unknown error'}`,
+        }
+      }
+      setComponents(errorState)
+    }
+
+    setLastChecked(new Date())
+    setIsRefreshing(false)
+  }
+
+  const retestComponent = async (key: ComponentKey) => {
+    setRetesting(prev => new Set(prev).add(key))
+    setComponents(prev => ({
+      ...prev,
+      [key]: { status: 'checking', message: 'Checking...' }
+    }))
+
+    // Retest via the comprehensive endpoint to get fresh data for this component
+    try {
+      const data = await systemApi.getComprehensiveHealth()
+      if (data.components && data.components[key]) {
+        setComponents(prev => ({
+          ...prev,
+          [key]: data.components[key]
+        }))
+      }
+    } catch (error) {
+      console.error(`Failed to retest ${key}:`, error)
       setComponents(prev => ({
         ...prev,
         [key]: {
@@ -77,44 +159,12 @@ export default function InfrastructureHealthPanel() {
         }
       }))
     }
-  }
-
-  const retestComponent = async (key: ComponentKey) => {
-    setRetesting(prev => new Set(prev).add(key))
-
-    setComponents(prev => ({
-      ...prev,
-      [key]: { status: 'checking', message: 'Checking...' }
-    }))
-
-    await checkComponentHealth(key)
 
     setRetesting(prev => {
       const next = new Set(prev)
       next.delete(key)
       return next
     })
-  }
-
-  const loadAllHealthData = async () => {
-    setIsRefreshing(true)
-
-    setComponents({
-      backend: { status: 'checking', message: 'Checking...' },
-      database: { status: 'checking', message: 'Checking...' },
-      redis: { status: 'checking', message: 'Checking...' },
-      celery_worker: { status: 'checking', message: 'Checking...' },
-    })
-
-    await Promise.all([
-      checkComponentHealth('backend'),
-      checkComponentHealth('database'),
-      checkComponentHealth('redis'),
-      checkComponentHealth('celery_worker'),
-    ])
-
-    setLastChecked(new Date())
-    setIsRefreshing(false)
   }
 
   useEffect(() => {
@@ -134,7 +184,7 @@ export default function InfrastructureHealthPanel() {
     const issues: string[] = []
     Object.entries(components).forEach(([key, component]) => {
       if (component.status === 'unhealthy' || component.status === 'degraded') {
-        const displayName = COMPONENT_MAP[key as ComponentKey].displayName
+        const displayName = COMPONENT_MAP[key as ComponentKey]?.displayName || key
         issues.push(`${displayName}: ${component.message}`)
       }
     })
@@ -150,6 +200,7 @@ export default function InfrastructureHealthPanel() {
       case 'degraded':
         return <AlertTriangle className="w-5 h-5 text-yellow-500" />
       case 'not_configured':
+      case 'not_enabled':
         return <AlertCircle className="w-5 h-5 text-gray-400" />
       case 'checking':
         return <Loader2 className="w-5 h-5 text-blue-500 animate-spin" />
@@ -168,7 +219,8 @@ export default function InfrastructureHealthPanel() {
       case 'degraded':
         return 'bg-yellow-50 border-yellow-200 dark:bg-yellow-900/20 dark:border-yellow-800'
       case 'not_configured':
-        return 'bg-gray-50 border-gray-200 dark:bg-gray-800 dark:border-gray-700'
+      case 'not_enabled':
+        return 'bg-gray-50 border-gray-200 dark:bg-gray-800 dark:border-gray-700 opacity-60'
       case 'checking':
         return 'bg-blue-50 border-blue-200 dark:bg-blue-900/20 dark:border-blue-800 animate-pulse'
       case 'unknown':
@@ -239,7 +291,7 @@ export default function InfrastructureHealthPanel() {
             Infrastructure Health
           </h2>
           <p className="text-sm text-gray-600 dark:text-gray-400">
-            Monitor the status of core system components
+            Monitor the status of system components
           </p>
         </div>
         <div className="flex items-center space-x-4">
@@ -263,6 +315,22 @@ export default function InfrastructureHealthPanel() {
         </p>
       )}
 
+      {/* Filter toggle */}
+      <div className="flex items-center space-x-2">
+        <button
+          onClick={() => setShowAll(!showAll)}
+          className="inline-flex items-center px-3 py-1.5 text-sm font-medium rounded-lg border transition-colors
+            bg-white dark:bg-gray-800 border-gray-300 dark:border-gray-600
+            text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700"
+        >
+          <Filter className="w-4 h-4 mr-2" />
+          {showAll ? 'Show Core Only' : 'Show All Components'}
+        </button>
+        <span className="text-xs text-gray-500 dark:text-gray-400">
+          Showing {visibleComponents.length} of {ALL_COMPONENTS.length} components
+        </span>
+      </div>
+
       {/* Issues Summary */}
       {issues.length > 0 && (
         <div className="p-4 bg-red-50 border border-red-200 rounded-lg dark:bg-red-900/20 dark:border-red-800">
@@ -279,7 +347,8 @@ export default function InfrastructureHealthPanel() {
 
       {/* Component Status Cards */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-        {(Object.entries(components) as [ComponentKey, ComponentHealth][]).map(([key, component]) => {
+        {visibleComponents.map((key) => {
+          const component = components[key]
           const config = COMPONENT_MAP[key]
           const docsUrl = component.status === 'healthy' ? getDocsUrl(key) : null
           const isRetesting = retesting.has(key)
@@ -333,7 +402,7 @@ export default function InfrastructureHealthPanel() {
                     component.status === 'checking' ? 'bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300' :
                     'bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300'
                   }`}>
-                    {component.status}
+                    {component.status === 'not_configured' || component.status === 'not_enabled' ? 'N/A' : component.status}
                   </span>
                 </div>
               </div>
@@ -378,6 +447,20 @@ export default function InfrastructureHealthPanel() {
                       </span>
                     </div>
                   )}
+                  {component.endpoint && !component.url && (
+                    <div className="flex justify-between">
+                      <span className="font-medium">Endpoint:</span>
+                      <span className="truncate ml-2" title={component.endpoint}>
+                        {component.endpoint.replace(/^https?:\/\//, '')}
+                      </span>
+                    </div>
+                  )}
+                  {component.model && (
+                    <div className="flex justify-between">
+                      <span className="font-medium">Model:</span>
+                      <span>{component.model}</span>
+                    </div>
+                  )}
                   {component.worker_count !== undefined && (
                     <div className="flex justify-between">
                       <span className="font-medium">Workers:</span>
@@ -396,6 +479,18 @@ export default function InfrastructureHealthPanel() {
                     <div className="flex justify-between">
                       <span className="font-medium">Queue:</span>
                       <span>{component.queue}</span>
+                    </div>
+                  )}
+                  {component.engine && (
+                    <div className="flex justify-between">
+                      <span className="font-medium">Engine:</span>
+                      <span>{component.engine}</span>
+                    </div>
+                  )}
+                  {component.tenant_id && (
+                    <div className="flex justify-between">
+                      <span className="font-medium">Tenant:</span>
+                      <span className="truncate ml-2 font-mono">{component.tenant_id}</span>
                     </div>
                   )}
                 </div>
@@ -419,10 +514,10 @@ export default function InfrastructureHealthPanel() {
             </h3>
             <div className="mt-2 text-sm text-blue-700 dark:text-blue-300">
               <ul className="list-disc list-inside space-y-1">
-                <li>Backend API handles all HTTP requests</li>
-                <li>Database stores documents and configuration</li>
-                <li>Redis provides message queuing for async tasks</li>
-                <li>Celery Worker processes document conversions</li>
+                <li>Health data is fetched from a single comprehensive endpoint</li>
+                <li>Components marked N/A are not configured in the current environment</li>
+                <li>Use &quot;Show All Components&quot; to see optional services</li>
+                <li>Click the refresh icon on any component to recheck individually</li>
               </ul>
             </div>
           </div>

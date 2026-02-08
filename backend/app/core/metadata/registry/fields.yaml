@@ -1,0 +1,461 @@
+# Metadata field definitions for all namespaces.
+# Global baseline (organization_id = null).
+#
+# Each field specifies:
+#   data_type: string | number | boolean | date | enum | array | object
+#   indexed: whether the field is indexed in search_chunks.metadata
+#   facetable: whether the field can be used as a facet filter
+#   applicable_content_types: which content types this field appears on
+#   description: human-readable description
+#   examples: sample values
+
+fields:
+  # =========================================================================
+  # SOURCE namespace - common fields for all assets
+  # =========================================================================
+  source:
+    storage_folder:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [asset]
+      description: "Storage folder path in object storage (org prefix and filename stripped)"
+      examples: ["uploads/docs", "sharepoint/site/library", "scrape/collection/pages"]
+
+    uploaded_by:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "User ID who uploaded the asset"
+
+    uploaded_at:
+      data_type: date
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "Timestamp when the asset was uploaded"
+
+    upload_method:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "Method of upload (api, ui, etc.)"
+      examples: ["api"]
+
+  # =========================================================================
+  # SHAREPOINT namespace
+  # =========================================================================
+  sharepoint:
+    item_id:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "SharePoint item ID"
+
+    drive_id:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "SharePoint drive ID"
+
+    path:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "Full SharePoint path"
+
+    folder:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [asset]
+      description: "SharePoint folder name"
+
+    web_url:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "SharePoint web URL"
+
+    parent_path:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "SharePoint parent folder path"
+
+    created_by:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [asset]
+      description: "Display name of document creator"
+
+    created_by_email:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "Email of document creator"
+
+    modified_by:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [asset]
+      description: "Display name of last modifier"
+
+    modified_by_email:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "Email of last modifier"
+
+    created_at:
+      data_type: date
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "SharePoint creation timestamp"
+
+    modified_at:
+      data_type: date
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "SharePoint modification timestamp"
+
+  # =========================================================================
+  # SAM namespace
+  # =========================================================================
+  sam:
+    notice_id:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [sam_notice, asset]
+      description: "SAM.gov notice ID"
+
+    solicitation_id:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [sam_notice, asset]
+      description: "Parent solicitation ID"
+
+    solicitation_number:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [sam_solicitation, asset]
+      description: "Solicitation number"
+
+    notice_type:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [sam_notice]
+      description: "Notice type (Presolicitation, Combined Synopsis, etc.)"
+      examples: ["Presolicitation", "Combined Synopsis/Solicitation", "Sources Sought"]
+
+    agency:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [sam_notice, sam_solicitation, asset]
+      description: "Federal agency name"
+      examples: ["GSA", "DOD", "USDA", "HHS"]
+
+    office:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [sam_solicitation]
+      description: "Agency office"
+
+    naics_code:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [sam_solicitation]
+      description: "NAICS code"
+      examples: ["541512", "541519", "541611"]
+
+    set_aside:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [sam_solicitation]
+      description: "Set-aside type"
+      examples: ["SBA", "8(a)", "HUBZone", "SDVOSB", "WOSB"]
+
+    posted_date:
+      data_type: date
+      indexed: true
+      facetable: false
+      applicable_content_types: [sam_notice, sam_solicitation]
+      description: "Date posted on SAM.gov"
+
+    response_deadline:
+      data_type: date
+      indexed: true
+      facetable: false
+      applicable_content_types: [sam_notice, sam_solicitation]
+      description: "Response deadline"
+
+    attachment_id:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "SAM.gov attachment ID"
+
+  # =========================================================================
+  # SALESFORCE namespace
+  # =========================================================================
+  salesforce:
+    salesforce_id:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [salesforce_account, salesforce_contact, salesforce_opportunity]
+      description: "Salesforce record ID"
+
+    account_type:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [salesforce_account]
+      description: "Account type"
+      examples: ["Customer", "Partner", "Prospect"]
+
+    industry:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [salesforce_account]
+      description: "Industry classification"
+
+    website:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [salesforce_account]
+      description: "Account website"
+
+    first_name:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [salesforce_contact]
+      description: "Contact first name"
+
+    last_name:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [salesforce_contact]
+      description: "Contact last name"
+
+    email:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [salesforce_contact]
+      description: "Contact email"
+
+    title:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [salesforce_contact]
+      description: "Contact job title"
+
+    account_name:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [salesforce_contact, salesforce_opportunity]
+      description: "Associated account name"
+
+    stage_name:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [salesforce_opportunity]
+      description: "Opportunity stage"
+      examples: ["Prospecting", "Qualification", "Proposal", "Closed Won"]
+
+    amount:
+      data_type: number
+      indexed: true
+      facetable: false
+      applicable_content_types: [salesforce_opportunity]
+      description: "Opportunity dollar amount"
+
+    opportunity_type:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [salesforce_opportunity]
+      description: "Opportunity type"
+
+    close_date:
+      data_type: date
+      indexed: true
+      facetable: false
+      applicable_content_types: [salesforce_opportunity]
+      description: "Expected close date"
+
+  # =========================================================================
+  # FORECAST namespace
+  # =========================================================================
+  forecast:
+    source_type:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [ag_forecast, apfs_forecast, state_forecast]
+      description: "Forecast source type"
+      examples: ["ag_forecast", "apfs_forecast", "state_forecast"]
+
+    source_id:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [ag_forecast, apfs_forecast, state_forecast]
+      description: "Source record ID"
+
+    agency_name:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [ag_forecast, apfs_forecast, state_forecast]
+      description: "Agency name"
+
+    naics_codes:
+      data_type: array
+      indexed: true
+      facetable: false
+      applicable_content_types: [ag_forecast, apfs_forecast, state_forecast]
+      description: "NAICS codes (may include code and description)"
+
+    set_aside_type:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [ag_forecast, apfs_forecast, state_forecast]
+      description: "Set-aside type"
+
+    fiscal_year:
+      data_type: number
+      indexed: true
+      facetable: true
+      applicable_content_types: [ag_forecast, apfs_forecast, state_forecast]
+      description: "Fiscal year"
+      examples: [2025, 2026]
+
+    estimated_award_quarter:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [ag_forecast, apfs_forecast, state_forecast]
+      description: "Estimated award quarter"
+      examples: ["Q1", "Q2", "Q3", "Q4"]
+
+  # =========================================================================
+  # SCRAPE namespace
+  # =========================================================================
+  scrape:
+    url:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "Original page URL"
+
+    final_url:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "Final URL after redirects"
+
+    source_url:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "URL of the page that linked to this document"
+
+    collection_id:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [asset]
+      description: "Scrape collection ID"
+
+    collection_name:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [asset]
+      description: "Scrape collection name"
+
+    crawl_run_id:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "Crawl run ID"
+
+    link_text:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "Link text from the referring page"
+
+  # =========================================================================
+  # SYNC namespace
+  # =========================================================================
+  sync:
+    config_id:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [asset]
+      description: "Sync configuration ID"
+
+    config_name:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [asset]
+      description: "Sync configuration name"
+
+  # =========================================================================
+  # FILE namespace
+  # =========================================================================
+  file:
+    extension:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [asset]
+      description: "File extension"
+      examples: [".pdf", ".docx", ".xlsx", ".pptx"]
+
+    description:
+      data_type: string
+      indexed: true
+      facetable: false
+      applicable_content_types: [asset]
+      description: "File description from source system"

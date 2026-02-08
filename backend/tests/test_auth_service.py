@@ -11,7 +11,7 @@ from unittest.mock import patch, MagicMock
 import jwt
 import bcrypt
 
-from app.services.auth_service import AuthService, auth_service
+from app.core.auth.auth_service import AuthService, auth_service
 from app.config import settings
 
 
@@ -467,7 +467,8 @@ class TestTokenExpirationUtilities:
 
         assert exp_datetime is not None
         assert isinstance(exp_datetime, datetime)
-        assert exp_datetime > datetime.utcnow()
+        # Compare against local time since get_token_expiration returns local time
+        assert exp_datetime > datetime.now()
 
     def test_get_token_expiration_invalid_token(self, auth_service_instance):
         """Test getting expiration for invalid token."""

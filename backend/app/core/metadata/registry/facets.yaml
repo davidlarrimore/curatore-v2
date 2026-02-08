@@ -1,0 +1,145 @@
+# Cross-domain facet definitions for Curatore Data Core.
+# Facets are user-facing filter abstractions that map to different
+# JSON paths across different content types.
+#
+# Each facet specifies:
+#   display_name: human-readable label
+#   data_type: string | number | boolean | date
+#   description: what this facet filters
+#   operators: supported filter operators (eq, in, gte, lte, contains, exists)
+#   mappings: content_type → json_path (namespace.field)
+
+facets:
+  agency:
+    display_name: "Agency"
+    data_type: string
+    description: "Federal agency name — cross-domain filter across SAM.gov and forecasts"
+    operators: [eq, in]
+    mappings:
+      sam_notice: "sam.agency"
+      sam_solicitation: "sam.agency"
+      ag_forecast: "forecast.agency_name"
+      apfs_forecast: "forecast.agency_name"
+      state_forecast: "forecast.agency_name"
+      asset: "sam.agency"
+
+  naics_code:
+    display_name: "NAICS Code"
+    data_type: string
+    description: "NAICS industry classification code"
+    operators: [eq, in]
+    mappings:
+      sam_solicitation: "sam.naics_code"
+
+  set_aside:
+    display_name: "Set-Aside"
+    data_type: string
+    description: "Small business set-aside type"
+    operators: [eq, in]
+    mappings:
+      sam_solicitation: "sam.set_aside"
+      ag_forecast: "forecast.set_aside_type"
+      apfs_forecast: "forecast.set_aside_type"
+      state_forecast: "forecast.set_aside_type"
+
+  notice_type:
+    display_name: "Notice Type"
+    data_type: string
+    description: "SAM.gov notice type (Presolicitation, Sources Sought, etc.)"
+    operators: [eq, in]
+    mappings:
+      sam_notice: "sam.notice_type"
+
+  fiscal_year:
+    display_name: "Fiscal Year"
+    data_type: number
+    description: "Federal fiscal year"
+    operators: [eq, in, gte, lte]
+    mappings:
+      ag_forecast: "forecast.fiscal_year"
+      apfs_forecast: "forecast.fiscal_year"
+      state_forecast: "forecast.fiscal_year"
+
+  award_quarter:
+    display_name: "Award Quarter"
+    data_type: string
+    description: "Estimated award quarter"
+    operators: [eq, in]
+    mappings:
+      ag_forecast: "forecast.estimated_award_quarter"
+      apfs_forecast: "forecast.estimated_award_quarter"
+      state_forecast: "forecast.estimated_award_quarter"
+
+  folder:
+    display_name: "Folder"
+    data_type: string
+    description: "SharePoint folder or storage folder"
+    operators: [eq, in, contains]
+    mappings:
+      asset: "sharepoint.folder"
+
+  created_by:
+    display_name: "Created By"
+    data_type: string
+    description: "Document creator (SharePoint author)"
+    operators: [eq, in]
+    mappings:
+      asset: "sharepoint.created_by"
+
+  account_type:
+    display_name: "Account Type"
+    data_type: string
+    description: "Salesforce account type"
+    operators: [eq, in]
+    mappings:
+      salesforce_account: "salesforce.account_type"
+
+  industry:
+    display_name: "Industry"
+    data_type: string
+    description: "Salesforce account industry"
+    operators: [eq, in]
+    mappings:
+      salesforce_account: "salesforce.industry"
+
+  stage_name:
+    display_name: "Stage"
+    data_type: string
+    description: "Salesforce opportunity stage"
+    operators: [eq, in]
+    mappings:
+      salesforce_opportunity: "salesforce.stage_name"
+
+  opportunity_type:
+    display_name: "Opportunity Type"
+    data_type: string
+    description: "Salesforce opportunity type"
+    operators: [eq, in]
+    mappings:
+      salesforce_opportunity: "salesforce.opportunity_type"
+
+  collection_name:
+    display_name: "Scrape Collection"
+    data_type: string
+    description: "Web scrape collection name"
+    operators: [eq, in]
+    mappings:
+      asset: "scrape.collection_name"
+
+  file_extension:
+    display_name: "File Type"
+    data_type: string
+    description: "File extension"
+    operators: [eq, in]
+    mappings:
+      asset: "file.extension"
+
+  forecast_source:
+    display_name: "Forecast Source"
+    data_type: string
+    description: "Forecast data source type"
+    operators: [eq, in]
+    mappings:
+      ag_forecast: "forecast.source_type"
+      apfs_forecast: "forecast.source_type"
+      state_forecast: "forecast.source_type"

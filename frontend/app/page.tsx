@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { systemApi, runsApi, objectStorageApi, storageApi, assetsApi } from '@/lib/api'
+import { systemApi, runsApi, objectStorageApi, assetsApi } from '@/lib/api'
 import {
   SystemHealthCard,
   StorageOverviewCard,
@@ -52,6 +52,7 @@ interface StorageStats {
     storage_saved_bytes: number
     savings_percentage: number
   }
+  // Note: No backend endpoint currently provides this data
 }
 
 interface Run {
@@ -127,13 +128,11 @@ function DashboardContent() {
     if (!token) return
 
     try {
-      const [health, stats, assetsResponse] = await Promise.all([
+      const [health, assetsResponse] = await Promise.all([
         objectStorageApi.getHealth(),
-        storageApi.getStats(token).catch(() => null),
         assetsApi.listAssets(token, { limit: 1 }).catch(() => null),
       ])
       setStorageHealth(health)
-      if (stats) setStorageStats(stats)
       if (assetsResponse) setAssetCount(assetsResponse.total)
     } catch (error) {
       console.error('Failed to fetch storage health:', error)

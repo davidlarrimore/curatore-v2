@@ -82,8 +82,8 @@ The SharePoint integration allows users to:
 
 | File | Purpose |
 |------|---------|
-| `sharepoint_service.py` | Microsoft Graph API client, token management |
-| `sharepoint_sync_service.py` | Sync config CRUD, sync execution |
+| `backend/app/connectors/sharepoint/sharepoint_service.py` | Microsoft Graph API client, token management |
+| `backend/app/connectors/sharepoint/sharepoint_sync_service.py` | Sync config CRUD, sync execution |
 
 ---
 
@@ -113,23 +113,23 @@ Files are re-downloaded when:
 
 ```
 # Connections
-GET    /api/v1/connections                          # List connections
-POST   /api/v1/connections                          # Create connection
-DELETE /api/v1/connections/{id}                     # Delete connection
+GET    /api/v1/admin/connections                          # List connections
+POST   /api/v1/admin/connections                          # Create connection
+DELETE /api/v1/admin/connections/{id}                     # Delete connection
 
 # Sync Configs
-GET    /api/v1/sharepoint/configs                   # List sync configs
-POST   /api/v1/sharepoint/configs                   # Create sync config
-GET    /api/v1/sharepoint/configs/{id}              # Get config details
-PATCH  /api/v1/sharepoint/configs/{id}              # Update config
-DELETE /api/v1/sharepoint/configs/{id}              # Delete (async)
-POST   /api/v1/sharepoint/configs/{id}/sync         # Trigger manual sync
-POST   /api/v1/sharepoint/configs/{id}/archive      # Archive config
+GET    /api/v1/data/sharepoint/configs                   # List sync configs
+POST   /api/v1/data/sharepoint/configs                   # Create sync config
+GET    /api/v1/data/sharepoint/configs/{id}              # Get config details
+PATCH  /api/v1/data/sharepoint/configs/{id}              # Update config
+DELETE /api/v1/data/sharepoint/configs/{id}              # Delete (async)
+POST   /api/v1/data/sharepoint/configs/{id}/sync         # Trigger manual sync
+POST   /api/v1/data/sharepoint/configs/{id}/archive      # Archive config
 
 # Folder Browser
-GET    /api/v1/sharepoint/sites                     # List available sites
-GET    /api/v1/sharepoint/sites/{id}/drives         # List drives in site
-GET    /api/v1/sharepoint/drives/{id}/children      # Browse folder contents
+GET    /api/v1/data/sharepoint/sites                     # List available sites
+GET    /api/v1/data/sharepoint/sites/{id}/drives         # List drives in site
+GET    /api/v1/data/sharepoint/drives/{id}/children      # Browse folder contents
 ```
 
 ---

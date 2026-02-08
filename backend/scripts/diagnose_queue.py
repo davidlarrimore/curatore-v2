@@ -14,8 +14,8 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from sqlalchemy import select, func, and_, text
-from app.services.database_service import database_service
-from app.database.models import Asset, Run, ExtractionResult
+from app.core.shared.database_service import database_service
+from app.core.database.models import Asset, Run, ExtractionResult
 from app.config import settings
 
 
@@ -30,7 +30,7 @@ async def diagnose():
     print(f"  database_url: {settings.database_url[:50]}...")
 
     # Queue configuration from config.yml
-    from app.services.queue_registry import queue_registry
+    from app.core.ops.queue_registry import queue_registry
     queue_registry._ensure_initialized()
     extraction_queue = queue_registry.get("extraction")
     print(f"\n[1b] QUEUE CONFIG (from config.yml)")

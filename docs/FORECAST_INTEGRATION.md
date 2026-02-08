@@ -392,26 +392,26 @@ Complete run: results_summary
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/forecasts/syncs` | List syncs |
-| POST | `/api/v1/forecasts/syncs` | Create sync |
-| GET | `/api/v1/forecasts/syncs/{id}` | Get sync details |
-| PATCH | `/api/v1/forecasts/syncs/{id}` | Update sync |
-| DELETE | `/api/v1/forecasts/syncs/{id}` | Archive sync |
-| POST | `/api/v1/forecasts/syncs/{id}/pull` | Trigger manual pull |
-| POST | `/api/v1/forecasts/syncs/{id}/clear` | Delete all forecasts |
+| GET | `/api/v1/data/forecasts/syncs` | List syncs |
+| POST | `/api/v1/data/forecasts/syncs` | Create sync |
+| GET | `/api/v1/data/forecasts/syncs/{id}` | Get sync details |
+| PATCH | `/api/v1/data/forecasts/syncs/{id}` | Update sync |
+| DELETE | `/api/v1/data/forecasts/syncs/{id}` | Archive sync |
+| POST | `/api/v1/data/forecasts/syncs/{id}/pull` | Trigger manual pull |
+| POST | `/api/v1/data/forecasts/syncs/{id}/clear` | Delete all forecasts |
 
 ### Forecasts (Unified View)
 
 | Method | Endpoint | Description |
 |--------|----------|-------------|
-| GET | `/api/v1/forecasts` | List forecasts (unified) |
-| GET | `/api/v1/forecasts/{id}` | Get forecast by UUID |
-| GET | `/api/v1/forecasts/stats` | Dashboard statistics |
+| GET | `/api/v1/data/forecasts` | List forecasts (unified) |
+| GET | `/api/v1/data/forecasts/{id}` | Get forecast by UUID |
+| GET | `/api/v1/data/forecasts/stats` | Dashboard statistics |
 
 ### Query Parameters
 
 ```
-GET /api/v1/forecasts?
+GET /api/v1/data/forecasts?
     source_type=ag,apfs      # Filter by source(s)
     sync_id={uuid}           # Filter by sync
     fiscal_year=2026         # Filter by FY
@@ -582,17 +582,17 @@ async def handle_forecast_scheduled_sync(session, run, config):
 
 | File | Purpose |
 |------|---------|
-| `backend/app/database/models.py` | ForecastSync, AgForecast, ApfsForecast, StateForecast models |
-| `backend/app/services/forecast_sync_service.py` | Sync configuration CRUD |
-| `backend/app/services/forecast_service.py` | Unified forecast access via VIEW |
-| `backend/app/services/ag_forecast_service.py` | AG record CRUD |
-| `backend/app/services/ag_pull_service.py` | AG API integration |
-| `backend/app/services/apfs_forecast_service.py` | APFS record CRUD |
-| `backend/app/services/apfs_pull_service.py` | APFS API integration |
-| `backend/app/services/state_forecast_service.py` | State record CRUD |
-| `backend/app/services/state_pull_service.py` | State scraping + Excel parsing |
-| `backend/app/api/v1/routers/forecasts.py` | REST API endpoints |
-| `backend/app/tasks.py` | `forecast_sync_task` Celery task |
+| `backend/app/core/database/models.py` | ForecastSync, AgForecast, ApfsForecast, StateForecast models |
+| `backend/app/core/shared/forecast_sync_service.py` | Sync configuration CRUD |
+| `backend/app/core/shared/forecast_service.py` | Unified forecast access via VIEW |
+| `backend/app/connectors/gsa_gateway/ag_forecast_service.py` | AG record CRUD |
+| `backend/app/connectors/gsa_gateway/ag_pull_service.py` | AG API integration |
+| `backend/app/connectors/dhs_apfs/apfs_forecast_service.py` | APFS record CRUD |
+| `backend/app/connectors/dhs_apfs/apfs_pull_service.py` | APFS API integration |
+| `backend/app/connectors/state_forecast/state_forecast_service.py` | State record CRUD |
+| `backend/app/connectors/state_forecast/state_pull_service.py` | State scraping + Excel parsing |
+| `backend/app/api/v1/data/routers/forecasts.py` | REST API endpoints |
+| `backend/app/core/tasks/forecasts.py` | `forecast_sync_task` Celery task |
 | `frontend/app/forecasts/` | Frontend pages |
 
 ---

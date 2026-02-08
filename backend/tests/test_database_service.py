@@ -8,10 +8,11 @@ and connection pooling for SQLite and PostgreSQL databases.
 import pytest
 import os
 import tempfile
+from contextlib import asynccontextmanager
 from unittest.mock import patch, AsyncMock, MagicMock, PropertyMock
 from pathlib import Path
 
-from app.services.database_service import DatabaseService, database_service
+from app.core.shared.database_service import DatabaseService, database_service
 from sqlalchemy.ext.asyncio import AsyncSession
 
 
@@ -52,6 +53,7 @@ class TestDatabaseServiceInitialization:
         assert database_service is not None
         assert isinstance(database_service, DatabaseService)
 
+    @pytest.mark.skip(reason="PostgreSQL is now required; SQLite is explicitly rejected")
     @patch.dict(os.environ, {"DATABASE_URL": "sqlite+aiosqlite:///./test.db"})
     def test_initialization_with_sqlite(self):
         """Test initialization with SQLite URL."""
@@ -78,6 +80,7 @@ class TestDatabaseServiceInitialization:
         # Pool settings are applied during engine creation
         assert db_service._engine is not None
 
+    @pytest.mark.skip(reason="PostgreSQL is now required; SQLite is explicitly rejected")
     def test_creates_data_directory_for_sqlite(self, temp_db_path):
         """Test that SQLite initialization creates data directory."""
         db_dir = os.path.dirname(temp_db_path)
@@ -104,8 +107,11 @@ class TestSessionManagement:
     async def test_get_session_commits_on_success(self):
         """Test that session commits on successful exit."""
         mock_session = AsyncMock(spec=AsyncSession)
-        mock_factory = AsyncMock()
-        mock_factory.return_value.__aenter__.return_value = mock_session
+
+        # Create a proper async context manager mock
+        @asynccontextmanager
+        async def mock_factory():
+            yield mock_session
 
         with patch.object(database_service, '_session_factory', mock_factory):
             async with database_service.get_session() as session:
@@ -119,8 +125,11 @@ class TestSessionManagement:
     async def test_get_session_rollback_on_error(self):
         """Test that session rolls back on error."""
         mock_session = AsyncMock(spec=AsyncSession)
-        mock_factory = AsyncMock()
-        mock_factory.return_value.__aenter__.return_value = mock_session
+
+        # Create a proper async context manager mock
+        @asynccontextmanager
+        async def mock_factory():
+            yield mock_session
 
         with patch.object(database_service, '_session_factory', mock_factory):
             try:
@@ -158,9 +167,15 @@ class TestDatabaseInitialization:
     @pytest.mark.asyncio
     async def test_init_db_creates_tables(self):
         """Test that init_db creates database tables."""
-        mock_engine = AsyncMock()
         mock_conn = AsyncMock()
-        mock_engine.begin.return_value.__aenter__.return_value = mock_conn
+
+        # Create proper async context manager for engine.begin()
+        @asynccontextmanager
+        async def mock_begin():
+            yield mock_conn
+
+        mock_engine = MagicMock()
+        mock_engine.begin = mock_begin
 
         with patch.object(database_service, '_engine', mock_engine):
             await database_service.init_db()
@@ -180,12 +195,18 @@ class TestDatabaseInitialization:
     @pytest.mark.asyncio
     async def test_init_db_imports_models(self):
         """Test that init_db imports database models."""
-        mock_engine = AsyncMock()
         mock_conn = AsyncMock()
-        mock_engine.begin.return_value.__aenter__.return_value = mock_conn
+
+        # Create proper async context manager for engine.begin()
+        @asynccontextmanager
+        async def mock_begin():
+            yield mock_conn
+
+        mock_engine = MagicMock()
+        mock_engine.begin = mock_begin
 
         with patch.object(database_service, '_engine', mock_engine):
-            with patch('app.database.models') as mock_models:
+            with patch('app.core.database.models') as mock_models:
                 await database_service.init_db()
 
         # Models module should be imported
@@ -277,6 +298,7 @@ class TestHealthCheck:
         assert health["status"] == "healthy"
         assert health["connected"] is True
 
+    @pytest.mark.skip(reason="PostgreSQL is now required; SQLite is explicitly rejected")
     @pytest.mark.asyncio
     @patch.dict(os.environ, {"DATABASE_URL": "sqlite+aiosqlite:///./test.db"})
     async def test_health_check_includes_database_size_for_sqlite(self):
@@ -358,6 +380,7 @@ class TestConnectionClosure:
 class TestDatabaseTypeDetection:
     """Test database type detection."""
 
+    @pytest.mark.skip(reason="PostgreSQL is now required; SQLite is explicitly rejected")
     @patch.dict(os.environ, {"DATABASE_URL": "sqlite+aiosqlite:///./test.db"})
     def test_detects_sqlite(self):
         """Test SQLite detection from URL."""
@@ -384,6 +407,7 @@ class TestStringRepresentation:
         assert "type=" in repr_str
         assert repr_str.endswith(")>")
 
+    @pytest.mark.skip(reason="PostgreSQL is now required; SQLite is explicitly rejected")
     @patch.dict(os.environ, {"DATABASE_URL": "sqlite+aiosqlite:///./test.db"})
     def test_repr_shows_sqlite(self):
         """Test repr shows SQLite for SQLite database."""
@@ -428,6 +452,7 @@ class TestErrorHandling:
 class TestConfigurationHandling:
     """Test configuration handling."""
 
+    @pytest.mark.skip(reason="PostgreSQL is now required; default SQLite URL no longer supported")
     @patch.dict(os.environ, {}, clear=True)
     def test_uses_default_sqlite_url(self):
         """Test uses default SQLite URL when none configured."""

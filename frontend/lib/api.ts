@@ -94,13 +94,13 @@ function validateAndEncodeDocumentId(documentId: string): string {
 // -------------------- System API --------------------
 export const systemApi = {
   async getHealth(): Promise<{ status: string; llm_connected: boolean; version: string } & Record<string, any>> {
-    const res = await fetch(apiUrl('/health'), { cache: 'no-store', headers: authHeaders() })
+    const res = await fetch(apiUrl('/admin/health'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async checkAvailability(): Promise<boolean> {
     try {
-      const res = await fetch(apiUrl('/health'), { cache: 'no-store' })
+      const res = await fetch(apiUrl('/admin/health'), { cache: 'no-store' })
       return res.ok || res.status === 401 || res.status === 403
     } catch {
       return false
@@ -108,14 +108,14 @@ export const systemApi = {
   },
 
   async getSupportedFormats(): Promise<{ supported_extensions: string[]; max_file_size: number }> {
-    const res = await fetch(apiUrl('/config/supported-formats'), { cache: 'no-store', headers: authHeaders() })
+    const res = await fetch(apiUrl('/admin/config/supported-formats'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getConfig(): Promise<{
     ocr_settings: { language: string; psm: number }
   }> {
-    const res = await fetch(apiUrl('/config/defaults'), { cache: 'no-store', headers: authHeaders() })
+    const res = await fetch(apiUrl('/admin/config/defaults'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
@@ -134,46 +134,46 @@ export const systemApi = {
     default_engine: string | null
     default_engine_source: string | null
   }> {
-    const res = await fetch(apiUrl('/config/extraction-engines'), { cache: 'no-store', headers: authHeaders() })
+    const res = await fetch(apiUrl('/admin/config/extraction-engines'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getLLMStatus(): Promise<LLMConnectionStatus> {
-    const res = await fetch(apiUrl('/llm/status'), { cache: 'no-store', headers: authHeaders() })
+    const res = await fetch(apiUrl('/admin/llm/status'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async resetSystem(): Promise<{ success: boolean; message?: string }> {
-    const res = await fetch(apiUrl('/system/reset'), { method: 'POST', headers: authHeaders() })
+    const res = await fetch(apiUrl('/admin/system/reset'), { method: 'POST', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getQueueHealth(): Promise<{ pending: number; running: number; processed: number; total: number } & Record<string, any>> {
-    const res = await fetch(apiUrl('/system/queues'), { cache: 'no-store', headers: authHeaders() })
+    const res = await fetch(apiUrl('/admin/system/queues'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getQueueSummaryByJobs(jobIds: string[]): Promise<{ queued: number; running: number; done: number; total: number } & Record<string, any>> {
-    const url = new URL(apiUrl('/system/queues/summary'))
+    const url = new URL(apiUrl('/admin/system/queues/summary'))
     url.searchParams.set('job_ids', jobIds.join(','))
     const res = await fetch(url.toString(), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getQueueSummaryByBatch(batchId: string): Promise<{ queued: number; running: number; done: number; total: number } & Record<string, any>> {
-    const url = new URL(apiUrl('/system/queues/summary'))
+    const url = new URL(apiUrl('/admin/system/queues/summary'))
     url.searchParams.set('batch_id', batchId)
     const res = await fetch(url.toString(), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getComprehensiveHealth(): Promise<any> {
-    const res = await fetch(apiUrl('/system/health/comprehensive'), { cache: 'no-store', headers: authHeaders() })
+    const res = await fetch(apiUrl('/admin/system/health/comprehensive'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getComponentHealth(component: 'backend' | 'database' | 'redis' | 'celery' | 'extraction' | 'docling' | 'llm' | 'sharepoint'): Promise<any> {
-    const res = await fetch(apiUrl(`/system/health/${component}`), { cache: 'no-store', headers: authHeaders() })
+    const res = await fetch(apiUrl(`/admin/system/health/${component}`), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 }
@@ -198,24 +198,13 @@ export const fileApi = {
       return { files, count: files.length }
     }
 
-    // Fall back to filesystem-based endpoint
-    const res = await fetch(apiUrl('/documents/uploaded'), { cache: 'no-store', headers: authHeaders() })
-    return handleJson(res)
+    // Filesystem fallback no longer available (documents router removed)
+    return { files: [], count: 0 }
   },
 
   async listBatchFiles(): Promise<{ files: FileInfo[]; count: number }> {
-    // Check if object storage is enabled
-    const useObjectStorage = await objectStorageApi.isEnabled()
-
-    if (useObjectStorage) {
-      // With object storage, "batch files" don't really exist as a separate concept
-      // Return empty list for now (batch processing would use uploaded files)
-      return { files: [], count: 0 }
-    }
-
-    // Fall back to filesystem-based endpoint
-    const res = await fetch(apiUrl('/documents/batch'), { cache: 'no-store', headers: authHeaders() })
-    return handleJson(res)
+    // Batch files are a legacy concept — always return empty
+    return { files: [], count: 0 }
   },
 
   /**
@@ -237,10 +226,10 @@ export const fileApi = {
       }
     }
 
-    // Fall back to traditional upload (through backend)
+    // Fall back to proxy upload (through backend)
     const form = new FormData()
     form.append('file', file)
-    const res = await fetch(apiUrl('/documents/upload'), { method: 'POST', body: form, headers: authHeaders() })
+    const res = await fetch(apiUrl('/data/storage/upload/proxy'), { method: 'POST', body: form, headers: authHeaders() })
     return handleJson(res)
   },
 
@@ -270,8 +259,7 @@ export const fileApi = {
     }
 
     // Fall back to traditional download (through backend)
-    // Use path parameter with validated document ID
-    let url = apiUrl(`/documents/${encodedDocId}/download`)
+    let url = apiUrl(`/data/assets/${encodedDocId}/download`)
     if (jobId) {
       url += `?job_id=${encodeURIComponent(jobId)}`
     }
@@ -281,7 +269,7 @@ export const fileApi = {
 
   async deleteDocument(documentId: string): Promise<{ success: boolean; message?: string }> {
     const encodedDocId = validateAndEncodeDocumentId(documentId)
-    const res = await fetch(apiUrl(`/documents/${encodedDocId}`), { method: 'DELETE', headers: authHeaders() })
+    const res = await fetch(apiUrl(`/data/assets/${encodedDocId}`), { method: 'DELETE', headers: authHeaders() })
     return handleJson(res)
   },
 
@@ -302,7 +290,7 @@ export const fileApi = {
       custom_filename: zipName,
       zip_name: zipName,
     }
-    const res = await fetch(apiUrl('/documents/download/bulk'), {
+    const res = await fetch(apiUrl('/data/assets/download/bulk'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders() },
       body: JSON.stringify(body),
@@ -311,7 +299,7 @@ export const fileApi = {
   },
 
   async downloadRAGReadyDocuments(zipName?: string): Promise<Blob> {
-    const url = new URL(apiUrl('/documents/download/rag-ready'))
+    const url = new URL(apiUrl('/data/assets/download/rag-ready'))
     if (zipName) url.searchParams.set('zip_name', zipName)
     url.searchParams.set('include_summary', 'true')
     const res = await fetch(url.toString(), { headers: authHeaders() })
@@ -320,53 +308,7 @@ export const fileApi = {
 }
 
 // -------------------- Processing API --------------------
-export const processingApi = {
-  /**
-   * @deprecated Job system has been removed. Use assetsApi.upload() instead
-   * which automatically triggers extraction via the Run system.
-   */
-  async enqueueDocument(
-    _documentId: string,
-    _options: { auto_optimize?: boolean; quality_thresholds?: any } = {},
-  ): Promise<{ job_id: string; document_id: string; status: string; enqueued_at?: string }>
-  {
-    throw new Error('Job system removed. Use assetsApi.upload() for automatic extraction.')
-  },
-
-  /**
-   * @deprecated Job system has been removed. Use assetsApi.upload() instead
-   * which automatically triggers extraction via the Run system.
-   */
-  async processBatch(_request: { document_ids: string[]; options?: any }): Promise<{ job_id: string; document_ids: string[]; status: string }>
-  {
-    throw new Error('Job system removed. Use assetsApi.upload() for automatic extraction.')
-  },
-
-  async getProcessingResult(documentId: string): Promise<ProcessingResult> {
-    const encodedDocId = validateAndEncodeDocumentId(documentId)
-    const res = await fetch(apiUrl(`/documents/${encodedDocId}/result`), { cache: 'no-store', headers: authHeaders() })
-    const raw = await handleJson<any>(res)
-    return mapV1ResultToFrontend(raw)
-  },
-
-  async processDocument(
-    documentId: string,
-    options: { auto_optimize?: boolean; quality_thresholds?: any },
-  ): Promise<ProcessingResult> {
-    await processingApi.enqueueDocument(documentId, options)
-    const raw = await processingApi.getProcessingResult(documentId)
-    return raw
-  },
-
-  // Optional helper (not currently used): export results in a simple JSON blob
-  async downloadResults(results: ProcessingResult[], format: 'json' | 'zip' | string = 'json'): Promise<Blob> {
-    if (format === 'json') {
-      return new Blob([JSON.stringify(results, null, 2)], { type: 'application/json' })
-    }
-    // For other formats, default to generating a JSON blob. Real zip export is handled via fileApi.* helpers.
-    return new Blob([JSON.stringify(results, null, 2)], { type: 'application/octet-stream' })
-  },
-}
+// REMOVED: processingApi was deprecated. Use assetsApi for extraction workflows.
 
 // -------------------- Organizations API --------------------
 export const organizationsApi = {
@@ -380,7 +322,7 @@ export const organizationsApi = {
     created_at: string
     updated_at: string
   }> {
-    const res = await fetch(apiUrl('/organizations/me'), {
+    const res = await fetch(apiUrl('/admin/organizations/me'), {
       cache: 'no-store',
       headers: authHeaders(token)
     })
@@ -397,7 +339,7 @@ export const organizationsApi = {
     created_at: string
     updated_at: string
   }> {
-    const res = await fetch(apiUrl('/organizations/me'), {
+    const res = await fetch(apiUrl('/admin/organizations/me'), {
       method: 'PUT',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -407,57 +349,7 @@ export const organizationsApi = {
 }
 
 // -------------------- Content API --------------------
-export const contentApi = {
-  /**
-   * Get document content for viewing/editing.
-   *
-   * @param documentId - Document ID to retrieve
-   * @param token - Optional auth token
-   * @param jobId - Optional job ID to retrieve job-specific processed content
-   */
-  async getDocumentContent(documentId: string, token?: string, jobId?: string): Promise<{ content: string }> {
-    // Validate and encode document ID
-    const encodedDocId = validateAndEncodeDocumentId(documentId)
-
-    // Use path parameter with validated document ID
-    let url = apiUrl(`/documents/${encodedDocId}/content`)
-    if (jobId) {
-      url += `?job_id=${encodeURIComponent(jobId)}`
-    }
-    const res = await fetch(url, {
-      cache: 'no-store',
-      headers: authHeaders(token)
-    })
-    return handleJson(res)
-  },
-
-  async updateDocumentContent(
-    documentId: string,
-    content: string,
-    token?: string,
-  ): Promise<{ job_id: string; document_id: string; status: string; enqueued_at?: string }> {
-    const encodedDocId = validateAndEncodeDocumentId(documentId)
-    const res = await fetch(apiUrl(`/documents/${encodedDocId}/content`), {
-      method: 'PUT',
-      headers: { ...jsonHeaders, ...authHeaders(token) },
-      body: JSON.stringify({ content }),
-    })
-    if (!res.ok) {
-      let body: any = undefined
-      try { body = await res.json() } catch {}
-      const msg = (body && (body.detail || body.message)) || res.statusText
-      // Preserve 409 status for conflict handling
-      if (res.status === 409) {
-        const err: any = new Error(msg)
-        err.status = 409
-        err.detail = body
-        throw err
-      }
-      httpError(res, msg, body)
-    }
-    return res.json()
-  },
-}
+// REMOVED: contentApi was unused. Use assetsApi for asset content access.
 
 // -------------------- Utility Functions --------------------
 export const utils = {
@@ -662,7 +554,7 @@ export const runsApi = {
    * Get run statistics for the organization
    */
   async getStats(token?: string): Promise<RunStats> {
-    const res = await fetch(apiUrl('/runs/stats'), {
+    const res = await fetch(apiUrl('/ops/runs/stats'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -692,7 +584,7 @@ export const runsApi = {
     if (params?.offset) query.set('offset', String(params.offset))
 
     const queryStr = query.toString()
-    const url = queryStr ? `/runs?${queryStr}` : '/runs'
+    const url = queryStr ? `/ops/runs?${queryStr}` : '/ops/runs'
 
     const res = await fetch(apiUrl(url), {
       headers: authHeaders(token),
@@ -705,7 +597,7 @@ export const runsApi = {
    * Get a single run by ID
    */
   async getRun(runId: string, token?: string): Promise<Run> {
-    const res = await fetch(apiUrl(`/runs/${runId}`), {
+    const res = await fetch(apiUrl(`/ops/runs/${runId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -726,7 +618,7 @@ export const runsApi = {
     if (params?.limit) query.set('limit', String(params.limit))
 
     const queryStr = query.toString()
-    const url = queryStr ? `/runs/${runId}/logs?${queryStr}` : `/runs/${runId}/logs`
+    const url = queryStr ? `/ops/runs/${runId}/logs?${queryStr}` : `/ops/runs/${runId}/logs`
 
     const res = await fetch(apiUrl(url), {
       headers: authHeaders(token),
@@ -739,7 +631,7 @@ export const runsApi = {
    * Retry a failed extraction run
    */
   async retryRun(runId: string, token?: string): Promise<Run> {
-    const res = await fetch(apiUrl(`/runs/${runId}/retry`), {
+    const res = await fetch(apiUrl(`/ops/runs/${runId}/retry`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -936,7 +828,7 @@ export const queueAdminApi = {
    * @deprecated Use getUnifiedStats() instead
    */
   async getStats(token?: string): Promise<ExtractionQueueStats> {
-    const res = await fetch(apiUrl('/queue/stats'), {
+    const res = await fetch(apiUrl('/ops/queue/stats'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -948,7 +840,7 @@ export const queueAdminApi = {
    * This is the preferred method for fetching queue stats.
    */
   async getUnifiedStats(token?: string): Promise<UnifiedQueueStats> {
-    const res = await fetch(apiUrl('/queue/unified'), {
+    const res = await fetch(apiUrl('/ops/queue/unified'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -969,7 +861,7 @@ export const queueAdminApi = {
     if (params?.status_filter) query.set('status_filter', params.status_filter)
 
     const queryStr = query.toString()
-    const url = queryStr ? `/queue/active?${queryStr}` : '/queue/active'
+    const url = queryStr ? `/ops/queue/active?${queryStr}` : '/ops/queue/active'
 
     const res = await fetch(apiUrl(url), {
       headers: authHeaders(token),
@@ -986,7 +878,7 @@ export const queueAdminApi = {
     run_id: string
     reason?: string
   }> {
-    const res = await fetch(apiUrl(`/queue/${runId}/cancel`), {
+    const res = await fetch(apiUrl(`/ops/queue/${runId}/cancel`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -1002,7 +894,7 @@ export const queueAdminApi = {
     total_requested: number
     total_cancelled: number
   }> {
-    const res = await fetch(apiUrl('/queue/cancel-bulk'), {
+    const res = await fetch(apiUrl('/ops/queue/cancel-bulk'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ run_ids: runIds }),
@@ -1014,7 +906,7 @@ export const queueAdminApi = {
    * Get queue configuration
    */
   async getConfig(token?: string): Promise<QueueConfig> {
-    const res = await fetch(apiUrl('/queue/config'), {
+    const res = await fetch(apiUrl('/ops/queue/config'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -1027,7 +919,7 @@ export const queueAdminApi = {
    * Get queue registry with all queue definitions and capabilities
    */
   async getRegistry(token?: string): Promise<QueueRegistryResponse> {
-    const res = await fetch(apiUrl('/queue/registry'), {
+    const res = await fetch(apiUrl('/ops/queue/registry'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -1050,7 +942,7 @@ export const queueAdminApi = {
     if (params?.limit) query.set('limit', String(params.limit))
 
     const queryStr = query.toString()
-    const url = queryStr ? `/queue/jobs?${queryStr}` : '/queue/jobs'
+    const url = queryStr ? `/ops/queue/jobs?${queryStr}` : '/ops/queue/jobs'
 
     const res = await fetch(apiUrl(url), {
       headers: authHeaders(token),
@@ -1067,7 +959,7 @@ export const queueAdminApi = {
     run_id: string
     reason?: string
   }> {
-    const res = await fetch(apiUrl(`/queue/jobs/${runId}/cancel`), {
+    const res = await fetch(apiUrl(`/ops/queue/jobs/${runId}/cancel`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -1084,7 +976,7 @@ export const queueAdminApi = {
     connections_terminated: number
     celery_task_revoked: boolean
   }> {
-    const res = await fetch(apiUrl(`/queue/jobs/${runId}/force-kill`), {
+    const res = await fetch(apiUrl(`/ops/queue/jobs/${runId}/force-kill`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -1107,7 +999,7 @@ export const authApi = {
       organization_id: string
     }
   }> {
-    const res = await fetch(apiUrl('/auth/login'), {
+    const res = await fetch(apiUrl('/admin/auth/login'), {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify({ email_or_username: emailOrUsername, password }),
@@ -1126,7 +1018,7 @@ export const authApi = {
     refresh_token: string
     user: any
   }> {
-    const res = await fetch(apiUrl('/auth/register'), {
+    const res = await fetch(apiUrl('/admin/auth/register'), {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify(data),
@@ -1139,7 +1031,7 @@ export const authApi = {
     refresh_token: string
     token_type: string
   }> {
-    const res = await fetch(apiUrl('/auth/refresh'), {
+    const res = await fetch(apiUrl('/admin/auth/refresh'), {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify({ refresh_token: refreshToken }),
@@ -1152,7 +1044,7 @@ export const authApi = {
     refresh_token: string
     token_type: string
   }> {
-    const res = await fetch(apiUrl('/auth/extend-session'), {
+    const res = await fetch(apiUrl('/admin/auth/extend-session'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
     })
@@ -1169,7 +1061,7 @@ export const authApi = {
     organization_name: string
     is_active: boolean
   }> {
-    const res = await fetch(apiUrl('/auth/me'), {
+    const res = await fetch(apiUrl('/admin/auth/me'), {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
@@ -1193,7 +1085,7 @@ export const connectionsApi = {
       updated_at: string
     }>
   }> {
-    const res = await fetch(apiUrl('/connections'), {
+    const res = await fetch(apiUrl('/admin/connections'), {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
@@ -1201,7 +1093,7 @@ export const connectionsApi = {
   },
 
   async getConnection(token: string, connectionId: string): Promise<any> {
-    const res = await fetch(apiUrl(`/connections/${connectionId}`), {
+    const res = await fetch(apiUrl(`/admin/connections/${connectionId}`), {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
@@ -1215,7 +1107,7 @@ export const connectionsApi = {
     is_default?: boolean
     test_on_save?: boolean
   }): Promise<any> {
-    const res = await fetch(apiUrl('/connections'), {
+    const res = await fetch(apiUrl('/admin/connections'), {
       method: 'POST',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
@@ -1229,7 +1121,7 @@ export const connectionsApi = {
     is_active?: boolean
     test_on_save?: boolean
   }): Promise<any> {
-    const res = await fetch(apiUrl(`/connections/${connectionId}`), {
+    const res = await fetch(apiUrl(`/admin/connections/${connectionId}`), {
       method: 'PUT',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
@@ -1238,7 +1130,7 @@ export const connectionsApi = {
   },
 
   async deleteConnection(token: string, connectionId: string): Promise<{ message: string }> {
-    const res = await fetch(apiUrl(`/connections/${connectionId}`), {
+    const res = await fetch(apiUrl(`/admin/connections/${connectionId}`), {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -1252,7 +1144,7 @@ export const connectionsApi = {
     details?: any
     error?: string
   }> {
-    const res = await fetch(apiUrl(`/connections/${connectionId}/test`), {
+    const res = await fetch(apiUrl(`/admin/connections/${connectionId}/test`), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -1260,7 +1152,7 @@ export const connectionsApi = {
   },
 
   async setDefaultConnection(token: string, connectionId: string): Promise<{ message: string }> {
-    const res = await fetch(apiUrl(`/connections/${connectionId}/set-default`), {
+    const res = await fetch(apiUrl(`/admin/connections/${connectionId}/set-default`), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -1277,7 +1169,7 @@ export const connectionsApi = {
     }>
   }> {
     const headers = token ? { Authorization: `Bearer ${token}` } : undefined
-    const res = await fetch(apiUrl('/connections/types'), {
+    const res = await fetch(apiUrl('/admin/connections/types'), {
       headers,
       cache: 'no-store',
     })
@@ -1296,7 +1188,7 @@ export const connectionsApi = {
     error?: string
     requires_manual_model?: boolean
   }> {
-    const res = await fetch(apiUrl('/connections/test-credentials'), {
+    const res = await fetch(apiUrl('/admin/connections/test-credentials'), {
       method: 'POST',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
@@ -1310,7 +1202,7 @@ export const settingsApi = {
   async getOrganizationSettings(token: string): Promise<{
     settings: Record<string, any>
   }> {
-    const res = await fetch(apiUrl('/organizations/me/settings'), {
+    const res = await fetch(apiUrl('/admin/organizations/me/settings'), {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
@@ -1320,7 +1212,7 @@ export const settingsApi = {
   async updateOrganizationSettings(token: string, settings: Record<string, any>): Promise<{
     settings: Record<string, any>
   }> {
-    const res = await fetch(apiUrl('/organizations/me/settings'), {
+    const res = await fetch(apiUrl('/admin/organizations/me/settings'), {
       method: 'PUT',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify({ settings }),
@@ -1331,7 +1223,7 @@ export const settingsApi = {
   async getUserSettings(token: string): Promise<{
     settings: Record<string, any>
   }> {
-    const res = await fetch(apiUrl('/users/me/settings'), {
+    const res = await fetch(apiUrl('/admin/users/me/settings'), {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
@@ -1341,7 +1233,7 @@ export const settingsApi = {
   async updateUserSettings(token: string, settings: Record<string, any>): Promise<{
     settings: Record<string, any>
   }> {
-    const res = await fetch(apiUrl('/users/me/settings'), {
+    const res = await fetch(apiUrl('/admin/users/me/settings'), {
       method: 'PUT',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify({ settings }),
@@ -1354,7 +1246,7 @@ export const settingsApi = {
     user_schema: any
     merged_example: Record<string, any>
   }> {
-    const res = await fetch(apiUrl('/settings/schema'), {
+    const res = await fetch(apiUrl('/admin/settings/schema'), {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
@@ -1363,131 +1255,9 @@ export const settingsApi = {
 }
 
 // -------------------- Storage API (Filesystem) --------------------
-// These methods handle filesystem-based storage operations
-export const storageApi = {
-  async getStats(token: string, organizationId?: string): Promise<{
-    organization_id: string
-    total_files: number
-    total_size_bytes: number
-    files_by_type: { uploaded: number; processed: number }
-    deduplication: {
-      unique_files: number
-      total_references: number
-      duplicate_references: number
-      storage_used_bytes: number
-      storage_saved_bytes: number
-      savings_percentage: number
-    }
-  }> {
-    const url = new URL(apiUrl('/storage/stats'))
-    if (organizationId) url.searchParams.set('organization_id', organizationId)
-    const res = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: 'no-store',
-    })
-    return handleJson(res)
-  },
-
-  async triggerCleanup(token: string, dryRun: boolean = true): Promise<{
-    dry_run: boolean
-    started_at: string
-    completed_at: string
-    duration_seconds: number
-    total_expired: number
-    deleted_count: number
-    would_delete_count: number
-    skipped_count: number
-    error_count: number
-    expired_batches: number
-  }> {
-    const url = new URL(apiUrl('/storage/cleanup'))
-    url.searchParams.set('dry_run', String(dryRun))
-    const res = await fetch(url.toString(), {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}` },
-    })
-    return handleJson(res)
-  },
-
-  async getRetentionPolicy(token: string): Promise<{
-    enabled: boolean
-    retention_periods: {
-      uploaded_days: number
-      processed_days: number
-      batch_days: number
-      temp_hours: number
-    }
-    cleanup_schedule: string
-    batch_size: number
-    dry_run: boolean
-  }> {
-    const res = await fetch(apiUrl('/storage/retention'), {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: 'no-store',
-    })
-    return handleJson(res)
-  },
-
-  async getDeduplicationStats(token: string, organizationId?: string): Promise<{
-    organization_id: string
-    enabled: boolean
-    strategy: string
-    min_file_size: number
-    unique_files: number
-    total_references: number
-    duplicate_references: number
-    storage_used_bytes: number
-    storage_saved_bytes: number
-    savings_percentage: number
-  }> {
-    const url = new URL(apiUrl('/storage/deduplication'))
-    if (organizationId) url.searchParams.set('organization_id', organizationId)
-    const res = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: 'no-store',
-    })
-    return handleJson(res)
-  },
-
-  async listDuplicates(token: string, organizationId?: string): Promise<{
-    organization_id: string
-    duplicate_groups: number
-    total_storage_saved: number
-    duplicates: Array<{
-      hash: string
-      file_count: number
-      document_ids: string[]
-      storage_saved: number
-    }>
-  }> {
-    const url = new URL(apiUrl('/storage/duplicates'))
-    if (organizationId) url.searchParams.set('organization_id', organizationId)
-    const res = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: 'no-store',
-    })
-    return handleJson(res)
-  },
-
-  async getDuplicateDetails(token: string, hash: string): Promise<{
-    hash: string
-    original_filename: string
-    file_size: number
-    created_at: string
-    reference_count: number
-    references: Array<{
-      document_id: string
-      organization_id: string
-      created_at: string
-    }>
-  }> {
-    const res = await fetch(apiUrl(`/storage/duplicates/${hash}`), {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: 'no-store',
-    })
-    return handleJson(res)
-  },
-}
+// REMOVED: storageApi referenced endpoints that never existed in the backend
+// (/data/storage/stats, /data/storage/cleanup, /data/storage/deduplication, etc.)
+// Use objectStorageApi for storage operations.
 
 // -------------------- Object Storage API --------------------
 // Direct access to S3/MinIO object storage via presigned URLs
@@ -1497,7 +1267,7 @@ export const objectStorageApi = {
    */
   async isEnabled(): Promise<boolean> {
     try {
-      const res = await fetch(apiUrl('/storage/health'), {
+      const res = await fetch(apiUrl('/data/storage/health'), {
         headers: authHeaders(),
         cache: 'no-store',
       })
@@ -1518,7 +1288,7 @@ export const objectStorageApi = {
     buckets: string[] | null
     error: string | null
   }> {
-    const res = await fetch(apiUrl('/storage/health'), {
+    const res = await fetch(apiUrl('/data/storage/health'), {
       headers: authHeaders(),
       cache: 'no-store',
     })
@@ -1541,7 +1311,7 @@ export const objectStorageApi = {
     const formData = new FormData()
     formData.append('file', file)
 
-    const res = await fetch(apiUrl('/storage/upload/proxy'), {
+    const res = await fetch(apiUrl('/data/storage/upload/proxy'), {
       method: 'POST',
       headers: { Authorization: `Bearer ${token}` },
       body: formData,
@@ -1583,7 +1353,7 @@ export const objectStorageApi = {
     const encodedDocId = validateAndEncodeDocumentId(documentId)
 
     // Use proxy endpoint to bypass CORS issues with MinIO
-    const url = new URL(apiUrl(`/storage/download/${encodedDocId}/proxy`))
+    const url = new URL(apiUrl(`/data/storage/download/${encodedDocId}/proxy`))
     url.searchParams.set('artifact_type', artifactType)
 
     const res = await fetch(url.toString(), {
@@ -1620,7 +1390,7 @@ export const objectStorageApi = {
     expires_at: string | null
   }>> {
     const encodedDocId = validateAndEncodeDocumentId(documentId)
-    const res = await fetch(apiUrl(`/storage/artifacts/document/${encodedDocId}`), {
+    const res = await fetch(apiUrl(`/data/storage/artifacts/document/${encodedDocId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -1647,7 +1417,7 @@ export const objectStorageApi = {
     updated_at: string
     expires_at: string | null
   }> {
-    const res = await fetch(apiUrl(`/storage/artifacts/${encodeURIComponent(artifactId)}`), {
+    const res = await fetch(apiUrl(`/data/storage/artifacts/${encodeURIComponent(artifactId)}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -1662,7 +1432,7 @@ export const objectStorageApi = {
     artifact_id: string
     document_id: string
   }> {
-    const res = await fetch(apiUrl(`/storage/artifacts/${encodeURIComponent(artifactId)}`), {
+    const res = await fetch(apiUrl(`/data/storage/artifacts/${encodeURIComponent(artifactId)}`), {
       method: 'DELETE',
       headers: authHeaders(token),
     })
@@ -1694,7 +1464,7 @@ export const objectStorageApi = {
     updated_at: string
     expires_at: string | null
   }>> {
-    const url = new URL(apiUrl('/storage/artifacts'))
+    const url = new URL(apiUrl('/data/storage/artifacts'))
     if (artifactType) {
       url.searchParams.set('artifact_type', artifactType)
     }
@@ -1722,7 +1492,7 @@ export const objectStorageApi = {
       error: string | null
     }>
   }> {
-    const res = await fetch(apiUrl('/storage/artifacts/bulk-delete'), {
+    const res = await fetch(apiUrl('/data/storage/artifacts/bulk-delete'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ artifact_ids: artifactIds }),
@@ -1744,7 +1514,7 @@ export const objectStorageApi = {
     }>
     default_bucket: string
   }> {
-    const res = await fetch(apiUrl('/storage/browse'), {
+    const res = await fetch(apiUrl('/data/storage/browse'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -1771,7 +1541,7 @@ export const objectStorageApi = {
     is_protected: boolean
     parent_path: string | null
   }> {
-    const url = new URL(apiUrl(`/storage/browse/${encodeURIComponent(bucket)}`))
+    const url = new URL(apiUrl(`/data/storage/browse/${encodeURIComponent(bucket)}`))
     if (prefix) {
       url.searchParams.set('prefix', prefix)
     }
@@ -1788,7 +1558,7 @@ export const objectStorageApi = {
   async getProtectedBuckets(token?: string): Promise<{
     protected_buckets: string[]
   }> {
-    const res = await fetch(apiUrl('/storage/buckets/protected'), {
+    const res = await fetch(apiUrl('/data/storage/buckets/protected'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -1805,7 +1575,7 @@ export const objectStorageApi = {
     bucket: string
     path: string
   }> {
-    const res = await fetch(apiUrl('/storage/folders'), {
+    const res = await fetch(apiUrl('/data/storage/folders'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ bucket, path }),
@@ -1829,7 +1599,7 @@ export const objectStorageApi = {
     formData.append('prefix', prefix)
     formData.append('file', file)
 
-    const res = await fetch(apiUrl('/storage/folders/upload'), {
+    const res = await fetch(apiUrl('/data/storage/folders/upload'), {
       method: 'POST',
       headers: authHeaders(token),
       body: formData,
@@ -1847,7 +1617,7 @@ export const objectStorageApi = {
     deleted_count: number
     failed_count: number
   }> {
-    const url = new URL(apiUrl(`/storage/folders/${encodeURIComponent(bucket)}/${path}`))
+    const url = new URL(apiUrl(`/data/storage/folders/${encodeURIComponent(bucket)}/${path}`))
     url.searchParams.set('recursive', String(recursive))
     const res = await fetch(url.toString(), {
       method: 'DELETE',
@@ -1865,7 +1635,7 @@ export const objectStorageApi = {
     key: string
     artifact_deleted: boolean
   }> {
-    const res = await fetch(apiUrl(`/storage/files/${encodeURIComponent(bucket)}/${key}`), {
+    const res = await fetch(apiUrl(`/data/storage/files/${encodeURIComponent(bucket)}/${key}`), {
       method: 'DELETE',
       headers: authHeaders(token),
     })
@@ -1881,7 +1651,7 @@ export const objectStorageApi = {
     inline: boolean = false,
     token?: string
   ): Promise<Blob> {
-    const url = new URL(apiUrl('/storage/object/download'))
+    const url = new URL(apiUrl('/data/storage/object/download'))
     url.searchParams.set('bucket', bucket)
     url.searchParams.set('key', key)
     url.searchParams.set('inline', String(inline))
@@ -1916,7 +1686,7 @@ export const objectStorageApi = {
     content_type: string | null
     expires_in: number
   }> {
-    const url = new URL(apiUrl('/storage/object/presigned'))
+    const url = new URL(apiUrl('/data/storage/object/presigned'))
     url.searchParams.set('bucket', bucket)
     url.searchParams.set('key', key)
     url.searchParams.set('inline', String(inline))
@@ -1945,7 +1715,7 @@ export const objectStorageApi = {
     moved_artifacts: string[]
     failed_artifacts: string[]
   }> {
-    const res = await fetch(apiUrl('/storage/files/move'), {
+    const res = await fetch(apiUrl('/data/storage/files/move'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({
@@ -1967,7 +1737,7 @@ export const objectStorageApi = {
     new_name: string
     new_key: string
   }> {
-    const res = await fetch(apiUrl('/storage/files/rename'), {
+    const res = await fetch(apiUrl('/data/storage/files/rename'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({
@@ -1994,7 +1764,7 @@ export const usersApi = {
       last_login?: string
     }>
   }> {
-    const res = await fetch(apiUrl('/organizations/me/users'), {
+    const res = await fetch(apiUrl('/admin/organizations/me/users'), {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
@@ -2002,7 +1772,7 @@ export const usersApi = {
   },
 
   async getUser(token: string, userId: string): Promise<any> {
-    const res = await fetch(apiUrl(`/organizations/me/users/${userId}`), {
+    const res = await fetch(apiUrl(`/admin/organizations/me/users/${userId}`), {
       headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
@@ -2019,7 +1789,7 @@ export const usersApi = {
     user: any
     temporary_password?: string
   }> {
-    const res = await fetch(apiUrl('/organizations/me/users'), {
+    const res = await fetch(apiUrl('/admin/organizations/me/users'), {
       method: 'POST',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
@@ -2037,7 +1807,7 @@ export const usersApi = {
     message: string
     user: any
   }> {
-    const res = await fetch(apiUrl(`/organizations/me/users/${userId}`), {
+    const res = await fetch(apiUrl(`/admin/organizations/me/users/${userId}`), {
       method: 'PUT',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
@@ -2048,7 +1818,7 @@ export const usersApi = {
   async deleteUser(token: string, userId: string): Promise<{
     message: string
   }> {
-    const res = await fetch(apiUrl(`/organizations/me/users/${userId}`), {
+    const res = await fetch(apiUrl(`/admin/organizations/me/users/${userId}`), {
       method: 'DELETE',
       headers: { Authorization: `Bearer ${token}` },
     })
@@ -2058,7 +1828,7 @@ export const usersApi = {
   async changePassword(token: string, userId: string, newPassword: string): Promise<{
     message: string
   }> {
-    const res = await fetch(apiUrl(`/organizations/me/users/${userId}/password`), {
+    const res = await fetch(apiUrl(`/admin/organizations/me/users/${userId}/password`), {
       method: 'PUT',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify({ new_password: newPassword }),
@@ -2283,9 +2053,7 @@ export interface AssetMetadata {
 
 export interface AssetMetadataList {
   canonical: AssetMetadata[]
-  experimental: AssetMetadata[]
   total_canonical: number
-  total_experimental: number
   metadata_types: string[]
 }
 
@@ -2297,24 +2065,6 @@ export interface AssetMetadataCreateRequest {
   producer_run_id?: string
 }
 
-export interface AssetMetadataPromoteResponse {
-  promoted: AssetMetadata
-  superseded: AssetMetadata | null
-  message: string
-}
-
-export interface AssetMetadataCompareResponse {
-  metadata_a: AssetMetadata
-  metadata_b: AssetMetadata
-  differences: {
-    metadata_type: { a: string; b: string; same: boolean }
-    is_canonical: { a: boolean; b: boolean }
-    keys_only_in_a: string[]
-    keys_only_in_b: string[]
-    keys_in_both: string[]
-    values_differ: string[]
-  }
-}
 
 export const assetsApi = {
   /**
@@ -2332,7 +2082,7 @@ export const assetsApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/assets?${searchParams.toString()}`)
+    const url = apiUrl(`/data/assets?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2343,7 +2093,7 @@ export const assetsApi = {
    * Get asset by ID
    */
   async getAsset(token: string | undefined, assetId: string): Promise<Asset> {
-    const url = apiUrl(`/assets/${assetId}`)
+    const url = apiUrl(`/data/assets/${assetId}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2354,7 +2104,7 @@ export const assetsApi = {
    * Get asset with latest extraction result
    */
   async getAssetWithExtraction(token: string | undefined, assetId: string): Promise<AssetWithExtraction> {
-    const url = apiUrl(`/assets/${assetId}/extraction`)
+    const url = apiUrl(`/data/assets/${assetId}/extraction`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2365,7 +2115,7 @@ export const assetsApi = {
    * Get runs for an asset
    */
   async getAssetRuns(token: string | undefined, assetId: string): Promise<Run[]> {
-    const url = apiUrl(`/assets/${assetId}/runs`)
+    const url = apiUrl(`/data/assets/${assetId}/runs`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2376,7 +2126,7 @@ export const assetsApi = {
    * Trigger manual re-extraction for an asset
    */
   async reextractAsset(token: string | undefined, assetId: string): Promise<Run> {
-    const url = apiUrl(`/assets/${assetId}/reextract`)
+    const url = apiUrl(`/data/assets/${assetId}/reextract`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -2388,7 +2138,7 @@ export const assetsApi = {
    * Get queue position and extraction info for a pending asset
    */
   async getAssetQueueInfo(token: string | undefined, assetId: string): Promise<AssetQueueInfo> {
-    const url = apiUrl(`/assets/${assetId}/queue-info`)
+    const url = apiUrl(`/data/assets/${assetId}/queue-info`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2399,7 +2149,7 @@ export const assetsApi = {
    * Get version history for an asset
    */
   async getAssetVersions(token: string | undefined, assetId: string): Promise<AssetVersionHistory> {
-    const url = apiUrl(`/assets/${assetId}/versions`)
+    const url = apiUrl(`/data/assets/${assetId}/versions`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2410,7 +2160,7 @@ export const assetsApi = {
    * Get specific version of an asset
    */
   async getAssetVersion(token: string | undefined, assetId: string, versionNumber: number): Promise<AssetVersion> {
-    const url = apiUrl(`/assets/${assetId}/versions/${versionNumber}`)
+    const url = apiUrl(`/data/assets/${assetId}/versions/${versionNumber}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2432,7 +2182,7 @@ export const assetsApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/runs/${runId}/logs?${searchParams.toString()}`)
+    const url = apiUrl(`/ops/runs/${runId}/logs?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2446,7 +2196,7 @@ export const assetsApi = {
     const formData = new FormData()
     files.forEach(file => formData.append('files', file))
 
-    const url = apiUrl(`/assets/bulk-upload/preview?source_type=${sourceType}`)
+    const url = apiUrl(`/data/assets/bulk-upload/preview?source_type=${sourceType}`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -2467,7 +2217,7 @@ export const assetsApi = {
     const formData = new FormData()
     files.forEach(file => formData.append('files', file))
 
-    const url = apiUrl(`/assets/bulk-upload/apply?source_type=${sourceType}&mark_missing_inactive=${markMissingInactive}`)
+    const url = apiUrl(`/data/assets/bulk-upload/apply?source_type=${sourceType}&mark_missing_inactive=${markMissingInactive}`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -2480,7 +2230,7 @@ export const assetsApi = {
    * Get collection health metrics (Phase 2)
    */
   async getCollectionHealth(token: string | undefined): Promise<CollectionHealth> {
-    const url = apiUrl('/assets/health')
+    const url = apiUrl('/data/assets/health')
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2495,7 +2245,7 @@ export const assetsApi = {
    * Get all metadata for an asset (canonical + experimental)
    */
   async getAssetMetadata(token: string | undefined, assetId: string, includeSupersceded: boolean = false): Promise<AssetMetadataList> {
-    const url = apiUrl(`/assets/${assetId}/metadata?include_superseded=${includeSupersceded}`)
+    const url = apiUrl(`/data/assets/${assetId}/metadata?include_superseded=${includeSupersceded}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2506,7 +2256,7 @@ export const assetsApi = {
    * Create new metadata for an asset
    */
   async createAssetMetadata(token: string | undefined, assetId: string, request: AssetMetadataCreateRequest): Promise<AssetMetadata> {
-    const url = apiUrl(`/assets/${assetId}/metadata`)
+    const url = apiUrl(`/data/assets/${assetId}/metadata`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -2519,7 +2269,7 @@ export const assetsApi = {
    * Get specific metadata by ID
    */
   async getSpecificMetadata(token: string | undefined, assetId: string, metadataId: string): Promise<AssetMetadata> {
-    const url = apiUrl(`/assets/${assetId}/metadata/${metadataId}`)
+    const url = apiUrl(`/data/assets/${assetId}/metadata/${metadataId}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2527,36 +2277,12 @@ export const assetsApi = {
   },
 
   /**
-   * Promote experimental metadata to canonical
+   * Delete metadata
    */
-  async promoteMetadata(token: string | undefined, assetId: string, metadataId: string): Promise<AssetMetadataPromoteResponse> {
-    const url = apiUrl(`/assets/${assetId}/metadata/${metadataId}/promote`)
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    })
-    return handleJson(res)
-  },
-
-  /**
-   * Delete or deprecate metadata
-   */
-  async deleteMetadata(token: string | undefined, assetId: string, metadataId: string, hardDelete: boolean = false): Promise<{ message: string; metadata_id: string }> {
-    const url = apiUrl(`/assets/${assetId}/metadata/${metadataId}?hard_delete=${hardDelete}`)
+  async deleteMetadata(token: string | undefined, assetId: string, metadataId: string): Promise<{ message: string; metadata_id: string }> {
+    const url = apiUrl(`/data/assets/${assetId}/metadata/${metadataId}`)
     const res = await fetch(url, {
       method: 'DELETE',
-      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
-    })
-    return handleJson(res)
-  },
-
-  /**
-   * Compare two metadata records
-   */
-  async compareMetadata(token: string | undefined, assetId: string, metadataIdA: string, metadataIdB: string): Promise<AssetMetadataCompareResponse> {
-    const url = apiUrl(`/assets/${assetId}/metadata/compare?metadata_id_a=${metadataIdA}&metadata_id_b=${metadataIdB}`)
-    const res = await fetch(url, {
-      method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
@@ -2674,7 +2400,7 @@ export const scrapeApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/scrape/collections?${searchParams.toString()}`)
+    const url = apiUrl(`/data/scrape/collections?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2685,7 +2411,7 @@ export const scrapeApi = {
    * Create a new scrape collection
    */
   async createCollection(token: string | undefined, request: ScrapeCollectionCreateRequest): Promise<ScrapeCollection> {
-    const url = apiUrl('/scrape/collections')
+    const url = apiUrl('/data/scrape/collections')
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -2698,7 +2424,7 @@ export const scrapeApi = {
    * Get collection details
    */
   async getCollection(token: string | undefined, collectionId: string): Promise<ScrapeCollection> {
-    const url = apiUrl(`/scrape/collections/${collectionId}`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2709,7 +2435,7 @@ export const scrapeApi = {
    * Update a collection
    */
   async updateCollection(token: string | undefined, collectionId: string, request: ScrapeCollectionUpdateRequest): Promise<ScrapeCollection> {
-    const url = apiUrl(`/scrape/collections/${collectionId}`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}`)
     const res = await fetch(url, {
       method: 'PUT',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -2723,7 +2449,7 @@ export const scrapeApi = {
    * Returns immediately with a run_id to track the deletion progress
    */
   async deleteCollection(token: string | undefined, collectionId: string): Promise<{ message: string; run_id: string; status: string }> {
-    const url = apiUrl(`/scrape/collections/${collectionId}`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}`)
     const res = await fetch(url, {
       method: 'DELETE',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -2741,7 +2467,7 @@ export const scrapeApi = {
    * Start a crawl for a collection
    */
   async startCrawl(token: string | undefined, collectionId: string, maxPages?: number): Promise<{ run_id: string; collection_id: string; status: string; message: string }> {
-    const url = apiUrl(`/scrape/collections/${collectionId}/crawl`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}/crawl`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -2754,7 +2480,7 @@ export const scrapeApi = {
    * Get crawl status
    */
   async getCrawlStatus(token: string | undefined, collectionId: string): Promise<CrawlStatus> {
-    const url = apiUrl(`/scrape/collections/${collectionId}/crawl/status`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}/crawl/status`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2770,7 +2496,7 @@ export const scrapeApi = {
     const searchParams = new URLSearchParams()
     if (isActive !== undefined) searchParams.append('is_active', isActive.toString())
 
-    const url = apiUrl(`/scrape/collections/${collectionId}/sources?${searchParams.toString()}`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}/sources?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2781,7 +2507,7 @@ export const scrapeApi = {
    * Add a source to a collection
    */
   async addSource(token: string | undefined, collectionId: string, url_source: string, sourceType: string = 'seed', crawlConfig?: Record<string, any>): Promise<ScrapeSource> {
-    const url = apiUrl(`/scrape/collections/${collectionId}/sources`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}/sources`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -2794,7 +2520,7 @@ export const scrapeApi = {
    * Delete a source
    */
   async deleteSource(token: string | undefined, collectionId: string, sourceId: string): Promise<void> {
-    const url = apiUrl(`/scrape/collections/${collectionId}/sources/${sourceId}`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}/sources/${sourceId}`)
     const res = await fetch(url, {
       method: 'DELETE',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -2824,7 +2550,7 @@ export const scrapeApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/scrape/collections/${collectionId}/assets?${searchParams.toString()}`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}/assets?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2835,7 +2561,7 @@ export const scrapeApi = {
    * Get a scraped asset
    */
   async getScrapedAsset(token: string | undefined, collectionId: string, scrapedAssetId: string): Promise<ScrapedAsset> {
-    const url = apiUrl(`/scrape/collections/${collectionId}/assets/${scrapedAssetId}`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}/assets/${scrapedAssetId}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2846,7 +2572,7 @@ export const scrapeApi = {
    * Promote a page to record
    */
   async promoteToRecord(token: string | undefined, collectionId: string, scrapedAssetId: string): Promise<{ scraped_asset: ScrapedAsset; message: string }> {
-    const url = apiUrl(`/scrape/collections/${collectionId}/assets/${scrapedAssetId}/promote`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}/assets/${scrapedAssetId}/promote`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -2858,7 +2584,7 @@ export const scrapeApi = {
    * Get extracted markdown content for a scraped asset
    */
   async getScrapedAssetContent(token: string | undefined, collectionId: string, scrapedAssetId: string): Promise<string> {
-    const url = apiUrl(`/scrape/collections/${collectionId}/assets/${scrapedAssetId}/content`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}/assets/${scrapedAssetId}/content`)
     const res = await fetch(url, {
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2879,7 +2605,7 @@ export const scrapeApi = {
     const searchParams = new URLSearchParams()
     searchParams.append('path_prefix', pathPrefix)
 
-    const url = apiUrl(`/scrape/collections/${collectionId}/tree?${searchParams.toString()}`)
+    const url = apiUrl(`/data/scrape/collections/${collectionId}/tree?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2942,7 +2668,7 @@ export const scheduledTasksApi = {
     const searchParams = new URLSearchParams()
     if (enabledOnly !== undefined) searchParams.append('enabled_only', enabledOnly.toString())
 
-    const url = apiUrl(`/scheduled-tasks?${searchParams.toString()}`)
+    const url = apiUrl(`/admin/scheduled-tasks?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2956,7 +2682,7 @@ export const scheduledTasksApi = {
     const searchParams = new URLSearchParams()
     if (days !== undefined) searchParams.append('days', days.toString())
 
-    const url = apiUrl(`/scheduled-tasks/stats?${searchParams.toString()}`)
+    const url = apiUrl(`/admin/scheduled-tasks/stats?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2967,7 +2693,7 @@ export const scheduledTasksApi = {
    * Get task details
    */
   async getTask(token: string | undefined, taskId: string): Promise<ScheduledTask> {
-    const url = apiUrl(`/scheduled-tasks/${taskId}`)
+    const url = apiUrl(`/admin/scheduled-tasks/${taskId}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2982,7 +2708,7 @@ export const scheduledTasksApi = {
     if (limit !== undefined) searchParams.append('limit', limit.toString())
     if (offset !== undefined) searchParams.append('offset', offset.toString())
 
-    const url = apiUrl(`/scheduled-tasks/${taskId}/runs?${searchParams.toString()}`)
+    const url = apiUrl(`/admin/scheduled-tasks/${taskId}/runs?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -2993,7 +2719,7 @@ export const scheduledTasksApi = {
    * Enable a scheduled task
    */
   async enableTask(token: string | undefined, taskId: string): Promise<{ message: string; task_id: string; task_name: string; enabled: boolean; next_run_at: string | null }> {
-    const url = apiUrl(`/scheduled-tasks/${taskId}/enable`)
+    const url = apiUrl(`/admin/scheduled-tasks/${taskId}/enable`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -3005,7 +2731,7 @@ export const scheduledTasksApi = {
    * Disable a scheduled task
    */
   async disableTask(token: string | undefined, taskId: string): Promise<{ message: string; task_id: string; task_name: string; enabled: boolean; next_run_at: string | null }> {
-    const url = apiUrl(`/scheduled-tasks/${taskId}/disable`)
+    const url = apiUrl(`/admin/scheduled-tasks/${taskId}/disable`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -3017,7 +2743,7 @@ export const scheduledTasksApi = {
    * Trigger a scheduled task immediately
    */
   async triggerTask(token: string | undefined, taskId: string, configOverrides?: Record<string, any>): Promise<{ message: string; task_id: string; task_name: string; run_id: string }> {
-    const url = apiUrl(`/scheduled-tasks/${taskId}/trigger`)
+    const url = apiUrl(`/admin/scheduled-tasks/${taskId}/trigger`)
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -3068,6 +2794,7 @@ export interface SearchRequest {
   date_from?: string
   date_to?: string
   metadata_filters?: Record<string, any>
+  facet_filters?: Record<string, any>
   limit?: number
   offset?: number
   include_facets?: boolean
@@ -3169,7 +2896,7 @@ export const searchApi = {
    * Search assets with full-text query
    */
   async search(token: string | undefined, request: SearchRequest): Promise<SearchResponse> {
-    const url = apiUrl('/search')
+    const url = apiUrl('/data/search')
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -3205,7 +2932,7 @@ export const searchApi = {
       params.set('offset', options.offset.toString())
     }
 
-    const url = apiUrl(`/search?${params.toString()}`)
+    const url = apiUrl(`/data/search?${params.toString()}`)
     const res = await fetch(url, {
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -3216,7 +2943,7 @@ export const searchApi = {
    * Get search index statistics
    */
   async getStats(token: string | undefined): Promise<IndexStatsResponse> {
-    const url = apiUrl('/search/stats')
+    const url = apiUrl('/data/search/stats')
     const res = await fetch(url, {
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -3227,7 +2954,7 @@ export const searchApi = {
    * Trigger reindex of all assets (admin only)
    */
   async reindexAll(token: string | undefined): Promise<ReindexResponse> {
-    const url = apiUrl('/search/reindex')
+    const url = apiUrl('/data/search/reindex')
     const res = await fetch(url, {
       method: 'POST',
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
@@ -3239,7 +2966,7 @@ export const searchApi = {
    * Check search service health
    */
   async getHealth(token: string | undefined): Promise<SearchHealthResponse> {
-    const url = apiUrl('/search/health')
+    const url = apiUrl('/data/search/health')
     const res = await fetch(url, {
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
@@ -3250,8 +2977,265 @@ export const searchApi = {
    * Get metadata schema for the organization's search index
    */
   async getMetadataSchema(token: string | undefined): Promise<MetadataSchemaResponse> {
-    const url = apiUrl('/search/metadata-schema')
+    const url = apiUrl('/data/search/metadata-schema')
     const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+}
+
+// ============================================================================
+// Metadata Registry API (Data Core Governance)
+// ============================================================================
+
+/**
+ * Metadata field definition from the registry
+ */
+export interface MetadataFieldDefinition {
+  namespace: string
+  field_name: string
+  data_type: string
+  indexed: boolean
+  facetable: boolean
+  applicable_content_types: string[]
+  description?: string
+  examples?: any[]
+}
+
+/**
+ * Facet mapping to a JSON path within a content type
+ */
+export interface FacetMapping {
+  content_type: string
+  json_path: string
+}
+
+/**
+ * Facet definition from the registry
+ */
+export interface FacetDefinition {
+  facet_name: string
+  display_name: string
+  data_type: string
+  description?: string
+  operators: string[]
+  mappings: FacetMapping[]
+}
+
+/**
+ * Metadata namespace info
+ */
+export interface MetadataNamespace {
+  namespace: string
+  display_name: string
+  description?: string
+  fields: MetadataFieldDefinition[]
+  doc_count: number
+}
+
+/**
+ * Complete metadata catalog
+ */
+export interface MetadataCatalog {
+  namespaces: MetadataNamespace[]
+  facets: FacetDefinition[]
+  total_indexed_docs: number
+}
+
+/**
+ * Field statistics
+ */
+export interface MetadataFieldStats {
+  namespace: string
+  field_name: string
+  sample_values: any[]
+  doc_count: number
+}
+
+// -- Metadata Write Request Types --
+
+export interface MetadataFieldCreateRequest {
+  field_name: string
+  data_type: string
+  indexed?: boolean
+  facetable?: boolean
+  applicable_content_types?: string[]
+  description?: string
+  examples?: any[]
+  sensitivity_tag?: string
+}
+
+export interface MetadataFieldUpdateRequest {
+  indexed?: boolean
+  facetable?: boolean
+  applicable_content_types?: string[]
+  description?: string
+  examples?: any[]
+  sensitivity_tag?: string
+  status?: string
+}
+
+export interface FacetMappingCreateRequest {
+  content_type: string
+  json_path: string
+}
+
+export interface FacetCreateRequest {
+  facet_name: string
+  display_name: string
+  data_type: string
+  description?: string
+  operators?: string[]
+  mappings?: FacetMappingCreateRequest[]
+}
+
+export interface FacetUpdateRequest {
+  display_name?: string
+  description?: string
+  operators?: string[]
+  status?: string
+}
+
+export const metadataApi = {
+  /**
+   * Get the full metadata catalog (namespaces, fields, facets)
+   */
+  async getCatalog(token: string | undefined): Promise<MetadataCatalog> {
+    const url = apiUrl('/data/metadata/catalog')
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * List all namespaces with doc counts
+   */
+  async getNamespaces(token: string | undefined): Promise<MetadataNamespace[]> {
+    const url = apiUrl('/data/metadata/namespaces')
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get fields for a namespace
+   */
+  async getNamespaceFields(token: string | undefined, namespace: string): Promise<MetadataFieldDefinition[]> {
+    const url = apiUrl(`/data/metadata/namespaces/${namespace}/fields`)
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * Get statistics for a field
+   */
+  async getFieldStats(token: string | undefined, namespace: string, fieldName: string): Promise<MetadataFieldStats> {
+    const url = apiUrl(`/data/metadata/fields/${namespace}/${fieldName}/stats`)
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  /**
+   * List all facet definitions
+   */
+  async getFacets(token: string | undefined): Promise<FacetDefinition[]> {
+    const url = apiUrl('/data/metadata/facets')
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  // -- Write Operations --
+
+  async createField(token: string | undefined, namespace: string, data: MetadataFieldCreateRequest): Promise<any> {
+    const url = apiUrl(`/data/metadata/fields/${namespace}`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async updateField(token: string | undefined, namespace: string, fieldName: string, data: MetadataFieldUpdateRequest): Promise<any> {
+    const url = apiUrl(`/data/metadata/fields/${namespace}/${fieldName}`)
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteField(token: string | undefined, namespace: string, fieldName: string): Promise<any> {
+    const url = apiUrl(`/data/metadata/fields/${namespace}/${fieldName}`)
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async createFacet(token: string | undefined, data: FacetCreateRequest): Promise<any> {
+    const url = apiUrl('/data/metadata/facets')
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async updateFacet(token: string | undefined, facetName: string, data: FacetUpdateRequest): Promise<any> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}`)
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteFacet(token: string | undefined, facetName: string): Promise<any> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}`)
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async addFacetMapping(token: string | undefined, facetName: string, data: FacetMappingCreateRequest): Promise<any> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}/mappings`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async removeFacetMapping(token: string | undefined, facetName: string, contentType: string): Promise<any> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}/mappings/${contentType}`)
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async invalidateCache(token: string | undefined): Promise<any> {
+    const url = apiUrl('/data/metadata/cache/invalidate')
+    const res = await fetch(url, {
+      method: 'POST',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
@@ -3500,7 +3484,7 @@ export const samApi = {
   // ========== Dashboard (Phase 7.6) ==========
 
   async getDashboardStats(token: string | undefined): Promise<SamDashboardStats> {
-    const res = await fetch(apiUrl('/sam/dashboard'), {
+    const res = await fetch(apiUrl('/data/sam/dashboard'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -3522,7 +3506,7 @@ export const samApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/sam/notices?${searchParams.toString()}`)
+    const url = apiUrl(`/data/sam/notices?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -3544,7 +3528,7 @@ export const samApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/sam/searches?${searchParams.toString()}`)
+    const url = apiUrl(`/data/sam/searches?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -3554,7 +3538,7 @@ export const samApi = {
 
   async getSearch(token: string | undefined, searchId: string): Promise<SamSearch> {
     console.log('[SAM API] getSearch - Request:', { searchId })
-    const res = await fetch(apiUrl(`/sam/searches/${searchId}`), {
+    const res = await fetch(apiUrl(`/data/sam/searches/${searchId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -3570,7 +3554,7 @@ export const samApi = {
     pull_frequency?: string
   }): Promise<SamSearch> {
     console.log('[SAM API] createSearch - Request:', data)
-    const res = await fetch(apiUrl('/sam/searches'), {
+    const res = await fetch(apiUrl('/data/sam/searches'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -3588,7 +3572,7 @@ export const samApi = {
     is_active?: boolean
     pull_frequency?: string
   }): Promise<SamSearch> {
-    const res = await fetch(apiUrl(`/sam/searches/${searchId}`), {
+    const res = await fetch(apiUrl(`/data/sam/searches/${searchId}`), {
       method: 'PATCH',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -3597,7 +3581,7 @@ export const samApi = {
   },
 
   async deleteSearch(token: string | undefined, searchId: string): Promise<void> {
-    const res = await fetch(apiUrl(`/sam/searches/${searchId}`), {
+    const res = await fetch(apiUrl(`/data/sam/searches/${searchId}`), {
       method: 'DELETE',
       headers: authHeaders(token),
     })
@@ -3612,7 +3596,7 @@ export const samApi = {
     page_size?: number
   }): Promise<Record<string, any>> {
     console.log('[SAM API] triggerPull - Request:', { searchId, params })
-    const res = await fetch(apiUrl(`/sam/searches/${searchId}/pull`), {
+    const res = await fetch(apiUrl(`/data/sam/searches/${searchId}/pull`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(params || {}),
@@ -3631,7 +3615,7 @@ export const samApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/sam/searches/${searchId}/pulls?${searchParams.toString()}`)
+    const url = apiUrl(`/data/sam/searches/${searchId}/pulls?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -3656,7 +3640,7 @@ export const samApi = {
     remaining_calls?: number
   }> {
     console.log('[SAM API] previewSearch - Request:', data)
-    const res = await fetch(apiUrl('/sam/searches/preview'), {
+    const res = await fetch(apiUrl('/data/sam/searches/preview'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -3693,7 +3677,7 @@ export const samApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/sam/solicitations?${searchParams.toString()}`)
+    const url = apiUrl(`/data/sam/solicitations?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -3705,7 +3689,7 @@ export const samApi = {
   },
 
   async getSolicitation(token: string | undefined, solicitationId: string): Promise<SamSolicitation> {
-    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}`), {
+    const res = await fetch(apiUrl(`/data/sam/solicitations/${solicitationId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -3713,7 +3697,7 @@ export const samApi = {
   },
 
   async getSolicitationNotices(token: string | undefined, solicitationId: string): Promise<SamNotice[]> {
-    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/notices`), {
+    const res = await fetch(apiUrl(`/data/sam/solicitations/${solicitationId}/notices`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -3732,7 +3716,7 @@ export const samApi = {
     console.log('[SAM API] refreshSolicitation - Request:', { solicitationId, downloadAttachments })
     const params = new URLSearchParams()
     params.append('download_attachments', String(downloadAttachments))
-    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/refresh?${params.toString()}`), {
+    const res = await fetch(apiUrl(`/data/sam/solicitations/${solicitationId}/refresh?${params.toString()}`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -3753,7 +3737,7 @@ export const samApi = {
     const searchParams = new URLSearchParams()
     if (params?.download_status) searchParams.append('download_status', params.download_status)
 
-    const url = apiUrl(`/sam/solicitations/${solicitationId}/attachments?${searchParams.toString()}`)
+    const url = apiUrl(`/data/sam/solicitations/${solicitationId}/attachments?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -3767,7 +3751,7 @@ export const samApi = {
     const searchParams = new URLSearchParams()
     if (params?.summary_type) searchParams.append('summary_type', params.summary_type)
 
-    const url = apiUrl(`/sam/solicitations/${solicitationId}/summaries?${searchParams.toString()}`)
+    const url = apiUrl(`/data/sam/solicitations/${solicitationId}/summaries?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -3780,7 +3764,7 @@ export const samApi = {
     model?: string
     include_attachments?: boolean
   }): Promise<SamSummary> {
-    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/summarize`), {
+    const res = await fetch(apiUrl(`/data/sam/solicitations/${solicitationId}/summarize`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -3790,7 +3774,7 @@ export const samApi = {
 
   // Phase 7.6: Regenerate auto-summary
   async regenerateSummary(token: string | undefined, solicitationId: string): Promise<SamSolicitation> {
-    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/regenerate-summary`), {
+    const res = await fetch(apiUrl(`/data/sam/solicitations/${solicitationId}/regenerate-summary`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -3798,7 +3782,7 @@ export const samApi = {
   },
 
   async downloadAllAttachments(token: string | undefined, solicitationId: string): Promise<Record<string, any>> {
-    const res = await fetch(apiUrl(`/sam/solicitations/${solicitationId}/download-attachments`), {
+    const res = await fetch(apiUrl(`/data/sam/solicitations/${solicitationId}/download-attachments`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -3812,7 +3796,7 @@ export const samApi = {
   }): Promise<SamNotice> {
     const params = new URLSearchParams()
     if (options?.includeMetadata) params.append('include_metadata', 'true')
-    const url = apiUrl(`/sam/notices/${noticeId}${params.toString() ? '?' + params.toString() : ''}`)
+    const url = apiUrl(`/data/sam/notices/${noticeId}${params.toString() ? '?' + params.toString() : ''}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -3824,7 +3808,7 @@ export const samApi = {
     notice_id: string
     changes_summary: string
   }> {
-    const res = await fetch(apiUrl(`/sam/notices/${noticeId}/generate-changes`), {
+    const res = await fetch(apiUrl(`/data/sam/notices/${noticeId}/generate-changes`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -3837,7 +3821,7 @@ export const samApi = {
     error?: string
   }> {
     console.log('[samApi.refreshNotice] Refreshing notice:', noticeId)
-    const res = await fetch(apiUrl(`/sam/notices/${noticeId}/refresh`), {
+    const res = await fetch(apiUrl(`/data/sam/notices/${noticeId}/refresh`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -3855,7 +3839,7 @@ export const samApi = {
     status: string
     message: string
   }> {
-    const res = await fetch(apiUrl(`/sam/notices/${noticeId}/regenerate-summary`), {
+    const res = await fetch(apiUrl(`/data/sam/notices/${noticeId}/regenerate-summary`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -3868,7 +3852,7 @@ export const samApi = {
     failed: number
     errors: Array<{ attachment_id: string; error: string }>
   }> {
-    const res = await fetch(apiUrl(`/sam/notices/${noticeId}/download-attachments`), {
+    const res = await fetch(apiUrl(`/data/sam/notices/${noticeId}/download-attachments`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -3882,7 +3866,7 @@ export const samApi = {
   ): Promise<SamAttachment[]> {
     const params = new URLSearchParams()
     if (downloadStatus) params.append('download_status', downloadStatus)
-    const url = apiUrl(`/sam/notices/${noticeId}/attachments?${params.toString()}`)
+    const url = apiUrl(`/data/sam/notices/${noticeId}/attachments?${params.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -3894,7 +3878,7 @@ export const samApi = {
     notice_id: string
     description: string | null
   }> {
-    const res = await fetch(apiUrl(`/sam/notices/${noticeId}/description`), {
+    const res = await fetch(apiUrl(`/data/sam/notices/${noticeId}/description`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -3904,7 +3888,7 @@ export const samApi = {
   // ========== Attachments ==========
 
   async getAttachment(token: string | undefined, attachmentId: string): Promise<SamAttachment> {
-    const res = await fetch(apiUrl(`/sam/attachments/${attachmentId}`), {
+    const res = await fetch(apiUrl(`/data/sam/attachments/${attachmentId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -3917,7 +3901,7 @@ export const samApi = {
     status: string
     error?: string
   }> {
-    const res = await fetch(apiUrl(`/sam/attachments/${attachmentId}/download`), {
+    const res = await fetch(apiUrl(`/data/sam/attachments/${attachmentId}/download`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -3927,7 +3911,7 @@ export const samApi = {
   // ========== Summaries ==========
 
   async getSummary(token: string | undefined, summaryId: string): Promise<SamSummary> {
-    const res = await fetch(apiUrl(`/sam/summaries/${summaryId}`), {
+    const res = await fetch(apiUrl(`/data/sam/summaries/${summaryId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -3935,7 +3919,7 @@ export const samApi = {
   },
 
   async promoteSummary(token: string | undefined, summaryId: string): Promise<SamSummary> {
-    const res = await fetch(apiUrl(`/sam/summaries/${summaryId}/promote`), {
+    const res = await fetch(apiUrl(`/data/sam/summaries/${summaryId}/promote`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -3943,7 +3927,7 @@ export const samApi = {
   },
 
   async deleteSummary(token: string | undefined, summaryId: string): Promise<void> {
-    const res = await fetch(apiUrl(`/sam/summaries/${summaryId}`), {
+    const res = await fetch(apiUrl(`/data/sam/summaries/${summaryId}`), {
       method: 'DELETE',
       headers: authHeaders(token),
     })
@@ -3956,7 +3940,7 @@ export const samApi = {
   // ========== Agencies ==========
 
   async listAgencies(token: string | undefined): Promise<SamAgency[]> {
-    const res = await fetch(apiUrl('/sam/agencies'), {
+    const res = await fetch(apiUrl('/data/sam/agencies'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -3966,7 +3950,7 @@ export const samApi = {
   // ========== API Usage ==========
 
   async getUsage(token: string | undefined): Promise<SamApiUsage> {
-    const res = await fetch(apiUrl('/sam/usage'), {
+    const res = await fetch(apiUrl('/data/sam/usage'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -3977,7 +3961,7 @@ export const samApi = {
     items: Array<Record<string, any>>
     days: number
   }> {
-    const res = await fetch(apiUrl(`/sam/usage/history?days=${days}`), {
+    const res = await fetch(apiUrl(`/data/sam/usage/history?days=${days}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -3997,7 +3981,7 @@ export const samApi = {
     will_exceed_limit: boolean
     daily_limit: number
   }> {
-    const res = await fetch(apiUrl('/sam/usage/estimate'), {
+    const res = await fetch(apiUrl('/data/sam/usage/estimate'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -4006,7 +3990,7 @@ export const samApi = {
   },
 
   async getApiStatus(token: string | undefined, historyDays: number = 7): Promise<SamApiStatus> {
-    const res = await fetch(apiUrl(`/sam/usage/status?history_days=${historyDays}`), {
+    const res = await fetch(apiUrl(`/data/sam/usage/status?history_days=${historyDays}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -4014,7 +3998,7 @@ export const samApi = {
   },
 
   async getQueueStats(token: string | undefined): Promise<SamQueueStats> {
-    const res = await fetch(apiUrl('/sam/queue'), {
+    const res = await fetch(apiUrl('/data/sam/queue'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -4049,7 +4033,7 @@ export const samApi = {
       highlights: Record<string, string[]>
     }>
   }> {
-    const res = await fetch(apiUrl('/search/sam'), {
+    const res = await fetch(apiUrl('/data/search/sam'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(params),
@@ -4151,7 +4135,7 @@ export const sharepointSyncApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/sharepoint-sync/configs?${searchParams.toString()}`)
+    const url = apiUrl(`/data/sharepoint-sync/configs?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -4163,7 +4147,7 @@ export const sharepointSyncApi = {
     token: string | undefined,
     configId: string
   ): Promise<SharePointSyncConfig> {
-    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}`), {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -4181,7 +4165,7 @@ export const sharepointSyncApi = {
       sync_frequency?: string
     }
   ): Promise<SharePointSyncConfig> {
-    const res = await fetch(apiUrl('/sharepoint-sync/configs'), {
+    const res = await fetch(apiUrl('/data/sharepoint-sync/configs'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -4202,7 +4186,7 @@ export const sharepointSyncApi = {
       reset_existing_assets?: boolean
     }
   ): Promise<SharePointSyncConfig> {
-    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}`), {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}`), {
       method: 'PATCH',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -4215,7 +4199,7 @@ export const sharepointSyncApi = {
     run_id: string
     status: string
   }> {
-    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}`), {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}`), {
       method: 'DELETE',
       headers: authHeaders(token),
     })
@@ -4229,7 +4213,7 @@ export const sharepointSyncApi = {
       errors: string[]
     }
   }> {
-    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}/archive`), {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}/archive`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -4248,7 +4232,7 @@ export const sharepointSyncApi = {
     status: string
     message: string
   }> {
-    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}/sync`), {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}/sync`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ full_sync: fullSync }),
@@ -4264,7 +4248,7 @@ export const sharepointSyncApi = {
     cancelled_count: number
     run_ids: string[]
   }> {
-    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}/cancel-stuck`), {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}/cancel-stuck`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
     })
@@ -4299,7 +4283,7 @@ export const sharepointSyncApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/sharepoint-sync/configs/${configId}/history?${searchParams.toString()}`)
+    const url = apiUrl(`/data/sharepoint-sync/configs/${configId}/history?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -4328,7 +4312,7 @@ export const sharepointSyncApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/sharepoint-sync/configs/${configId}/documents?${searchParams.toString()}`)
+    const url = apiUrl(`/data/sharepoint-sync/configs/${configId}/documents?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -4346,7 +4330,7 @@ export const sharepointSyncApi = {
     assets_deleted: number
     message: string
   }> {
-    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}/cleanup`), {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}/cleanup`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ delete_assets: deleteAssets }),
@@ -4372,7 +4356,7 @@ export const sharepointSyncApi = {
     items: SharePointBrowseItem[]
     total_items: number
   }> {
-    const res = await fetch(apiUrl('/sharepoint-sync/browse'), {
+    const res = await fetch(apiUrl('/data/sharepoint-sync/browse'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -4408,7 +4392,7 @@ export const sharepointSyncApi = {
     message: string
     selected_count: number
   }> {
-    const res = await fetch(apiUrl('/sharepoint-sync/import'), {
+    const res = await fetch(apiUrl('/data/sharepoint-sync/import'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -4427,7 +4411,7 @@ export const sharepointSyncApi = {
     assets_deleted: number
     message: string
   }> {
-    const res = await fetch(apiUrl(`/sharepoint-sync/configs/${configId}/remove-items`), {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}/remove-items`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({
@@ -4488,6 +4472,11 @@ export interface FunctionMeta {
   version: string
   requires_llm?: boolean
   requires_session?: boolean
+  // Governance fields
+  side_effects?: boolean
+  is_primitive?: boolean
+  payload_profile?: string
+  exposure_profile?: Record<string, any>
 }
 
 export interface FunctionListResponse {
@@ -4509,7 +4498,7 @@ export interface FunctionExecuteResult {
 
 export const functionsApi = {
   async listFunctions(token?: string): Promise<FunctionListResponse> {
-    const res = await fetch(apiUrl('/functions/'), {
+    const res = await fetch(apiUrl('/cwr/functions/'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -4517,7 +4506,7 @@ export const functionsApi = {
   },
 
   async getCategories(token?: string): Promise<{ categories: Record<string, string[]> }> {
-    const res = await fetch(apiUrl('/functions/categories'), {
+    const res = await fetch(apiUrl('/cwr/functions/categories'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -4525,7 +4514,7 @@ export const functionsApi = {
   },
 
   async getFunction(token: string | undefined, name: string): Promise<FunctionMeta> {
-    const res = await fetch(apiUrl(`/functions/${name}`), {
+    const res = await fetch(apiUrl(`/cwr/functions/${name}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -4538,10 +4527,77 @@ export const functionsApi = {
     params: Record<string, any> = {},
     dryRun: boolean = false
   ): Promise<FunctionExecuteResult> {
-    const res = await fetch(apiUrl(`/functions/${name}/execute`), {
+    const res = await fetch(apiUrl(`/cwr/functions/${name}/execute`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ params, dry_run: dryRun }),
+    })
+    return handleJson(res)
+  },
+}
+
+// =============================================================================
+// TOOL CONTRACTS API
+// =============================================================================
+
+export interface ToolContract {
+  name: string
+  description: string
+  category: string
+  version: string
+  input_schema: Record<string, any>
+  output_schema: Record<string, any>
+  side_effects: boolean
+  is_primitive: boolean
+  payload_profile: string
+  exposure_profile: Record<string, any>
+  requires_llm: boolean
+  requires_session: boolean
+  tags: string[]
+}
+
+export interface ToolContractListResponse {
+  contracts: ToolContract[]
+  total: number
+}
+
+export const contractsApi = {
+  async listContracts(
+    token?: string,
+    filters?: { category?: string; side_effects?: boolean; payload_profile?: string }
+  ): Promise<ToolContractListResponse> {
+    const params = new URLSearchParams()
+    if (filters?.category) params.set('category', filters.category)
+    if (filters?.side_effects !== undefined) params.set('side_effects', String(filters.side_effects))
+    if (filters?.payload_profile) params.set('payload_profile', filters.payload_profile)
+    const qs = params.toString()
+    const res = await fetch(apiUrl(`/cwr/contracts/${qs ? `?${qs}` : ''}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getContract(token: string | undefined, name: string): Promise<ToolContract> {
+    const res = await fetch(apiUrl(`/cwr/contracts/${name}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getInputSchema(token: string | undefined, name: string): Promise<Record<string, any>> {
+    const res = await fetch(apiUrl(`/cwr/contracts/${name}/input-schema`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getOutputSchema(token: string | undefined, name: string): Promise<Record<string, any>> {
+    const res = await fetch(apiUrl(`/cwr/contracts/${name}/output-schema`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4660,6 +4716,29 @@ export interface ProcedureValidationError {
   validation: ValidationResult
 }
 
+export interface GenerationProfile {
+  name: string
+  description: string
+  allowed_categories: string[]
+  blocked_tools: string[]
+  allow_side_effects: boolean
+  require_side_effect_confirmation: boolean
+  max_search_limit: number
+  max_llm_tokens: number
+}
+
+export interface PlanDiagnostics {
+  profile_used: string
+  tools_available: number
+  tools_referenced: string[]
+  plan_attempts: number
+  procedure_attempts: number
+  total_attempts: number
+  validation_error_types: string[]
+  clamps_applied: string[]
+  timing_ms: number
+}
+
 export const proceduresApi = {
   async listProcedures(
     token?: string,
@@ -4669,7 +4748,7 @@ export const proceduresApi = {
     if (params?.is_active !== undefined) searchParams.append('is_active', String(params.is_active))
     if (params?.tag) searchParams.append('tag', params.tag)
 
-    const res = await fetch(apiUrl(`/procedures/?${searchParams.toString()}`), {
+    const res = await fetch(apiUrl(`/cwr/procedures/?${searchParams.toString()}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -4677,7 +4756,7 @@ export const proceduresApi = {
   },
 
   async getProcedure(token: string | undefined, slug: string): Promise<Procedure> {
-    const res = await fetch(apiUrl(`/procedures/${slug}`), {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -4691,7 +4770,7 @@ export const proceduresApi = {
     dryRun: boolean = false,
     asyncExecution: boolean = true
   ): Promise<ProcedureRunResponse> {
-    const res = await fetch(apiUrl(`/procedures/${slug}/run`), {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}/run`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ params, dry_run: dryRun, async_execution: asyncExecution }),
@@ -4700,7 +4779,7 @@ export const proceduresApi = {
   },
 
   async enableProcedure(token: string | undefined, slug: string): Promise<{ status: string; message: string }> {
-    const res = await fetch(apiUrl(`/procedures/${slug}/enable`), {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}/enable`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -4708,7 +4787,7 @@ export const proceduresApi = {
   },
 
   async disableProcedure(token: string | undefined, slug: string): Promise<{ status: string; message: string }> {
-    const res = await fetch(apiUrl(`/procedures/${slug}/disable`), {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}/disable`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -4716,7 +4795,7 @@ export const proceduresApi = {
   },
 
   async listTriggers(token: string | undefined, slug: string): Promise<ProcedureTrigger[]> {
-    const res = await fetch(apiUrl(`/procedures/${slug}/triggers`), {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}/triggers`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -4734,7 +4813,7 @@ export const proceduresApi = {
       trigger_params?: Record<string, any>
     }
   ): Promise<ProcedureTrigger> {
-    const res = await fetch(apiUrl(`/procedures/${slug}/triggers`), {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}/triggers`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -4743,7 +4822,7 @@ export const proceduresApi = {
   },
 
   async deleteTrigger(token: string | undefined, slug: string, triggerId: string): Promise<{ status: string; message: string }> {
-    const res = await fetch(apiUrl(`/procedures/${slug}/triggers/${triggerId}`), {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}/triggers/${triggerId}`), {
       method: 'DELETE',
       headers: authHeaders(token),
     })
@@ -4751,7 +4830,7 @@ export const proceduresApi = {
   },
 
   async createProcedure(token: string | undefined, data: CreateProcedureRequest): Promise<Procedure> {
-    const res = await fetch(apiUrl('/procedures/'), {
+    const res = await fetch(apiUrl('/cwr/procedures/'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -4766,7 +4845,7 @@ export const proceduresApi = {
   },
 
   async updateProcedure(token: string | undefined, slug: string, data: UpdateProcedureRequest): Promise<Procedure> {
-    const res = await fetch(apiUrl(`/procedures/${slug}`), {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}`), {
       method: 'PUT',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -4781,7 +4860,7 @@ export const proceduresApi = {
   },
 
   async deleteProcedure(token: string | undefined, slug: string): Promise<{ status: string; slug: string }> {
-    const res = await fetch(apiUrl(`/procedures/${slug}`), {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}`), {
       method: 'DELETE',
       headers: authHeaders(token),
     })
@@ -4789,7 +4868,7 @@ export const proceduresApi = {
   },
 
   async validateProcedure(token: string | undefined, data: CreateProcedureRequest): Promise<ValidationResult> {
-    const res = await fetch(apiUrl('/procedures/validate'), {
+    const res = await fetch(apiUrl('/cwr/procedures/validate'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -4798,7 +4877,7 @@ export const proceduresApi = {
   },
 
   async reloadProcedures(token: string | undefined): Promise<{ status: string; message: string; procedures_loaded: number; slugs: string[] }> {
-    const res = await fetch(apiUrl('/procedures/reload'), {
+    const res = await fetch(apiUrl('/cwr/procedures/reload'), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -4812,19 +4891,27 @@ export const proceduresApi = {
    * @param prompt - Description of procedure to create, or changes to make (in refine mode)
    * @param currentYaml - Optional current procedure YAML to refine. If provided, prompt describes changes.
    * @param includeExamples - Whether to include examples in AI context
+   * @param profile - Generation profile: safe_readonly, workflow_standard, admin_full
+   * @param currentPlan - Optional current Typed Plan JSON to refine
    */
   async generateProcedure(
     token: string | undefined,
     prompt: string,
     currentYaml?: string,
-    includeExamples: boolean = true
+    includeExamples: boolean = true,
+    profile?: string,
+    currentPlan?: Record<string, any>
   ): Promise<{
     success: boolean
     yaml?: string
     procedure?: Record<string, any>
+    plan_json?: Record<string, any>
     error?: string
     attempts: number
     validation_errors: ValidationError[]
+    validation_warnings?: ValidationError[]
+    profile_used?: string
+    diagnostics?: PlanDiagnostics
   }> {
     const body: Record<string, any> = {
       prompt,
@@ -4833,7 +4920,38 @@ export const proceduresApi = {
     if (currentYaml) {
       body.current_yaml = currentYaml
     }
-    const res = await fetch(apiUrl('/procedures/generate'), {
+    if (profile) {
+      body.profile = profile
+    }
+    if (currentPlan) {
+      body.current_plan = currentPlan
+    }
+    const res = await fetch(apiUrl('/cwr/procedures/generate'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(body),
+    })
+    return handleJson(res)
+  },
+
+  async getGenerationProfiles(token?: string): Promise<GenerationProfile[]> {
+    const res = await fetch(apiUrl('/cwr/procedures/profiles'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async validateDraft(
+    token: string | undefined,
+    plan: Record<string, any>,
+    profile?: string
+  ): Promise<ValidationResult> {
+    const body: Record<string, any> = { plan }
+    if (profile) {
+      body.profile = profile
+    }
+    const res = await fetch(apiUrl('/cwr/procedures/drafts/validate'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(body),
@@ -4940,7 +5058,7 @@ export const pipelinesApi = {
     if (params?.is_active !== undefined) searchParams.append('is_active', String(params.is_active))
     if (params?.tag) searchParams.append('tag', params.tag)
 
-    const res = await fetch(apiUrl(`/pipelines/?${searchParams.toString()}`), {
+    const res = await fetch(apiUrl(`/cwr/pipelines/?${searchParams.toString()}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -4948,7 +5066,7 @@ export const pipelinesApi = {
   },
 
   async getPipeline(token: string | undefined, slug: string): Promise<Pipeline> {
-    const res = await fetch(apiUrl(`/pipelines/${slug}`), {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -4962,7 +5080,7 @@ export const pipelinesApi = {
     dryRun: boolean = false,
     asyncExecution: boolean = true
   ): Promise<PipelineRunResponse> {
-    const res = await fetch(apiUrl(`/pipelines/${slug}/run`), {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/run`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ params, dry_run: dryRun, async_execution: asyncExecution }),
@@ -4980,7 +5098,7 @@ export const pipelinesApi = {
     if (params?.limit) searchParams.append('limit', String(params.limit))
     if (params?.offset) searchParams.append('offset', String(params.offset))
 
-    const res = await fetch(apiUrl(`/pipelines/${slug}/runs?${searchParams.toString()}`), {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/runs?${searchParams.toString()}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -4999,7 +5117,7 @@ export const pipelinesApi = {
     if (params?.limit) searchParams.append('limit', String(params.limit))
     if (params?.offset) searchParams.append('offset', String(params.offset))
 
-    const res = await fetch(apiUrl(`/pipelines/${slug}/runs/${runId}/items?${searchParams.toString()}`), {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/runs/${runId}/items?${searchParams.toString()}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5012,7 +5130,7 @@ export const pipelinesApi = {
     runId: string,
     fromStage?: number
   ): Promise<PipelineRunResponse> {
-    const res = await fetch(apiUrl(`/pipelines/${slug}/runs/${runId}/resume`), {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/runs/${runId}/resume`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ from_stage: fromStage }),
@@ -5021,7 +5139,7 @@ export const pipelinesApi = {
   },
 
   async enablePipeline(token: string | undefined, slug: string): Promise<{ status: string; message: string }> {
-    const res = await fetch(apiUrl(`/pipelines/${slug}/enable`), {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/enable`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -5029,7 +5147,7 @@ export const pipelinesApi = {
   },
 
   async disablePipeline(token: string | undefined, slug: string): Promise<{ status: string; message: string }> {
-    const res = await fetch(apiUrl(`/pipelines/${slug}/disable`), {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/disable`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -5037,7 +5155,7 @@ export const pipelinesApi = {
   },
 
   async listTriggers(token: string | undefined, slug: string): Promise<PipelineTrigger[]> {
-    const res = await fetch(apiUrl(`/pipelines/${slug}/triggers`), {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/triggers`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5055,7 +5173,7 @@ export const pipelinesApi = {
       trigger_params?: Record<string, any>
     }
   ): Promise<PipelineTrigger> {
-    const res = await fetch(apiUrl(`/pipelines/${slug}/triggers`), {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/triggers`), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -5064,7 +5182,7 @@ export const pipelinesApi = {
   },
 
   async deleteTrigger(token: string | undefined, slug: string, triggerId: string): Promise<{ status: string; message: string }> {
-    const res = await fetch(apiUrl(`/pipelines/${slug}/triggers/${triggerId}`), {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/triggers/${triggerId}`), {
       method: 'DELETE',
       headers: authHeaders(token),
     })
@@ -5194,7 +5312,7 @@ export const salesforceApi = {
     const formData = new FormData()
     formData.append('file', file)
 
-    const res = await fetch(apiUrl('/salesforce/import'), {
+    const res = await fetch(apiUrl('/data/salesforce/import'), {
       method: 'POST',
       headers: authHeaders(token),
       body: formData,
@@ -5205,7 +5323,7 @@ export const salesforceApi = {
   // ========== Statistics ==========
 
   async getStats(token: string | undefined): Promise<SalesforceStats> {
-    const res = await fetch(apiUrl('/salesforce/stats'), {
+    const res = await fetch(apiUrl('/data/salesforce/stats'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5231,7 +5349,7 @@ export const salesforceApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/salesforce/accounts?${searchParams.toString()}`)
+    const url = apiUrl(`/data/salesforce/accounts?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -5240,7 +5358,7 @@ export const salesforceApi = {
   },
 
   async getAccount(token: string | undefined, accountId: string): Promise<SalesforceAccount> {
-    const res = await fetch(apiUrl(`/salesforce/accounts/${accountId}`), {
+    const res = await fetch(apiUrl(`/data/salesforce/accounts/${accountId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5256,7 +5374,7 @@ export const salesforceApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/salesforce/accounts/${accountId}/contacts?${searchParams.toString()}`)
+    const url = apiUrl(`/data/salesforce/accounts/${accountId}/contacts?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -5273,7 +5391,7 @@ export const salesforceApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/salesforce/accounts/${accountId}/opportunities?${searchParams.toString()}`)
+    const url = apiUrl(`/data/salesforce/accounts/${accountId}/opportunities?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -5300,7 +5418,7 @@ export const salesforceApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/salesforce/contacts?${searchParams.toString()}`)
+    const url = apiUrl(`/data/salesforce/contacts?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -5309,7 +5427,7 @@ export const salesforceApi = {
   },
 
   async getContact(token: string | undefined, contactId: string): Promise<SalesforceContact> {
-    const res = await fetch(apiUrl(`/salesforce/contacts/${contactId}`), {
+    const res = await fetch(apiUrl(`/data/salesforce/contacts/${contactId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5339,7 +5457,7 @@ export const salesforceApi = {
     if (params?.limit) searchParams.append('limit', params.limit.toString())
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
-    const url = apiUrl(`/salesforce/opportunities?${searchParams.toString()}`)
+    const url = apiUrl(`/data/salesforce/opportunities?${searchParams.toString()}`)
     const res = await fetch(url, {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -5348,7 +5466,7 @@ export const salesforceApi = {
   },
 
   async getOpportunity(token: string | undefined, opportunityId: string): Promise<SalesforceOpportunity> {
-    const res = await fetch(apiUrl(`/salesforce/opportunities/${opportunityId}`), {
+    const res = await fetch(apiUrl(`/data/salesforce/opportunities/${opportunityId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5358,7 +5476,7 @@ export const salesforceApi = {
   // ========== Filter Options ==========
 
   async getAccountTypes(token: string | undefined): Promise<FilterOptionsResponse> {
-    const res = await fetch(apiUrl('/salesforce/filters/account-types'), {
+    const res = await fetch(apiUrl('/data/salesforce/filters/account-types'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5366,7 +5484,7 @@ export const salesforceApi = {
   },
 
   async getIndustries(token: string | undefined): Promise<FilterOptionsResponse> {
-    const res = await fetch(apiUrl('/salesforce/filters/industries'), {
+    const res = await fetch(apiUrl('/data/salesforce/filters/industries'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5374,7 +5492,7 @@ export const salesforceApi = {
   },
 
   async getStages(token: string | undefined): Promise<FilterOptionsResponse> {
-    const res = await fetch(apiUrl('/salesforce/filters/stages'), {
+    const res = await fetch(apiUrl('/data/salesforce/filters/stages'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5382,7 +5500,7 @@ export const salesforceApi = {
   },
 
   async getOpportunityTypes(token: string | undefined): Promise<FilterOptionsResponse> {
-    const res = await fetch(apiUrl('/salesforce/filters/opportunity-types'), {
+    const res = await fetch(apiUrl('/data/salesforce/filters/opportunity-types'), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5508,8 +5626,8 @@ export const forecastsApi = {
     if (params?.offset) queryParams.set('offset', params.offset.toString())
 
     const url = queryParams.toString()
-      ? `/forecasts/syncs?${queryParams.toString()}`
-      : '/forecasts/syncs'
+      ? `/data/forecasts/syncs?${queryParams.toString()}`
+      : '/data/forecasts/syncs'
     const res = await fetch(apiUrl(url), {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -5521,7 +5639,7 @@ export const forecastsApi = {
     token: string | undefined,
     data: ForecastSyncCreateRequest
   ): Promise<ForecastSync> {
-    const res = await fetch(apiUrl('/forecasts/syncs'), {
+    const res = await fetch(apiUrl('/data/forecasts/syncs'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -5530,7 +5648,7 @@ export const forecastsApi = {
   },
 
   async getSync(token: string | undefined, syncId: string): Promise<ForecastSync> {
-    const res = await fetch(apiUrl(`/forecasts/syncs/${syncId}`), {
+    const res = await fetch(apiUrl(`/data/forecasts/syncs/${syncId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5542,7 +5660,7 @@ export const forecastsApi = {
     syncId: string,
     data: ForecastSyncUpdateRequest
   ): Promise<ForecastSync> {
-    const res = await fetch(apiUrl(`/forecasts/syncs/${syncId}`), {
+    const res = await fetch(apiUrl(`/data/forecasts/syncs/${syncId}`), {
       method: 'PATCH',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -5551,7 +5669,7 @@ export const forecastsApi = {
   },
 
   async deleteSync(token: string | undefined, syncId: string): Promise<void> {
-    const res = await fetch(apiUrl(`/forecasts/syncs/${syncId}`), {
+    const res = await fetch(apiUrl(`/data/forecasts/syncs/${syncId}`), {
       method: 'DELETE',
       headers: authHeaders(token),
     })
@@ -5565,7 +5683,7 @@ export const forecastsApi = {
     token: string | undefined,
     syncId: string
   ): Promise<{ run_id: string; sync_id: string; status: string; message: string }> {
-    const res = await fetch(apiUrl(`/forecasts/syncs/${syncId}/pull`), {
+    const res = await fetch(apiUrl(`/data/forecasts/syncs/${syncId}/pull`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -5576,7 +5694,7 @@ export const forecastsApi = {
     token: string | undefined,
     syncId: string
   ): Promise<{ sync_id: string; deleted_count: number; message: string }> {
-    const res = await fetch(apiUrl(`/forecasts/syncs/${syncId}/clear`), {
+    const res = await fetch(apiUrl(`/data/forecasts/syncs/${syncId}/clear`), {
       method: 'POST',
       headers: authHeaders(token),
     })
@@ -5612,8 +5730,8 @@ export const forecastsApi = {
     if (params?.offset) queryParams.set('offset', params.offset.toString())
 
     const url = queryParams.toString()
-      ? `/forecasts?${queryParams.toString()}`
-      : '/forecasts'
+      ? `/data/forecasts?${queryParams.toString()}`
+      : '/data/forecasts'
     const res = await fetch(apiUrl(url), {
       headers: authHeaders(token),
       cache: 'no-store',
@@ -5626,7 +5744,7 @@ export const forecastsApi = {
     sourceType: string,
     sourceId: string
   ): Promise<Forecast> {
-    const res = await fetch(apiUrl(`/forecasts/${sourceType}/${sourceId}`), {
+    const res = await fetch(apiUrl(`/data/forecasts/${sourceType}/${sourceId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5637,7 +5755,7 @@ export const forecastsApi = {
     token: string | undefined,
     forecastId: string
   ): Promise<Forecast> {
-    const res = await fetch(apiUrl(`/forecasts/${forecastId}`), {
+    const res = await fetch(apiUrl(`/data/forecasts/${forecastId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5645,7 +5763,26 @@ export const forecastsApi = {
   },
 
   async getStats(token: string | undefined): Promise<ForecastStatsResponse> {
-    const res = await fetch(apiUrl('/forecasts/stats'), {
+    const res = await fetch(apiUrl('/data/forecasts/stats'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+}
+
+// -------------------- Metrics API --------------------
+export const metricsApi = {
+  async getProcedureMetrics(token?: string, days: number = 7): Promise<{
+    period_days: number
+    total_runs: number
+    avg_duration_ms: number
+    success_rate: number
+    by_function: Record<string, { calls: number; avg_ms: number; errors: number }>
+  }> {
+    const url = new URL(apiUrl('/ops/metrics/procedures'))
+    url.searchParams.set('days', String(days))
+    const res = await fetch(url.toString(), {
       headers: authHeaders(token),
       cache: 'no-store',
     })
@@ -5659,13 +5796,10 @@ export default {
   API_PATH_VERSION,
   systemApi,
   fileApi,
-  processingApi,
-  contentApi,
   authApi,
   connectionsApi,
   organizationsApi,
   settingsApi,
-  storageApi,
   objectStorageApi,
   usersApi,
   assetsApi,
@@ -5678,7 +5812,10 @@ export default {
   forecastsApi,
   sharepointSyncApi,
   functionsApi,
+  contractsApi,
   proceduresApi,
   pipelinesApi,
+  metadataApi,
+  metricsApi,
   utils,
 }

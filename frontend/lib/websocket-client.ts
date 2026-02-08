@@ -157,7 +157,7 @@ export function createWebSocketClient(config: WebSocketClientConfig): WebSocketC
   const getWebSocketUrl = (): string => {
     // Convert HTTP(S) to WS(S)
     const wsBase = API_BASE_URL.replace(/^http/, 'ws')
-    return `${wsBase}/api/v1/ws/jobs?token=${encodeURIComponent(token)}`
+    return `${wsBase}/api/v1/ops/ws/jobs?token=${encodeURIComponent(token)}`
   }
 
   // Update status and notify

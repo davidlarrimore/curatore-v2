@@ -1,0 +1,892 @@
+# backend/app/api/v1/routers/system.py
+import asyncio
+from datetime import datetime
+from fastapi import APIRouter, HTTPException, Query, Depends
+import os
+from typing import Dict, Any, Optional, List
+import json
+import redis
+
+from app.config import settings
+from app.api.v1.admin.schemas import HealthStatus, LLMConnectionStatus
+from app.core.llm.llm_service import llm_service
+from app.core.shared.document_service import document_service
+from app.core.storage.storage_service import storage_service
+from app.core.storage.zip_service import zip_service
+from app.core.shared.database_service import database_service
+from app.core.shared.config_loader import config_loader
+from app.celery_app import app as celery_app
+from app.dependencies import get_current_user
+
+
+def get_redis_client():
+    """Get a Redis client for queue health checks."""
+    broker_url = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
+    return redis.Redis.from_url(broker_url)
+
+router = APIRouter(dependencies=[Depends(get_current_user)])
+
+
+# ============================================================================
+# HEALTH CHECK HELPERS (shared by individual and comprehensive endpoints)
+# ============================================================================
+
+async def _check_backend() -> Dict[str, Any]:
+    """Check backend API health."""
+    return {
+        "status": "healthy",
+        "message": "API is responding",
+        "version": settings.api_version,
+    }
+
+
+async def _check_database() -> Dict[str, Any]:
+    """Check database health."""
+    try:
+        db_health = await database_service.health_check()
+
+        if db_health["status"] == "healthy":
+            database_url = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./data/curatore.db")
+            safe_url = database_url.split("@")[-1].split("?")[0]
+
+            response = {
+                "status": "healthy",
+                "message": "Database connection successful",
+                "database_type": db_health.get("database_type", "unknown"),
+                "database_url": safe_url,
+                "connected": True,
+                "tables": db_health.get("tables", {}),
+                "migration_version": db_health.get("migration_version", "unknown"),
+            }
+
+            if "database_size_mb" in db_health:
+                response["database_size_mb"] = db_health["database_size_mb"]
+
+            return response
+        else:
+            return {
+                "status": "unhealthy",
+                "message": f"Database connection error: {db_health.get('error', 'unknown')}",
+                "connected": False,
+            }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Database health check failed: {str(e)}",
+            "connected": False,
+        }
+
+
+async def _check_redis() -> Dict[str, Any]:
+    """Check Redis health."""
+    try:
+        r = get_redis_client()
+        ping_result = r.ping()
+        return {
+            "status": "healthy" if ping_result else "unhealthy",
+            "message": "Redis connection successful" if ping_result else "Redis ping failed",
+            "broker_url": os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0"),
+            "result_backend": os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1"),
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Redis connection error: {str(e)}",
+        }
+
+
+async def _check_celery() -> Dict[str, Any]:
+    """Check Celery worker health."""
+    try:
+        insp = celery_app.control.inspect(timeout=2.0)
+        ping_result = insp.ping() or {}
+        worker_count = len(ping_result)
+
+        active_tasks = {}
+        try:
+            active = insp.active() or {}
+            active_tasks = {worker: len(tasks or []) for worker, tasks in active.items()}
+        except Exception:
+            pass
+
+        return {
+            "status": "healthy" if worker_count > 0 else "unhealthy",
+            "message": f"{worker_count} worker(s) active" if worker_count > 0 else "No workers responding",
+            "worker_count": worker_count,
+            "active_tasks": active_tasks,
+            "queue": os.getenv("CELERY_DEFAULT_QUEUE", "extraction"),
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Worker check error: {str(e)}",
+            "worker_count": 0,
+        }
+
+
+async def _check_extraction() -> Dict[str, Any]:
+    """Check extraction service health."""
+    try:
+        extractor_status = await document_service.extractor_health()
+        is_connected = extractor_status.get("connected", False)
+
+        if is_connected:
+            return {
+                "status": "healthy",
+                "message": "Extraction service is responding",
+                "url": extractor_status.get("endpoint"),
+                "engine": extractor_status.get("engine", "default"),
+                "response": extractor_status.get("response", {}),
+            }
+        elif extractor_status.get("error") == "not_configured":
+            return {
+                "status": "not_configured",
+                "message": "Extraction service not configured",
+                "engine": extractor_status.get("engine", "default"),
+            }
+        else:
+            error_msg = extractor_status.get("error", "Service check failed")
+            return {
+                "status": "unhealthy",
+                "message": f"Extraction service unreachable: {error_msg}",
+                "url": extractor_status.get("endpoint"),
+                "engine": extractor_status.get("engine", "default"),
+            }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Extraction service error: {str(e)}",
+        }
+
+
+async def _check_docling() -> Dict[str, Any]:
+    """Check Docling service health."""
+    import httpx
+
+    docling_url = (getattr(settings, "docling_service_url", None) or "").rstrip("/")
+    if not docling_url:
+        return {
+            "status": "not_configured",
+            "message": "Docling service not configured",
+        }
+
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            health_url = f"{docling_url}/health"
+            try:
+                resp = await client.get(health_url)
+                if resp.status_code == 200:
+                    return {
+                        "status": "healthy",
+                        "message": "Docling service is responding",
+                        "url": docling_url,
+                    }
+                else:
+                    return {
+                        "status": "degraded",
+                        "message": f"Docling returned status {resp.status_code}",
+                        "url": docling_url,
+                    }
+            except httpx.HTTPStatusError:
+                return {
+                    "status": "unknown",
+                    "message": "Docling service configured but health endpoint not available",
+                    "url": docling_url,
+                }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Docling service error: {str(e)}",
+            "url": docling_url,
+        }
+
+
+async def _check_storage() -> Dict[str, Any]:
+    """Check object storage (S3/MinIO) health."""
+    if not settings.use_object_storage:
+        return {
+            "status": "not_enabled",
+            "message": "Object storage not enabled (USE_OBJECT_STORAGE=false)",
+            "use_object_storage": False,
+        }
+
+    try:
+        from app.core.storage.minio_service import get_minio_service
+
+        minio = get_minio_service()
+        if not minio:
+            return {
+                "status": "not_configured",
+                "message": "MinIO service not initialized",
+                "use_object_storage": True,
+            }
+
+        connected, buckets, error = minio.check_health()
+
+        if connected:
+            return {
+                "status": "healthy",
+                "message": "Object storage is responding",
+                "use_object_storage": True,
+                "endpoint": minio.endpoint,
+                "provider_connected": True,
+                "buckets": buckets or [],
+            }
+        else:
+            return {
+                "status": "unhealthy",
+                "message": f"MinIO connection failed: {error}",
+                "use_object_storage": True,
+                "endpoint": minio.endpoint,
+                "error": error,
+            }
+
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Storage service error: {str(e)}",
+            "use_object_storage": True,
+        }
+
+
+async def _check_llm() -> Dict[str, Any]:
+    """Check LLM connection health."""
+    try:
+        llm_status = await llm_service.test_connection()
+        if llm_status.connected:
+            return {
+                "status": "healthy",
+                "message": f"Connected to {llm_status.model}",
+                "model": llm_status.model,
+                "endpoint": llm_status.endpoint,
+            }
+        else:
+            error_msg = llm_status.error or "Connection failed"
+            return {
+                "status": "unhealthy",
+                "message": error_msg,
+                "model": llm_status.model,
+                "endpoint": llm_status.endpoint,
+            }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"LLM check error: {str(e)}",
+        }
+
+
+async def _check_playwright() -> Dict[str, Any]:
+    """Check Playwright rendering service health."""
+    playwright_url = (getattr(settings, "playwright_service_url", None) or "").rstrip("/")
+    if not playwright_url:
+        return {
+            "status": "not_configured",
+            "message": "Playwright service not configured (missing PLAYWRIGHT_SERVICE_URL)",
+            "configured": False,
+        }
+
+    try:
+        import httpx
+
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            health_url = f"{playwright_url}/health"
+            try:
+                resp = await client.get(health_url)
+                if resp.status_code == 200:
+                    health_data = resp.json() if resp.headers.get("content-type", "").startswith("application/json") else {}
+                    return {
+                        "status": "healthy",
+                        "message": "Playwright service is responding",
+                        "url": playwright_url,
+                        "configured": True,
+                        "browser_pool_size": health_data.get("browser_pool_size"),
+                        "active_contexts": health_data.get("active_contexts"),
+                    }
+                else:
+                    return {
+                        "status": "degraded",
+                        "message": f"Playwright returned status {resp.status_code}",
+                        "url": playwright_url,
+                        "configured": True,
+                    }
+            except httpx.HTTPStatusError:
+                return {
+                    "status": "unknown",
+                    "message": "Playwright service configured but health endpoint not available",
+                    "url": playwright_url,
+                    "configured": True,
+                }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Playwright service error: {str(e)}",
+            "url": playwright_url,
+            "configured": True,
+        }
+
+
+async def _check_sharepoint() -> Dict[str, Any]:
+    """Check SharePoint / Microsoft Graph API connectivity."""
+    import httpx
+
+    tenant_id = os.getenv("MS_TENANT_ID", "").strip()
+    client_id = os.getenv("MS_CLIENT_ID", "").strip()
+    client_secret = os.getenv("MS_CLIENT_SECRET", "").strip()
+
+    if not tenant_id or not client_id or not client_secret:
+        return {
+            "status": "not_configured",
+            "message": "SharePoint integration not configured (missing MS_TENANT_ID, MS_CLIENT_ID, or MS_CLIENT_SECRET)",
+            "configured": False,
+        }
+
+    try:
+        graph_base = os.getenv("MS_GRAPH_BASE_URL", "https://graph.microsoft.com/v1.0")
+        token_url = os.getenv(
+            "MS_GRAPH_TOKEN_URL",
+            f"https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token",
+        )
+        scope = os.getenv("MS_GRAPH_SCOPE", "https://graph.microsoft.com/.default")
+
+        token_payload = {
+            "client_id": client_id,
+            "client_secret": client_secret,
+            "grant_type": "client_credentials",
+            "scope": scope,
+        }
+
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            token_resp = await client.post(token_url, data=token_payload)
+            token_resp.raise_for_status()
+            token_data = token_resp.json()
+            access_token = token_data.get("access_token")
+
+            if not access_token:
+                return {
+                    "status": "unhealthy",
+                    "message": "Failed to obtain access token from Microsoft identity platform",
+                    "configured": True,
+                    "authenticated": False,
+                }
+
+            headers = {"Authorization": f"Bearer {access_token}"}
+            try:
+                graph_resp = await client.get(f"{graph_base}/sites/root", headers=headers, timeout=5.0)
+                graph_resp.raise_for_status()
+
+                return {
+                    "status": "healthy",
+                    "message": "Successfully authenticated with Microsoft Graph API",
+                    "configured": True,
+                    "authenticated": True,
+                    "tenant_id": tenant_id,
+                    "graph_endpoint": graph_base,
+                }
+            except httpx.HTTPStatusError as graph_error:
+                if graph_error.response.status_code == 403:
+                    return {
+                        "status": "degraded",
+                        "message": "Authenticated but missing required permissions (Sites.Read.All or Files.Read.All)",
+                        "configured": True,
+                        "authenticated": True,
+                        "tenant_id": tenant_id,
+                        "graph_endpoint": graph_base,
+                        "error": "Permission denied",
+                    }
+                else:
+                    return {
+                        "status": "unhealthy",
+                        "message": f"Graph API request failed: {graph_error.response.status_code}",
+                        "configured": True,
+                        "authenticated": True,
+                        "tenant_id": tenant_id,
+                        "graph_endpoint": graph_base,
+                    }
+
+    except httpx.HTTPStatusError as e:
+        return {
+            "status": "unhealthy",
+            "message": f"Authentication failed: {e.response.status_code} - Check client credentials",
+            "configured": True,
+            "authenticated": False,
+            "error": str(e),
+        }
+    except Exception as e:
+        return {
+            "status": "unhealthy",
+            "message": f"SharePoint health check error: {str(e)}",
+            "configured": True,
+            "authenticated": False,
+            "error": str(e),
+        }
+
+
+# ============================================================================
+# INDIVIDUAL HEALTH ENDPOINTS (backward compatibility)
+# ============================================================================
+
+@router.get("/system/health/backend", tags=["System"])
+async def health_check_backend() -> Dict[str, Any]:
+    """Health check for backend API component."""
+    return await _check_backend()
+
+
+@router.get("/system/health/database", tags=["System"])
+async def health_check_database() -> Dict[str, Any]:
+    """Health check for database component."""
+    return await _check_database()
+
+
+@router.get("/system/health/redis", tags=["System"])
+async def health_check_redis() -> Dict[str, Any]:
+    """Health check for Redis component."""
+    return await _check_redis()
+
+
+@router.get("/system/health/celery", tags=["System"])
+async def health_check_celery() -> Dict[str, Any]:
+    """Health check for Celery worker component."""
+    return await _check_celery()
+
+
+@router.get("/system/health/extraction", tags=["System"])
+async def health_check_extraction() -> Dict[str, Any]:
+    """Health check for extraction service component."""
+    return await _check_extraction()
+
+
+@router.get("/system/health/docling", tags=["System"])
+async def health_check_docling() -> Dict[str, Any]:
+    """Health check for Docling service component."""
+    return await _check_docling()
+
+
+@router.get("/system/health/storage", tags=["System"])
+async def health_check_storage() -> Dict[str, Any]:
+    """Health check for object storage (S3/MinIO)."""
+    return await _check_storage()
+
+
+@router.get("/system/health/llm", tags=["System"])
+async def health_check_llm() -> Dict[str, Any]:
+    """Health check for LLM connection component."""
+    return await _check_llm()
+
+
+@router.get("/system/health/playwright", tags=["System"])
+async def health_check_playwright() -> Dict[str, Any]:
+    """Health check for Playwright rendering service component."""
+    return await _check_playwright()
+
+
+@router.get("/system/health/sharepoint", tags=["System"])
+async def health_check_sharepoint() -> Dict[str, Any]:
+    """Health check for SharePoint / Microsoft Graph API connectivity."""
+    return await _check_sharepoint()
+
+
+@router.get("/system/health/comprehensive", tags=["System"])
+async def comprehensive_health() -> Dict[str, Any]:
+    """Comprehensive health check for all system components.
+
+    Runs all component health checks in parallel and returns a unified report.
+    This is the recommended single endpoint for monitoring system health.
+    """
+    # Run all health checks in parallel
+    results = await asyncio.gather(
+        _check_backend(),
+        _check_database(),
+        _check_redis(),
+        _check_celery(),
+        _check_extraction(),
+        _check_docling(),
+        _check_storage(),
+        _check_llm(),
+        _check_playwright(),
+        _check_sharepoint(),
+        return_exceptions=True,
+    )
+
+    component_keys = [
+        "backend", "database", "redis", "celery_worker",
+        "extraction_service", "docling", "object_storage",
+        "llm", "playwright", "sharepoint",
+    ]
+
+    health_report: Dict[str, Any] = {
+        "timestamp": datetime.now().isoformat(),
+        "overall_status": "healthy",
+        "components": {},
+    }
+
+    issues = []
+
+    for key, result in zip(component_keys, results):
+        if isinstance(result, Exception):
+            health_report["components"][key] = {
+                "status": "unhealthy",
+                "message": f"Health check failed: {str(result)}",
+            }
+            issues.append(f"{key}: {str(result)}")
+        else:
+            health_report["components"][key] = result
+            status = result.get("status")
+            if status == "unhealthy":
+                issues.append(f"{key}: {result.get('message')}")
+            elif status in ("degraded", "unknown"):
+                issues.append(f"{key}: {result.get('message')}")
+
+    # Determine overall status
+    component_statuses = [c.get("status") for c in health_report["components"].values()]
+
+    if any(s == "unhealthy" for s in component_statuses):
+        health_report["overall_status"] = "unhealthy"
+    elif any(s in ("degraded", "unknown") for s in component_statuses):
+        health_report["overall_status"] = "degraded"
+    else:
+        health_report["overall_status"] = "healthy"
+
+    if issues:
+        health_report["issues"] = issues
+
+    return health_report
+
+
+# ============================================================================
+# SYSTEM MANAGEMENT ENDPOINTS
+# ============================================================================
+
+@router.post("/system/reset", tags=["System"])
+async def reset_system():
+    """Reset the entire system - cancel jobs, clear files and data."""
+    try:
+        # Best-effort: cancel running and queued Celery tasks
+        revoked = 0
+        purged = 0
+        try:
+            insp = celery_app.control.inspect(timeout=1.0)
+            active = insp.active() or {}
+            for tasks in active.values():
+                for t in tasks or []:
+                    tid = (t.get('id') if isinstance(t, dict) else None) or getattr(t, 'id', None)
+                    if tid:
+                        celery_app.control.revoke(tid, terminate=True)
+                        revoked += 1
+            reserved = insp.reserved() or {}
+            for tasks in reserved.values():
+                for t in tasks or []:
+                    tid = (t.get('id') if isinstance(t, dict) else None) or getattr(t, 'id', None)
+                    if tid:
+                        celery_app.control.revoke(tid, terminate=False)
+                        revoked += 1
+            scheduled = insp.scheduled() or {}
+            for tasks in scheduled.values():
+                for t in tasks or []:
+                    tid = None
+                    if isinstance(t, dict):
+                        tid = (t.get('request') or {}).get('id') or t.get('id')
+                    if tid:
+                        celery_app.control.revoke(tid, terminate=False)
+                        revoked += 1
+            purged = celery_app.control.purge() or 0
+        except Exception:
+            pass
+
+        # Clear temp ZIPs and object storage
+        try:
+            zip_deleted = zip_service.cleanup_all_temp_archives()
+        except Exception:
+            zip_deleted = 0
+
+        # Clear object storage buckets
+        minio_deleted = {"uploads": 0, "processed": 0, "temp": 0}
+        try:
+            from app.core.storage.minio_service import get_minio_service
+            minio = get_minio_service()
+            if minio and minio.enabled:
+                try:
+                    minio_deleted["uploads"] = minio.delete_all_objects_in_bucket(minio.bucket_uploads)
+                except Exception:
+                    pass
+                try:
+                    minio_deleted["processed"] = minio.delete_all_objects_in_bucket(minio.bucket_processed)
+                except Exception:
+                    pass
+                try:
+                    minio_deleted["temp"] = minio.delete_all_objects_in_bucket(minio.bucket_temp)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+        # Clear in-memory storage cache
+        storage_service.clear_all()
+
+        return {
+            "success": True,
+            "message": "System reset successfully",
+            "timestamp": datetime.now(),
+            "queue": {"revoked": revoked, "purged": purged},
+            "temp_zips_deleted": zip_deleted,
+            "minio_objects_deleted": minio_deleted,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Reset failed: {str(e)}")
+
+
+# ============================================================================
+# CONFIGURATION ENDPOINTS
+# ============================================================================
+
+@router.get("/config/supported-formats", tags=["Configuration"])
+async def get_supported_formats():
+    """Get list of supported file formats."""
+    from app.core.ingestion.extraction import file_type_registry
+
+    return {
+        "supported_extensions": document_service.get_supported_extensions(),
+        "max_file_size": settings.max_file_size,
+        "engines": file_type_registry.get_all_engines(),
+        "format_matrix": file_type_registry.get_format_matrix(),
+    }
+
+
+@router.get("/config/file-type-registry", tags=["Configuration"])
+async def get_file_type_registry():
+    """Get detailed file type support information by extraction engine."""
+    from app.core.ingestion.extraction import file_type_registry
+
+    return {
+        "all_supported_formats": sorted(file_type_registry.get_all_supported_formats()),
+        "engines": file_type_registry.get_all_engines(),
+        "format_matrix": file_type_registry.get_format_matrix(),
+    }
+
+@router.get("/config/defaults", tags=["Configuration"])
+async def get_default_config():
+    """Get default configuration values."""
+    return {
+        "quality_thresholds": {
+            "conversion": settings.default_conversion_threshold,
+            "clarity": settings.default_clarity_threshold,
+            "completeness": settings.default_completeness_threshold,
+            "relevance": settings.default_relevance_threshold,
+            "markdown": settings.default_markdown_threshold
+        },
+        "ocr_settings": {
+            "language": settings.ocr_lang,
+            "psm": settings.ocr_psm
+        },
+        "auto_optimize": True
+    }
+
+@router.get("/config/extraction-services", tags=["Configuration"])
+async def get_extraction_services() -> Dict[str, Any]:
+    """List available document extraction services and which one is active."""
+    try:
+        return await document_service.available_extraction_services()
+    except Exception as e:
+        if getattr(document_service, 'extract_base', ''):
+            active = "extraction-service"
+        elif getattr(document_service, 'docling_base', ''):
+            active = "docling"
+        else:
+            active = None
+        return {"active": active, "services": [], "error": str(e)}
+
+@router.get("/config/extraction-engines", tags=["Configuration"])
+async def get_extraction_engines() -> Dict[str, Any]:
+    """List extraction engines configured in config.yml."""
+    try:
+        enabled_engines = config_loader.get_enabled_extraction_engines()
+        default_engine = config_loader.get_default_extraction_engine()
+
+        engines_list = []
+        for engine in enabled_engines:
+            is_default = (default_engine and engine.name.lower() == default_engine.name.lower())
+
+            engines_list.append({
+                "id": engine.name,
+                "name": engine.name,
+                "display_name": engine.display_name,
+                "description": engine.description,
+                "engine_type": engine.engine_type,
+                "service_url": engine.service_url,
+                "timeout": engine.timeout,
+                "is_default": is_default,
+                "is_system": True
+            })
+
+        return {
+            "engines": engines_list,
+            "default_engine": default_engine.name if default_engine else None,
+            "default_engine_source": "config.yml" if config_loader.has_default_engine_in_config() else None
+        }
+    except Exception as e:
+        return {
+            "engines": [],
+            "default_engine": None,
+            "default_engine_source": None,
+            "error": str(e)
+        }
+
+
+# ============================================================================
+# QUEUE ENDPOINTS
+# ============================================================================
+
+@router.get("/system/queues", tags=["System"])
+async def queue_health() -> Dict[str, Any]:
+    """Minimal Celery/Redis queue health endpoint."""
+    enabled = os.getenv("USE_CELERY", "true").lower() in {"1", "true", "yes"}
+    broker = os.getenv("CELERY_BROKER_URL", "redis://redis:6379/0")
+    backend = os.getenv("CELERY_RESULT_BACKEND", "redis://redis:6379/1")
+    queue = os.getenv("CELERY_DEFAULT_QUEUE", "extraction")
+
+    info: Dict[str, Any] = {
+        "enabled": enabled,
+        "broker": broker,
+        "result_backend": backend,
+        "queue": queue,
+        "redis_ok": False,
+        "pending": 0,
+        "workers": 0,
+        "running": 0,
+        "processed": 0,
+        "total": 0,
+    }
+
+    # Redis status and rough pending count
+    try:
+        r = get_redis_client()
+        info["redis_ok"] = bool(r.ping())
+        keys = [queue, "celery"] if queue != "celery" else ["celery"]
+        total = 0
+        for k in keys:
+            try:
+                total += int(r.llen(k))
+            except Exception:
+                continue
+        info["pending"] = total
+        try:
+            cursor = 0
+            running = 0
+            completed = 0
+            while True:
+                cursor, keys = r.scan(cursor=cursor, match="job:*", count=500)
+                for k in keys or []:
+                    try:
+                        raw = r.get(k)
+                        if not raw:
+                            continue
+                        data = json.loads(raw)
+                        status = str(data.get("status", "")).upper()
+                        if status == "STARTED":
+                            running += 1
+                        elif status in ("SUCCESS", "FAILURE"):
+                            completed += 1
+                    except Exception:
+                        continue
+                if cursor == 0:
+                    break
+            info["running"] = running
+            info["processed"] = completed
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+    try:
+        insp = celery_app.control.inspect(timeout=1.0)
+        p = insp.ping() or {}
+        info["workers"] = len(p)
+        try:
+            active = insp.active() or {}
+            info["running"] = sum(len(tasks or []) for tasks in active.values())
+        except Exception:
+            pass
+    except Exception:
+        pass
+    info["total"] = int(info.get("processed", 0)) + int(info.get("running", 0)) + int(info.get("pending", 0))
+    return info
+
+
+@router.get("/system/queues/summary", tags=["System"])
+async def queue_summary(
+    batch_id: Optional[str] = Query(None),
+    job_ids: Optional[str] = Query(None, description="Comma-separated job IDs"),
+) -> Dict[str, Any]:
+    """Summarize status for a requested set of jobs."""
+    if not batch_id and not job_ids:
+        raise HTTPException(status_code=400, detail="batch_id or job_ids required")
+
+    r = get_redis_client()
+    target_job_ids: List[str] = []
+
+    if job_ids:
+        target_job_ids = [j.strip() for j in job_ids.split(",") if j.strip()]
+    else:
+        cursor = 0
+        while True:
+            cursor, keys = r.scan(cursor=cursor, match="job:*", count=500)
+            for k in keys or []:
+                try:
+                    raw = r.get(k)
+                    if not raw:
+                        continue
+                    data = json.loads(raw)
+                    if data.get("batch_id") == batch_id and data.get("job_id"):
+                        target_job_ids.append(str(data.get("job_id")))
+                except Exception:
+                    continue
+            if cursor == 0:
+                break
+
+    requested = len(target_job_ids)
+    running = 0
+    done = 0
+
+    for jid in target_job_ids:
+        try:
+            raw = r.get(f"job:{jid}")
+            if not raw:
+                continue
+            data = json.loads(raw)
+            status = str(data.get("status", "")).upper()
+            if status == "STARTED":
+                running += 1
+            elif status in ("SUCCESS", "FAILURE"):
+                done += 1
+        except Exception:
+            continue
+
+    queued = max(requested - running - done, 0)
+    return {
+        "batch_id": batch_id,
+        "requested": requested,
+        "queued": queued,
+        "running": running,
+        "done": done,
+        "total": requested,
+    }
+
+
+# ============================================================================
+# STORAGE MANAGEMENT & RETENTION ENDPOINTS
+# ============================================================================
+
+@router.get("/storage/retention", tags=["System", "Storage"])
+async def get_retention_policy():
+    """Get current retention policy settings."""
+    return {
+        "enabled": settings.file_cleanup_enabled,
+        "retention_periods": {
+            "uploaded_days": settings.file_retention_uploaded_days,
+            "processed_days": settings.file_retention_processed_days,
+            "batch_days": settings.file_retention_batch_days,
+            "temp_hours": settings.file_retention_temp_hours,
+        },
+        "cleanup_schedule": settings.file_cleanup_schedule_cron,
+        "batch_size": settings.file_cleanup_batch_size,
+        "dry_run": settings.file_cleanup_dry_run,
+    }

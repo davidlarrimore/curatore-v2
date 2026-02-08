@@ -1,0 +1,170 @@
+# SAM.gov Daily Digest Procedure
+#
+# Generates a daily digest of SAM.gov opportunities with per-opportunity
+# LLM analysis, PDF generation, and email delivery.
+#
+# Triggers:
+# - Cron: Weekdays at 8 AM
+# - Manual: Via API or UI
+
+name: SAM.gov Daily Digest
+slug: sam_daily_digest
+description: >
+  Generate a daily digest of federal contracting opportunities from SAM.gov.
+  Queries notices from the past 24 hours, generates detailed per-opportunity
+  analysis, creates a PDF report, and emails it to configured recipients.
+
+version: "1.1.0"
+is_system: true
+tags:
+  - sam
+  - digest
+  - daily
+  - automation
+  - email
+
+parameters:
+  - name: recipients
+    type: string
+    description: Email addresses to send the digest to (comma-separated if multiple)
+    required: false
+    default: "dlarrimore@amivero.com, mpaschal@amivero.com, mmyette@amivero.com, mmckinney@amivero.com, spoticha@amivero.com, cporter@amivero.com"
+    example: "dlarrimore@amivero.com, other@example.com"
+
+  - name: posted_within_days
+    type: integer
+    description: Only include notices posted within N days
+    required: false
+    default: 1
+
+  - name: max_notices
+    type: integer
+    description: Maximum notices to include in digest
+    required: false
+    default: 50
+
+  - name: company_name
+    type: string
+    description: Company name for the analysis context
+    required: false
+    default: "Amivero, LLC"
+
+  - name: company_context
+    type: string
+    description: Company context for relevance analysis
+    required: false
+    default: >
+      8(a), Woman-Owned Small Business (WOSB). Primary customer: General Services Administration, Department of Transportation, U.S. Department
+      of Homeland Security (DHS) including CBP, USCIS, ICE. Strategic growth
+      targets: TSA, CISA, FEMA. We also are strategically targeting Department of State. Core capabilities: AI & Advanced Analytics,
+      Fraud Detection, SecDevOps & Cloud Engineering, Software Development,
+      RPA & Intelligent Automation, Program Management, Business Intelligence.
+
+triggers:
+  - type: cron
+    cron_expression: "0 8 * * 1-5"  # 8 AM Monday-Friday
+
+steps:
+  # Step 1: Query recent notices
+  - name: query_notices
+    function: search_notices
+    description: Query SAM.gov notices from the past 24 hours
+    params:
+      posted_within_days: "{{ params.posted_within_days }}"
+      include_solicitation: true
+      limit: "{{ params.max_notices }}"
+    on_error: fail
+
+  # Step 2: Analyze each opportunity individually
+  - name: analyze_opportunities
+    function: llm_generate
+    description: Generate detailed analysis for each opportunity
+    foreach: "{{ steps.query_notices }}"
+    params:
+      system_prompt: "You are an internal business development and acquisition analyst for {{ params.company_name }}.\n\nABOUT THE COMPANY:\n{{ params.company_context }}\n\nPRIMARY GOAL:\nProvide a concise, executive-ready assessment of whether this SAM.gov notice represents a real, actionable opportunity.\n\nGENERAL GUIDANCE:\n- Most Special Notices, Award Notices, and Sole Source Justifications are NOT actionable.\n- Be decisive and concise.\n- Avoid FAR explanations unless they materially affect actionability.\n\nREQUIRED OUTPUT FORMAT:\n\n### Opportunity Overview\n**Disposition**: ACTIONABLE | MONITOR | IGNORE\n**Title**: <Exact title from input>\n**Agency / Component**: <Agency, Subcomponent>\n**Notice Type**: <SAM notice type>\n**SAM.gov Link**: <Include the exact Link URL provided in the input>\n\n### Key Dates\n- List any: Response deadline, RFP release date, Industry Day date\n\n### Acquisition Summary\n- 2-4 concise bullets describing what the government is buying\n\n### Contract Details\n- Contract type, estimated value, period of performance (if available)\n\n### Relevance to {{ params.company_name }}\n- Connect to company strategy and capabilities, or state 'Not relevant'\n\n### Recommended Action\n- One clear sentence"
+      prompt: "Analyze this opportunity:\n\nTitle: {{ item.title }}\nNotice ID: {{ item.fields.sam_notice_id }}\nNotice Type: {{ item.display_type }} ({{ item.fields.notice_type }})\nPosted: {{ item.fields.posted_date }}\nResponse Deadline: {{ item.fields.response_deadline or 'Not specified' }}\nAgency: {{ item.fields.agency_name or 'Unknown' }}\nBureau: {{ item.fields.bureau_name or 'Unknown' }}\nNAICS: {{ item.fields.naics_code or 'Not specified' }}\nSet-Aside: {{ item.fields.set_aside_code or 'None' }}\nLink: {{ item.metadata.ui_link }}\n\nDescription:\n{{ item.metadata.description or 'No description available' }}"
+      max_tokens: 1000
+      temperature: 0.3
+    on_error: continue
+
+  # Step 3: Generate executive summary
+  - name: executive_summary
+    function: llm_generate
+    description: Generate executive summary of all opportunities
+    condition: "steps.analyze_opportunities"
+    params:
+      system_prompt: "You are a senior Business Development executive at {{ params.company_name }}. Create an executive-ready daily SAM.gov intelligence summary."
+      prompt: "Create an executive summary for the daily SAM.gov digest dated {{ today() }}.\n\nTotal notices analyzed: {{ steps.analyze_opportunities | length }}\n\nIndividual Analyses:\n{% for analysis in steps.analyze_opportunities %}{% if analysis.success %}\n---\n{{ analysis.result }}\n{% endif %}{% endfor %}\n\nREQUIRED STRUCTURE:\n\n## Executive Summary\n\n### Action Required\n- List opportunities marked ACTIONABLE with title, agency, and deadline\n\n### Monitor List\n- List opportunities marked MONITOR with brief reason\n\n### Key Takeaways\n- 3-5 bullets on DHS activity trends, notable opportunities, strategic implications for {{ params.company_name }}"
+      max_tokens: 1500
+      temperature: 0.3
+    on_error: continue
+
+  # Step 4: Build full report markdown
+  - name: build_report
+    function: llm_generate
+    description: Compile full markdown report
+    params:
+      system_prompt: "You are a report formatter. Combine the provided content into a well-structured markdown document. Do not add or remove content, just format it cleanly."
+      prompt: "Create a formatted markdown report:\n\n# SAM.gov Daily Intelligence Brief\n\n**Date**: {{ today() }}\n**Prepared for**: {{ params.company_name }}\n**Source**: SAM.gov (past {{ params.posted_within_days }} day{% if params.posted_within_days > 1 %}s{% endif %})\n**Notices Analyzed**: {{ steps.query_notices | length if steps.query_notices else 0 }}\n\n---\n\n{{ steps.executive_summary if steps.executive_summary else '## Executive Summary\\n\\nNo executive summary available.' }}\n\n---\n\n## Detailed Opportunity Assessments\n\n{% if steps.analyze_opportunities %}{% for analysis in steps.analyze_opportunities %}{% if analysis.success %}\n### {{ loop.index }}. Analysis\n\n{{ analysis.result }}\n\n---\n\n{% endif %}{% endfor %}{% else %}\nNo opportunities to analyze.\n{% endif %}\n\n---\n\n*Generated by Curatore SAM.gov Integration*"
+      max_tokens: 4000
+    on_error: fail
+
+  # Step 5: Generate PDF
+  - name: generate_pdf
+    function: generate_document
+    description: Convert report to PDF
+    params:
+      format: pdf
+      content: "{{ steps.build_report }}"
+      title: "SAM.gov Daily Brief - {{ now_et().strftime('%Y-%m-%d') }}"
+      filename: "sam_daily_brief_{{ now_et().strftime('%Y%m%d') }}.pdf"
+    on_error: fail
+
+  # Step 6: Save markdown to storage
+  - name: save_markdown
+    function: create_artifact
+    description: Save markdown report to storage
+    params:
+      content: "{{ steps.build_report }}"
+      filename: "sam_daily_digest_{{ now().strftime('%Y%m%d') }}.md"
+      content_type: text/markdown
+      folder: digests/sam/daily
+    on_error: continue
+
+  # Step 7: Build email body with summary
+  - name: build_email_body
+    function: llm_generate
+    description: Create HTML email body
+    params:
+      system_prompt: "You generate clean, valid HTML email bodies. Output ONLY HTML - never markdown, never code blocks, never explanations. All HTML must be properly closed and valid."
+      prompt: "Generate an HTML email for the SAM.gov daily digest dated {{ today() }}.\n\nData to include:\n- Total notices: {{ steps.query_notices | length if steps.query_notices else 0 }}\n\nAnalysis results:\n{% for analysis in steps.analyze_opportunities %}{% if analysis.success %}\n---\n{{ analysis.result }}\n{% endif %}{% endfor %}\n\nGENERATE THIS EXACT HTML STRUCTURE (fill in the data from above):\n\n<div style=\"font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px;\">\n  <h1 style=\"color: #333; border-bottom: 2px solid #4A90A4; padding-bottom: 10px;\">SAM.gov Daily Digest</h1>\n  <p style=\"color: #666;\">{{ today() }}</p>\n  \n  <p>Good morning,</p>\n  <p>Today's digest includes <strong>[X]</strong> opportunities: <strong>[Y] actionable</strong>, <strong>[Z] to monitor</strong>.</p>\n  \n  <!-- IF there are ACTIONABLE items, include this section -->\n  <div style=\"background-color: #FFE4E1; padding: 15px; border-radius: 5px; margin: 15px 0;\">\n    <h2 style=\"color: #C41E3A; margin-top: 0;\">Action Required</h2>\n    <!-- For each ACTIONABLE item: -->\n    <div style=\"margin-bottom: 10px;\">\n      <a href=\"[SAM.gov Link URL]\" style=\"color: #C41E3A; font-weight: bold;\">[Title]</a><br>\n      <span style=\"color: #666;\">[Agency] | Deadline: [Date]</span>\n    </div>\n  </div>\n  \n  <!-- IF there are MONITOR items, include this section -->\n  <div style=\"background-color: #FFFACD; padding: 15px; border-radius: 5px; margin: 15px 0;\">\n    <h2 style=\"color: #B8860B; margin-top: 0;\">Monitor</h2>\n    <!-- For each MONITOR item: -->\n    <div style=\"margin-bottom: 10px;\">\n      <a href=\"[SAM.gov Link URL]\" style=\"color: #B8860B; font-weight: bold;\">[Title]</a><br>\n      <span style=\"color: #666;\">[Agency] - [Brief reason]</span>\n    </div>\n  </div>\n  \n  <p style=\"color: #666; font-size: 14px;\">See attached PDF for complete analysis of all [X] opportunities.</p>\n  \n  <hr style=\"border: none; border-top: 1px solid #ddd; margin: 20px 0;\">\n  <p style=\"color: #999; font-size: 12px;\">Generated by Curatore SAM.gov Integration</p>\n</div>\n\nRULES:\n1. Replace [bracketed placeholders] with actual data from the analyses\n2. Extract SAM.gov Link URLs from the analysis text (look for 'SAM.gov Link:' field)\n3. Only include ACTIONABLE section if there are ACTIONABLE items\n4. Only include MONITOR section if there are MONITOR items\n5. Output ONLY the HTML div - no markdown code fences, no explanations"
+      max_tokens: 2000
+      temperature: 0.2
+    on_error: continue
+
+  # Step 8: Send email with PDF attachment
+  - name: send_email
+    function: send_email
+    description: Email the digest to recipients
+    params:
+      to: "{{ params.recipients }}"
+      subject: "SAM.gov Daily Brief ({{ steps.query_notices | length if steps.query_notices else 0 }} opportunities)"
+      body: "{{ steps.build_email_body if steps.build_email_body else '<p>Please see the attached PDF for today''s SAM.gov daily digest.</p>' }}"
+      html: true
+      attachments:
+        - filename: "{{ steps.generate_pdf.filename }}"
+          content: "{{ steps.generate_pdf.document_base64 }}"
+          content_type: "application/pdf"
+    on_error: fail
+
+outputs:
+  - type: result
+    config:
+      include_steps:
+        - query_notices
+        - analyze_opportunities
+        - executive_summary
+        - generate_pdf
+        - send_email
+
+on_error: continue

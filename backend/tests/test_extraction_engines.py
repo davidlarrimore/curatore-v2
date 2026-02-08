@@ -6,12 +6,13 @@ and ExtractionEngineFactory functionality.
 """
 
 import pytest
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 
-from app.services.extraction.factory import ExtractionEngineFactory
-from app.services.extraction.fast_pdf import FastPdfEngine
-from app.services.extraction.base import BaseExtractionEngine, ExtractionResult
+from app.core.ingestion.extraction.factory import ExtractionEngineFactory
+from app.core.ingestion.extraction.fast_pdf import FastPdfEngine
+from app.core.ingestion.extraction.base import BaseExtractionEngine, ExtractionResult
 
 
 # =============================================================================
@@ -94,14 +95,14 @@ class TestFastPdfEngine:
         assert "not installed" in result.error.lower()
 
     @pytest.mark.asyncio
-    @patch("app.services.extraction.fast_pdf.fitz")
-    async def test_extract_simple_pdf(self, mock_fitz, tmp_path):
+    async def test_extract_simple_pdf(self, tmp_path):
         """Test extraction of a simple PDF."""
         # Create test PDF
         pdf_path = tmp_path / "test.pdf"
         pdf_path.write_bytes(b"%PDF-1.4\ntest")
 
-        # Mock PyMuPDF
+        # Mock fitz module
+        mock_fitz = MagicMock()
         mock_doc = MagicMock()
         mock_doc.__len__ = MagicMock(return_value=2)
         mock_doc.metadata = {"title": "Test Doc", "author": "Test Author"}
@@ -114,10 +115,11 @@ class TestFastPdfEngine:
         mock_doc.__getitem__ = MagicMock(side_effect=[mock_page1, mock_page2])
         mock_fitz.open.return_value = mock_doc
 
-        engine = FastPdfEngine()
-        engine._fitz_available = True
+        with patch.dict(sys.modules, {'fitz': mock_fitz}):
+            engine = FastPdfEngine()
+            engine._fitz_available = True
 
-        result = await engine.extract(pdf_path)
+            result = await engine.extract(pdf_path)
 
         assert result.success is True
         assert "Test Doc" in result.content
@@ -125,12 +127,13 @@ class TestFastPdfEngine:
         assert result.metadata["pages"] == 2
 
     @pytest.mark.asyncio
-    @patch("app.services.extraction.fast_pdf.fitz")
-    async def test_extract_empty_pdf(self, mock_fitz, tmp_path):
+    async def test_extract_empty_pdf(self, tmp_path):
         """Test extraction of PDF with no text."""
         pdf_path = tmp_path / "empty.pdf"
         pdf_path.write_bytes(b"%PDF-1.4\n")
 
+        # Mock fitz module
+        mock_fitz = MagicMock()
         mock_doc = MagicMock()
         mock_doc.__len__ = MagicMock(return_value=1)
         mock_doc.metadata = {}
@@ -141,10 +144,11 @@ class TestFastPdfEngine:
         mock_doc.__getitem__ = MagicMock(return_value=mock_page)
         mock_fitz.open.return_value = mock_doc
 
-        engine = FastPdfEngine()
-        engine._fitz_available = True
+        with patch.dict(sys.modules, {'fitz': mock_fitz}):
+            engine = FastPdfEngine()
+            engine._fitz_available = True
 
-        result = await engine.extract(pdf_path)
+            result = await engine.extract(pdf_path)
 
         assert result.success is False
         assert "no extractable text" in result.error.lower()

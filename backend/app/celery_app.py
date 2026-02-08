@@ -29,7 +29,16 @@ app = Celery(
     "curatore",
     broker=BROKER_URL,
     backend=RESULT_BACKEND,
-    include=["app.tasks"],
+    include=[
+        "app.core.tasks.extraction",
+        "app.core.tasks.sam",
+        "app.core.tasks.salesforce",
+        "app.core.tasks.sharepoint",
+        "app.core.tasks.scrape",
+        "app.core.tasks.forecasts",
+        "app.core.tasks.procedures",
+        "app.core.tasks.maintenance",
+    ],
 )
 
 # Define task queues - each job type has its own queue for isolation
@@ -267,7 +276,7 @@ def on_worker_ready(sender, **kwargs):
     """
     # Initialize queue registry
     try:
-        from .services.queue_registry import initialize_queue_registry
+        from .core.ops.queue_registry import initialize_queue_registry
         initialize_queue_registry()
         _recovery_logger.info("Queue registry initialized")
     except Exception as e:
@@ -283,7 +292,7 @@ def on_worker_ready(sender, **kwargs):
     _recovery_logger.info("Worker ready - scheduling orphaned extraction recovery")
 
     # Import here to avoid circular imports
-    from .tasks import recover_orphaned_extractions
+    from .core.tasks import recover_orphaned_extractions
 
     # Delay recovery by 10 seconds to ensure all services are ready
     recover_orphaned_extractions.apply_async(

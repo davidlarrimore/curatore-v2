@@ -6,7 +6,7 @@ validation of UUID document ID formats.
 """
 
 import pytest
-from app.utils.validators import (
+from app.core.utils.validators import (
     is_valid_uuid,
     is_valid_document_id,
     validate_document_id,

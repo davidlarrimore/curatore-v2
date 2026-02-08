@@ -19,7 +19,7 @@ class TestObjectStorageUploadFlow:
     @pytest.mark.skip(reason="Requires MinIO service running")
     def test_generate_upload_presigned_url(self):
         """Test generation of presigned URL for upload."""
-        from app.services.minio_service import get_minio_service
+        from app.core.storage.minio_service import get_minio_service
 
         minio = get_minio_service()
         if not minio or not minio.enabled:
@@ -40,7 +40,7 @@ class TestObjectStorageUploadFlow:
     @pytest.mark.skip(reason="Requires MinIO service running")
     def test_upload_and_download_file(self):
         """Test uploading a file to MinIO and downloading it back."""
-        from app.services.minio_service import get_minio_service
+        from app.core.storage.minio_service import get_minio_service
 
         minio = get_minio_service()
         if not minio or not minio.enabled:
@@ -77,8 +77,8 @@ class TestArtifactTracking:
     @pytest.mark.skip(reason="Requires database setup")
     async def test_create_artifact_record(self):
         """Test creating an artifact record in the database."""
-        from app.services.artifact_service import artifact_service
-        from app.services.database_service import database_service
+        from app.core.shared.artifact_service import artifact_service
+        from app.core.shared.database_service import database_service
 
         async with database_service.get_session() as session:
             artifact = await artifact_service.create_artifact(
@@ -102,8 +102,8 @@ class TestArtifactTracking:
     @pytest.mark.skip(reason="Requires database setup")
     async def test_get_artifact_by_document(self):
         """Test retrieving artifacts by document ID."""
-        from app.services.artifact_service import artifact_service
-        from app.services.database_service import database_service
+        from app.core.shared.artifact_service import artifact_service
+        from app.core.shared.database_service import database_service
 
         document_id = str(uuid4())
 
@@ -139,7 +139,7 @@ class TestMultiTenantIsolation:
     @pytest.mark.skip(reason="Requires MinIO service running")
     def test_organization_prefix_isolation(self):
         """Test that files are isolated by organization_id prefix."""
-        from app.services.minio_service import get_minio_service
+        from app.core.storage.minio_service import get_minio_service
 
         minio = get_minio_service()
         if not minio or not minio.enabled:
@@ -186,7 +186,7 @@ class TestPresignedURLDownload:
     @pytest.mark.skip(reason="Requires MinIO service running")
     def test_generate_download_presigned_url(self):
         """Test generation of presigned URL for download."""
-        from app.services.minio_service import get_minio_service
+        from app.core.storage.minio_service import get_minio_service
 
         minio = get_minio_service()
         if not minio or not minio.enabled:

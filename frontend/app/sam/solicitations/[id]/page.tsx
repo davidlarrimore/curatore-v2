@@ -213,7 +213,7 @@ function SolicitationDetailContent({ params }: PageProps) {
 
       // Download file via proxy
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-      const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
+      const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
 
       const response = await fetch(url, {
         headers: {

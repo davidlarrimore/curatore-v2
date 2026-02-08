@@ -1,0 +1,40 @@
+# Metadata namespace definitions for Curatore Data Core.
+# Each namespace groups related metadata fields.
+# Global baseline (organization_id = null).
+
+namespaces:
+  source:
+    display_name: "Source Info"
+    description: "Common source metadata for all assets (storage path, upload info)"
+
+  sharepoint:
+    display_name: "SharePoint"
+    description: "SharePoint-specific metadata (site, path, author, timestamps)"
+
+  sam:
+    display_name: "SAM.gov"
+    description: "SAM.gov acquisition data (notices, solicitations, attachments)"
+
+  salesforce:
+    display_name: "Salesforce"
+    description: "Salesforce CRM data (accounts, contacts, opportunities)"
+
+  forecast:
+    display_name: "Forecasts"
+    description: "Acquisition forecast data (AG, APFS, state forecasts)"
+
+  scrape:
+    display_name: "Web Scrape"
+    description: "Web scraping metadata (URLs, collections, crawl runs)"
+
+  sync:
+    display_name: "Sync"
+    description: "Sync configuration metadata (config IDs, names)"
+
+  file:
+    display_name: "File"
+    description: "File-level metadata (extension, description)"
+
+  custom:
+    display_name: "AI-Generated"
+    description: "LLM-generated metadata (tags, summaries, entities, classifications)"

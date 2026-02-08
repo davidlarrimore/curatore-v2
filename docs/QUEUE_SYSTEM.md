@@ -5,7 +5,7 @@ Curatore uses a centralized queue system for all background job processing. This
 ## Overview
 
 All background jobs are managed through the Queue Registry system:
-- **Queue types defined in code** - See `backend/app/services/queue_registry.py`
+- **Queue types defined in code** - See `backend/app/core/ops/queue_registry.py`
 - **Celery queues per job type** - Each job type has its own queue for isolation
 - **Job Manager UI** - Unified view at `/admin/queue`
 - **Configurable throttling** - Set `max_concurrent` per queue in `config.yml`
@@ -40,7 +40,7 @@ Default max concurrent: 3 (to avoid overwhelming external APIs)
 Child extractions spawned by parent jobs are automatically assigned priority based on `group_type`:
 
 ```python
-# QueuePriority levels (in backend/app/services/queue_registry.py)
+# QueuePriority levels (in backend/app/core/ops/queue_registry.py)
 SHAREPOINT_SYNC = 0  # Background SharePoint sync extractions (lowest)
 SAM_SCRAPE = 1       # SAM.gov and web scrape extractions
 PIPELINE = 2         # Pipeline/workflow extractions
@@ -88,7 +88,7 @@ Parent Job (SAM Pull) → Creates Run Group → Downloads Attachments
 
 1. **Parent job creates group:**
 ```python
-from .services.run_group_service import run_group_service
+from app.core.shared.run_group_service import run_group_service
 
 group = await run_group_service.create_group(
     session=session,
@@ -130,11 +130,11 @@ except Exception as e:
 
 ### Key Files
 
-- `backend/app/services/run_group_service.py` - Group lifecycle management
-- `backend/app/services/job_cancellation_service.py` - Cascade cancellation logic
-- `backend/app/services/extraction_queue_service.py` - Priority handling, timeout exclusion
-- `backend/app/services/queue_registry.py` - QueuePriority enum
-- `backend/app/database/models.py` - `RunGroup` model, `Run.group_id`
+- `backend/app/core/shared/run_group_service.py` - Group lifecycle management
+- `backend/app/core/ops/job_cancellation_service.py` - Cascade cancellation logic
+- `backend/app/core/ingestion/extraction_queue_service.py` - Priority handling, timeout exclusion
+- `backend/app/core/ops/queue_registry.py` - QueuePriority enum
+- `backend/app/core/database/models.py` - `RunGroup` model, `Run.group_id`
 
 ---
 
@@ -160,7 +160,7 @@ Different job types have different cancellation cascade behavior:
 
 Use `job_cancellation_service` for cascade cancellation:
 ```python
-from .services.job_cancellation_service import job_cancellation_service
+from app.core.ops.job_cancellation_service import job_cancellation_service
 
 result = await job_cancellation_service.cancel_parent_job(
     session=session,
@@ -242,7 +242,7 @@ const handleDelete = async () => {
 
 ## Adding New Queue Types
 
-1. **Define the queue class** in `backend/app/services/queue_registry.py`:
+1. **Define the queue class** in `backend/app/core/ops/queue_registry.py`:
 ```python
 class GoogleDriveQueue(QueueDefinition):
     """Google Drive document synchronization queue."""
@@ -293,9 +293,9 @@ task_routes = {
 celery -A app.celery_app worker -Q processing_priority,extraction,sam,scrape,sharepoint,google_drive,maintenance
 ```
 
-6. **Create the task** in `backend/app/tasks.py`:
+6. **Create the task** in `backend/app/core/tasks/` (appropriate module):
 ```python
-@celery_app.task(name="app.tasks.google_drive_sync_task")
+@celery_app.task(name="app.core.tasks.google_drive.google_drive_sync_task")
 def google_drive_sync_task(run_id: str, ...):
     pass
 ```

@@ -9,6 +9,7 @@ import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import InfrastructureHealthPanel from '@/components/admin/InfrastructureHealthPanel'
+import MetricsPanel from '@/components/admin/MetricsPanel'
 import SystemMaintenanceTab from '@/components/admin/SystemMaintenanceTab'
 import UserInviteForm from '@/components/users/UserInviteForm'
 import UserEditForm from '@/components/users/UserEditForm'
@@ -29,6 +30,7 @@ import {
   Link2,
   Globe,
   Check,
+  BarChart3,
 } from 'lucide-react'
 import ConnectionsTab from '@/components/connections/ConnectionsTab'
 
@@ -62,8 +64,8 @@ function SettingsAdminContent() {
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
   const searchParams = useSearchParams()
-  const initialTab = searchParams.get('tab') as 'organization' | 'user' | 'infrastructure' | 'users' | 'maintenance' | 'connections' | null
-  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'infrastructure' | 'users' | 'maintenance' | 'connections'>(initialTab || 'organization')
+  const initialTab = searchParams.get('tab') as 'organization' | 'user' | 'infrastructure' | 'users' | 'maintenance' | 'connections' | 'metrics' | null
+  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'infrastructure' | 'users' | 'maintenance' | 'connections' | 'metrics'>(initialTab || 'organization')
   const [showMergedPreview, setShowMergedPreview] = useState(false)
 
   // Users management state
@@ -448,6 +450,17 @@ function SettingsAdminContent() {
               >
                 <Link2 className="w-4 h-4 mr-2" />
                 Connections
+              </button>
+              <button
+                onClick={() => setActiveTab('metrics')}
+                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'metrics'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
+                }`}
+              >
+                <BarChart3 className="w-4 h-4 mr-2" />
+                Metrics
               </button>
             </nav>
           </div>
@@ -842,6 +855,10 @@ function SettingsAdminContent() {
 
             {activeTab === 'connections' && (
               <ConnectionsTab onError={(msg) => setError(msg)} />
+            )}
+
+            {activeTab === 'metrics' && (
+              <MetricsPanel />
             )}
           </div>
 

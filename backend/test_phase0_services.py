@@ -17,11 +17,11 @@ from uuid import uuid4
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent))
 
-from app.services.database_service import database_service
-from app.services.asset_service import asset_service
-from app.services.run_service import run_service
-from app.services.extraction_result_service import extraction_result_service
-from app.services.run_log_service import run_log_service
+from app.core.shared.database_service import database_service
+from app.core.shared.asset_service import asset_service
+from app.core.shared.run_service import run_service
+from app.core.ingestion.extraction_result_service import extraction_result_service
+from app.core.shared.run_log_service import run_log_service
 
 
 async def test_phase0_services():

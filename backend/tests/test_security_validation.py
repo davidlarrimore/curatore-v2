@@ -15,7 +15,7 @@ from app.api.v1.middleware import (
     validate_document_ownership,
     check_document_exists,
 )
-from app.database.models import Artifact, User
+from app.core.database.models import Artifact, User
 from fastapi import HTTPException
 
 

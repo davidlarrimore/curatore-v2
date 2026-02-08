@@ -50,11 +50,11 @@ from starlette.types import Message
 from pydantic import ValidationError
 
 from .config import settings
-from .models import ErrorResponse
+from .core.models import ErrorResponse
 from .api.v1 import api_router as v1_router
-from .services.document_service import document_service
-from .services.storage_service import storage_service
-from .services.database_service import database_service
+from .core.shared.document_service import document_service
+from .core.storage.storage_service import storage_service
+from .core.shared.database_service import database_service
 
 # ============================================================================
 # APPLICATION INITIALIZATION
@@ -283,7 +283,7 @@ async def startup_event() -> None:
         # Initialize queue registry
         try:
             print("📋 Initializing queue registry...")
-            from .services.queue_registry import initialize_queue_registry
+            from .core.ops.queue_registry import initialize_queue_registry
             initialize_queue_registry()
             print("   ✅ Queue registry initialized")
         except Exception as e:
@@ -294,10 +294,10 @@ async def startup_event() -> None:
         try:
             print("🔄 Discovering procedures and pipelines...")
             async with database_service.get_session() as session:
-                from .procedures.discovery import procedure_discovery_service
-                from .pipelines.discovery import pipeline_discovery_service
+                from .cwr.procedures.store.discovery import procedure_discovery_service
+                from .cwr.pipelines.store.discovery import pipeline_discovery_service
                 from sqlalchemy import select
-                from .database.models import Organization
+                from .core.database.models import Organization
 
                 # Get organizations to register procedures/pipelines for
                 result = await session.execute(select(Organization))
@@ -336,9 +336,9 @@ async def startup_event() -> None:
         try:
             print("🔗 Syncing default connections from environment variables...")
             async with database_service.get_session() as session:
-                from .services.connection_service import sync_default_connections_from_env
+                from .core.auth.connection_service import sync_default_connections_from_env
                 from sqlalchemy import select
-                from .database.models import Organization
+                from .core.database.models import Organization
                 from uuid import UUID
 
                 # Determine which organization to sync for
@@ -390,7 +390,7 @@ async def startup_event() -> None:
             # Clear object storage if enabled
             if settings.use_object_storage:
                 try:
-                    from .services.minio_service import get_minio_service
+                    from .core.storage.minio_service import get_minio_service
                     minio = get_minio_service()
 
                     if minio and minio.enabled:
@@ -419,7 +419,7 @@ async def startup_event() -> None:
         if settings.use_object_storage:
             print("📦 Initializing MinIO object storage...")
             try:
-                from .services.minio_service import get_minio_service
+                from .core.storage.minio_service import get_minio_service
                 minio = get_minio_service()
                 if minio:
                     # Ensure buckets exist
@@ -443,7 +443,7 @@ async def startup_event() -> None:
             print("📁 Using filesystem storage (USE_OBJECT_STORAGE=false)")
 
         # Log LLM service status
-        from .services.llm_service import llm_service
+        from .core.llm.llm_service import llm_service
         llm_status = "available" if llm_service.is_available else "unavailable"
         print(f"🤖 LLM Service: {llm_status}")
 

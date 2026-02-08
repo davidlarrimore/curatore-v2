@@ -92,10 +92,10 @@ SAM.gov uses `ptype` codes to identify notice types:
 
 | File | Purpose |
 |------|---------|
-| `sam_service.py` | Database operations for SAM entities |
-| `sam_pull_service.py` | SAM.gov API integration and data sync |
-| `sam_api_usage_service.py` | Rate limiting and API quota tracking |
-| `sam_summarization_service.py` | LLM-powered summary generation |
+| `backend/app/connectors/sam_gov/sam_service.py` | Database operations for SAM entities |
+| `backend/app/connectors/sam_gov/sam_pull_service.py` | SAM.gov API integration and data sync |
+| `backend/app/connectors/sam_gov/sam_api_usage_service.py` | Rate limiting and API quota tracking |
+| `backend/app/connectors/sam_gov/sam_summarization_service.py` | LLM-powered summary generation |
 
 ---
 
@@ -103,20 +103,20 @@ SAM.gov uses `ptype` codes to identify notice types:
 
 ```
 # Searches
-GET    /api/v1/sam/searches              # List saved searches
-POST   /api/v1/sam/searches              # Create new search
-GET    /api/v1/sam/searches/{id}         # Get search details
-PATCH  /api/v1/sam/searches/{id}         # Update search
-DELETE /api/v1/sam/searches/{id}         # Delete search
-POST   /api/v1/sam/searches/{id}/pull    # Trigger manual pull
+GET    /api/v1/data/sam/searches              # List saved searches
+POST   /api/v1/data/sam/searches              # Create new search
+GET    /api/v1/data/sam/searches/{id}         # Get search details
+PATCH  /api/v1/data/sam/searches/{id}         # Update search
+DELETE /api/v1/data/sam/searches/{id}         # Delete search
+POST   /api/v1/data/sam/searches/{id}/pull    # Trigger manual pull
 
 # Solicitations
-GET    /api/v1/sam/solicitations         # List solicitations
-GET    /api/v1/sam/solicitations/{id}    # Get solicitation with notices
+GET    /api/v1/data/sam/solicitations         # List solicitations
+GET    /api/v1/data/sam/solicitations/{id}    # Get solicitation with notices
 
 # Notices
-GET    /api/v1/sam/notices               # List notices
-GET    /api/v1/sam/notices/{id}          # Get notice details
+GET    /api/v1/data/sam/notices               # List notices
+GET    /api/v1/data/sam/notices/{id}          # Get notice details
 ```
 
 ---

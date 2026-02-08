@@ -398,7 +398,7 @@ def main():
         print(f"\nSuccessfully created {args.output}")
         print("\nNext steps:")
         print(f"  1. Review {args.output} and adjust as needed")
-        print(f"  2. Validate configuration: python -m app.commands.validate_config")
+        print(f"  2. Validate configuration: python -m app.core.commands.validate_config")
         print(f"  3. Keep sensitive values in .env (referenced via ${{VAR_NAME}})")
         print(f"  4. Restart services to use new configuration")
 

@@ -106,8 +106,8 @@ The Salesforce integration allows users to:
 
 | File | Purpose |
 |------|---------|
-| `salesforce_service.py` | CRUD operations for accounts, contacts, opportunities |
-| `salesforce_import_service.py` | ZIP file parsing and data import |
+| `backend/app/connectors/salesforce/salesforce_service.py` | CRUD operations for accounts, contacts, opportunities |
+| `backend/app/connectors/salesforce/salesforce_import_service.py` | ZIP file parsing and data import |
 
 ---
 
@@ -150,24 +150,24 @@ The import service maps standard Salesforce fields plus common custom fields:
 
 ```
 # Import
-POST   /api/v1/salesforce/import              # Upload and import ZIP file
+POST   /api/v1/data/salesforce/import              # Upload and import ZIP file
 
 # Accounts
-GET    /api/v1/salesforce/accounts            # List accounts
-GET    /api/v1/salesforce/accounts/{id}       # Get account detail
-GET    /api/v1/salesforce/accounts/{id}/contacts      # Account contacts
-GET    /api/v1/salesforce/accounts/{id}/opportunities # Account opportunities
+GET    /api/v1/data/salesforce/accounts            # List accounts
+GET    /api/v1/data/salesforce/accounts/{id}       # Get account detail
+GET    /api/v1/data/salesforce/accounts/{id}/contacts      # Account contacts
+GET    /api/v1/data/salesforce/accounts/{id}/opportunities # Account opportunities
 
 # Contacts
-GET    /api/v1/salesforce/contacts            # List contacts
-GET    /api/v1/salesforce/contacts/{id}       # Get contact detail
+GET    /api/v1/data/salesforce/contacts            # List contacts
+GET    /api/v1/data/salesforce/contacts/{id}       # Get contact detail
 
 # Opportunities
-GET    /api/v1/salesforce/opportunities       # List opportunities
-GET    /api/v1/salesforce/opportunities/{id}  # Get opportunity detail
+GET    /api/v1/data/salesforce/opportunities       # List opportunities
+GET    /api/v1/data/salesforce/opportunities/{id}  # Get opportunity detail
 
 # Dashboard
-GET    /api/v1/salesforce/stats               # Dashboard statistics
+GET    /api/v1/data/salesforce/stats               # Dashboard statistics
 ```
 
 ---

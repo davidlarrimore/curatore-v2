@@ -6,7 +6,7 @@ Curatore uses a scheduled task system for background maintenance operations. Tas
 
 - Tasks stored in `scheduled_tasks` table
 - Executed by the maintenance Celery queue
-- Handlers defined in `backend/app/services/maintenance_handlers.py`
+- Handlers defined in `backend/app/core/ops/maintenance_handlers.py`
 - Cron-style scheduling
 
 ---
@@ -181,7 +181,7 @@ See [Search & Indexing](SEARCH_INDEXING.md) for full details on the indexing pip
 
 ## Adding a New Maintenance Handler
 
-1. **Add handler function** in `backend/app/services/maintenance_handlers.py`:
+1. **Add handler function** in `backend/app/core/ops/maintenance_handlers.py`:
 ```python
 async def handle_my_task(
     session: AsyncSession,
@@ -205,7 +205,7 @@ MAINTENANCE_HANDLERS = {
 }
 ```
 
-3. **Add default scheduled task** in `backend/app/commands/seed.py`:
+3. **Add default scheduled task** in `backend/app/core/commands/seed.py`:
 ```python
 {
     "name": "my_task",
@@ -221,7 +221,7 @@ MAINTENANCE_HANDLERS = {
 
 4. **Re-seed scheduled tasks**:
 ```bash
-docker exec curatore-backend python -m app.commands.seed --seed-scheduled-tasks
+docker exec curatore-backend python -m app.core.commands.seed --seed-scheduled-tasks
 ```
 
 ---
@@ -229,12 +229,12 @@ docker exec curatore-backend python -m app.commands.seed --seed-scheduled-tasks
 ## API Endpoints
 
 ```
-GET    /api/v1/scheduled-tasks              # List all tasks
-GET    /api/v1/scheduled-tasks/{id}         # Get task details
-PATCH  /api/v1/scheduled-tasks/{id}         # Update task config
-POST   /api/v1/scheduled-tasks/{id}/enable  # Enable task
-POST   /api/v1/scheduled-tasks/{id}/disable # Disable task
-POST   /api/v1/scheduled-tasks/{id}/run     # Trigger immediate execution
+GET    /api/v1/admin/scheduled-tasks              # List all tasks
+GET    /api/v1/admin/scheduled-tasks/{id}         # Get task details
+PATCH  /api/v1/admin/scheduled-tasks/{id}         # Update task config
+POST   /api/v1/admin/scheduled-tasks/{id}/enable  # Enable task
+POST   /api/v1/admin/scheduled-tasks/{id}/disable # Disable task
+POST   /api/v1/admin/scheduled-tasks/{id}/run     # Trigger immediate execution
 ```
 
 ---

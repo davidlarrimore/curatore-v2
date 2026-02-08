@@ -1,497 +1,891 @@
-# Curatore Platform Evolution  
-## Contract-Driven Tools, JSON-First Workflows, and Faceted Metadata Architecture  
-### With AI Procedure Generator as First Integration
+# Curatore Platform Architecture Evolution
+## Data Core & Curatore Workflow Runtime (CWR)
+### Contract-Driven Automation, Deterministic Execution, and AI-Compiled Workflows
 
 ---
 
 # Executive Summary
 
-This document defines the next architectural evolution of the Curatore data platform:
+Curatore has evolved into a full data automation platform that includes:
 
-1. Transform the current workflow engine into a standards-aligned, contract-driven tool system compatible with modern LLM tool-calling specifications.
-2. Adopt JSON Schema as the canonical validation and interoperability layer while retaining YAML as a human-authoring format.
-3. Mature metadata and asset management into a governed schema + facet architecture to support scalable cross-domain search and LLM-aware filtering.
-4. Use the AI Procedure Generator as the first full integration of this architecture.
+- Enterprise data connectors (SAM.gov, SharePoint, web scraping via Playwright)
+- Ingestion and extraction pipelines
+- Metadata enrichment and indexing
+- Redis + Celery distributed job orchestration
+- Administrative management APIs
+- Search and catalog APIs
+- Deterministic workflow automation (procedures and pipelines)
+- AI-assisted procedure compilation
 
-The objective is to build a platform that is:
+As capabilities have expanded, architectural boundaries between ingestion, metadata, automation, and AI have blurred.
 
-- Deterministic and high-performance for cron/autonomous workflows  
-- Agent-capable for interactive research and business automation  
-- Vendor-agnostic and interoperable  
-- Schema-driven and versioned  
-- Safe and governable for enterprise usage  
+This document defines a structural refactor of Curatore into clearly defined bounded contexts:
 
----
+1. **Curatore Data Core** — governs how data enters, is structured, enriched, indexed, and queried.
+2. **Curatore Workflow Runtime (CWR)** — governs how deterministic automation executes on top of that data using contract-driven tools.
 
-# 1. Architectural Principles
+This whitepaper is written as an implementation guide for building and refactoring the platform. It includes:
 
-The platform evolution is guided by the following principles:
+- Target module structure
+- Deployment model
+- Worker separation strategy
+- Tool contract requirements
+- Procedure compilation architecture
+- Facet and metadata evolution
+- Execution runtime design
 
-1. **Schema First** — All tools and metadata must be governed by explicit JSON Schemas.
-2. **Contracts Over Prompts** — LLM integrations must rely on machine-readable contracts, not prose descriptions.
-3. **Deterministic Execution** — Autonomous workflows must not depend on runtime reasoning.
-4. **Separation of Planning and Execution** — LLM planning generates structured plans; execution is deterministic.
-5. **Facet-Based Search** — Cross-domain filtering must rely on canonical metadata vocabulary.
-6. **Versioned and Observable** — All contracts and executions must be versioned and traceable.
-
----
-
-# 2. Transforming the Workflow Engine into a Contract-Driven Tool System
-
-## 2.1 Current State
-
-Curatore’s function registry:
-
-- Stores name, description, parameters  
-- Is consumed by the YAML-based procedure engine  
-- Is exposed via prompt context to LLMs  
-
-Limitations:
-
-- No machine-readable contract layer  
-- No structured validation for LLM tool calling  
-- Tight coupling to Curatore runtime  
+The system remains a modular monolith, but deploys multiple worker containers for isolation and scalability.
 
 ---
 
-## 2.2 Target State: Tool Contract Layer
+# 1. Platform Context and Refactor Rationale
 
-Introduce a canonical Tool Contract model.
+Curatore is not simply:
 
-### Tool Contract Model
+- A backend API
+- A workflow engine
+- A connector framework
+- An LLM integration layer
 
-```pseudo
-class ToolContract:
-    name: string
-    description: string
-    input_schema: JSONSchema
-    output_schema: JSONSchema
-    schema_version: string
-    side_effects: enum(none, email, db_write, external)
-    capability_class: enum(read_only, internal_write, external_communication, high_risk)
-    requires_approval: boolean
-    idempotency: enum(idempotent, non_idempotent)
-    retry_policy: enum(safe_retry, no_retry)
-    rate_limit_group: string
+It is a platform that performs:
+
+- Data ingestion
+- Metadata modeling
+- Search and retrieval
+- Analytics workflows
+- Automated reporting
+- AI-assisted business automation
+
+Historically, components such as `functions`, `procedures`, `pipelines`, and job orchestration grew organically.
+
+This has led to:
+
+- Blurred ownership boundaries
+- Confusion between Python functions and workflow “functions”
+- Unclear separation between data concerns and automation concerns
+- Difficulty reasoning about agent compatibility vs deterministic runtime
+
+The refactor formalizes separation into:
+
+## Curatore Data Core (data plane)
+## Curatore Workflow Runtime (execution plane)
+
+The job layer (Celery/Redis) remains shared infrastructure across both.
+
+---
+
+# 2. High-Level Architecture
+
+```
+
+Curatore Platform
+│
+├── Curatore Data Core
+│     ├── Connectors
+│     ├── Ingestion & Extraction
+│     ├── ContentItem Abstraction
+│     ├── Metadata Registry
+│     ├── Facets
+│     ├── Search (vector + hybrid + filters)
+│     └── Data Catalog
+│
+├── Curatore Workflow Runtime (CWR)
+│     ├── Tool Contracts
+│     ├── Primitive Tools
+│     ├── Compound Tools
+│     ├── Deterministic Procedures
+│     ├── Pipelines (stateful)
+│     ├── Runtime Executor
+│     ├── AI Procedure Compiler
+│     └── Governance & Observability
+│
+└── Job Infrastructure
+├── Redis
+├── Celery
+├── Worker Pools
+└── Scheduler
+
+```
+
+---
+
+# 3. Deployment Model
+
+Curatore remains a **single codebase**, deployed as multiple containers.
+
+## Containers
+
+| Container | Role |
+|------------|------|
+| curatore-api | FastAPI control plane |
+| curatore-worker-connectors | SAM / SharePoint / scraping jobs |
+| curatore-worker-extract | Extraction and parsing |
+| curatore-worker-index | Indexing and embedding |
+| curatore-worker-cwr | Procedure & pipeline execution |
+
+Each worker subscribes to specific Celery queues.
+
+---
+
+# 4. Curatore Data Core
+
+## Responsibilities
+
+Data Core owns:
+
+- Asset models
+- ContentItem abstraction
+- Metadata storage (JSONB + structured fields)
+- Metadata schema registry
+- Facet registry and mappings
+- Search services
+- Connector implementations
+- Extraction pipelines
+- Indexing
+
+CWR must depend on Data Core through explicit service interfaces.
+
+---
+
+## 4.1 Backend Structure (Data Core)
+
+```
+
+backend/app/
+core/
+content/
+content_item.py
+content_service.py
+metadata/
+schema_registry.py
+metadata_store.py
+enrichment.py
+facets/
+registry.py
+mappings.py
+validation.py
+search/
+search_service.py
+hybrid_search.py
+metadata_filters.py
+catalog/
+discovery.py
+data_dictionary.py
+
+connectors/
+sam_gov/
+sharepoint/
+scraping_playwright/
+
+ingestion/
+extraction/
+normalization/
+indexing/
+
 ````
 
-This becomes the interoperability layer between Curatore and any LLM framework.
-
 ---
 
-## 2.3 Alignment with OpenAI Tool Calling Specification
+## 4.2 Metadata Schema Registry
 
-Tool contracts must map directly to the OpenAI structured tool calling format.
+A first-class schema system describing:
 
-Tool definition:
-
-```pseudo
-{
-  "type": "function",
-  "function": {
-    "name": "search_assets",
-    "description": "...",
-    "parameters": { JSON Schema }
-  }
-}
-```
-
-LLM response:
-
-```pseudo
-{
-  "tool_calls": [
-    {
-      "function": {
-        "name": "search_assets",
-        "arguments": { ... }
-      }
-    }
-  ]
-}
-```
-
-Adapter:
-
-```pseudo
-function to_openai_tool(contract):
-    return {
-        type: "function",
-        function: {
-            name: contract.name,
-            description: contract.description,
-            parameters: contract.input_schema
-        }
-    }
-```
-
-This ensures compatibility with OpenAI, LlamaIndex, LangGraph, and future frameworks.
-
----
-
-# 3. JSON Schema as the Canonical Execution Model
-
-## 3.1 Problem
-
-LLM → YAML generation today is:
-
-* Fragile
-* Hard to validate
-* Retry-heavy
-* Difficult to version
-
----
-
-## 3.2 Target Architecture
-
-JSON is the canonical execution model.
-YAML is a human authoring layer only.
-
----
-
-## 3.3 ProcedurePlan Model
-
-```pseudo
-class ProcedurePlan:
-    name: string
-    slug: string
-    description: string
-    parameters: array(Parameter)
-    steps: array(Step)
-    on_error: enum(fail, continue)
-    execution_mode: enum(cron, interactive)
-```
-
-Validation:
-
-```pseudo
-validate(plan_json, ProcedurePlanSchema)
-```
-
----
-
-## 3.4 YAML Support
-
-```pseudo
-function yaml_to_plan(yaml_text):
-    parsed = parse_yaml(yaml_text)
-    validate(parsed, ProcedurePlanSchema)
-    return parsed
-```
-
-Execution engine consumes only validated JSON.
-
----
-
-## 3.5 Schema Versioning Strategy
-
-All tool and metadata schemas must include:
-
-* `schema_id`
-* `schema_version`
-
-Rules:
-
-* Minor changes are backward-compatible
-* Major changes require version bump
-* Procedures bind to schema version at generation time
-* Migration path must exist for breaking changes
-
----
-
-# 4. Metadata and Facet Architecture
-
-## 4.1 Problem
-
-* Metadata is dynamic
-* Asset types vary
-* Cross-domain filtering is brittle
-* LLM cannot reliably infer valid fields
-
----
-
-## 4.2 Target Architecture
-
-Introduce:
-
-1. Metadata Schema Registry
-2. Facet Registry
-3. Facet Mapping Layer
-4. Optional Materialized Facet Index
-
----
-
-## 4.3 Metadata Schema Registry
-
-```pseudo
-class AssetMetadataSchema:
-    schema_id: string
-    asset_type: string
-    version: integer
-    json_schema: JSON
-    status: enum(draft, active, deprecated)
-```
-
-Discovery:
-
-```pseudo
-get_asset_metadata_schema(asset_type) -> JSONSchema
-```
-
----
-
-## 4.4 Canonical Facet Registry
-
-```pseudo
-class FacetDefinition:
-    facet_name: string
-    value_type: enum(string, number, date, boolean, array)
-    allowed_ops: array(eq, in, gte, lte, contains, exists)
-    normalizer: string
-    schema_version: string
-```
-
----
-
-## 4.5 Facet Mapping
-
-```pseudo
-class FacetMapping:
-    asset_type: string
-    facet_name: string
-    json_path: string
-    transform: optional
-```
-
----
-
-## 4.6 Search Contract
-
-```pseudo
-search_assets(
-    asset_types: array[string],
-    query: string,
-    facet_filters: object,
-    filters: object(optional),
-    limit: integer
-)
-```
+- Namespaces
+- Field types
+- Indexability
+- Cardinality
+- Facet eligibility
 
 Example:
 
-```pseudo
-facet_filters = {
-    customer_agency: { eq: "DHS" },
-    contract_value: { gte: 5000000 }
-}
-```
-
----
-
-## 4.7 Optional Phase 2: Materialized Facet Index
-
-```pseudo
-asset_facets(
-    asset_id,
-    facet_name,
-    value_text,
-    value_num,
-    value_date,
-    updated_at
+```python
+MetadataNamespace(
+    name="sam",
+    fields=[
+        Field(name="agency", type="string", index=True, facet=True),
+        Field(name="naics_code", type="string", index=True, facet=True),
+    ]
 )
+````
+
+Used for:
+
+* Validation
+* Search introspection
+* Tool contract generation
+* AI procedure generator context
+
+---
+
+## 4.3 Facet System
+
+Facets provide cross-domain filtering.
+
+Example:
+
+```
+Facet: agency
+  asset → metadata.sam.agency
+  solicitation → fields.agency
+  notice → fields.agency
 ```
 
-Search uses indexed joins for performance.
+Search APIs and CWR tools should prefer `facet_filters` over raw metadata filters.
 
 ---
 
-# 5. Governance and Safety Model
+## 4.4 Payload Discipline
 
-Each tool must declare:
+Search returns thin results by default:
 
-* capability_class
-* requires_approval
-* idempotency
-* retry_policy
+* id
+* title
+* score
+* snippet
+* metadata summary
 
-Execution enforcement:
+Full text requires explicit materialization:
 
-```pseudo
-if tool.requires_approval:
-    pause_and_request_approval()
+```yaml
+- function: materialize_text
+  params:
+    ids: "{{ steps.search_results[*].id }}"
+    max_chars_per_item: 8000
+```
 
-if tool.retry_policy == safe_retry:
-    retry_on_failure()
+This ensures cost control and scalability.
+
+---
+
+# 5. Curatore Workflow Runtime (CWR)
+
+CWR is the deterministic execution layer.
+
+It is not an autonomous agent system.
+
+Agentic behavior exists only at compile-time via the AI Procedure Generator.
+
+---
+
+## 5.1 Responsibilities
+
+* Tool contracts (JSON Schema)
+* Primitive tools
+* Compound tools
+* Procedure execution
+* Pipeline execution
+* AI Procedure Compiler
+* Governance (side-effect approval)
+* Run tracking
+* Concurrency control
+
+---
+
+## 5.2 Backend Structure (CWR)
+
+```
+backend/app/
+  cwr/
+    contracts/
+      tool_contracts.py
+      procedure_schema.json
+      validation.py
+
+    tools/
+      primitives/
+      compounds/
+      registry.py
+
+    procedures/
+      compiler/
+        ai_generator.py
+        optimizer.py
+      runtime/
+        executor.py
+        step_runner.py
+        templating.py
+      store/
+        definitions.py
+        versioning.py
+
+    pipelines/
+      runtime/
+      state.py
+
+    governance/
+      approvals.py
+      capability_profiles.py
+
+    observability/
+      runs.py
+      traces.py
+      metrics.py
 ```
 
 ---
 
-# 6. Observability and Traceability
+# 6. Tool Contracts
 
-Each execution step records:
+Each primitive tool must expose:
 
-```pseudo
-trace_id
-procedure_id
-tool_name
-schema_version
-input_payload
-output_payload
-duration_ms
-status
-error
-token_cost
-```
-
-Supports:
-
-* auditing
-* debugging
-* compliance
-* cost tracking
-
----
-
-# 7. Concurrency and Performance Model
-
-Define:
-
-* max_concurrency per procedure
-* max_concurrency per tool category
-* isolation boundaries
-* transactional guarantees
-* token budgets
-
-```pseudo
-if concurrent_calls(tool.rate_limit_group) > limit:
-    queue()
-```
-
----
-
-# 8. AI Procedure Generator as First Integration
-
-The AI Procedure Generator must be the first consumer of:
-
-* Tool Contracts
-* ProcedurePlanSchema
-* Metadata Schema Registry
-* Facet Registry
-
----
-
-## 8.1 Planner Requirements
-
-The generator must:
-
-1. Consume ToolContract export dynamically
-2. Output JSON conforming to ProcedurePlanSchema
-3. Use facet_filters when applicable
-4. Respect capability governance
-5. Operate within bounded token budgets
-
----
-
-## 8.2 Planner Flow
-
-```pseudo
-tools = export_tool_contracts()
-facets = list_facets()
-schema = get_asset_metadata_schema(asset_type)
-
-plan_json = LLM.generate_structured(
-    output_schema=ProcedurePlanSchema,
-    context={
-        tools,
-        facets,
-        schema
+```python
+ToolContract(
+    name="search_assets",
+    description="Search assets using hybrid search",
+    input_schema={...},      # JSON Schema
+    output_schema={...},     # JSON Schema
+    payload_profile="thin",
+    side_effects=False,
+    exposure_profile={
+        "procedure": True,
+        "agent": "readonly"
     }
 )
+```
 
-validate(plan_json)
+Contracts are canonical. YAML is compiled to JSON for runtime.
+
+---
+
+# 7. Deterministic Procedures
+
+Procedures:
+
+* Static
+* Stored
+* Versioned
+* Deterministic
+* Executed by CWR worker
+
+No runtime planning occurs.
+
+AI only generates or refines procedure definitions.
+
+---
+
+# 8. AI Procedure Compiler
+
+The AI Procedure Generator is a compiler.
+
+Responsibilities:
+
+* Interpret user intent
+* Select tools
+* Prefer compound tools
+* Insert materialization steps
+* Apply facet filters
+* Validate JSON schemas
+* Optimize payload size
+* Emit final procedure definition
+
+Execution does not use LLM reasoning.
+
+---
+
+# 9. Pipelines
+
+Pipelines extend procedures by:
+
+* Tracking per-item state
+* Supporting checkpoints
+* Allowing resumability
+* Managing large collections
+
+Executed via CWR worker plane.
+
+---
+
+# 10. Celery Integration
+
+Queues:
+
+* connectors
+* scrape
+* extract
+* index
+* cwr
+
+CWR execution is triggered by:
+
+* API request
+* Cron schedule
+* Event emission
+
+Runs are persisted and traceable.
+
+---
+
+# 11. API Namespacing
+
+```
+/api/v1/admin/*
+/api/v1/data/*
+/api/v1/ops/*
+/api/v1/cwr/*
+```
+
+CWR endpoints:
+
+* tools
+* contracts
+* procedures
+* pipelines
+* runs
+* compiler/generate
+
+---
+
+# 12. Strategic Outcomes
+
+This architecture provides:
+
+* Clear ownership boundaries
+* Isolated workload scaling
+* Deterministic automation
+* Agent-compatible contracts
+* Metadata and facet evolution
+* Compile-time AI planning
+* Runtime safety
+* Long-term extensibility
+
+---
+
+# Final Definition
+
+Curatore evolves into:
+
+A modular data platform with a dedicated Workflow Runtime capable of deterministic automation and AI-assisted compilation, built on contract-driven tooling and scalable job infrastructure.
+
+---
+
+
+
+
+
+ADDENDUM
+
+# Addendum: Metadata Catalog, Facets, and Organization-Scoped Governance
+
+## Purpose
+
+This addendum defines how Curatore manages its metadata model, facet system, and organization-scoped schema evolution in a scalable and governable way.
+
+Curatore supports:
+
+- Dynamic metadata fields
+- Cross-domain facets
+- Organization-scoped data isolation
+- AI-driven procedure compilation (CWR)
+- Deterministic search and filtering
+
+To support these capabilities, metadata must become a formally governed subsystem within **Curatore Data Core**, not an implicit JSONB convention.
+
+This document defines:
+
+1. The metadata catalog model  
+2. The facet system  
+3. Global vs organization-scoped schema layering  
+4. Runtime registry resolution  
+5. Required APIs  
+6. Frontend requirements  
+
+---
+
+# 1. Architectural Positioning
+
+Metadata governance belongs to **Curatore Data Core**, not CWR.
+
+CWR consumes metadata definitions but does not define or mutate the metadata schema model.
+
+```
+
+Curatore Data Core
+│
+├── Metadata Schema Registry
+├── Field Catalog
+├── Facet Registry
+└── Search & Indexing
+
+```
+
+The registry must be organization-aware even if only a single “Default” organization exists today.
+
+All metadata and facet resolution must be scoped to `organization_id`.
+
+---
+
+# 2. Metadata Catalog Model
+
+The Metadata Catalog consists of three linked registries:
+
+1. Field Registry (Data Dictionary)  
+2. Asset-Type Applicability Rules  
+3. Facet Registry (Cross-Domain Filters)  
+
+---
+
+## 2.1 Field Registry (Data Dictionary)
+
+Each metadata field must be formally registered.
+
+### Required Attributes
+
+- `namespace` (e.g., sam, custom, security)
+- `field_name`
+- `data_type` (string, number, boolean, date, enum, array, object)
+- `indexed` (boolean)
+- `facetable` (boolean)
+- `applicable_asset_types`
+- `description`
+- `examples`
+- `sensitivity_tag` (optional)
+- `version`
+- `organization_id` (nullable: null = global baseline)
+
+### Example (Conceptual)
+
+```
+
+namespace: sam
+field: agency
+type: string
+indexed: true
+facetable: true
+applies_to: [notice, solicitation]
+organization_id: null
+
+```
+
+This registry is authoritative for:
+
+- Search filter validation
+- Facet eligibility
+- Tool contract generation
+- AI procedure generator context
+- UI discovery
+
+---
+
+## 2.2 Asset-Type Applicability
+
+Curatore supports multiple content types:
+
+- asset
+- solicitation
+- notice
+- scraped_asset
+- forecast
+- etc.
+
+Each metadata field must explicitly declare which content types it applies to.
+
+This prevents:
+
+- Invalid cross-type filtering
+- Incorrect AI-generated procedures
+- Ambiguous query construction
+
+---
+
+## 2.3 Facet Registry (Cross-Domain Filters)
+
+Facets are user-facing filter abstractions that map to underlying metadata paths.
+
+They unify filtering across asset types.
+
+### Example
+
+Facet: `agency`
+
+Mappings:
+
+- notice → fields.agency
+- solicitation → fields.agency
+- asset → metadata.sam.agency
+
+Facets are not metadata fields.
+They are semantic abstractions layered on top of metadata paths.
+
+Search tools and CWR tools should prefer `facet_filters` over raw `metadata_filters`.
+
+---
+
+# 3. Global vs Organization-Scoped Registry
+
+Curatore must support layered metadata governance.
+
+Even if only one “Default” organization exists today, the system must behave as multi-tenant-aware.
+
+---
+
+## 3.1 Baseline (Global) Registry
+
+Global metadata definitions are:
+
+- Version-controlled in files
+- Reviewed via PR
+- Considered product-level schema
+
+Location:
+
+```
+
+backend/app/core/metadata/registry/
+namespaces.yaml
+fields.yaml
+facets.yaml
+
+```
+
+These definitions have:
+
+```
+
+organization_id = null
+
 ```
 
 ---
 
-## 8.3 Deterministic Repair Loop
+## 3.2 Organization-Level Overrides
 
-```pseudo
-errors = validate(plan_json)
+Organizations may define:
 
-if errors:
-    patch = build_structured_patch(errors)
-    plan_json = LLM.apply_patch(plan_json, patch)
+- Custom namespaces
+- Custom fields
+- Custom facet mappings
+- Field indexing flags
+- Facet enable/disable behavior
+
+These are stored in the database with:
+
 ```
 
-Avoid full regeneration when possible.
+organization_id = <org_uuid>
 
----
-
-## 8.4 Metadata Promotion Workflow
-
-If procedure introduces new metadata:
-
-```pseudo
-write_metadata(...)
-upsert_metadata_schema(...)
-upsert_facet_definition(...)
-upsert_facet_mapping(...)
-backfill_asset_facets(...)
 ```
 
 ---
 
-# 9. Cost Governance
+## 3.3 Effective Registry Resolution
 
-Each LLM step declares:
+All metadata and facet resolution must be organization-aware.
 
-* cost_class
-* max_tokens
+At runtime:
 
-Enforcement:
+```
 
-```pseudo
-if token_usage > procedure_budget:
-    fail()
+effective_registry(org_id) =
+merge(global_registry, org_registry[org_id])
+
+```
+
+Resolution order:
+
+1. Load global baseline definitions
+2. Apply organization-level overrides/extensions
+3. Produce effective registry for that organization
+
+All search validation, CWR contract generation, and UI discovery use the effective registry.
+
+---
+
+# 4. Registry Storage Model
+
+Two supported approaches:
+
+---
+
+## Option A (Preferred Long-Term): Structured Tables
+
+Tables:
+
+- metadata_field_definitions
+- facet_definitions
+- facet_mappings
+
+Columns include:
+
+- organization_id (nullable)
+- namespace
+- field_name
+- schema_json
+- version
+- status (active/deprecated)
+- created_at
+- created_by
+
+This enables:
+
+- Auditing
+- Deprecation tracking
+- Controlled evolution
+- Usage analysis
+
+---
+
+## Option B (Simpler Initial Model): JSON Registry Per Organization
+
+Add to Organization model:
+
+```
+
+organization.metadata_registry_json
+organization.facet_registry_json
+
+```
+
+Files provide baseline.
+Org JSON provides overrides.
+Runtime compiles both.
+
+This is simpler to implement but less queryable long-term.
+
+---
+
+# 5. Search and Indexing Implications
+
+Metadata governance directly affects:
+
+- Indexing
+- Faceting
+- Filtering
+- Payload generation
+
+## 5.1 Indexing Rules
+
+If a field is marked `indexed = true`, indexing jobs must:
+
+- Ensure the field is included in search filters
+- Update search indexes
+- Potentially trigger reindex/backfill jobs
+
+Index updates must be organization-scoped.
+
+---
+
+## 5.2 Facet Materialization
+
+Facet queries may:
+
+- Map to multiple underlying metadata paths
+- Require normalized value storage
+- Require precomputed aggregations (optional optimization)
+
+Facet mapping resolution must occur before search execution.
+
+---
+
+# 6. Required Metadata APIs
+
+All endpoints must be organization-aware.
+
+```
+
+GET /api/v1/data/metadata/catalog
+GET /api/v1/data/metadata/namespaces
+GET /api/v1/data/metadata/fields/{field}
+GET /api/v1/data/metadata/fields/{field}/stats
+GET /api/v1/data/facets
+GET /api/v1/data/facets/{facet}/mappings
+
+```
+
+Each request must resolve against:
+
+```
+
+effective_registry(current_org_id)
+
+```
+
+Optional but recommended:
+
+```
+
+GET /api/v1/data/metadata/fields/{field}/usage
+
 ```
 
 ---
 
-# 10. Migration Strategy
+# 7. Frontend Requirements
 
-## Phase 1
+A metadata governance UI is required.
 
-* ToolContract layer
-* JSON-first ProcedurePlan
-* Schema registry tables
-* Facet registry tables
-* search_assets supports facet_filters
-
-## Phase 2
-
-* Materialized facet index
-* Structured LLM output enforcement
-* Observability layer
-
-## Phase 3
-
-* Governance UI
-* Metadata promotion UI
-* Optional OpenAPI/MCP exposure
+Even with a single organization today.
 
 ---
 
-# Final State
+## Phase 1 (Required)
 
-Curatore becomes:
+### Metadata Catalog Browser
 
-* Tool-contract compliant
-* JSON Schema-driven
-* Facet-enabled
-* LLM interoperable
-* Deterministic for automation
-* Governed for enterprise
-* Scalable for cross-domain search
-* Framework-agnostic
+- View namespaces
+- View fields
+- See types, indexing, facetable status
+- See applicable asset types
+- View top values (if indexed)
 
-The AI Procedure Generator validates and proves the architecture before wider adoption.
+### Facet Manager
+
+- View facet list
+- View mappings per asset type
+- Validate mapping behavior
+- Show preview query resolution
+
+If only one organization exists, org selector may be hidden but logic remains org-aware.
+
+---
+
+## Phase 2 (Optional / Advanced)
+
+### Org-Level Field Editor (Admin Only)
+
+- Add namespace
+- Add field
+- Configure indexing
+- Configure facetable status
+- Trigger reindex job
+
+### Deprecation Manager
+
+- Mark fields deprecated
+- Track field versions
+- Show migration warnings
+
+---
+
+# 8. Interaction with CWR and AI Procedure Compiler
+
+CWR must never assume raw JSON metadata structure.
+
+Instead:
+
+- Tool contracts derive from effective metadata registry
+- Procedure generator is provided effective metadata schema context
+- LLM prompts include allowed fields and facets for the organization
+
+This reduces hallucinated filters and invalid search references.
+
+---
+
+# 9. Strategic Outcomes
+
+This organization-aware metadata governance model enables:
+
+- Controlled schema evolution
+- Safe dynamic metadata
+- Cross-domain facet filtering
+- AI-compatible schema discovery
+- Deterministic search validation
+- Multi-tenant readiness
+- Long-term maintainability
+
+Even with a single “Default” organization today, building the system as organization-aware prevents future architectural rewrites.
+
+Metadata becomes a governed platform capability rather than an implicit convention.
+
+---
+
+End of Addendum

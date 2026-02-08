@@ -11,7 +11,7 @@ from typing import Dict, Any
 from pydantic import ValidationError
 import httpx
 
-from app.services.connection_service import (
+from app.core.auth.connection_service import (
     ConnectionService,
     ConnectionTypeRegistry,
     BaseConnectionType,
@@ -52,10 +52,12 @@ class TestConnectionServiceInitialization:
         """Test that default connection types are registered."""
         registry = connection_service_instance.registry
 
-        # Should have SharePoint, LLM, and Extraction types
-        assert registry.get("sharepoint") is not None
+        # Should have Microsoft Graph (for SharePoint), LLM, Extraction, Playwright, and SAM.gov types
+        assert registry.get("microsoft_graph") is not None
         assert registry.get("llm") is not None
         assert registry.get("extraction") is not None
+        assert registry.get("playwright") is not None
+        assert registry.get("sam_gov") is not None
 
 
 class TestConnectionTypeRegistry:
@@ -111,8 +113,8 @@ class TestConnectionTypeRegistry:
         types = registry_instance.list_types()
 
         ms_info = next(t for t in types if t["type"] == "microsoft_graph")
-        assert "schema" in ms_info
-        assert "properties" in ms_info["schema"]
+        assert "config_schema" in ms_info
+        assert "properties" in ms_info["config_schema"]
 
 
 class TestMicrosoftGraphConnectionType:
@@ -141,7 +143,7 @@ class TestMicrosoftGraphConnectionType:
 
     def test_validate_config_valid(self):
         """Test validating valid SharePoint config."""
-        sp_type = SharePointConnectionType()
+        sp_type = MicrosoftGraphConnectionType()
 
         config = {
             "tenant_id": "12345678-1234-1234-1234-123456789abc",
@@ -157,7 +159,7 @@ class TestMicrosoftGraphConnectionType:
 
     def test_validate_config_with_defaults(self):
         """Test that validation applies defaults."""
-        sp_type = SharePointConnectionType()
+        sp_type = MicrosoftGraphConnectionType()
 
         config = {
             "tenant_id": "12345678-1234-1234-1234-123456789abc",
@@ -173,7 +175,7 @@ class TestMicrosoftGraphConnectionType:
 
     def test_validate_config_missing_required(self):
         """Test validation fails with missing required field."""
-        sp_type = SharePointConnectionType()
+        sp_type = MicrosoftGraphConnectionType()
 
         config = {
             "tenant_id": "12345678-1234-1234-1234-123456789abc",
@@ -185,7 +187,7 @@ class TestMicrosoftGraphConnectionType:
 
     def test_validate_config_invalid_type(self):
         """Test validation fails with invalid field type."""
-        sp_type = SharePointConnectionType()
+        sp_type = MicrosoftGraphConnectionType()
 
         config = {
             "tenant_id": 12345,  # Should be string
@@ -198,8 +200,8 @@ class TestMicrosoftGraphConnectionType:
 
     @pytest.mark.asyncio
     async def test_connection_successful(self):
-        """Test successful SharePoint connection test."""
-        sp_type = SharePointConnectionType()
+        """Test successful Microsoft Graph connection test."""
+        ms_type = MicrosoftGraphConnectionType()
 
         config = {
             "tenant_id": "test-tenant",
@@ -214,19 +216,19 @@ class TestMicrosoftGraphConnectionType:
             mock_client = AsyncMock()
             mock_client_class.return_value.__aenter__.return_value = mock_client
 
-            # Mock token response
-            mock_token_response = AsyncMock()
+            # Mock token response - json() is NOT async in httpx
+            mock_token_response = MagicMock()
             mock_token_response.status_code = 200
             mock_token_response.json.return_value = {"access_token": "test-token"}
 
             # Mock graph API response
-            mock_graph_response = AsyncMock()
+            mock_graph_response = MagicMock()
             mock_graph_response.status_code = 200
 
             mock_client.post.return_value = mock_token_response
             mock_client.get.return_value = mock_graph_response
 
-            result = await sp_type.test_connection(config)
+            result = await ms_type.test_connection(config)
 
             assert result.success is True
             assert result.status == "healthy"
@@ -234,7 +236,7 @@ class TestMicrosoftGraphConnectionType:
     @pytest.mark.asyncio
     async def test_connection_auth_failure(self):
         """Test SharePoint connection test with auth failure."""
-        sp_type = SharePointConnectionType()
+        sp_type = MicrosoftGraphConnectionType()
 
         config = {
             "tenant_id": "test-tenant",
@@ -261,7 +263,7 @@ class TestMicrosoftGraphConnectionType:
     @pytest.mark.asyncio
     async def test_connection_timeout(self):
         """Test SharePoint connection test with timeout."""
-        sp_type = SharePointConnectionType()
+        sp_type = MicrosoftGraphConnectionType()
 
         config = {
             "tenant_id": "test-tenant",
@@ -578,10 +580,10 @@ class TestConnectionTestResult:
 class TestConnectionTypeSchemas:
     """Test connection type schema generation."""
 
-    def test_sharepoint_schema_has_required_fields(self):
-        """Test SharePoint schema has all required fields."""
-        sp_type = SharePointConnectionType()
-        schema = sp_type.get_config_schema()
+    def test_microsoft_graph_schema_has_required_fields(self):
+        """Test Microsoft Graph schema has all required fields."""
+        ms_type = MicrosoftGraphConnectionType()
+        schema = ms_type.get_config_schema()
 
         required_fields = schema.get("required", [])
         assert "tenant_id" in required_fields
@@ -613,7 +615,7 @@ class TestErrorHandling:
 
     def test_validate_config_handles_empty_dict(self):
         """Test config validation with empty dict."""
-        sp_type = SharePointConnectionType()
+        sp_type = MicrosoftGraphConnectionType()
 
         with pytest.raises(ValueError):
             sp_type.validate_config({})
@@ -650,9 +652,9 @@ class TestErrorHandling:
 class TestConfigNormalization:
     """Test configuration normalization."""
 
-    def test_sharepoint_url_normalization(self):
-        """Test SharePoint URL normalization."""
-        sp_type = SharePointConnectionType()
+    def test_microsoft_graph_url_normalization(self):
+        """Test Microsoft Graph URL normalization."""
+        ms_type = MicrosoftGraphConnectionType()
 
         config = {
             "tenant_id": "12345678-1234-1234-1234-123456789abc",
@@ -661,7 +663,7 @@ class TestConfigNormalization:
             "graph_base_url": "https://graph.microsoft.com/v1.0/",  # Extra slash
         }
 
-        validated = sp_type.validate_config(config)
+        validated = ms_type.validate_config(config)
 
         # Should normalize URL (though this might not be implemented)
         assert "graph_base_url" in validated

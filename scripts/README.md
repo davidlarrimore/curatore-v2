@@ -30,7 +30,7 @@ Scripts for pulling government contracting opportunities from SAM.gov API.
 # 1. Setup (one-time)
 ./scripts/dev-up.sh
 ./scripts/init_storage.sh
-cd backend && python -m app.commands.seed --create-admin
+cd backend && python -m app.core.commands.seed --create-admin
 
 # 2. Configure .env
 SAM_API_KEY=your-sam-gov-api-key

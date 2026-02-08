@@ -10,7 +10,7 @@ These are the most commonly missed steps that cause integrations to fail:
 
 | Step | File | What Happens If Missed |
 |------|------|------------------------|
-| **1. Add to ALL_RUN_TYPES** | `backend/app/api/v1/routers/queue_admin.py` | Jobs won't appear in Job Manager |
+| **1. Add to ALL_RUN_TYPES** | `backend/app/api/v1/ops/routers/queue_admin.py` | Jobs won't appear in Job Manager |
 | **2. Add Celery queue to worker** | `docker-compose.yml` (worker command) | Tasks sit in Redis queue forever |
 | **3. Use explicit task name** | `@celery_app.task(name="app.tasks.xxx")` | Task routing fails silently |
 | **4. Use run_log_service for logging** | Import `run_log_service`, NOT `run_service` | `AttributeError: 'RunService' object has no attribute 'log_event'` |
@@ -64,13 +64,13 @@ Adding a new data connection involves multiple layers of the application:
 
 | Service | Import | Purpose | When to Use |
 |---------|--------|---------|-------------|
-| `run_service` | `from app.services.run_service import run_service` | Run **lifecycle** management | Creating runs, updating status, completing/failing runs |
-| `run_log_service` | `from app.services.run_log_service import run_log_service` | Run **event logging** | Logging progress, errors, and events DURING job execution |
+| `run_service` | `from app.core.shared.run_service import run_service` | Run **lifecycle** management | Creating runs, updating status, completing/failing runs |
+| `run_log_service` | `from app.core.shared.run_log_service import run_log_service` | Run **event logging** | Logging progress, errors, and events DURING job execution |
 
 ```python
 # ✅ CORRECT PATTERN
-from app.services.run_service import run_service
-from app.services.run_log_service import run_log_service
+from app.core.shared.run_service import run_service
+from app.core.shared.run_log_service import run_log_service
 
 # Creating and managing runs (run_service)
 run = await run_service.create_run(session, org_id, "my_import", created_by=user_id)
@@ -91,42 +91,42 @@ await run_service.log_event(...)  # AttributeError!
 
 | Service | Import | Purpose |
 |---------|--------|---------|
-| `database_service` | `from app.services.database_service import database_service` | Database session management |
-| `minio_service` | `from app.services.minio_service import minio_service` | Object storage (MinIO/S3) |
-| `pg_index_service` | `from app.services.pg_index_service import pg_index_service` | Search indexing (pgvector) |
-| `asset_service` | `from app.services.asset_service import asset_service` | Asset CRUD operations |
+| `database_service` | `from app.core.shared.database_service import database_service` | Database session management |
+| `minio_service` | `from app.core.storage.minio_service import minio_service` | Object storage (MinIO/S3) |
+| `pg_index_service` | `from app.core.search.pg_index_service import pg_index_service` | Search indexing (pgvector) |
+| `asset_service` | `from app.core.shared.asset_service import asset_service` | Asset CRUD operations |
 
 ## Checklist
 
 Use this checklist when implementing a new data connection:
 
 ### Backend - Core
-- [ ] Database models in `backend/app/database/models.py`
+- [ ] Database models in `backend/app/core/database/models.py`
 - [ ] Alembic migration in `backend/alembic/versions/`
-- [ ] CRUD service in `backend/app/services/{name}_service.py`
-- [ ] Import service in `backend/app/services/{name}_import_service.py` (if applicable)
-- [ ] Queue definition in `backend/app/services/queue_registry.py`
-- [ ] Celery task in `backend/app/tasks.py`
+- [ ] CRUD service in `backend/app/connectors/{name}/{name}_service.py`
+- [ ] Import service in `backend/app/connectors/{name}/{name}_import_service.py` (if applicable)
+- [ ] Queue definition in `backend/app/core/ops/queue_registry.py`
+- [ ] Celery task in `backend/app/core/tasks/{name}.py`
 - [ ] Task routing in `backend/app/celery_app.py`
 - [ ] Worker queue in `docker-compose.yml`
-- [ ] API router in `backend/app/api/v1/routers/{name}.py`
-- [ ] Router registration in `backend/app/api/v1/__init__.py`
-- [ ] Run type in `backend/app/api/v1/routers/queue_admin.py` (`ALL_RUN_TYPES`)
+- [ ] API router in `backend/app/api/v1/data/routers/{name}.py`
+- [ ] Router registration in `backend/app/api/v1/data/__init__.py`
+- [ ] Run type in `backend/app/api/v1/ops/routers/queue_admin.py` (`ALL_RUN_TYPES`)
 
 ### Backend - Search & Indexing
-- [ ] MetadataBuilder subclass in `backend/app/services/metadata_builders.py` (build_content + build_metadata with namespaced output)
+- [ ] MetadataBuilder subclass in `backend/app/core/search/metadata_builders.py` (build_content + build_metadata with namespaced output)
 - [ ] Register builder in `metadata_builders.py` `_register_defaults()`
-- [ ] Indexing methods in `backend/app/services/pg_index_service.py` (index_*(), delete_*_index()) using builder
+- [ ] Indexing methods in `backend/app/core/search/pg_index_service.py` (index_*(), delete_*_index()) using builder
 - [ ] Call indexing in import service after successful import
-- [ ] Search method in `backend/app/services/pg_search_service.py` (search_*()) with namespaced metadata filters
-- [ ] Search API endpoint in `backend/app/api/v1/routers/search.py` (POST and GET)
+- [ ] Search method in `backend/app/core/search/pg_search_service.py` (search_*()) with namespaced metadata filters
+- [ ] Search API endpoint in `backend/app/api/v1/data/routers/search.py` (POST and GET)
 - [ ] Display-friendly labels for source_type in search results
 
 ### Backend - Functions Engine
-- [ ] ContentItem type in `backend/app/functions/content/content_item.py`
-- [ ] ContentService methods in `backend/app/functions/content/service.py`
-- [ ] Content type registration in `backend/app/functions/content/registry.py`
-- [ ] Search functions in `backend/app/functions/search/` (if needed)
+- [ ] ContentItem type in `backend/app/cwr/tools/content/content_item.py`
+- [ ] ContentService methods in `backend/app/cwr/tools/content/service.py`
+- [ ] Content type registration in `backend/app/cwr/tools/content/registry.py`
+- [ ] Search functions in `backend/app/cwr/tools/primitives/search/` (if needed)
 
 ### Frontend - Core
 - [ ] TypeScript interfaces in `frontend/lib/api.ts`
@@ -156,7 +156,7 @@ Use this checklist when implementing a new data connection:
 ## 1. Database Models
 
 ### Location
-`backend/app/database/models.py`
+`backend/app/core/database/models.py`
 
 ### Guidelines
 
@@ -320,7 +320,7 @@ def downgrade():
 
 ### CRUD Service
 
-**Location**: `backend/app/services/{name}_service.py`
+**Location**: `backend/app/connectors/{name}/{name}_service.py`
 
 Provides database operations for the data connection.
 
@@ -471,7 +471,7 @@ salesforce_service = SalesforceService()
 
 ### Import Service
 
-**Location**: `backend/app/services/{name}_import_service.py`
+**Location**: `backend/app/connectors/{name}/{name}_import_service.py`
 
 Handles data import from files or external APIs.
 
@@ -494,7 +494,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from .salesforce_service import salesforce_service
 # IMPORTANT: Use run_log_service for logging, NOT run_service
-from .run_log_service import run_log_service
+from app.core.shared.run_log_service import run_log_service
 
 logger = logging.getLogger("curatore.services.salesforce_import")
 
@@ -644,7 +644,7 @@ salesforce_import_service = SalesforceImportService()
 ## 4. Queue Registry
 
 ### Location
-`backend/app/services/queue_registry.py`
+`backend/app/core/ops/queue_registry.py`
 
 ### Guidelines
 
@@ -683,7 +683,7 @@ def _register_defaults(self):
 ## 5. Celery Task
 
 ### Location
-`backend/app/tasks.py`
+`backend/app/core/tasks/{name}.py` (e.g., `salesforce.py`, `forecasts.py`)
 
 ### Guidelines
 
@@ -815,7 +815,7 @@ docker exec curatore-redis redis-cli llen salesforce
 ## 6. API Router
 
 ### Location
-`backend/app/api/v1/routers/{name}.py`
+`backend/app/api/v1/data/routers/{name}.py` (for data connectors)
 
 ### Guidelines
 
@@ -906,12 +906,12 @@ async def import_data(
 
 ### Router Registration
 
-**Location**: `backend/app/api/v1/__init__.py`
+**Location**: `backend/app/api/v1/data/__init__.py`
 
 ```python
 from .routers import salesforce
 
-api_router.include_router(salesforce.router)
+data_router.include_router(salesforce.router)
 ```
 
 ---
@@ -920,7 +920,7 @@ api_router.include_router(salesforce.router)
 
 ### Backend: ALL_RUN_TYPES
 
-**Location**: `backend/app/api/v1/routers/queue_admin.py`
+**Location**: `backend/app/api/v1/ops/routers/queue_admin.py`
 
 Add run type to the list:
 ```python
@@ -1265,7 +1265,7 @@ const acquireNavigation: NavItem[] = isAuthenticated ? [
 If the data should be searchable, add indexing methods.
 
 ### Location
-`backend/app/services/pg_index_service.py`
+`backend/app/core/search/pg_index_service.py`
 
 ```python
 async def index_salesforce_account(
@@ -1337,7 +1337,7 @@ except Exception as e:
 For files that should persist (like attachments), use MinIO:
 
 ```python
-from .minio_service import minio_service
+from app.core.storage.minio_service import minio_service
 
 # Upload
 await minio_service.upload_file(
@@ -1435,11 +1435,11 @@ asyncio.run(check())
 1. **Using wrong service for run logging** - Use `run_log_service.log_event()`, NOT `run_service`. The `run_service` handles run CRUD operations (create, update status, complete, fail). The `run_log_service` handles structured logging events.
    ```python
    # CORRECT
-   from app.services.run_log_service import run_log_service
+   from app.core.shared.run_log_service import run_log_service
    await run_log_service.log_event(session, run_id, "INFO", "my_event", "Message")
 
    # WRONG - run_service doesn't have log_event()
-   from app.services.run_service import run_service
+   from app.core.shared.run_service import run_service
    await run_service.log_event(...)  # This will fail!
    ```
 
@@ -1492,11 +1492,11 @@ docker-compose stop worker && docker-compose rm -f worker && docker-compose up -
 **Solution**: Change your import and method call:
 ```python
 # Wrong
-from app.services.run_service import run_service
+from app.core.shared.run_service import run_service
 await run_service.log_event(...)
 
 # Correct
-from app.services.run_log_service import run_log_service
+from app.core.shared.run_log_service import run_log_service
 await run_log_service.log_event(...)
 ```
 
@@ -1504,7 +1504,7 @@ await run_log_service.log_event(...)
 
 **Cause**: Run type not added to `ALL_RUN_TYPES`.
 
-**Solution**: Add your run type to `backend/app/api/v1/routers/queue_admin.py`:
+**Solution**: Add your run type to `backend/app/api/v1/ops/routers/queue_admin.py`:
 ```python
 ALL_RUN_TYPES = [
     # ... existing types ...
@@ -1573,7 +1573,7 @@ Data connections should integrate with the Functions Engine to enable LLM-powere
 
 ### ContentTypeRegistry
 
-**Location**: `backend/app/functions/content/registry.py`
+**Location**: `backend/app/cwr/tools/content/registry.py`
 
 Register your content types in `CONTENT_TYPE_REGISTRY`:
 
@@ -1634,7 +1634,7 @@ CONTENT_TYPE_REGISTRY: Dict[str, Dict[str, Any]] = {
 
 ### GetFunction Integration
 
-**Location**: `backend/app/functions/search/get.py`
+**Location**: `backend/app/cwr/tools/primitives/search/get.py`
 
 Add your content types to the `enum_values` list:
 
@@ -1653,7 +1653,7 @@ ParameterDoc(
 
 ### QueryModelFunction Integration
 
-**Location**: `backend/app/functions/search/query_model.py`
+**Location**: `backend/app/cwr/tools/primitives/search/query_model.py`
 
 Add your models to `ALLOWED_MODELS`:
 
@@ -1671,7 +1671,7 @@ ALLOWED_MODELS = {
 
 ### Search Function
 
-**Location**: Create `backend/app/functions/search/search_{name}.py`
+**Location**: Create `backend/app/cwr/tools/primitives/search/search_{name}.py`
 
 Create a dedicated search function for your data type:
 
@@ -1738,7 +1738,7 @@ class SearchMyDataFunction(BaseFunction):
         )
 ```
 
-**Register the function** in `backend/app/functions/search/__init__.py`:
+**Register the function** in `backend/app/cwr/tools/primitives/search/__init__.py`:
 
 ```python
 from .search_my_data import SearchMyDataFunction
@@ -1749,11 +1749,11 @@ __all__ = [
 ]
 ```
 
-**Register in the registry** in `backend/app/functions/registry.py`:
+**Register in the registry** in `backend/app/cwr/tools/registry.py`:
 
 ```python
 # In _discover_functions():
-from .search.search_my_data import SearchMyDataFunction
+from .primitives.search.search_my_data import SearchMyDataFunction
 self.register(SearchMyDataFunction)
 ```
 
@@ -2065,7 +2065,7 @@ Data connections should be searchable through the unified search infrastructure.
 
 ### Step 1: Add Indexing Methods
 
-**Location**: `backend/app/services/pg_index_service.py`
+**Location**: `backend/app/core/search/pg_index_service.py`
 
 Add indexing methods for each searchable entity type:
 
@@ -2164,7 +2164,7 @@ async def delete_my_record_index(
 
 ### Step 2: Call Indexing During Import
 
-**Location**: Your import service (e.g., `backend/app/services/my_import_service.py`)
+**Location**: Your import service (e.g., `backend/app/connectors/my_data/my_import_service.py`)
 
 Add indexing after successful import:
 
@@ -2204,7 +2204,7 @@ async def import_data(self, session, organization_id, data_source, run_id=None):
 
 ### Step 3: Add Search Service Method
 
-**Location**: `backend/app/services/pg_search_service.py`
+**Location**: `backend/app/core/search/pg_search_service.py`
 
 Add a search method for your data type:
 
@@ -2273,7 +2273,7 @@ async def search_my_data(
 
 ### Step 4: Add Search API Endpoint
 
-**Location**: `backend/app/api/v1/routers/search.py`
+**Location**: `backend/app/api/v1/data/routers/search.py`
 
 Add request model and endpoints:
 

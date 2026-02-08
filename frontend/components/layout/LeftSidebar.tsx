@@ -25,6 +25,7 @@ import {
   GitBranch,
   Database,
   TrendingUp,
+  Tags,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import clsx from 'clsx'
@@ -176,6 +177,13 @@ export function LeftSidebar({
       icon: Activity,
       current: pathname === '/admin/queue',
       gradient: 'from-indigo-500 to-purple-600'
+    },
+    {
+      name: 'Metadata',
+      href: '/admin/metadata',
+      icon: Tags,
+      current: pathname === '/admin/metadata',
+      gradient: 'from-teal-500 to-emerald-600'
     },
     {
       name: 'Admin Settings',

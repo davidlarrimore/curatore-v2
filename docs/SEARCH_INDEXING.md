@@ -22,7 +22,9 @@ Curatore v2 provides hybrid full-text + semantic search powered by PostgreSQL wi
 14. [Extending Search to New Data Sources](#extending-search-to-new-data-sources)
 15. [Troubleshooting](#troubleshooting)
 16. [Metadata Schema Discovery](#metadata-schema-discovery)
-17. [Metadata Filtering](#metadata-filtering)
+17. [Metadata Registry (Governance)](#metadata-registry-governance)
+18. [Facet Filtering](#facet-filtering-preferred)
+19. [Raw Metadata Filtering](#raw-metadata-filtering-advanced)
 
 ---
 
@@ -56,12 +58,12 @@ Content Sources              Indexing Pipeline              Search Query
 
 | Component | File | Purpose |
 |-----------|------|---------|
-| PgIndexService | `backend/app/services/pg_index_service.py` | Index content to `search_chunks` |
-| PgSearchService | `backend/app/services/pg_search_service.py` | Execute search queries |
-| ChunkingService | `backend/app/services/chunking_service.py` | Split documents into chunks |
-| EmbeddingService | `backend/app/services/embedding_service.py` | Generate OpenAI embeddings |
-| Search Router | `backend/app/api/v1/routers/search.py` | REST API endpoints |
-| Maintenance Handler | `backend/app/services/maintenance_handlers.py` | Bulk reindexing |
+| PgIndexService | `backend/app/core/search/pg_index_service.py` | Index content to `search_chunks` |
+| PgSearchService | `backend/app/core/search/pg_search_service.py` | Execute search queries |
+| ChunkingService | `backend/app/core/search/chunking_service.py` | Split documents into chunks |
+| EmbeddingService | `backend/app/core/search/embedding_service.py` | Generate OpenAI embeddings |
+| Search Router | `backend/app/api/v1/data/routers/search.py` | REST API endpoints |
+| Maintenance Handler | `backend/app/core/ops/maintenance_handlers.py` | Bulk reindexing |
 
 ---
 
@@ -327,13 +329,39 @@ WHERE metadata->'custom' ? 'tags_llm_v1';
 
 ### MetadataBuilder Registry
 
-Metadata is built consistently by the `MetadataBuilder` registry (`backend/app/services/metadata_builders.py`). Each source type has a registered builder that produces both indexable content and namespaced metadata. See [Extending Search](#extending-search-to-new-data-sources) for how to add builders for new source types.
+Metadata is built consistently by the `MetadataBuilder` registry (`backend/app/core/search/metadata_builders.py`). Each source type has a registered builder that produces both indexable content and namespaced metadata. See [Extending Search](#extending-search-to-new-data-sources) for how to add builders for new source types.
+
+**Asset builders** use a pass-through pattern: connectors write namespaced `Asset.source_metadata` directly, and `AssetPassthroughBuilder` returns it as-is. Entity builders (SAM, Salesforce, Forecast) still read from typed model columns and produce namespaced metadata.
 
 ### Custom Namespace (AssetMetadata Bridge)
 
-When canonical metadata is created via `update_metadata` or `bulk_update_metadata` functions (with `is_canonical=True`), it is automatically propagated to the `custom` namespace in `search_chunks.metadata`. This makes LLM-generated metadata searchable and filterable without a separate query path.
+When canonical metadata is created via `update_metadata` or `bulk_update_metadata` functions (with `is_canonical=True` default), it is automatically propagated to the `custom` namespace in `search_chunks.metadata`. This makes LLM-generated metadata searchable and filterable without a separate query path.
 
 The key format is the metadata type with dots replaced by underscores: `tags.llm.v1` becomes `tags_llm_v1`.
+
+### Metadata Registry (Governance)
+
+Metadata fields and facets are formally defined in a DB-backed registry:
+
+| Table | Purpose |
+|-------|---------|
+| `metadata_field_definitions` | All known fields per namespace with types, indexing, facet flags |
+| `facet_definitions` | Cross-domain facet definitions with supported operators |
+| `facet_mappings` | Maps each facet to a `json_path` per `content_type` |
+
+**YAML baseline** (`backend/app/core/metadata/registry/`): Global field and facet definitions loaded at startup. Org-level overrides stored in DB.
+
+**MetadataRegistryService** (`backend/app/core/metadata/registry_service.py`): Singleton that loads YAML baseline, seeds DB tables, resolves effective registry per org (5-min TTL cache).
+
+**Governance APIs** at `/api/v1/data/metadata/`:
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/catalog` | GET | Full catalog: namespaces, fields, facets |
+| `/namespaces` | GET | List namespaces with doc counts |
+| `/namespaces/{ns}/fields` | GET | Fields in a namespace |
+| `/fields/{ns}/{field}/stats` | GET | Sample values, cardinality |
+| `/facets` | GET | List all facets with mappings |
 
 ---
 
@@ -534,6 +562,7 @@ POST /api/v1/search
     "search_mode": "hybrid",
     "semantic_weight": 0.5,
     "source_types": ["upload", "sam_gov"],
+    "facet_filters": {"agency": "GSA"},
     "limit": 20,
     "offset": 0,
     "include_facets": true
@@ -625,11 +654,27 @@ Returns the available metadata namespaces, their fields, sample values, and docu
 }
 ```
 
-**Caching:** Schema responses are cached in-memory for 5 minutes. The cache is automatically invalidated when documents are indexed (via `index_asset()`, `index_asset_prepared()`, `propagate_asset_metadata()`) or after a full reindex. The schema structure comes from the `MetadataBuilder` registry (code-derived), while sample values use lightweight targeted SQL queries (~250ms cold, <5ms warm).
+**Caching:** Schema responses are cached in-memory for 5 minutes. The cache is automatically invalidated when documents are indexed (via `index_asset()`, `index_asset_prepared()`, `propagate_asset_metadata()`) or after a full reindex. The schema structure comes from the `MetadataRegistryService` (DB-backed registry with YAML baseline), while sample values use lightweight targeted SQL queries (~250ms cold, <5ms warm).
 
-### Metadata Filtering
+### Facet Filtering (Preferred)
 
-The general search endpoint accepts a `metadata_filters` parameter for JSONB containment filtering using PostgreSQL's `@>` operator against the GIN index:
+The search endpoint accepts a `facet_filters` parameter for cross-domain filtering. Facets are resolved by the `MetadataRegistryService` — each facet maps to different JSON paths across content types:
+
+```json
+{
+    "query": "cybersecurity assessment",
+    "facet_filters": {
+        "agency": "GSA",
+        "naics_code": ["541512", "541519"]
+    }
+}
+```
+
+This resolves `agency` to `sam.agency` for SAM data and `forecast.agency_name` for forecasts, building SQL conditions automatically. Facet definitions (names, operators, mappings) are managed via the metadata registry. Multiple facets combine with AND; multiple values within a facet use IN.
+
+### Raw Metadata Filtering (Advanced)
+
+The `metadata_filters` parameter is still available for direct JSONB containment filtering using PostgreSQL's `@>` operator against the GIN index:
 
 ```json
 {
@@ -641,7 +686,7 @@ The general search endpoint accepts a `metadata_filters` parameter for JSONB con
 }
 ```
 
-This filters results to only chunks whose `metadata` column contains the specified nested values. Metadata filters combine with all existing filters (`source_types`, `date_from`, `content_types`, etc.).
+This filters results to only chunks whose `metadata` column contains the specified nested values. Both `facet_filters` and `metadata_filters` combine with all existing filters (`source_types`, `date_from`, `content_types`, etc.).
 
 ### Admin Operations
 
@@ -661,7 +706,8 @@ POST /api/v1/search/reindex   # Trigger background reindex
 | `sync_config_ids` | `UUID[]` | Filter by SharePoint sync config |
 | `date_from` | `datetime` | Created at or after |
 | `date_to` | `datetime` | Created at or before |
-| `metadata_filters` | `object` | Namespaced JSONB containment filter (e.g., `{"sam": {"agency": "GSA"}}`) |
+| `facet_filters` | `object` | Cross-domain facet filter (e.g., `{"agency": "GSA"}`) — resolved via registry |
+| `metadata_filters` | `object` | Raw JSONB containment filter (e.g., `{"sam": {"agency": "GSA"}}`) |
 
 ---
 
@@ -767,7 +813,7 @@ To add a new searchable content type (e.g., "widgets"):
 
 ### 1. Create a MetadataBuilder
 
-Define a builder in `backend/app/services/metadata_builders.py`:
+Define a builder in `backend/app/core/search/metadata_builders.py`:
 
 ```python
 class WidgetBuilder(MetadataBuilder):
@@ -848,7 +894,7 @@ async def search_widgets(request: SearchRequest, ...):
 
 ### 6. Add to reindex handler
 
-Add the widget phase to `handle_search_reindex()` in `maintenance_handlers.py`:
+Add the widget phase to `handle_search_reindex()` in `backend/app/core/ops/maintenance_handlers.py`:
 - Add `"widgets": "widget"` mapping to `_phase_to_builder_key()`
 - Add `_index_item()` branch for `phase_key == "widgets"`
 

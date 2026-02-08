@@ -15,7 +15,7 @@ Key Dependencies:
 Usage:
     from fastapi import Depends
     from app.dependencies import get_current_user, require_org_admin
-    from app.database.models import User
+    from app.core.database.models import User
 
     @router.get("/protected")
     async def protected_endpoint(user: User = Depends(get_current_user)):
@@ -41,9 +41,9 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 
 from app.config import settings
-from app.database.models import ApiKey, Organization, User
-from app.services.auth_service import auth_service
-from app.services.database_service import database_service
+from app.core.database.models import ApiKey, Organization, User
+from app.core.auth.auth_service import auth_service
+from app.core.shared.database_service import database_service
 
 # Initialize logger
 logger = logging.getLogger("curatore.dependencies")
@@ -342,7 +342,7 @@ async def get_current_user(
                 logger.error("No users found in database for backward compatibility mode")
                 raise HTTPException(
                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail="No users found. Please run database seed: python -m app.commands.seed --create-admin",
+                    detail="No users found. Please run database seed: python -m app.core.commands.seed --create-admin",
                 )
 
             logger.debug(f"Backward compatibility mode: using default user {user.email}")
@@ -609,7 +609,7 @@ def validate_document_id_param(document_id: str) -> str:
         - Enforces UUID-only format
         - Provides clear error messages for API consumers
     """
-    from app.utils.validators import validate_document_id
+    from app.core.utils.validators import validate_document_id
 
     try:
         return validate_document_id(document_id)

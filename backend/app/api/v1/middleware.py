@@ -28,7 +28,7 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ...database.models import Artifact, User
+from app.core.database.models import Artifact, User
 
 logger = logging.getLogger("curatore.middleware")
 
@@ -62,7 +62,7 @@ async def validate_document_access(
 
     Example:
         from app.dependencies import get_current_user
-        from app.services.database_service import database_service
+        from app.core.shared.database_service import database_service
 
         @router.get("/documents/{document_id}")
         async def get_document(

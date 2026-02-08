@@ -43,7 +43,7 @@ The Functions Engine provides a unified interface for working with all content t
 
 All data flows through functions as `ContentItem` objects.
 
-**Location**: `backend/app/functions/content/content_item.py`
+**Location**: `backend/app/cwr/tools/content/content_item.py`
 
 ```python
 @dataclass
@@ -91,7 +91,7 @@ class ContentItem:
 
 Fetches and transforms database records into ContentItems.
 
-**Location**: `backend/app/functions/content/service.py`
+**Location**: `backend/app/cwr/tools/content/service.py`
 
 ```python
 class ContentService:
@@ -119,7 +119,7 @@ Functions are atomic units of work receiving a `FunctionContext` with access to 
 
 ### Base Classes
 
-**Location**: `backend/app/functions/base.py`
+**Location**: `backend/app/cwr/tools/base.py`
 
 ```python
 class BaseFunction:
@@ -134,7 +134,7 @@ class FunctionResult:
 
 ### FunctionContext
 
-**Location**: `backend/app/functions/context.py`
+**Location**: `backend/app/cwr/tools/context.py`
 
 Provides lazy-loaded services:
 - `ctx.llm_service` - LLM API access
@@ -148,11 +148,11 @@ Provides lazy-loaded services:
 
 | Category | Functions | Purpose |
 |----------|-----------|---------|
-| **LLM** (`llm/`) | `generate`, `extract`, `summarize`, `classify`, `decide`, `route` | LLM-powered analysis |
-| **Search** (`search/`) | `search_assets`, `search_solicitations`, `search_notices`, `search_forecasts`, `get`, `get_content`, `query_model` | Query and retrieve data |
-| **Output** (`output/`) | `update_metadata`, `bulk_update_metadata`, `create_artifact`, `generate_document` | Create/update data |
-| **Notify** (`notify/`) | `send_email`, `webhook` | External notifications |
-| **Compound** (`compound/`) | `analyze_solicitation`, `summarize_solicitations`, `generate_digest`, `classify_document` | Multi-step workflows |
+| **LLM** (`primitives/llm/`) | `generate`, `extract`, `summarize`, `classify`, `decide`, `route` | LLM-powered analysis |
+| **Search** (`primitives/search/`) | `search_assets`, `search_solicitations`, `search_notices`, `search_forecasts`, `get`, `get_content`, `query_model` | Query and retrieve data |
+| **Output** (`primitives/output/`) | `update_metadata`, `bulk_update_metadata`, `create_artifact`, `generate_document` | Create/update data |
+| **Notify** (`primitives/notify/`) | `send_email`, `webhook` | External notifications |
+| **Compound** (`compounds/`) | `analyze_solicitation`, `summarize_solicitations`, `generate_digest`, `classify_document` | Multi-step workflows |
 
 ### SAM.gov Search Functions
 
@@ -170,20 +170,36 @@ The `search_solicitations` and `search_notices` functions support an `include_as
 
 Results include both notices/solicitations (type: `notice`/`solicitation`) and documents (type: `asset`, display: `SAM Document`).
 
-### Metadata Filtering (all search functions)
+### Facet Filtering (Preferred)
 
-All search functions (`search_assets`, `search_solicitations`, `search_notices`, `search_forecasts`) support a `metadata_filters` parameter for filtering by namespaced metadata fields using JSONB containment:
+All search functions support a `facet_filters` parameter for cross-domain filtering. Facets are resolved by the metadata registry — each facet maps to different JSON paths across content types:
 
 ```yaml
-# Filter SAM notices by agency
-- name: search_gsa_notices
+# Filter by agency across SAM and forecast data
+- name: search_gsa_content
   function: search_notices
   params:
     keyword: "cloud services"
-    metadata_filters:
-      sam:
-        agency: "GSA"
+    facet_filters:
+      agency: "GSA"
 
+# Filter by multiple facets
+- name: search_dod_it
+  function: search_solicitations
+  params:
+    keyword: "IT modernization"
+    facet_filters:
+      agency: "DOD"
+      naics_code: "541512"
+```
+
+Available facets include: `agency`, `naics_code`, `set_aside`, `notice_type`, `fiscal_year`, `folder`, `created_by`, `account_type`, `industry`, `stage_name`, `collection_name`, `file_extension`, and more. Use `GET /api/v1/data/metadata/facets` to discover all facets and their mappings.
+
+### Raw Metadata Filtering (Advanced)
+
+All search functions also support `metadata_filters` for direct JSONB containment queries:
+
+```yaml
 # Filter assets by LLM-generated tags
 - name: search_tagged_docs
   function: search_assets
@@ -195,7 +211,7 @@ All search functions (`search_assets`, `search_solicitations`, `search_notices`,
           tags: ["cybersecurity"]
 ```
 
-Use the metadata schema discovery endpoint (`GET /api/v1/search/metadata-schema`) to discover available namespaces, fields, and sample values. The procedure generator automatically includes metadata context when generating procedures, so AI-generated procedures can use `metadata_filters` with real field names and values.
+The procedure generator automatically includes facet definitions when generating procedures, so AI-generated procedures prefer `facet_filters` with real facet names and values.
 
 ### Folder Path Filtering (search_assets)
 
@@ -225,10 +241,10 @@ The `search_assets` function supports a `folder_path` parameter to limit results
 
 ### Function Registry
 
-**Location**: `backend/app/functions/registry.py`
+**Location**: `backend/app/cwr/tools/registry.py`
 
 ```python
-from app.functions import fn
+from app.cwr.tools import fn
 
 # Get a function
 func = fn.get("search_assets")
@@ -247,10 +263,10 @@ Functions document their return types using structured `OutputSchema` objects. T
 - Enables AI procedure generation to reliably use correct template references
 - Allows API consumers to understand output structure programmatically
 
-**Location**: `backend/app/functions/base.py`
+**Location**: `backend/app/cwr/tools/base.py`
 
 ```python
-from app.functions.base import OutputFieldDoc, OutputSchema, OutputVariant
+from app.cwr.tools.base import OutputFieldDoc, OutputSchema, OutputVariant
 
 # Simple output (e.g., llm_generate returns a string)
 output_schema = OutputSchema(
@@ -344,7 +360,7 @@ steps:
 
 YAML-defined workflows with Jinja2 templating.
 
-**Location**: `backend/app/procedures/definitions/`
+**Location**: `backend/app/cwr/procedures/store/definitions/`
 
 ### Example Procedure
 
@@ -485,58 +501,83 @@ Events trigger procedures and pipelines automatically:
 
 ```
 backend/app/
-├── functions/
-│   ├── __init__.py          # fn namespace
-│   ├── base.py              # BaseFunction, FunctionResult
-│   ├── context.py           # FunctionContext
-│   ├── registry.py          # FunctionRegistry
-│   └── content/
-│       ├── content_item.py  # ContentItem dataclass
-│       ├── service.py       # ContentService
-│       └── registry.py      # ContentTypeRegistry
-│   └── llm/, search/, output/, notify/, compound/
-├── procedures/
-│   ├── base.py              # ProcedureDefinition
-│   ├── executor.py          # ProcedureExecutor
-│   ├── discovery.py         # YAML auto-discovery
-│   ├── loader.py            # YAML loading with Jinja2
-│   └── definitions/         # YAML procedure definitions
-├── pipelines/
-│   ├── executor.py          # PipelineExecutor
-│   └── definitions/         # YAML pipeline definitions
-├── database/
-│   └── procedures.py        # Procedure, Pipeline, Trigger models
-└── services/
-    └── event_service.py     # Event emission
+├── cwr/                            # Curatore Workflow Runtime
+│   ├── tools/
+│   │   ├── __init__.py             # fn namespace, re-exports
+│   │   ├── base.py                 # BaseFunction, FunctionResult
+│   │   ├── context.py              # FunctionContext
+│   │   ├── registry.py             # FunctionRegistry
+│   │   ├── content/
+│   │   │   ├── content_item.py     # ContentItem dataclass
+│   │   │   ├── service.py          # ContentService
+│   │   │   └── registry.py         # ContentTypeRegistry
+│   │   ├── primitives/             # llm/, search/, output/, notify/, flow/
+│   │   └── compounds/              # Multi-step compound functions
+│   ├── contracts/
+│   │   ├── tool_contracts.py       # ToolContract + ContractGenerator
+│   │   └── validation.py           # Procedure validator
+│   ├── procedures/
+│   │   ├── compiler/
+│   │   │   └── ai_generator.py     # AI procedure generator
+│   │   ├── runtime/
+│   │   │   └── executor.py         # ProcedureExecutor
+│   │   └── store/
+│   │       ├── definitions.py      # ProcedureDefinition
+│   │       ├── loader.py           # YAML loading with Jinja2
+│   │       ├── discovery.py        # YAML auto-discovery
+│   │       └── definitions/        # YAML procedure definitions
+│   ├── pipelines/
+│   │   ├── runtime/
+│   │   │   ├── definitions.py      # PipelineDefinition
+│   │   │   └── executor.py         # PipelineExecutor
+│   │   └── store/
+│   │       ├── loader.py           # Pipeline loading
+│   │       ├── discovery.py        # Pipeline discovery
+│   │       └── definitions/        # YAML pipeline definitions
+│   ├── governance/                 # Capability profiles, approvals
+│   └── observability/              # Run queries, traces, metrics
+├── core/
+│   ├── database/
+│   │   └── procedures.py           # Procedure, Pipeline, Trigger models
+│   └── shared/
+│       └── event_service.py        # Event emission
 ```
 
 ---
 
 ## API Endpoints
 
+All workflow endpoints are under the `/api/v1/cwr/` namespace.
+
 ```
 # Functions
-GET    /api/v1/functions/                 # List all functions
-GET    /api/v1/functions/categories       # List categories
-GET    /api/v1/functions/{name}           # Get function details
-POST   /api/v1/functions/{name}/execute   # Execute function directly
+GET    /api/v1/cwr/functions/                 # List all functions
+GET    /api/v1/cwr/functions/categories       # List categories
+GET    /api/v1/cwr/functions/{name}           # Get function details + contracts
+POST   /api/v1/cwr/functions/{name}/execute   # Execute function directly
 
 # Procedures
-GET    /api/v1/procedures/                # List procedures
-GET    /api/v1/procedures/{slug}          # Get procedure details
-POST   /api/v1/procedures/{slug}/run      # Execute procedure
-POST   /api/v1/procedures/{slug}/enable   # Enable procedure
-POST   /api/v1/procedures/{slug}/disable  # Disable procedure
+GET    /api/v1/cwr/procedures/                # List procedures
+GET    /api/v1/cwr/procedures/{slug}          # Get procedure details
+POST   /api/v1/cwr/procedures/{slug}/run      # Execute procedure
+POST   /api/v1/cwr/procedures/{slug}/enable   # Enable procedure
+POST   /api/v1/cwr/procedures/{slug}/disable  # Disable procedure
 
 # Pipelines
-GET    /api/v1/pipelines/                 # List pipelines
-GET    /api/v1/pipelines/{slug}           # Get pipeline details
-POST   /api/v1/pipelines/{slug}/run       # Execute pipeline
-GET    /api/v1/pipelines/{slug}/runs/{id}/items  # Get item states
+GET    /api/v1/cwr/pipelines/                 # List pipelines
+GET    /api/v1/cwr/pipelines/{slug}           # Get pipeline details
+POST   /api/v1/cwr/pipelines/{slug}/run       # Execute pipeline
+GET    /api/v1/cwr/pipelines/{slug}/runs/{id}/items  # Get item states
+
+# Tool Contracts
+GET    /api/v1/cwr/contracts/{function_name}  # Input/output schema for a function
+
+# Metrics (under ops namespace)
+GET    /api/v1/ops/metrics/procedures         # Procedure execution metrics
 
 # Webhooks
-POST   /api/v1/webhooks/procedures/{slug} # Trigger procedure
-POST   /api/v1/webhooks/pipelines/{slug}  # Trigger pipeline
+POST   /api/v1/data/webhooks/procedures/{slug} # Trigger procedure
+POST   /api/v1/data/webhooks/pipelines/{slug}  # Trigger pipeline
 ```
 
 ---
@@ -555,8 +596,8 @@ POST   /api/v1/webhooks/pipelines/{slug}  # Trigger pipeline
 
 1. Create function file in appropriate category folder:
 ```python
-# backend/app/functions/llm/my_function.py
-from ..base import BaseFunction, FunctionResult, FunctionMeta
+# backend/app/cwr/tools/primitives/llm/my_function.py
+from ...base import BaseFunction, FunctionResult, FunctionMeta
 
 class MyFunction(BaseFunction):
     meta = FunctionMeta(
@@ -580,7 +621,7 @@ class MyFunction(BaseFunction):
 
 ## Creating a New Procedure
 
-1. Create YAML file in `backend/app/procedures/definitions/`:
+1. Create YAML file in `backend/app/cwr/procedures/store/definitions/`:
 ```yaml
 name: My Procedure
 slug: my_procedure
@@ -608,3 +649,106 @@ steps:
 ```
 
 2. Procedure is auto-discovered and available via API.
+
+---
+
+## Governance & Safety
+
+Functions declare governance metadata through their `FunctionMeta`:
+
+### Side Effects Logging
+
+Functions that modify state declare `side_effects` to enable audit logging:
+
+```python
+meta = FunctionMeta(
+    name="update_metadata",
+    side_effects=["write_metadata"],  # Logged in RunLogEvent
+)
+```
+
+Side effects are recorded in `RunLogEvent` entries with `event_type="side_effect"`, providing an audit trail of what each procedure run modified.
+
+### Exposure Profile
+
+Functions that send data externally declare an `exposure_profile`:
+
+```python
+meta = FunctionMeta(
+    name="send_email",
+    exposure_profile="external",  # Can be blocked by org settings
+)
+```
+
+The executor checks exposure profiles before running steps, allowing organizations to block externally-facing functions.
+
+---
+
+## Tool Contracts
+
+Each function exposes machine-readable input/output schemas via the contracts API:
+
+```
+GET /api/v1/cwr/contracts/{function_name}
+```
+
+This returns:
+- **input_schema**: JSON Schema describing parameters
+- **output_schema**: Structured description of return type and fields
+- **output_variants**: Different output shapes based on mode (single vs collection)
+
+Tool contracts enable the AI procedure generator to create valid procedure YAML automatically.
+
+---
+
+## Payload Discipline
+
+When building procedures that process large datasets, follow the **search → get_content → LLM** pattern:
+
+```yaml
+steps:
+  # Step 1: Search returns lightweight references (no full text)
+  - name: find_docs
+    function: search_assets
+    params:
+      query: "quarterly report"
+      limit: 10
+
+  # Step 2: Load full content only for items that need it
+  - name: load_content
+    function: get_content
+    params:
+      items: "{{ steps.find_docs }}"
+
+  # Step 3: Process with LLM
+  - name: summarize
+    function: llm_summarize
+    params:
+      items: "{{ steps.load_content }}"
+```
+
+This avoids loading full document text during search, keeping search responses fast and memory-efficient. The `get_content` function loads full text on demand from object storage.
+
+---
+
+## Observability
+
+### Trace ID Propagation
+
+Every procedure run receives a `trace_id` (UUID). Child runs inherit `parent_run_id`, enabling full lineage tracking:
+
+```
+Procedure Run (trace_id=abc)
+  └── Step 1 Run (parent_run_id=abc, trace_id=abc)
+  └── Step 2 Run (parent_run_id=abc, trace_id=abc)
+```
+
+### Metrics
+
+Procedure execution metrics are available via:
+
+```
+GET /api/v1/ops/metrics/procedures?days=7
+```
+
+Returns per-function call counts, average latencies, error counts, and overall success rate. Visible in the admin Settings > Metrics tab.

@@ -61,7 +61,7 @@ if [[ "${1:-}" == "--dry-run" ]]; then
 fi
 
 # Run the cleanup command
-python -m app.commands.cleanup_storage "$@"
+python -m app.core.commands.cleanup_storage "$@"
 
 echo ""
 echo -e "${GREEN}Done!${NC}"

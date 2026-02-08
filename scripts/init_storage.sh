@@ -16,7 +16,7 @@ if ! docker ps | grep -q curatore-backend; then
 fi
 
 # Run initialization command
-docker exec curatore-backend python -m app.commands.init_storage "$@"
+docker exec curatore-backend python -m app.core.commands.init_storage "$@"
 
 exit_code=$?
 

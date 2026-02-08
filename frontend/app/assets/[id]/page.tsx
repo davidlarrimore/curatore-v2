@@ -25,12 +25,8 @@ import {
   History,
   Tag,
   Star,
-  TestTube2,
-  ArrowUp,
   Trash2,
-  ChevronDown,
   ChevronRight,
-  GitCompare,
   Search,
   Sparkles,
   FileCheck,
@@ -82,11 +78,6 @@ function AssetDetailContent() {
   // Phase 3: Metadata state
   const [metadataList, setMetadataList] = useState<AssetMetadataList | null>(null)
   const [isLoadingMetadata, setIsLoadingMetadata] = useState(false)
-  const [expandedExperimental, setExpandedExperimental] = useState(false)
-  const [isPromoting, setIsPromoting] = useState<string | null>(null)
-  const [selectedForCompare, setSelectedForCompare] = useState<string[]>([])
-  const [compareResult, setCompareResult] = useState<any | null>(null)
-  const [isComparing, setIsComparing] = useState(false)
 
   // Queue info for pending assets
   const [queueInfo, setQueueInfo] = useState<AssetQueueInfo | null>(null)
@@ -225,7 +216,7 @@ function AssetDetailContent() {
     setDocxError('')
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-      const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
+      const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
 
       const response = await fetch(url, {
         headers: {
@@ -261,7 +252,7 @@ function AssetDetailContent() {
       // Download extracted content from object storage via proxy
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
       // Manually encode the key to preserve special characters like +
-      const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(extraction.extracted_bucket)}&key=${encodeURIComponent(extraction.extracted_object_key)}`
+      const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(extraction.extracted_bucket)}&key=${encodeURIComponent(extraction.extracted_object_key)}`
 
       const response = await fetch(url, {
         headers: {
@@ -335,74 +326,22 @@ function AssetDetailContent() {
     }
   }
 
-  const handlePromoteMetadata = async (metadataId: string) => {
+  const handleDeleteMetadata = async (metadataId: string) => {
     if (!token || !assetId) return
 
-    if (!confirm('Promote this metadata to canonical? This will supersede the current canonical metadata of this type.')) {
-      return
-    }
-
-    setIsPromoting(metadataId)
-    try {
-      const result = await assetsApi.promoteMetadata(token, assetId, metadataId)
-      setSuccessMessage(result.message)
-      // Reload metadata
-      await loadAssetMetadata()
-      setTimeout(() => setSuccessMessage(''), 3000)
-    } catch (err: any) {
-      setError(`Failed to promote metadata: ${err.message}`)
-      setTimeout(() => setError(''), 5000)
-    } finally {
-      setIsPromoting(null)
-    }
-  }
-
-  const handleDeleteMetadata = async (metadataId: string, hardDelete: boolean = false) => {
-    if (!token || !assetId) return
-
-    const action = hardDelete ? 'permanently delete' : 'deprecate'
-    if (!confirm(`Are you sure you want to ${action} this metadata?`)) {
+    if (!confirm('Are you sure you want to delete this metadata?')) {
       return
     }
 
     try {
-      await assetsApi.deleteMetadata(token, assetId, metadataId, hardDelete)
-      setSuccessMessage(hardDelete ? 'Metadata deleted' : 'Metadata deprecated')
+      await assetsApi.deleteMetadata(token, assetId, metadataId)
+      setSuccessMessage('Metadata deleted')
       await loadAssetMetadata()
       setTimeout(() => setSuccessMessage(''), 3000)
     } catch (err: any) {
-      setError(`Failed to ${action} metadata: ${err.message}`)
+      setError(`Failed to delete metadata: ${err.message}`)
       setTimeout(() => setError(''), 5000)
     }
-  }
-
-  const handleCompareMetadata = async () => {
-    if (!token || !assetId || selectedForCompare.length !== 2) return
-
-    setIsComparing(true)
-    try {
-      const result = await assetsApi.compareMetadata(token, assetId, selectedForCompare[0], selectedForCompare[1])
-      setCompareResult(result)
-    } catch (err: any) {
-      setError(`Failed to compare metadata: ${err.message}`)
-      setTimeout(() => setError(''), 5000)
-    } finally {
-      setIsComparing(false)
-    }
-  }
-
-  const toggleCompareSelection = (metadataId: string) => {
-    setSelectedForCompare(prev => {
-      if (prev.includes(metadataId)) {
-        return prev.filter(id => id !== metadataId)
-      }
-      if (prev.length >= 2) {
-        // Replace the first selected
-        return [prev[1], metadataId]
-      }
-      return [...prev, metadataId]
-    })
-    setCompareResult(null) // Clear comparison when selection changes
   }
 
   const handleReextract = async () => {
@@ -860,7 +799,7 @@ function AssetDetailContent() {
                   onClick={() => {
                     if (!token) return
                     const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                    const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
+                    const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
                     window.open(url + `&inline=false`, '_blank')
                   }}
                   className="gap-2"
@@ -875,7 +814,7 @@ function AssetDetailContent() {
                 {asset.content_type?.startsWith('image/') ? (
                   <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
                     <img
-                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
+                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
                       alt={asset.original_filename}
                       className="max-w-full h-auto"
                     />
@@ -883,7 +822,7 @@ function AssetDetailContent() {
                 ) : asset.content_type === 'application/pdf' ? (
                   <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden" style={{ height: '600px' }}>
                     <iframe
-                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
+                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
                       className="w-full h-full"
                       title={asset.original_filename}
                     />
@@ -891,7 +830,7 @@ function AssetDetailContent() {
                 ) : asset.content_type === 'text/html' ? (
                   <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden" style={{ height: '600px' }}>
                     <iframe
-                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
+                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
                       className="w-full h-full bg-white"
                       title={asset.original_filename}
                       sandbox="allow-same-origin"
@@ -900,7 +839,7 @@ function AssetDetailContent() {
                 ) : asset.content_type === 'text/plain' || asset.content_type === 'text/csv' || asset.content_type === 'text/markdown' ? (
                   <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden" style={{ height: '600px' }}>
                     <iframe
-                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
+                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
                       className="w-full h-full bg-white dark:bg-gray-900"
                       title={asset.original_filename}
                     />
@@ -921,7 +860,7 @@ function AssetDetailContent() {
                           onClick={() => {
                             if (!token) return
                             const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                            const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
+                            const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
                             window.open(url, '_blank')
                           }}
                           className="gap-2"
@@ -943,7 +882,7 @@ function AssetDetailContent() {
                             onClick={() => {
                               if (!token) return
                               const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                              const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
+                              const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
                               window.open(url, '_blank')
                             }}
                             className="gap-1"
@@ -982,7 +921,7 @@ function AssetDetailContent() {
                         onClick={() => {
                           if (!token) return
                           const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                          const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
+                          const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
                           window.open(url, '_blank')
                         }}
                         className="gap-2"
@@ -1012,7 +951,7 @@ function AssetDetailContent() {
                         onClick={() => {
                           if (!token) return
                           const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                          const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
+                          const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
                           window.open(url, '_blank')
                         }}
                         className="gap-2"
@@ -1036,7 +975,7 @@ function AssetDetailContent() {
                       onClick={() => {
                         if (!token) return
                         const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                        const url = `${apiUrl}/api/v1/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
+                        const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
                         window.open(url, '_blank')
                       }}
                       className="gap-2"
@@ -1213,264 +1152,68 @@ function AssetDetailContent() {
             <div>
               <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-6">Document Metadata</h3>
 
-              {/* Phase 3: Canonical vs Experimental Metadata */}
+              {/* Asset Metadata */}
               {isLoadingMetadata ? (
                 <div className="flex items-center justify-center py-8">
                   <Loader2 className="w-6 h-6 animate-spin text-indigo-500" />
                   <span className="ml-2 text-sm text-gray-500 dark:text-gray-400">Loading metadata...</span>
                 </div>
-              ) : metadataList && (metadataList.canonical.length > 0 || metadataList.experimental.length > 0) ? (
+              ) : metadataList && metadataList.canonical.length > 0 ? (
                 <div className="space-y-6">
-                  {/* Canonical Metadata Section */}
+                  {/* Metadata Section */}
                   <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-emerald-200 dark:border-emerald-800 overflow-hidden">
                     <div className="px-5 py-4 bg-emerald-50 dark:bg-emerald-900/20 border-b border-emerald-200 dark:border-emerald-800">
                       <div className="flex items-center justify-between">
                         <div className="flex items-center gap-2">
                           <Star className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
                           <h4 className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">
-                            Canonical Metadata
+                            Metadata
                           </h4>
                           <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400">
                             {metadataList.total_canonical}
                           </span>
                         </div>
-                        <span className="text-xs text-emerald-600 dark:text-emerald-400">Production / Trusted</span>
                       </div>
                     </div>
                     <div className="p-5">
-                      {metadataList.canonical.length > 0 ? (
-                        <div className="space-y-4">
-                          {metadataList.canonical.map((metadata) => (
-                            <div key={metadata.id} className="p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-                              <div className="flex items-start justify-between mb-3">
-                                <div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-sm font-semibold text-gray-900 dark:text-white">
-                                      {metadata.metadata_type}
-                                    </span>
-                                    <span className="px-1.5 py-0.5 text-xs rounded bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-400">
-                                      canonical
-                                    </span>
-                                  </div>
-                                  <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                    Schema v{metadata.schema_version} • Created {formatDateTime(metadata.created_at)}
-                                    {metadata.promoted_at && ` • Promoted ${formatDateTime(metadata.promoted_at)}`}
-                                  </p>
-                                </div>
+                      <div className="space-y-4">
+                        {metadataList.canonical.map((metadata) => (
+                          <div key={metadata.id} className="p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+                            <div className="flex items-start justify-between mb-3">
+                              <div>
                                 <div className="flex items-center gap-2">
-                                  <input
-                                    type="checkbox"
-                                    checked={selectedForCompare.includes(metadata.id)}
-                                    onChange={() => toggleCompareSelection(metadata.id)}
-                                    className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
-                                    title="Select for comparison"
-                                  />
+                                  <span className="text-sm font-semibold text-gray-900 dark:text-white">
+                                    {metadata.metadata_type}
+                                  </span>
                                 </div>
+                                <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
+                                  Schema v{metadata.schema_version} • Created {formatDateTime(metadata.created_at)}
+                                </p>
                               </div>
-                              <div className="bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg">
-                                <pre className="text-xs text-gray-700 dark:text-gray-300 overflow-x-auto max-h-32 overflow-y-auto">
-                                  {JSON.stringify(metadata.metadata_content, null, 2)}
-                                </pre>
-                              </div>
+                              <button
+                                onClick={() => handleDeleteMetadata(metadata.id)}
+                                className="p-1.5 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
+                                title="Delete metadata"
+                              >
+                                <Trash2 className="w-4 h-4" />
+                              </button>
                             </div>
-                          ))}
-                        </div>
-                      ) : (
-                        <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
-                          No canonical metadata yet. Promote experimental metadata to create canonical versions.
-                        </p>
-                      )}
+                            <div className="bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg">
+                              <pre className="text-xs text-gray-700 dark:text-gray-300 overflow-x-auto max-h-32 overflow-y-auto">
+                                {JSON.stringify(metadata.metadata_content, null, 2)}
+                              </pre>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
                     </div>
                   </div>
 
-                  {/* Experimental Metadata Section */}
-                  <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-purple-200 dark:border-purple-800 overflow-hidden">
-                    <button
-                      onClick={() => setExpandedExperimental(!expandedExperimental)}
-                      className="w-full px-5 py-4 bg-purple-50 dark:bg-purple-900/20 border-b border-purple-200 dark:border-purple-800 hover:bg-purple-100 dark:hover:bg-purple-900/30 transition-colors"
-                    >
-                      <div className="flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <TestTube2 className="w-5 h-5 text-purple-600 dark:text-purple-400" />
-                          <h4 className="text-sm font-semibold text-purple-800 dark:text-purple-200">
-                            Experimental Metadata
-                          </h4>
-                          <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">
-                            {metadataList.total_experimental}
-                          </span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <span className="text-xs text-purple-600 dark:text-purple-400">Run-attributed / Promotable</span>
-                          {expandedExperimental ? (
-                            <ChevronDown className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-                          ) : (
-                            <ChevronRight className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-                          )}
-                        </div>
-                      </div>
-                    </button>
-                    {expandedExperimental && (
-                      <div className="p-5">
-                        {metadataList.experimental.length > 0 ? (
-                          <div className="space-y-4">
-                            {metadataList.experimental.map((metadata) => (
-                              <div key={metadata.id} className="p-4 rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
-                                <div className="flex items-start justify-between mb-3">
-                                  <div>
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-sm font-semibold text-gray-900 dark:text-white">
-                                        {metadata.metadata_type}
-                                      </span>
-                                      <span className="px-1.5 py-0.5 text-xs rounded bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-400">
-                                        experimental
-                                      </span>
-                                    </div>
-                                    <p className="text-xs text-gray-500 dark:text-gray-400 mt-1">
-                                      Schema v{metadata.schema_version} • Created {formatDateTime(metadata.created_at)}
-                                      {metadata.producer_run_id && (
-                                        <span> • Run: {metadata.producer_run_id.substring(0, 8)}...</span>
-                                      )}
-                                    </p>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <input
-                                      type="checkbox"
-                                      checked={selectedForCompare.includes(metadata.id)}
-                                      onChange={() => toggleCompareSelection(metadata.id)}
-                                      className="w-4 h-4 text-indigo-600 rounded border-gray-300 focus:ring-indigo-500"
-                                      title="Select for comparison"
-                                    />
-                                    <button
-                                      onClick={() => handlePromoteMetadata(metadata.id)}
-                                      disabled={isPromoting === metadata.id}
-                                      className="p-1.5 rounded-lg text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 transition-colors disabled:opacity-50"
-                                      title="Promote to canonical"
-                                    >
-                                      {isPromoting === metadata.id ? (
-                                        <Loader2 className="w-4 h-4 animate-spin" />
-                                      ) : (
-                                        <ArrowUp className="w-4 h-4" />
-                                      )}
-                                    </button>
-                                    <button
-                                      onClick={() => handleDeleteMetadata(metadata.id, false)}
-                                      className="p-1.5 rounded-lg text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20 transition-colors"
-                                      title="Deprecate metadata"
-                                    >
-                                      <Trash2 className="w-4 h-4" />
-                                    </button>
-                                  </div>
-                                </div>
-                                <div className="bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg">
-                                  <pre className="text-xs text-gray-700 dark:text-gray-300 overflow-x-auto max-h-32 overflow-y-auto">
-                                    {JSON.stringify(metadata.metadata_content, null, 2)}
-                                  </pre>
-                                </div>
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-4">
-                            No experimental metadata. Run experiments to generate metadata variants.
-                          </p>
-                        )}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Comparison Section */}
-                  {selectedForCompare.length > 0 && (
-                    <div className="bg-white dark:bg-gray-800/50 rounded-xl border border-indigo-200 dark:border-indigo-800 overflow-hidden">
-                      <div className="px-5 py-4 bg-indigo-50 dark:bg-indigo-900/20 border-b border-indigo-200 dark:border-indigo-800">
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <GitCompare className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
-                            <h4 className="text-sm font-semibold text-indigo-800 dark:text-indigo-200">
-                              Compare Metadata
-                            </h4>
-                            <span className="text-xs text-indigo-600 dark:text-indigo-400">
-                              {selectedForCompare.length} selected
-                            </span>
-                          </div>
-                          <div className="flex items-center gap-2">
-                            <button
-                              onClick={() => setSelectedForCompare([])}
-                              className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline"
-                            >
-                              Clear selection
-                            </button>
-                            <Button
-                              variant="primary"
-                              onClick={handleCompareMetadata}
-                              disabled={selectedForCompare.length !== 2 || isComparing}
-                              className="gap-2 text-xs py-1 px-3"
-                            >
-                              {isComparing ? (
-                                <Loader2 className="w-3 h-3 animate-spin" />
-                              ) : (
-                                <GitCompare className="w-3 h-3" />
-                              )}
-                              Compare
-                            </Button>
-                          </div>
-                        </div>
-                      </div>
-                      {compareResult && (
-                        <div className="p-5">
-                          <div className="grid grid-cols-2 gap-4 mb-4">
-                            <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700">
-                              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Metadata A</p>
-                              <p className="text-sm font-semibold text-gray-900 dark:text-white">{compareResult.metadata_a.metadata_type}</p>
-                              <p className="text-xs text-gray-500 dark:text-gray-400">
-                                {compareResult.metadata_a.is_canonical ? 'Canonical' : 'Experimental'}
-                              </p>
-                            </div>
-                            <div className="p-3 rounded-lg border border-gray-200 dark:border-gray-700">
-                              <p className="text-xs font-medium text-gray-500 dark:text-gray-400 mb-1">Metadata B</p>
-                              <p className="text-sm font-semibold text-gray-900 dark:text-white">{compareResult.metadata_b.metadata_type}</p>
-                              <p className="text-xs text-gray-500 dark:text-gray-400">
-                                {compareResult.metadata_b.is_canonical ? 'Canonical' : 'Experimental'}
-                              </p>
-                            </div>
-                          </div>
-                          <div className="bg-gray-50 dark:bg-gray-900/50 p-4 rounded-lg">
-                            <h5 className="text-xs font-semibold text-gray-700 dark:text-gray-300 mb-2">Differences</h5>
-                            <dl className="space-y-2 text-xs">
-                              {compareResult.differences.values_differ.length > 0 && (
-                                <div>
-                                  <dt className="text-red-600 dark:text-red-400 font-medium">Changed keys:</dt>
-                                  <dd className="text-gray-600 dark:text-gray-400">{compareResult.differences.values_differ.join(', ')}</dd>
-                                </div>
-                              )}
-                              {compareResult.differences.keys_only_in_a.length > 0 && (
-                                <div>
-                                  <dt className="text-amber-600 dark:text-amber-400 font-medium">Only in A:</dt>
-                                  <dd className="text-gray-600 dark:text-gray-400">{compareResult.differences.keys_only_in_a.join(', ')}</dd>
-                                </div>
-                              )}
-                              {compareResult.differences.keys_only_in_b.length > 0 && (
-                                <div>
-                                  <dt className="text-amber-600 dark:text-amber-400 font-medium">Only in B:</dt>
-                                  <dd className="text-gray-600 dark:text-gray-400">{compareResult.differences.keys_only_in_b.join(', ')}</dd>
-                                </div>
-                              )}
-                              {compareResult.differences.values_differ.length === 0 &&
-                               compareResult.differences.keys_only_in_a.length === 0 &&
-                               compareResult.differences.keys_only_in_b.length === 0 && (
-                                <p className="text-emerald-600 dark:text-emerald-400">Content is identical</p>
-                              )}
-                            </dl>
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  )}
                 </div>
               ) : (
                 <div className="text-center py-8 text-gray-500 dark:text-gray-400">
                   <Tag className="w-12 h-12 mx-auto mb-3 opacity-50" />
-                  <p>No derived metadata available yet.</p>
-                  <p className="text-xs mt-1">Run experiments to generate metadata.</p>
+                  <p>No metadata available yet.</p>
                 </div>
               )}
 

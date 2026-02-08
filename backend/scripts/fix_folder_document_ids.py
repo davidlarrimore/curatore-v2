@@ -16,8 +16,8 @@ sys.path.insert(0, str(backend_dir))
 
 import asyncio
 from sqlalchemy import select
-from app.database.models import Artifact
-from app.services.database_service import database_service
+from app.core.database.models import Artifact
+from app.core.shared.database_service import database_service
 
 
 async def fix_document_ids():

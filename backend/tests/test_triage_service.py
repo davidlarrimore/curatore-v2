@@ -6,11 +6,12 @@ for PDFs, Office files, text files, images, and unknown file types.
 """
 
 import pytest
+import sys
 import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch, AsyncMock
 
-from app.services.triage_service import (
+from app.core.ingestion.triage_service import (
     TriageService,
     ExtractionPlan,
     ExtractionEngine,
@@ -281,7 +282,8 @@ class TestOfficeTriage:
         plan = await service.triage(large_docx, docling_enabled=False)
 
         assert plan.engine == "extraction-service"
-        assert "fallback" in plan.reason.lower()
+        # Reason format changed from "fallback" to more descriptive message
+        assert "extraction-service" in plan.reason.lower() or "markitdown" in plan.reason.lower()
 
     @pytest.mark.asyncio
     async def test_all_office_extensions(self, service, tmp_path):
@@ -327,10 +329,10 @@ class TestPdfTriage:
         assert plan.engine == "fast_pdf"
 
     @pytest.mark.asyncio
-    @patch("app.services.triage_service.fitz")
-    async def test_pdf_simple_uses_fast_pdf(self, mock_fitz, service, simple_pdf):
+    async def test_pdf_simple_uses_fast_pdf(self, service, simple_pdf):
         """Test simple PDF uses fast_pdf engine."""
-        # Mock a simple PDF with good text layer
+        # Mock fitz module
+        mock_fitz = MagicMock()
         mock_doc = MagicMock()
         mock_doc.__len__ = MagicMock(return_value=1)
         mock_page = MagicMock()
@@ -343,18 +345,19 @@ class TestPdfTriage:
         mock_doc.__getitem__ = MagicMock(return_value=mock_page)
         mock_fitz.open.return_value = mock_doc
 
-        service._fitz_available = True
-        plan = await service.triage(simple_pdf, docling_enabled=True)
+        with patch.dict(sys.modules, {'fitz': mock_fitz}):
+            service._fitz_available = True
+            plan = await service.triage(simple_pdf, docling_enabled=True)
 
         assert plan.engine == "fast_pdf"
         assert plan.needs_ocr is False
         assert plan.complexity == "low"
 
     @pytest.mark.asyncio
-    @patch("app.services.triage_service.fitz")
-    async def test_pdf_scanned_uses_docling(self, mock_fitz, service, simple_pdf):
+    async def test_pdf_scanned_uses_docling(self, service, simple_pdf):
         """Test scanned PDF uses docling engine."""
-        # Mock a scanned PDF with no text layer
+        # Mock fitz module
+        mock_fitz = MagicMock()
         mock_doc = MagicMock()
         mock_doc.__len__ = MagicMock(return_value=1)
         mock_page = MagicMock()
@@ -367,18 +370,19 @@ class TestPdfTriage:
         mock_doc.__getitem__ = MagicMock(return_value=mock_page)
         mock_fitz.open.return_value = mock_doc
 
-        service._fitz_available = True
-        plan = await service.triage(simple_pdf, docling_enabled=True)
+        with patch.dict(sys.modules, {'fitz': mock_fitz}):
+            service._fitz_available = True
+            plan = await service.triage(simple_pdf, docling_enabled=True)
 
         assert plan.engine == "docling"
         assert plan.needs_ocr is True
         assert plan.complexity == "high"
 
     @pytest.mark.asyncio
-    @patch("app.services.triage_service.fitz")
-    async def test_pdf_complex_layout_uses_docling(self, mock_fitz, service, simple_pdf):
+    async def test_pdf_complex_layout_uses_docling(self, service, simple_pdf):
         """Test PDF with complex layout uses docling engine."""
-        # Mock a PDF with many blocks (complex layout)
+        # Mock fitz module
+        mock_fitz = MagicMock()
         mock_doc = MagicMock()
         mock_doc.__len__ = MagicMock(return_value=1)
         mock_page = MagicMock()
@@ -391,18 +395,19 @@ class TestPdfTriage:
         mock_doc.__getitem__ = MagicMock(return_value=mock_page)
         mock_fitz.open.return_value = mock_doc
 
-        service._fitz_available = True
-        plan = await service.triage(simple_pdf, docling_enabled=True)
+        with patch.dict(sys.modules, {'fitz': mock_fitz}):
+            service._fitz_available = True
+            plan = await service.triage(simple_pdf, docling_enabled=True)
 
         assert plan.engine == "docling"
         assert plan.needs_layout is True
         assert plan.complexity == "medium"
 
     @pytest.mark.asyncio
-    @patch("app.services.triage_service.fitz")
-    async def test_pdf_with_tables_uses_docling(self, mock_fitz, service, simple_pdf):
+    async def test_pdf_with_tables_uses_docling(self, service, simple_pdf):
         """Test PDF with tables uses docling engine."""
-        # Mock a PDF with many drawing lines (tables)
+        # Mock fitz module
+        mock_fitz = MagicMock()
         mock_doc = MagicMock()
         mock_doc.__len__ = MagicMock(return_value=1)
         mock_page = MagicMock()
@@ -415,8 +420,9 @@ class TestPdfTriage:
         mock_doc.__getitem__ = MagicMock(return_value=mock_page)
         mock_fitz.open.return_value = mock_doc
 
-        service._fitz_available = True
-        plan = await service.triage(simple_pdf, docling_enabled=True)
+        with patch.dict(sys.modules, {'fitz': mock_fitz}):
+            service._fitz_available = True
+            plan = await service.triage(simple_pdf, docling_enabled=True)
 
         assert plan.engine == "docling"
         assert "tables" in plan.reason.lower()
@@ -477,7 +483,8 @@ class TestDoclingFallback:
         plan = await service.triage(large_docx, docling_enabled=False)
 
         assert plan.engine == "extraction-service"
-        assert "fallback" in plan.reason.lower()
+        # Reason format changed from "fallback" to more descriptive message
+        assert "extraction-service" in plan.reason.lower() or "markitdown" in plan.reason.lower()
 
 
 # =============================================================================

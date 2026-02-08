@@ -56,7 +56,7 @@ class TestURLNormalization:
     @pytest.fixture
     def crawl_service(self):
         """Create CrawlService instance."""
-        from app.services.crawl_service import CrawlService
+        from app.connectors.scrape.crawl_service import CrawlService
         return CrawlService()
 
     def test_normalize_url_removes_fragment(self, crawl_service):
@@ -97,7 +97,7 @@ class TestDomainMatching:
 
     @pytest.fixture
     def crawl_service(self):
-        from app.services.crawl_service import CrawlService
+        from app.connectors.scrape.crawl_service import CrawlService
         return CrawlService()
 
     def test_same_domain_exact_match(self, crawl_service):
@@ -143,7 +143,7 @@ class TestLinkExtraction:
 
     @pytest.fixture
     def crawl_service(self):
-        from app.services.crawl_service import CrawlService
+        from app.connectors.scrape.crawl_service import CrawlService
         return CrawlService()
 
     def test_extract_links_from_homepage(self, crawl_service):
@@ -219,7 +219,7 @@ class TestDocumentDiscovery:
 
     @pytest.fixture
     def crawl_service(self):
-        from app.services.crawl_service import CrawlService
+        from app.connectors.scrape.crawl_service import CrawlService
         return CrawlService()
 
     def test_discover_pdf_documents(self, crawl_service):
@@ -287,7 +287,7 @@ class TestLocaleExclusion:
 
     @pytest.fixture
     def crawl_service(self):
-        from app.services.crawl_service import CrawlService
+        from app.connectors.scrape.crawl_service import CrawlService
         return CrawlService()
 
     def test_is_locale_path_en_us(self, crawl_service):
@@ -338,7 +338,7 @@ class TestCDNPatternMatching:
 
     def test_cloudfront_matches(self):
         """Verify CloudFront URLs match CDN pattern."""
-        from app.services.crawl_service import KNOWN_CDN_PATTERNS
+        from app.connectors.scrape.crawl_service import KNOWN_CDN_PATTERNS
 
         url = "https://d1234abcd.cloudfront.net/assets/doc.pdf"
         hostname = "d1234abcd.cloudfront.net"
@@ -348,7 +348,7 @@ class TestCDNPatternMatching:
 
     def test_s3_matches(self):
         """Verify S3 URLs match CDN pattern."""
-        from app.services.crawl_service import KNOWN_CDN_PATTERNS
+        from app.connectors.scrape.crawl_service import KNOWN_CDN_PATTERNS
 
         hostname = "my-bucket.s3.amazonaws.com"
 
@@ -357,7 +357,7 @@ class TestCDNPatternMatching:
 
     def test_azure_blob_matches(self):
         """Verify Azure Blob URLs match CDN pattern."""
-        from app.services.crawl_service import KNOWN_CDN_PATTERNS
+        from app.connectors.scrape.crawl_service import KNOWN_CDN_PATTERNS
 
         hostname = "mystorageaccount.blob.core.windows.net"
 
@@ -366,7 +366,7 @@ class TestCDNPatternMatching:
 
     def test_akamai_matches(self):
         """Verify Akamai URLs match CDN pattern."""
-        from app.services.crawl_service import KNOWN_CDN_PATTERNS
+        from app.connectors.scrape.crawl_service import KNOWN_CDN_PATTERNS
 
         hostname = "example.akamaized.net"
 
@@ -375,7 +375,7 @@ class TestCDNPatternMatching:
 
     def test_generic_cdn_matches(self):
         """Verify generic CDN patterns match."""
-        from app.services.crawl_service import KNOWN_CDN_PATTERNS
+        from app.connectors.scrape.crawl_service import KNOWN_CDN_PATTERNS
 
         hostnames = [
             "assets.example.com",
@@ -394,7 +394,7 @@ class TestCDNPatternMatching:
 
     def test_regular_domain_not_cdn(self):
         """Verify regular domains don't match CDN patterns."""
-        from app.services.crawl_service import KNOWN_CDN_PATTERNS
+        from app.connectors.scrape.crawl_service import KNOWN_CDN_PATTERNS
 
         hostname = "www.random-site.com"
 
@@ -412,7 +412,7 @@ class TestExternalDocumentFiltering:
 
     @pytest.fixture
     def crawl_service(self):
-        from app.services.crawl_service import CrawlService
+        from app.connectors.scrape.crawl_service import CrawlService
         return CrawlService()
 
     def test_same_domain_always_allowed(self, crawl_service):
@@ -519,7 +519,7 @@ class TestContentHash:
 
     @pytest.fixture
     def crawl_service(self):
-        from app.services.crawl_service import CrawlService
+        from app.connectors.scrape.crawl_service import CrawlService
         return CrawlService()
 
     def test_hash_is_consistent(self, crawl_service):
@@ -561,7 +561,7 @@ class TestCrawlConfiguration:
 
     def test_default_config_values(self):
         """Verify default configuration has expected values."""
-        from app.services.crawl_service import DEFAULT_CRAWL_CONFIG
+        from app.connectors.scrape.crawl_service import DEFAULT_CRAWL_CONFIG
 
         assert DEFAULT_CRAWL_CONFIG["max_depth"] == 3
         assert DEFAULT_CRAWL_CONFIG["max_pages"] == 100
@@ -571,7 +571,7 @@ class TestCrawlConfiguration:
 
     def test_document_extensions_configured(self):
         """Verify document extensions are configured."""
-        from app.services.crawl_service import DEFAULT_CRAWL_CONFIG
+        from app.connectors.scrape.crawl_service import DEFAULT_CRAWL_CONFIG
 
         extensions = DEFAULT_CRAWL_CONFIG["document_extensions"]
 
@@ -581,13 +581,13 @@ class TestCrawlConfiguration:
 
     def test_external_document_mode_default(self):
         """Verify external_document_mode defaults to smart."""
-        from app.services.crawl_service import DEFAULT_CRAWL_CONFIG
+        from app.connectors.scrape.crawl_service import DEFAULT_CRAWL_CONFIG
 
         assert DEFAULT_CRAWL_CONFIG["external_document_mode"] == "smart"
 
     def test_rate_limiting_config(self):
         """Verify rate limiting configuration exists."""
-        from app.services.crawl_service import DEFAULT_CRAWL_CONFIG
+        from app.connectors.scrape.crawl_service import DEFAULT_CRAWL_CONFIG
 
         assert "backoff_on_error" in DEFAULT_CRAWL_CONFIG
         assert "max_consecutive_errors" in DEFAULT_CRAWL_CONFIG
@@ -604,7 +604,7 @@ class TestConditionalRequests:
 
     @pytest.fixture
     def crawl_service(self):
-        from app.services.crawl_service import CrawlService
+        from app.connectors.scrape.crawl_service import CrawlService
         return CrawlService()
 
     @pytest.mark.asyncio
@@ -701,7 +701,7 @@ class TestCrawlResult:
 
     def test_crawl_result_success(self):
         """Verify successful CrawlResult structure."""
-        from app.services.crawl_service import CrawlResult
+        from app.connectors.scrape.crawl_service import CrawlResult
 
         result = CrawlResult(
             url="https://example.com/page",
@@ -723,7 +723,7 @@ class TestCrawlResult:
 
     def test_crawl_result_failure(self):
         """Verify failed CrawlResult structure."""
-        from app.services.crawl_service import CrawlResult
+        from app.connectors.scrape.crawl_service import CrawlResult
 
         result = CrawlResult(
             url="https://example.com/page",
@@ -737,7 +737,7 @@ class TestCrawlResult:
 
     def test_crawl_result_update(self):
         """Verify CrawlResult for updated content."""
-        from app.services.crawl_service import CrawlResult
+        from app.connectors.scrape.crawl_service import CrawlResult
 
         result = CrawlResult(
             url="https://example.com/page",
@@ -761,7 +761,7 @@ class TestScrapeServiceIntegration:
 
     def test_url_path_extraction(self):
         """Verify URL path extraction utility."""
-        from app.services.scrape_service import extract_url_path
+        from app.connectors.scrape.scrape_service import extract_url_path
 
         url = "https://example.com/products/widget-a?ref=123"
         path = extract_url_path(url)
@@ -770,7 +770,7 @@ class TestScrapeServiceIntegration:
 
     def test_url_path_root(self):
         """Verify root URL path extraction."""
-        from app.services.scrape_service import extract_url_path
+        from app.connectors.scrape.scrape_service import extract_url_path
 
         url = "https://example.com/"
         path = extract_url_path(url)
@@ -779,7 +779,7 @@ class TestScrapeServiceIntegration:
 
     def test_url_path_with_encoding(self):
         """Verify URL path with encoded characters."""
-        from app.services.scrape_service import extract_url_path
+        from app.connectors.scrape.scrape_service import extract_url_path
 
         url = "https://example.com/path%20with%20spaces"
         path = extract_url_path(url)
@@ -798,7 +798,7 @@ class TestScrapeQueueRegistry:
 
     def test_scrape_queue_registered(self):
         """Verify scrape queue is registered."""
-        from app.services.queue_registry import queue_registry
+        from app.core.ops.queue_registry import queue_registry
 
         queue_registry._ensure_initialized()
 
@@ -808,7 +808,7 @@ class TestScrapeQueueRegistry:
 
     def test_scrape_run_type_resolves(self):
         """Verify scrape run_type resolves correctly."""
-        from app.services.queue_registry import queue_registry
+        from app.core.ops.queue_registry import queue_registry
 
         queue_registry._ensure_initialized()
 
@@ -817,7 +817,7 @@ class TestScrapeQueueRegistry:
 
     def test_scrape_delete_resolves(self):
         """Verify scrape_delete run_type resolves to scrape queue."""
-        from app.services.queue_registry import queue_registry
+        from app.core.ops.queue_registry import queue_registry
 
         queue_registry._ensure_initialized()
 
@@ -836,7 +836,7 @@ class TestPlaywrightRendering:
 
     @pytest.fixture
     def crawl_service(self):
-        from app.services.crawl_service import CrawlService
+        from app.connectors.scrape.crawl_service import CrawlService
         return CrawlService()
 
     @pytest.mark.asyncio
@@ -890,7 +890,7 @@ class TestErrorHandling:
 
     @pytest.fixture
     def crawl_service(self):
-        from app.services.crawl_service import CrawlService
+        from app.connectors.scrape.crawl_service import CrawlService
         return CrawlService()
 
     @pytest.mark.asyncio
@@ -946,7 +946,7 @@ class TestFilenameGeneration:
 
     @pytest.fixture
     def crawl_service(self):
-        from app.services.crawl_service import CrawlService
+        from app.connectors.scrape.crawl_service import CrawlService
         return CrawlService()
 
     def test_url_to_filename_simple(self, crawl_service):

@@ -1,0 +1,92 @@
+# MCP Gateway Policy Configuration
+# This file controls which CWR functions are exposed via MCP and their limits.
+
+version: "1.0"
+
+# MVP allowlist - all safe functions (no side effects)
+# Functions with side_effects=true are automatically excluded regardless of this list
+allowlist:
+  # Search functions (thin payload - return IDs/scores)
+  - search_assets
+  - search_notices
+  - search_solicitations
+  - search_forecasts
+  - search_scraped_assets
+  - search_salesforce
+  # Content retrieval (full payload)
+  - get_asset
+  - get_content
+  - get
+  - query_model
+  # LLM functions
+  - llm_summarize
+  - llm_extract
+  - llm_classify
+  - llm_generate
+  # Compound functions (safe, read-only)
+  - analyze_solicitation
+  - classify_document
+
+# Parameter clamps - limit values that users can request
+# These override user input to enforce resource limits
+clamps:
+  # Search functions - limit result count
+  search_assets:
+    limit:
+      max: 50
+      default: 20
+  search_notices:
+    limit:
+      max: 50
+      default: 20
+  search_solicitations:
+    limit:
+      max: 50
+      default: 20
+  search_forecasts:
+    limit:
+      max: 50
+      default: 20
+  search_scraped_assets:
+    limit:
+      max: 50
+      default: 20
+  search_salesforce:
+    limit:
+      max: 50
+      default: 20
+
+  # Content functions - limit text size
+  get_content:
+    max_total_chars:
+      max: 80000
+      default: 50000
+
+  # LLM functions - limit token usage
+  llm_summarize:
+    max_tokens:
+      max: 2000
+      default: 1000
+  llm_extract:
+    max_tokens:
+      max: 2000
+      default: 1000
+  llm_generate:
+    max_tokens:
+      max: 2000
+      default: 1000
+  llm_classify:
+    max_tokens:
+      max: 2000
+      default: 1000
+
+# Global settings
+settings:
+  # Block all functions with side_effects=true (overrides allowlist)
+  block_side_effects: true
+  # Validate facet_filters against metadata catalog
+  validate_facets: true
+  # Cache TTL for contracts (seconds)
+  contract_cache_ttl: 300
+  # Cache TTL for metadata catalog (seconds)
+  metadata_cache_ttl: 600

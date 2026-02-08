@@ -85,7 +85,7 @@ fi
 echo ""
 
 echo "=== Phase 4: Storage Initialization ==="
-if [ -f "backend/app/commands/init_storage.py" ]; then
+if [ -f "backend/app/core/commands/init_storage.py" ]; then
     check_pass "Created init_storage.py command"
 else
     check_fail "Missing init_storage.py command"
