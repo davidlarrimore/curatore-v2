@@ -48,8 +48,8 @@ logger = logging.getLogger("curatore.embedding_service")
 
 # Rate limit handling constants
 MAX_RETRIES = 5
-INITIAL_BACKOFF_SECONDS = 1.0
-MAX_BACKOFF_SECONDS = 60.0
+INITIAL_BACKOFF_SECONDS = 0.5
+MAX_BACKOFF_SECONDS = 10.0
 BACKOFF_MULTIPLIER = 2.0
 
 # Known embedding dimensions for common models

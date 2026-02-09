@@ -94,13 +94,19 @@ function validateAndEncodeDocumentId(documentId: string): string {
 // -------------------- System API --------------------
 export const systemApi = {
   async getHealth(): Promise<{ status: string; llm_connected: boolean; version: string } & Record<string, any>> {
-    const res = await fetch(apiUrl('/admin/health'), { cache: 'no-store', headers: authHeaders() })
-    return handleJson(res)
+    const res = await fetch(apiUrl('/admin/system/health/comprehensive'), { cache: 'no-store', headers: authHeaders() })
+    const data = await handleJson(res)
+    return {
+      ...data,
+      status: data.overall_status ?? 'unknown',
+      llm_connected: data.components?.llm?.status === 'healthy',
+      version: data.components?.backend?.version ?? '',
+    }
   },
 
   async checkAvailability(): Promise<boolean> {
     try {
-      const res = await fetch(apiUrl('/admin/health'), { cache: 'no-store' })
+      const res = await fetch(apiUrl('/admin/system/health/backend'), { cache: 'no-store' })
       return res.ok || res.status === 401 || res.status === 403
     } catch {
       return false
@@ -139,8 +145,16 @@ export const systemApi = {
   },
 
   async getLLMStatus(): Promise<LLMConnectionStatus> {
-    const res = await fetch(apiUrl('/admin/llm/status'), { cache: 'no-store', headers: authHeaders() })
-    return handleJson(res)
+    const res = await fetch(apiUrl('/admin/system/health/llm'), { cache: 'no-store', headers: authHeaders() })
+    const data = await handleJson(res)
+    return {
+      connected: data.status === 'healthy',
+      endpoint: data.endpoint ?? '',
+      model: data.model ?? '',
+      error: data.status === 'unhealthy' ? data.message : undefined,
+      ssl_verify: data.ssl_verify ?? false,
+      timeout: data.timeout ?? 0,
+    }
   },
 
   async resetSystem(): Promise<{ success: boolean; message?: string }> {
@@ -245,20 +259,6 @@ export const fileApi = {
     // Validate document ID
     const encodedDocId = validateAndEncodeDocumentId(documentId)
 
-    // Check if object storage is enabled
-    const useObjectStorage = await objectStorageApi.isEnabled()
-
-    if (useObjectStorage) {
-      // Use presigned URL flow (direct from storage)
-      try {
-        return await objectStorageApi.downloadFile(documentId, artifactType)
-      } catch (e) {
-        // If object storage download fails (e.g., file not in storage), fall back
-        console.warn('Object storage download failed, falling back to backend:', e)
-      }
-    }
-
-    // Fall back to traditional download (through backend)
     let url = apiUrl(`/data/assets/${encodedDocId}/download`)
     if (jobId) {
       url += `?job_id=${encodeURIComponent(jobId)}`
@@ -1241,17 +1241,6 @@ export const settingsApi = {
     return handleJson(res)
   },
 
-  async getSettingsSchema(token: string): Promise<{
-    organization_schema: any
-    user_schema: any
-    merged_example: Record<string, any>
-  }> {
-    const res = await fetch(apiUrl('/admin/settings/schema'), {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: 'no-store',
-    })
-    return handleJson(res)
-  },
 }
 
 // -------------------- Storage API (Filesystem) --------------------
@@ -1337,36 +1326,6 @@ export const objectStorageApi = {
       filename: result.filename,
       file_size: result.file_size,
     }
-  },
-
-  /**
-   * Download a file proxied through backend (bypasses CORS)
-   */
-  async downloadFile(
-    documentId: string,
-    artifactType: 'uploaded' | 'processed' = 'processed'
-  ): Promise<Blob> {
-    const token = getAccessToken()
-    if (!token) throw new Error('Authentication required')
-
-    // Validate and encode document ID
-    const encodedDocId = validateAndEncodeDocumentId(documentId)
-
-    // Use proxy endpoint to bypass CORS issues with MinIO
-    const url = new URL(apiUrl(`/data/storage/download/${encodedDocId}/proxy`))
-    url.searchParams.set('artifact_type', artifactType)
-
-    const res = await fetch(url.toString(), {
-      headers: { Authorization: `Bearer ${token}` },
-      cache: 'no-store',
-    })
-
-    if (!res.ok) {
-      const error = await res.text()
-      throw new Error(`Download failed: ${error || res.statusText}`)
-    }
-
-    return res.blob()
   },
 
   /**
@@ -1637,63 +1596,6 @@ export const objectStorageApi = {
   }> {
     const res = await fetch(apiUrl(`/data/storage/files/${encodeURIComponent(bucket)}/${key}`), {
       method: 'DELETE',
-      headers: authHeaders(token),
-    })
-    return handleJson(res)
-  },
-
-  /**
-   * Download object proxied through backend (no presigned URLs needed)
-   */
-  async downloadObject(
-    bucket: string,
-    key: string,
-    inline: boolean = false,
-    token?: string
-  ): Promise<Blob> {
-    const url = new URL(apiUrl('/data/storage/object/download'))
-    url.searchParams.set('bucket', bucket)
-    url.searchParams.set('key', key)
-    url.searchParams.set('inline', String(inline))
-
-    const res = await fetch(url.toString(), {
-      headers: authHeaders(token),
-    })
-
-    if (!res.ok) {
-      throw new Error(`Download failed: ${res.statusText}`)
-    }
-
-    return await res.blob()
-  },
-
-  /**
-   * Get presigned URL for any object (DEPRECATED - use downloadObject instead)
-   * @deprecated Use downloadObject() for backend-proxied downloads
-   */
-  async getObjectPresignedUrl(
-    bucket: string,
-    key: string,
-    inline: boolean = false,
-    filename?: string,
-    token?: string
-  ): Promise<{
-    download_url: string
-    bucket: string
-    key: string
-    filename: string
-    size: number | null
-    content_type: string | null
-    expires_in: number
-  }> {
-    const url = new URL(apiUrl('/data/storage/object/presigned'))
-    url.searchParams.set('bucket', bucket)
-    url.searchParams.set('key', key)
-    url.searchParams.set('inline', String(inline))
-    if (filename) {
-      url.searchParams.set('filename', filename)
-    }
-    const res = await fetch(url.toString(), {
       headers: authHeaders(token),
     })
     return handleJson(res)
@@ -2286,6 +2188,19 @@ export const assetsApi = {
       headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
+  },
+
+  /**
+   * Download the original uploaded file for an asset
+   */
+  async downloadOriginal(token: string, assetId: string, inline = false): Promise<Blob> {
+    const url = new URL(apiUrl(`/data/assets/${assetId}/original`))
+    url.searchParams.set('inline', String(inline))
+
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
+    })
+    return handleBlob(res)
   },
 }
 
@@ -5733,18 +5648,6 @@ export const forecastsApi = {
       ? `/data/forecasts?${queryParams.toString()}`
       : '/data/forecasts'
     const res = await fetch(apiUrl(url), {
-      headers: authHeaders(token),
-      cache: 'no-store',
-    })
-    return handleJson(res)
-  },
-
-  async getForecast(
-    token: string | undefined,
-    sourceType: string,
-    sourceId: string
-  ): Promise<Forecast> {
-    const res = await fetch(apiUrl(`/data/forecasts/${sourceType}/${sourceId}`), {
       headers: authHeaders(token),
       cache: 'no-store',
     })

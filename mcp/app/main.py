@@ -20,7 +20,9 @@ from app.models.mcp import (
     MCPToolsListResponse,
     MCPToolsCallResponse,
 )
+from app.models.openai import OpenAIToolsResponse
 from app.handlers import handle_initialize, handle_tools_list, handle_tools_call
+from app.services.openai_converter import mcp_tools_to_openai
 from app.services.policy_service import policy_service
 from app.services.backend_client import backend_client
 
@@ -89,6 +91,7 @@ async def root():
         "endpoints": {
             "health": "/health",
             "mcp": "/mcp",
+            "openai": "/openai/tools",
         },
     }
 
@@ -251,6 +254,71 @@ async def reload_policy():
         "status": "reloaded",
         "allowlist_count": len(policy.allowlist),
     }
+
+
+# =============================================================================
+# OpenAI-Compatible Endpoints
+# =============================================================================
+
+
+@app.get("/openai/tools", response_model=OpenAIToolsResponse)
+async def list_openai_tools(request: Request):
+    """
+    List available tools in OpenAI function calling format.
+
+    This endpoint provides tools in the format expected by OpenAI-compatible
+    clients like Open WebUI and ChatGPT. Tools are filtered by the same
+    policy as MCP (allowlist, side-effect blocking).
+    """
+    api_key = getattr(request.state, "api_key", None)
+    correlation_id = getattr(request.state, "correlation_id", None)
+
+    # Reuse existing MCP tools list handler
+    mcp_result = await handle_tools_list(api_key, correlation_id)
+
+    # Convert to OpenAI format
+    openai_tools = mcp_tools_to_openai(mcp_result.tools)
+
+    return OpenAIToolsResponse(
+        tools=openai_tools,
+        total=len(openai_tools),
+    )
+
+
+@app.post("/openai/tools/{name}")
+async def call_openai_tool(name: str, request: Request):
+    """
+    Execute a tool using OpenAI-compatible format.
+
+    OpenAI clients send arguments directly in the request body (not wrapped
+    in an "arguments" key like MCP). This endpoint handles both formats
+    for compatibility.
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+
+    org_id = getattr(request.state, "org_id", None)
+    api_key = getattr(request.state, "api_key", None)
+    correlation_id = getattr(request.state, "correlation_id", None)
+
+    # OpenAI sends args directly; MCP wraps in "arguments"
+    # Support both formats for maximum compatibility
+    if "arguments" in body and isinstance(body["arguments"], dict):
+        arguments = body["arguments"]
+    else:
+        arguments = body
+
+    # Reuse existing MCP tool call handler
+    result = await handle_tools_call(
+        name=name,
+        arguments=arguments,
+        org_id=org_id,
+        api_key=api_key,
+        correlation_id=correlation_id,
+    )
+    return result.model_dump()
 
 
 if __name__ == "__main__":

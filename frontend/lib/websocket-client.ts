@@ -29,6 +29,7 @@ export type ConnectionStatus =
 export type JobUpdateMessageType =
   | 'run_status'
   | 'run_progress'
+  | 'run_log'
   | 'queue_stats'
   | 'initial_state'
   | 'pong'
@@ -83,6 +84,17 @@ export interface QueueStatsData {
   }
 }
 
+// Run log event from backend
+export interface RunLogData {
+  id: string
+  run_id: string
+  level: string
+  event_type: string
+  message: string
+  context: Record<string, any> | null
+  created_at: string | null
+}
+
 // Initial state sent on connection
 export interface InitialStateData {
   active_runs: RunStatusData[]
@@ -93,7 +105,7 @@ export interface InitialStateData {
 export interface JobUpdateMessage {
   type: JobUpdateMessageType
   timestamp: string
-  data: RunStatusData | QueueStatsData | InitialStateData | Record<string, any>
+  data: RunStatusData | QueueStatsData | RunLogData | InitialStateData | Record<string, any>
 }
 
 // Client configuration

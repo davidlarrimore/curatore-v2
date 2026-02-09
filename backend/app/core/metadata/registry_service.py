@@ -105,7 +105,7 @@ class MetadataRegistryService:
         """
         self._ensure_loaded()
 
-        from ...database.models import (
+        from ..database.models import (
             FacetDefinition,
             FacetMapping,
             MetadataFieldDefinition,
@@ -222,7 +222,7 @@ class MetadataRegistryService:
         organization_id: Optional[UUID],
     ) -> Dict[str, Any]:
         """Build effective registry by merging global + org overrides."""
-        from ...database.models import (
+        from ..database.models import (
             FacetDefinition,
             FacetMapping,
             MetadataFieldDefinition,
@@ -403,7 +403,7 @@ class MetadataRegistryService:
         sensitivity_tag: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Create an org-level field definition override."""
-        from ...database.models import MetadataFieldDefinition
+        from ..database.models import MetadataFieldDefinition
 
         self._ensure_loaded()
 
@@ -446,7 +446,7 @@ class MetadataRegistryService:
         updates: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Update an org-level field definition."""
-        from ...database.models import MetadataFieldDefinition
+        from ..database.models import MetadataFieldDefinition
 
         query = select(MetadataFieldDefinition).where(
             MetadataFieldDefinition.organization_id == organization_id,
@@ -476,7 +476,7 @@ class MetadataRegistryService:
         field_name: str,
     ) -> Dict[str, Any]:
         """Soft-delete an org-level field definition."""
-        from ...database.models import MetadataFieldDefinition
+        from ..database.models import MetadataFieldDefinition
 
         query = select(MetadataFieldDefinition).where(
             MetadataFieldDefinition.organization_id == organization_id,
@@ -506,7 +506,7 @@ class MetadataRegistryService:
         mappings: Optional[List[Dict[str, str]]] = None,
     ) -> Dict[str, Any]:
         """Create an org-level facet definition with optional mappings."""
-        from ...database.models import FacetDefinition, FacetMapping
+        from ..database.models import FacetDefinition, FacetMapping
 
         if data_type not in self.VALID_DATA_TYPES:
             raise ValueError(f"Invalid data_type '{data_type}'. Must be one of: {self.VALID_DATA_TYPES}")
@@ -550,7 +550,7 @@ class MetadataRegistryService:
         updates: Dict[str, Any],
     ) -> Dict[str, Any]:
         """Update an org-level facet definition."""
-        from ...database.models import FacetDefinition
+        from ..database.models import FacetDefinition
 
         query = select(FacetDefinition).where(
             FacetDefinition.organization_id == organization_id,
@@ -578,7 +578,7 @@ class MetadataRegistryService:
         facet_name: str,
     ) -> Dict[str, Any]:
         """Soft-delete an org-level facet definition."""
-        from ...database.models import FacetDefinition
+        from ..database.models import FacetDefinition
 
         query = select(FacetDefinition).where(
             FacetDefinition.organization_id == organization_id,
@@ -604,7 +604,7 @@ class MetadataRegistryService:
         json_path: str,
     ) -> Dict[str, Any]:
         """Add a content type mapping to an org-level facet."""
-        from ...database.models import FacetDefinition, FacetMapping
+        from ..database.models import FacetDefinition, FacetMapping
 
         query = select(FacetDefinition).where(
             FacetDefinition.organization_id == organization_id,
@@ -634,7 +634,7 @@ class MetadataRegistryService:
         content_type: str,
     ) -> Dict[str, Any]:
         """Remove a content type mapping from an org-level facet."""
-        from ...database.models import FacetDefinition, FacetMapping
+        from ..database.models import FacetDefinition, FacetMapping
 
         query = select(FacetDefinition).where(
             FacetDefinition.organization_id == organization_id,

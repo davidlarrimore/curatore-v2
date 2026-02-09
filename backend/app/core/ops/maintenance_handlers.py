@@ -25,7 +25,6 @@ Usage:
 
 import asyncio
 import logging
-import time
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 from uuid import UUID, uuid4
@@ -934,33 +933,16 @@ async def handle_search_reindex(
     current_item = 0
     total_indexed = 0
     total_failed = 0
-    last_heartbeat = time.monotonic()
-    heartbeat_interval = 30  # seconds — must be well under the 300s inactivity timeout
 
-    # Track current phase for background heartbeat progress reporting
-    current_phase_label = "Initializing"
-    current_org_name = ""
+    async def _heartbeat(phase_label: str, org_name: str):
+        """Send a heartbeat with progress after each batch.
 
-    async def _heartbeat(phase_key: str, phase_label: str, org_name: str):
-        """Commit a visible heartbeat with progress + log update.
-
-        Uses time.monotonic() so the heartbeat fires based on wall-clock
-        time rather than item count.  This ensures the run's
-        last_activity_at is always committed (visible to the timeout
-        monitor) regardless of how long individual items take.
-
+        Called after every batch commit to reset the inactivity timeout.
         Uses heartbeat_service with a fresh session to avoid greenlet
         errors when the main session is in a bad state after exceptions.
         """
         from .heartbeat_service import heartbeat_service
 
-        nonlocal last_heartbeat
-        now_mono = time.monotonic()
-        if now_mono - last_heartbeat < heartbeat_interval:
-            return  # Not time yet
-        last_heartbeat = now_mono
-
-        # Use heartbeat service with fresh session to avoid greenlet errors
         try:
             progress = {
                 "current": current_item,
@@ -972,264 +954,161 @@ async def handle_search_reindex(
             }
             await heartbeat_service.beat_sync(run_id, progress=progress)
         except Exception as e:
-            # Heartbeat failures should not crash the task
-            logger.debug(f"Heartbeat failed (non-fatal): {e}")
+            logger.warning(f"Heartbeat failed (non-fatal): {e}")
 
-    # Background heartbeat task to prevent timeouts during long-running operations
-    # like rate-limited embedding API calls. This runs independently of the main
-    # processing loop and sends heartbeats every 30 seconds.
-    async def _background_heartbeat_loop():
-        """Background task that sends heartbeats every 30 seconds."""
-        from .heartbeat_service import heartbeat_service
-        while True:
-            await asyncio.sleep(30)
-            try:
-                progress = {
-                    "current": current_item,
-                    "total": total_items,
-                    "unit": "items",
-                    "percent": int((current_item / total_items) * 100) if total_items > 0 else 0,
-                    "phase": current_phase_label,
-                    "organization": current_org_name,
-                }
-                await heartbeat_service.beat_sync(run_id, progress=progress)
-                logger.debug(f"Background heartbeat: {current_item}/{total_items} ({current_phase_label})")
-            except asyncio.CancelledError:
-                break
-            except Exception as e:
-                logger.debug(f"Background heartbeat failed (non-fatal): {e}")
+    for org in organizations:
+        await _log_event(
+            session, run_id, "INFO", "progress",
+            f"Reindexing for organization: {org.name}"
+        )
 
-    # Start background heartbeat task
-    heartbeat_task = asyncio.create_task(_background_heartbeat_loop())
+        for phase_key, model in phase_defs:
+            phase_label = phase_key.replace("_", " ").title()
 
-    try:
-        for org in organizations:
-            current_org_name = org.name
-            await _log_event(
-                session, run_id, "INFO", "progress",
-                f"Reindexing for organization: {org.name}"
-            )
-
-            for phase_key, model in phase_defs:
-                phase_label = phase_key.replace("_", " ").title()
-                current_phase_label = f"Indexing {phase_label}"
-
-                # Build the query for this phase, filtering to items needing reindex
-                if phase_key == "assets":
-                    base_query = (
-                        select(model)
-                        .where(and_(model.organization_id == org.id, model.status == "ready",
-                                    _needs_reindex_filter(model)))
-                        .order_by(model.created_at)
-                    )
-                elif phase_key == "sam_notices":
-                    base_query = (
-                        select(model)
-                        .where(and_(
-                            or_(
-                                model.organization_id == org.id,
-                                model.solicitation_id.in_(
-                                    select(SamSolicitation.id).where(
-                                        SamSolicitation.organization_id == org.id
-                                    )
-                                ),
+            # Build the query for this phase, filtering to items needing reindex
+            if phase_key == "assets":
+                base_query = (
+                    select(model)
+                    .where(and_(model.organization_id == org.id, model.status == "ready",
+                                _needs_reindex_filter(model)))
+                    .order_by(model.created_at)
+                )
+            elif phase_key == "sam_notices":
+                base_query = (
+                    select(model)
+                    .where(and_(
+                        or_(
+                            model.organization_id == org.id,
+                            model.solicitation_id.in_(
+                                select(SamSolicitation.id).where(
+                                    SamSolicitation.organization_id == org.id
+                                )
                             ),
-                            _needs_reindex_filter(model),
-                        ))
-                        .order_by(model.id)
-                    )
-                else:
-                    base_query = (
-                        select(model)
-                        .where(and_(model.organization_id == org.id,
-                                    _needs_reindex_filter(model)))
-                        .order_by(model.id)
-                    )
-
-                # Track per-phase start counts so we can report how many were processed
-                phase_start_indexed = phases[phase_key]["indexed"]
-                phase_start_failed = phases[phase_key]["failed"]
-                phase_start_total = phases[phase_key]["total"]
-
-                await _log_event(
-                    session, run_id, "INFO", "progress",
-                    f"Starting phase: {phase_label}",
-                    {"phase": phase_key, "organization": org.name},
+                        ),
+                        _needs_reindex_filter(model),
+                    ))
+                    .order_by(model.id)
+                )
+            else:
+                base_query = (
+                    select(model)
+                    .where(and_(model.organization_id == org.id,
+                                _needs_reindex_filter(model)))
+                    .order_by(model.id)
                 )
 
-                # Paginate through results
-                offset = 0
-                # Use smaller page size to ensure heartbeats fire frequently enough
-                # to avoid stale detection (131s timeout). With rate limiting,
-                # 50 assets can still take 60-90s, but should complete before timeout.
-                page_size = 50
-                is_asset_phase = phase_key == "assets"
-                embed_batch_size = 50  # Matches embedding_service internal batch size
+            # Track per-phase start counts so we can report how many were processed
+            phase_start_indexed = phases[phase_key]["indexed"]
+            phase_start_failed = phases[phase_key]["failed"]
+            phase_start_total = phases[phase_key]["total"]
 
-                while True:
-                    page_result = await session.execute(
-                        base_query.offset(offset).limit(page_size)
+            await _log_event(
+                session, run_id, "INFO", "progress",
+                f"Starting phase: {phase_label}",
+                {"phase": phase_key, "organization": org.name},
+            )
+
+            # Paginate through results — heartbeat fires after each page commit
+            offset = 0
+            page_size = 50
+            is_asset_phase = phase_key == "assets"
+            embed_batch_size = 50  # Matches embedding_service internal batch size
+
+            while True:
+                page_result = await session.execute(
+                    base_query.offset(offset).limit(page_size)
+                )
+                items = list(page_result.scalars().all())
+                if not items:
+                    break
+
+                if is_asset_phase:
+                    # Cross-asset batching: prepare all assets in this page,
+                    # batch-embed all chunks concurrently, then write to DB.
+                    phases[phase_key]["total"] += len(items)
+                    current_item += len(items)
+
+                    # Pass heartbeat callback to send progress between
+                    # embedding sub-batches within _prepare_and_embed_asset_batch
+                    async def _send_heartbeat():
+                        await _heartbeat(phase_label, org.name)
+
+                    batch_results = await _prepare_and_embed_asset_batch(
+                        pg_index_service, session, items,
+                        heartbeat_callback=_send_heartbeat,
                     )
-                    items = list(page_result.scalars().all())
-                    if not items:
-                        break
 
-                    if is_asset_phase:
-                        # Cross-asset batching: prepare all assets in this page,
-                        # batch-embed all chunks concurrently, then write to DB.
-                        phases[phase_key]["total"] += len(items)
-                        current_item += len(items)
+                    for item, batch_result in zip(items, batch_results):
+                        try:
+                            if batch_result is not None:
+                                success = await pg_index_service.index_asset_prepared(
+                                    session,
+                                    batch_result["prepared"],
+                                    batch_result["embeddings"],
+                                )
+                            else:
+                                # Fallback to original single-asset path
+                                success = await pg_index_service.index_asset(
+                                    session, item.id,
+                                )
+                            if success:
+                                phases[phase_key]["indexed"] += 1
+                                total_indexed += 1
+                            else:
+                                phases[phase_key]["failed"] += 1
+                                total_failed += 1
+                        except Exception as e:
+                            phases[phase_key]["failed"] += 1
+                            total_failed += 1
+                            if len(all_errors) < max_errors:
+                                all_errors.append(
+                                    f"{phase_key} {getattr(item, 'id', '?')}: {str(e)[:200]}"
+                                )
 
-                        # Pass heartbeat callback to send progress during long-running
-                        # embedding operations (can take > 60s with rate limit retries)
-                        # Uses heartbeat_service with fresh session to avoid transaction issues
-                        async def _send_heartbeat():
-                            from .heartbeat_service import heartbeat_service
-                            try:
-                                progress = {
-                                    "current": current_item,
-                                    "total": total_items,
-                                    "unit": "items",
-                                    "percent": int((current_item / total_items) * 100) if total_items > 0 else 0,
-                                    "phase": f"Embedding {phase_label}",
-                                    "organization": org.name,
-                                }
-                                await heartbeat_service.beat_sync(run_id, progress=progress)
-                                logger.debug(f"Heartbeat sent: {current_item}/{total_items}")
-                            except Exception as e:
-                                logger.debug(f"Heartbeat callback failed (non-fatal): {e}")
+                    # Commit after each batch to release any held locks and ensure
+                    # progress is saved even if the job crashes later
+                    await session.commit()
+                    await _heartbeat(phase_label, org.name)
+                else:
+                    # Non-asset phases: batch-embed across items before indexing.
+                    # Build content strings, batch-embed in groups of 50, then
+                    # call _index_item with pre-computed embeddings.
+                    pending_items: List = []
+                    pending_contents: List[str] = []
 
-                        batch_results = await _prepare_and_embed_asset_batch(
-                            pg_index_service, session, items,
-                            heartbeat_callback=_send_heartbeat,
-                        )
+                    for item in items:
+                        phases[phase_key]["total"] += 1
+                        current_item += 1
 
-                        for item, batch_result in zip(items, batch_results):
-                            try:
-                                if batch_result is not None:
-                                    success = await pg_index_service.index_asset_prepared(
-                                        session,
-                                        batch_result["prepared"],
-                                        batch_result["embeddings"],
-                                    )
-                                else:
-                                    # Fallback to original single-asset path
-                                    success = await pg_index_service.index_asset(
-                                        session, item.id,
-                                    )
+                        try:
+                            content = await _build_content_for_item(
+                                session, phase_key, item,
+                            )
+                            if content is not None:
+                                pending_items.append(item)
+                                pending_contents.append(content)
+                            else:
+                                # Fallback: index without pre-computed embedding
+                                success = await _index_item(
+                                    pg_index_service, session, org.id,
+                                    phase_key, item,
+                                )
                                 if success:
                                     phases[phase_key]["indexed"] += 1
                                     total_indexed += 1
                                 else:
                                     phases[phase_key]["failed"] += 1
                                     total_failed += 1
-                            except Exception as e:
-                                phases[phase_key]["failed"] += 1
-                                total_failed += 1
-                                if len(all_errors) < max_errors:
-                                    all_errors.append(
-                                        f"{phase_key} {getattr(item, 'id', '?')}: {str(e)[:200]}"
-                                    )
-
-                            # Time-based heartbeat: commit progress + log every 30s
-                            await _heartbeat(phase_key, phase_label, org.name)
-
-                        # Commit after each batch to release any held locks and ensure
-                        # progress is saved even if the job crashes later
-                        await session.commit()
-                    else:
-                        # Non-asset phases: batch-embed across items before indexing.
-                        # Build content strings, batch-embed in groups of 50, then
-                        # call _index_item with pre-computed embeddings.
-                        pending_items: List = []
-                        pending_contents: List[str] = []
-
-                        for item in items:
-                            phases[phase_key]["total"] += 1
-                            current_item += 1
-
-                            try:
-                                content = await _build_content_for_item(
-                                    session, phase_key, item,
+                        except Exception as e:
+                            phases[phase_key]["failed"] += 1
+                            total_failed += 1
+                            if len(all_errors) < max_errors:
+                                all_errors.append(
+                                    f"{phase_key} {getattr(item, 'id', '?')}: {str(e)[:200]}"
                                 )
-                                if content is not None:
-                                    pending_items.append(item)
-                                    pending_contents.append(content)
-                                else:
-                                    # Fallback: index without pre-computed embedding
-                                    success = await _index_item(
-                                        pg_index_service, session, org.id,
-                                        phase_key, item,
-                                    )
-                                    if success:
-                                        phases[phase_key]["indexed"] += 1
-                                        total_indexed += 1
-                                    else:
-                                        phases[phase_key]["failed"] += 1
-                                        total_failed += 1
-                            except Exception as e:
-                                phases[phase_key]["failed"] += 1
-                                total_failed += 1
-                                if len(all_errors) < max_errors:
-                                    all_errors.append(
-                                        f"{phase_key} {getattr(item, 'id', '?')}: {str(e)[:200]}"
-                                    )
 
-                            # Flush the embedding batch when it reaches embed_batch_size
-                            if len(pending_items) >= embed_batch_size:
-                                try:
-                                    embeddings = await embedding_service.get_embeddings_batch(
-                                        pending_contents
-                                    )
-                                    for itm, emb in zip(pending_items, embeddings):
-                                        try:
-                                            success = await _index_item(
-                                                pg_index_service, session, org.id,
-                                                phase_key, itm, embedding=emb,
-                                            )
-                                            if success:
-                                                phases[phase_key]["indexed"] += 1
-                                                total_indexed += 1
-                                            else:
-                                                phases[phase_key]["failed"] += 1
-                                                total_failed += 1
-                                        except Exception as e:
-                                            phases[phase_key]["failed"] += 1
-                                            total_failed += 1
-                                            if len(all_errors) < max_errors:
-                                                all_errors.append(
-                                                    f"{phase_key} {getattr(itm, 'id', '?')}: {str(e)[:200]}"
-                                                )
-                                except Exception as e:
-                                    # Batch embedding failed — fall back to per-item
-                                    logger.warning(f"Batch embedding failed, falling back to per-item: {e}")
-                                    for itm in pending_items:
-                                        try:
-                                            success = await _index_item(
-                                                pg_index_service, session, org.id,
-                                                phase_key, itm,
-                                            )
-                                            if success:
-                                                phases[phase_key]["indexed"] += 1
-                                                total_indexed += 1
-                                            else:
-                                                phases[phase_key]["failed"] += 1
-                                                total_failed += 1
-                                        except Exception as e2:
-                                            phases[phase_key]["failed"] += 1
-                                            total_failed += 1
-                                            if len(all_errors) < max_errors:
-                                                all_errors.append(
-                                                    f"{phase_key} {getattr(itm, 'id', '?')}: {str(e2)[:200]}"
-                                                )
-                                pending_items = []
-                                pending_contents = []
-
-                            # Time-based heartbeat: commit progress + log every 30s
-                            await _heartbeat(phase_key, phase_label, org.name)
-
-                        # Flush remaining pending items after the page
-                        if pending_items:
+                        # Flush the embedding batch when it reaches embed_batch_size
+                        if len(pending_items) >= embed_batch_size:
                             try:
                                 embeddings = await embedding_service.get_embeddings_batch(
                                     pending_contents
@@ -1254,6 +1133,7 @@ async def handle_search_reindex(
                                                 f"{phase_key} {getattr(itm, 'id', '?')}: {str(e)[:200]}"
                                             )
                             except Exception as e:
+                                # Batch embedding failed — fall back to per-item
                                 logger.warning(f"Batch embedding failed, falling back to per-item: {e}")
                                 for itm in pending_items:
                                     try:
@@ -1277,77 +1157,118 @@ async def handle_search_reindex(
                             pending_items = []
                             pending_contents = []
 
-                        # Commit after each batch to release locks and save progress
-                        await session.commit()
+                    # Flush remaining pending items after the page
+                    if pending_items:
+                        try:
+                            embeddings = await embedding_service.get_embeddings_batch(
+                                pending_contents
+                            )
+                            for itm, emb in zip(pending_items, embeddings):
+                                try:
+                                    success = await _index_item(
+                                        pg_index_service, session, org.id,
+                                        phase_key, itm, embedding=emb,
+                                    )
+                                    if success:
+                                        phases[phase_key]["indexed"] += 1
+                                        total_indexed += 1
+                                    else:
+                                        phases[phase_key]["failed"] += 1
+                                        total_failed += 1
+                                except Exception as e:
+                                    phases[phase_key]["failed"] += 1
+                                    total_failed += 1
+                                    if len(all_errors) < max_errors:
+                                        all_errors.append(
+                                            f"{phase_key} {getattr(itm, 'id', '?')}: {str(e)[:200]}"
+                                        )
+                        except Exception as e:
+                            logger.warning(f"Batch embedding failed, falling back to per-item: {e}")
+                            for itm in pending_items:
+                                try:
+                                    success = await _index_item(
+                                        pg_index_service, session, org.id,
+                                        phase_key, itm,
+                                    )
+                                    if success:
+                                        phases[phase_key]["indexed"] += 1
+                                        total_indexed += 1
+                                    else:
+                                        phases[phase_key]["failed"] += 1
+                                        total_failed += 1
+                                except Exception as e2:
+                                    phases[phase_key]["failed"] += 1
+                                    total_failed += 1
+                                    if len(all_errors) < max_errors:
+                                        all_errors.append(
+                                            f"{phase_key} {getattr(itm, 'id', '?')}: {str(e2)[:200]}"
+                                        )
+                        pending_items = []
+                        pending_contents = []
 
-                    offset += page_size
+                    # Commit after each batch to release locks and save progress
+                    await session.commit()
+                    await _heartbeat(phase_label, org.name)
 
-                # Phase complete — log summary
-                phase_processed = phases[phase_key]["total"] - phase_start_total
-                phase_ok = phases[phase_key]["indexed"] - phase_start_indexed
-                phase_err = phases[phase_key]["failed"] - phase_start_failed
-                if phase_processed > 0:
-                    level = "WARN" if phase_err > 0 else "INFO"
-                    await _log_event(
-                        session, run_id, level, "progress",
-                        f"Completed phase: {phase_label} — "
-                        f"{phase_ok} indexed, {phase_err} failed "
-                        f"(of {phase_processed} items)",
-                        {
-                            "phase": phase_key,
-                            "organization": org.name,
-                            "processed": phase_processed,
-                            "indexed": phase_ok,
-                            "failed": phase_err,
-                        },
-                    )
-                else:
-                    await _log_event(
-                        session, run_id, "INFO", "progress",
-                        f"Completed phase: {phase_label} — no items to index",
-                        {"phase": phase_key, "organization": org.name},
-                    )
+                offset += page_size
 
-        # Final progress update
-        current_phase_label = "Complete"
-        await run_service.update_run_progress(
-            session, run_id,
-            current=total_items, total=total_items,
-            unit="items", phase="Complete",
-        )
+            # Phase complete — log summary
+            phase_processed = phases[phase_key]["total"] - phase_start_total
+            phase_ok = phases[phase_key]["indexed"] - phase_start_indexed
+            phase_err = phases[phase_key]["failed"] - phase_start_failed
+            if phase_processed > 0:
+                level = "WARN" if phase_err > 0 else "INFO"
+                await _log_event(
+                    session, run_id, level, "progress",
+                    f"Completed phase: {phase_label} — "
+                    f"{phase_ok} indexed, {phase_err} failed "
+                    f"(of {phase_processed} items)",
+                    {
+                        "phase": phase_key,
+                        "organization": org.name,
+                        "processed": phase_processed,
+                        "indexed": phase_ok,
+                        "failed": phase_err,
+                    },
+                )
+            else:
+                await _log_event(
+                    session, run_id, "INFO", "progress",
+                    f"Completed phase: {phase_label} — no items to index",
+                    {"phase": phase_key, "organization": org.name},
+                )
 
-        # Invalidate metadata schema cache for all reindexed organizations
-        from app.core.search.pg_search_service import pg_search_service
-        for org in organizations:
-            pg_search_service.invalidate_metadata_cache(org.id)
+    # Final progress update
+    await run_service.update_run_progress(
+        session, run_id,
+        current=total_items, total=total_items,
+        unit="items", phase="Complete",
+    )
 
-        # Final summary
-        summary = {
-            "status": "completed",
-            "organizations_processed": total_orgs,
-            "total_items": total_items,
-            "total_indexed": total_indexed,
-            "total_failed": total_failed,
-            "phases": phases,
-            "errors": all_errors,
-        }
+    # Invalidate metadata schema cache for all reindexed organizations
+    from app.core.search.pg_search_service import pg_search_service
+    for org in organizations:
+        pg_search_service.invalidate_metadata_cache(org.id)
 
-        await _log_event(
-            session, run_id, "INFO", "summary",
-            f"Search reindex completed: {total_indexed}/{total_items} items indexed "
-            f"across {total_orgs} organizations",
-            context=summary,
-        )
+    # Final summary
+    summary = {
+        "status": "completed",
+        "organizations_processed": total_orgs,
+        "total_items": total_items,
+        "total_indexed": total_indexed,
+        "total_failed": total_failed,
+        "phases": phases,
+        "errors": all_errors,
+    }
 
-        return summary
+    await _log_event(
+        session, run_id, "INFO", "summary",
+        f"Search reindex completed: {total_indexed}/{total_items} items indexed "
+        f"across {total_orgs} organizations",
+        context=summary,
+    )
 
-    finally:
-        # Always cancel the background heartbeat task
-        heartbeat_task.cancel()
-        try:
-            await heartbeat_task
-        except asyncio.CancelledError:
-            pass
+    return summary
 
 
 async def _prepare_and_embed_asset_batch(

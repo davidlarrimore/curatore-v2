@@ -11,9 +11,15 @@ export function HealthCheck({ apiUrl, health, llmConnected }) {
   const refreshLlmStatus = async () => {
     setIsRefreshing(true)
     try {
-      const response = await fetch(`${apiUrl}/api/${API_PATH_VERSION}/llm/status`)
-      const status = await response.json()
-      setLlmStatus(status)
+      const response = await fetch(`${apiUrl}/api/${API_PATH_VERSION}/admin/system/health/llm`)
+      const data = await response.json()
+      setLlmStatus({
+        connected: data.status === 'healthy',
+        endpoint: data.endpoint,
+        model: data.model,
+        message: data.message,
+        error: data.status === 'unhealthy' ? data.message : undefined,
+      })
     } catch (error) {
       console.error('Failed to fetch LLM status:', error)
       setLlmStatus({ connected: false, error: error.message })
@@ -88,22 +94,15 @@ export function HealthCheck({ apiUrl, health, llmConnected }) {
                 <span className="text-gray-600">Model:</span>
                 <span className="font-mono text-xs">{llmStatus.model}</span>
               </div>
-              <div className="flex justify-between">
-                <span className="text-gray-600">SSL Verify:</span>
-                <span className={`px-2 py-1 rounded text-xs ${llmStatus.ssl_verify ? 'bg-green-100 text-green-800' : 'bg-yellow-100 text-yellow-800'}`}>
-                  {llmStatus.ssl_verify ? 'Enabled' : 'Disabled'}
-                </span>
-              </div>
-              
               {llmStatus.error && (
                 <div className="mt-2 p-2 bg-red-50 border border-red-200 rounded">
                   <span className="text-red-800 text-xs">Error: {llmStatus.error}</span>
                 </div>
               )}
-              
-              {llmStatus.response && (
+
+              {llmStatus.connected && llmStatus.message && (
                 <div className="mt-2 p-2 bg-green-50 border border-green-200 rounded">
-                  <span className="text-green-800 text-xs">Response: {llmStatus.response}</span>
+                  <span className="text-green-800 text-xs">{llmStatus.message}</span>
                 </div>
               )}
             </div>
@@ -130,7 +129,7 @@ export function HealthCheck({ apiUrl, health, llmConnected }) {
               📚 API Docs
             </a>
             <a
-              href={`${apiUrl}/api/${API_PATH_VERSION}/health`}
+              href={`${apiUrl}/api/${API_PATH_VERSION}/admin/system/health/comprehensive`}
               target="_blank"
               rel="noopener noreferrer"
               className="flex-1 text-center bg-gray-50 text-gray-700 px-3 py-2 rounded-lg text-sm hover:bg-gray-100 transition-colors"

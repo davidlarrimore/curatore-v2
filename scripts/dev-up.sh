@@ -73,6 +73,7 @@ echo ""
 echo "🌐 Frontend:    http://localhost:3000"
 echo "🔗 Backend:     http://localhost:8000 (Swagger at /docs)"
 echo "📦 Extraction:  http://localhost:8010 (Swagger at /api/v1/docs)"
+echo "🤖 MCP Gateway: http://localhost:8020 (Open WebUI integration)"
 echo "🪣 MinIO:       http://localhost:9001 (Console - admin/changeme)"
 if [[ "${ENABLE_POSTGRES}" == "true" ]]; then
   echo "🐘 PostgreSQL:  localhost:5432 (curatore/curatore_dev_password)"

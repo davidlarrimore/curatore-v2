@@ -48,6 +48,7 @@ import {
   JobUpdateMessage,
   WebSocketClient,
   RunStatusData,
+  RunLogData,
   QueueStatsData,
   InitialStateData,
 } from './websocket-client'
@@ -143,6 +144,11 @@ export interface UnifiedJobsState {
 }
 
 /**
+ * Callback type for run log event subscribers
+ */
+export type RunLogCallback = (log: RunLogData) => void
+
+/**
  * Context value interface
  */
 interface UnifiedJobsContextValue {
@@ -163,6 +169,9 @@ interface UnifiedJobsContextValue {
   getJobsForResource: (resourceType: string, resourceId: string) => UnifiedJob[]
   isResourceBusy: (resourceType: string, resourceId: string) => boolean
   getJobsByType: (jobType: JobType | 'deletion') => UnifiedJob[]
+
+  // Log subscriptions
+  subscribeToRunLogs: (runId: string, callback: RunLogCallback) => () => void
 
   // Computed
   hasActiveJobs: boolean
@@ -211,6 +220,8 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
   const isPollingRef = useRef(false)
   const previousConnectionStatus = useRef<ConnectionStatus>('disconnected')
   const wasEverConnected = useRef(false)
+  // Map of runId -> Set of subscriber callbacks for run log events
+  const logSubscribersRef = useRef<Map<string, Set<RunLogCallback>>>(new Map())
 
   // ============================================================================
   // Session Storage
@@ -400,6 +411,14 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
           }
           return { ...job, progress }
         }))
+        break
+
+      case 'run_log':
+        const logData = message.data as RunLogData
+        const subscribers = logSubscribersRef.current.get(logData.run_id)
+        if (subscribers) {
+          subscribers.forEach(cb => cb(logData))
+        }
         break
 
       case 'queue_stats':
@@ -735,6 +754,26 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
     [jobs]
   )
 
+  // Subscribe to real-time log events for a specific run
+  const subscribeToRunLogs = useCallback((runId: string, callback: RunLogCallback): (() => void) => {
+    const map = logSubscribersRef.current
+    if (!map.has(runId)) {
+      map.set(runId, new Set())
+    }
+    map.get(runId)!.add(callback)
+
+    // Return unsubscribe function
+    return () => {
+      const subs = map.get(runId)
+      if (subs) {
+        subs.delete(callback)
+        if (subs.size === 0) {
+          map.delete(runId)
+        }
+      }
+    }
+  }, [])
+
   // Manual refresh
   const refresh = useCallback(async () => {
     await pollQueueStats()
@@ -793,6 +832,9 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
     getJobsForResource,
     isResourceBusy,
     getJobsByType,
+
+    // Log subscriptions
+    subscribeToRunLogs,
 
     // Computed
     hasActiveJobs,

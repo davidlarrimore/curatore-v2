@@ -3,7 +3,7 @@
 import React, { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { objectStorageApi, organizationsApi, utils } from '@/lib/api'
+import { objectStorageApi, assetsApi, organizationsApi, utils } from '@/lib/api'
 import { formatDateTime } from '@/lib/date-utils'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import FilePreview from '@/components/storage/FilePreview'
@@ -218,11 +218,10 @@ function StorageContent() {
 
       let blob: Blob
       if (isValidUuid) {
-        // Use document_id based download for standard artifacts
-        blob = await objectStorageApi.downloadFile(artifact.document_id, artifact.artifact_type as any)
+        // Use asset-based download for standard artifacts
+        blob = await assetsApi.downloadOriginal(token, artifact.document_id)
       } else {
-        // Use bucket/key based download for custom path artifacts (e.g., SAM files)
-        blob = await objectStorageApi.downloadObject(artifact.bucket, artifact.object_key, false, token)
+        throw new Error('Download not available for this file (no associated asset)')
       }
 
       utils.downloadBlob(blob, artifact.original_filename)
@@ -415,11 +414,10 @@ function StorageContent() {
 
       let blob: Blob
       if (isValidUuid) {
-        // Use document_id based download for standard artifacts
-        blob = await objectStorageApi.downloadFile(artifact.document_id, artifact.artifact_type as any)
+        // Use asset-based download for standard artifacts
+        blob = await assetsApi.downloadOriginal(token, artifact.document_id, true)
       } else {
-        // Use bucket/key based download for custom path artifacts (e.g., SAM files)
-        blob = await objectStorageApi.downloadObject(artifact.bucket, artifact.object_key, true, token)
+        throw new Error('Preview not available for this file (no associated asset)')
       }
 
       setPreviewBlob(blob)
@@ -634,47 +632,23 @@ function StorageContent() {
                 prefix={urlPrefix}
                 onNavigate={handleNavigate}
                 onFileUpload={handleOpenUpload}
-                onFilePreview={async (bucket, key, filename) => {
-                    try {
-                      console.log('Preview request:', { bucket, key, filename })
-                      setIsLoadingPreview(true)
-                      setPreviewBlob(null)
-                      setPreviewError(null)
-
-                      // Direct proxy download with inline=true
-                      const blob = await objectStorageApi.downloadObject(bucket, key, true, token ?? undefined)
-
-                      // Set preview artifact (mock structure for preview modal)
-                      setPreviewArtifact({
-                        id: key, // Use key as ID for non-artifact files
-                        document_id: '',
-                        artifact_type: 'uploaded',
-                        bucket: bucket,
-                        object_key: key,
-                        original_filename: filename,
-                        content_type: blob.type || 'application/octet-stream',
-                        file_size: blob.size,
-                        status: 'available',
-                        created_at: new Date().toISOString(),
-                      })
-
-                      setPreviewBlob(blob)
-                    } catch (err: any) {
-                      console.error('Preview failed:', err)
-                      setPreviewError(err.message || 'Failed to load preview')
-                    } finally {
-                      setIsLoadingPreview(false)
-                    }
+                onFilePreview={async (_bucket, key, filename) => {
+                    setPreviewArtifact({
+                      id: key,
+                      document_id: '',
+                      artifact_type: 'uploaded',
+                      bucket: _bucket,
+                      object_key: key,
+                      original_filename: filename,
+                      content_type: 'application/octet-stream',
+                      file_size: 0,
+                      status: 'available',
+                      created_at: new Date().toISOString(),
+                    })
+                    setPreviewError('Preview not available for raw storage files. Open the associated asset to preview.')
                   }}
-                  onFileDownload={async (bucket, key, filename) => {
-                    try {
-                      // Direct proxy download
-                      const blob = await objectStorageApi.downloadObject(bucket, key, false, token ?? undefined)
-                      utils.downloadBlob(blob, filename)
-                    } catch (err: any) {
-                      console.error('Download failed:', err)
-                      setError(`Failed to download: ${err.message}`)
-                    }
+                  onFileDownload={async (_bucket, _key, _filename) => {
+                    setError('Download not available for raw storage files. Open the associated asset to download.')
                   }}
                 />
             </div>

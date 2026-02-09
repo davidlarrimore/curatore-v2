@@ -76,7 +76,7 @@ class ExtractionQueueService:
 
         Configured via config.yml queues.extraction.max_concurrent
         """
-        from ..queue_registry import queue_registry
+        from ..ops.queue_registry import queue_registry
         return queue_registry.get_max_concurrent("extraction") or 10
 
     @property
@@ -85,7 +85,7 @@ class ExtractionQueueService:
 
         Configured via config.yml queues.extraction.submission_interval
         """
-        from ..queue_registry import queue_registry
+        from ..ops.queue_registry import queue_registry
         queue_def = queue_registry.get("extraction")
         return queue_def.submission_interval if queue_def else 5
 
@@ -95,7 +95,7 @@ class ExtractionQueueService:
 
         Configured via config.yml queues.extraction.duplicate_cooldown
         """
-        from ..queue_registry import queue_registry
+        from ..ops.queue_registry import queue_registry
         queue_def = queue_registry.get("extraction")
         return queue_def.duplicate_cooldown if queue_def else 30
 
@@ -161,7 +161,7 @@ class ExtractionQueueService:
 
         # Get extractor version from config if not provided
         if not extractor_version:
-            from ..config_loader import config_loader
+            from ..shared.config_loader import config_loader
             default_engine = config_loader.get_default_extraction_engine()
             if default_engine:
                 extractor_version = default_engine.name
@@ -174,12 +174,12 @@ class ExtractionQueueService:
             raise ValueError(f"Asset {asset_id} not found")
 
         # Get current asset version
-        from ..asset_service import asset_service
+        from ..shared.asset_service import asset_service
         current_version = await asset_service.get_current_asset_version(session, asset_id)
         asset_version_id = current_version.id if current_version else None
 
         # Create Run with status="pending" (NOT submitted to Celery yet)
-        from ..run_service import run_service
+        from ..shared.run_service import run_service
         run = await run_service.create_run(
             session=session,
             organization_id=organization_id,
@@ -197,7 +197,7 @@ class ExtractionQueueService:
         )
 
         # Determine queue priority and set spawned_by_parent flag
-        from ..queue_registry import QueuePriority
+        from ..ops.queue_registry import QueuePriority
 
         if group_id:
             # This is a child extraction spawned by a parent job
@@ -207,7 +207,7 @@ class ExtractionQueueService:
 
             # Auto-determine priority based on group type if not explicitly set
             if priority is None:
-                from ...database.models import RunGroup
+                from ..database.models import RunGroup
                 group = await session.get(RunGroup, group_id)
                 if group:
                     # Map group_type to priority level
@@ -231,7 +231,7 @@ class ExtractionQueueService:
         await session.flush()
 
         # Create extraction result
-        from ..extraction_result_service import extraction_result_service
+        from .extraction_result_service import extraction_result_service
         extraction = await extraction_result_service.create_extraction_result(
             session=session,
             asset_id=asset_id,
@@ -241,7 +241,7 @@ class ExtractionQueueService:
         )
 
         # Log queue entry
-        from ..run_log_service import run_log_service
+        from ..shared.run_log_service import run_log_service
         await run_log_service.log_event(
             session=session,
             run_id=run.id,
@@ -381,7 +381,7 @@ class ExtractionQueueService:
 
         # Import and call Celery task
         from ...tasks import execute_extraction_task
-        from ..queue_registry import QueuePriority
+        from ..ops.queue_registry import QueuePriority
 
         # Determine queue based on priority
         # Priority >= PIPELINE (2) goes to priority queue, lower goes to regular extraction queue
@@ -432,8 +432,8 @@ class ExtractionQueueService:
         Returns:
             Dict with timeout check statistics
         """
-        from ...database.models import RunGroup
-        from ..heartbeat_service import HeartbeatService
+        from ..database.models import RunGroup
+        from ..ops.heartbeat_service import HeartbeatService
 
         now = datetime.utcnow()
 

@@ -1440,6 +1440,66 @@ async def download_asset_content(
             )
 
 
+@router.get(
+    "/{asset_id}/original",
+    summary="Download asset original file",
+    description="Download the original uploaded file for an asset.",
+)
+async def download_asset_original(
+    asset_id: UUID,
+    inline: bool = Query(False, description="If true, set Content-Disposition to inline for preview; otherwise attachment for download"),
+    current_user: User = Depends(get_current_user),
+):
+    """Download the original uploaded file for an asset.
+
+    Streams the original file from raw_bucket/raw_object_key.
+    """
+    from app.core.storage.minio_service import get_minio_service
+
+    minio = get_minio_service()
+    if not minio:
+        raise HTTPException(status_code=503, detail="Object storage not available")
+
+    async with database_service.get_session() as session:
+        asset = await asset_service.get_asset(session=session, asset_id=asset_id)
+
+        if not asset:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        if asset.organization_id != current_user.organization_id:
+            raise HTTPException(status_code=404, detail="Asset not found")
+
+        if not asset.raw_bucket or not asset.raw_object_key:
+            raise HTTPException(
+                status_code=404,
+                detail="No original file found for this asset",
+            )
+
+        original_filename = asset.original_filename or f"{asset_id}"
+        clean_filename = _strip_hash_prefix(original_filename)
+        content_type = asset.content_type or "application/octet-stream"
+
+        disposition = "inline" if inline else "attachment"
+
+        try:
+            content_io = minio.get_object(asset.raw_bucket, asset.raw_object_key)
+            content = content_io.getvalue()
+
+            return StreamingResponse(
+                io.BytesIO(content),
+                media_type=content_type,
+                headers={
+                    "Content-Disposition": f'{disposition}; filename="{clean_filename}"',
+                    "Content-Length": str(len(content)),
+                },
+            )
+        except Exception as e:
+            logger.error(f"Failed to download original for asset {asset_id}: {e}")
+            raise HTTPException(
+                status_code=500, detail=f"Download failed: {str(e)}"
+            )
+
+
 @router.post(
     "/download/bulk",
     summary="Bulk download assets as ZIP",

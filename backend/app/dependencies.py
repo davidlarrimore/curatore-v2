@@ -134,12 +134,6 @@ async def get_current_user_from_jwt(
                     headers={"WWW-Authenticate": "Bearer"},
                 )
 
-            # Update last login timestamp
-            user.last_login_at = auth_service._logger  # Using datetime.utcnow would be better
-            from datetime import datetime
-            user.last_login_at = datetime.utcnow()
-            await session.commit()
-
             logger.debug(f"User authenticated via JWT: {user.email} (org: {user.organization_id})")
             return user
 

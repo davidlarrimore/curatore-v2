@@ -14,7 +14,7 @@
  * - Test credentials: admin@example.com / changeme
  */
 
-const API_BASE = 'http://localhost:8000/api/v1'
+const API_BASE = 'http://localhost:8000/api/v1/admin'
 
 /**
  * Test Case 1: Login API works correctly

@@ -4,7 +4,7 @@ import { useState, useEffect } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
-import { assetsApi, type Run, type AssetMetadataList, type AssetQueueInfo, type Asset, type ExtractionResult, type AssetVersion } from '@/lib/api'
+import { assetsApi, API_BASE_URL, API_PATH_VERSION, type Run, type AssetMetadataList, type AssetQueueInfo, type Asset, type ExtractionResult, type AssetVersion } from '@/lib/api'
 import { ExtractionStatus, isActiveStatus } from '@/components/ui/ExtractionStatus'
 import { POLLING } from '@/lib/polling-config'
 import { formatDateTime } from '@/lib/date-utils'
@@ -92,6 +92,9 @@ function AssetDetailContent() {
   const [docxHtml, setDocxHtml] = useState<string>('')
   const [isLoadingDocx, setIsLoadingDocx] = useState(false)
   const [docxError, setDocxError] = useState<string>('')
+
+  // Blob URL for inline previews (images, PDFs, HTML, text)
+  const [previewBlobUrl, setPreviewBlobUrl] = useState<string | null>(null)
 
   // Check if any run is actively processing
   const hasActiveRuns = runs.some((run) =>
@@ -209,26 +212,46 @@ function AssetDetailContent() {
     }
   }, [activeTab, asset?.id, asset?.content_type])
 
+  // Load blob URL for inline previews (images, PDFs, HTML, text)
+  useEffect(() => {
+    if (activeTab !== 'original' || !asset?.id || !token) return
+
+    const needsPreview =
+      asset.content_type?.startsWith('image/') ||
+      asset.content_type === 'application/pdf' ||
+      asset.content_type === 'text/html' ||
+      asset.content_type === 'text/plain' ||
+      asset.content_type === 'text/csv' ||
+      asset.content_type === 'text/markdown'
+
+    if (!needsPreview) return
+
+    let revoked = false
+    assetsApi.downloadOriginal(token, asset.id, true).then((blob) => {
+      if (revoked) return
+      const url = URL.createObjectURL(blob)
+      setPreviewBlobUrl(url)
+    }).catch((err) => {
+      console.error('Failed to load preview:', err)
+    })
+
+    return () => {
+      revoked = true
+      setPreviewBlobUrl((prev) => {
+        if (prev) URL.revokeObjectURL(prev)
+        return null
+      })
+    }
+  }, [activeTab, asset?.id, asset?.content_type, token])
+
   const loadDocxContent = async () => {
-    if (!asset?.raw_bucket || !asset?.raw_object_key || !token) return
+    if (!asset?.id || !token) return
 
     setIsLoadingDocx(true)
     setDocxError('')
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-      const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
-
-      const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
-
-      if (!response.ok) {
-        throw new Error('Failed to download document')
-      }
-
-      const arrayBuffer = await response.arrayBuffer()
+      const blob = await assetsApi.downloadOriginal(token, asset.id)
+      const arrayBuffer = await blob.arrayBuffer()
 
       // Dynamically import mammoth to avoid SSR issues
       const mammoth = await import('mammoth')
@@ -243,16 +266,27 @@ function AssetDetailContent() {
     }
   }
 
+  const handleDownloadOriginal = async () => {
+    if (!asset?.id || !token) return
+    try {
+      const blob = await assetsApi.downloadOriginal(token, asset.id)
+      const blobUrl = URL.createObjectURL(blob)
+      window.open(blobUrl, '_blank')
+      // Revoke after a delay to allow the new tab to load
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+    } catch (err) {
+      console.error('Download failed:', err)
+    }
+  }
+
   const loadExtractedContent = async () => {
-    if (!extraction?.extracted_object_key || !extraction?.extracted_bucket || !token) return
+    if (!asset?.id || !extraction?.extracted_object_key || !token) return
 
     setIsLoadingContent(true)
     setContentLoadProgress(0)
     try {
-      // Download extracted content from object storage via proxy
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-      // Manually encode the key to preserve special characters like +
-      const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(extraction.extracted_bucket)}&key=${encodeURIComponent(extraction.extracted_object_key)}`
+      // Download extracted markdown via the asset download endpoint
+      const url = `${API_BASE_URL}/api/${API_PATH_VERSION}/data/assets/${asset.id}/download`
 
       const response = await fetch(url, {
         headers: {
@@ -796,12 +830,7 @@ function AssetDetailContent() {
                 <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Original File</h3>
                 <Button
                   variant="secondary"
-                  onClick={() => {
-                    if (!token) return
-                    const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                    const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
-                    window.open(url + `&inline=false`, '_blank')
-                  }}
+                  onClick={handleDownloadOriginal}
                   className="gap-2"
                 >
                   <Download className="w-4 h-4" />
@@ -813,36 +842,60 @@ function AssetDetailContent() {
               <div className="mb-6">
                 {asset.content_type?.startsWith('image/') ? (
                   <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-                    <img
-                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
-                      alt={asset.original_filename}
-                      className="max-w-full h-auto"
-                    />
+                    {previewBlobUrl ? (
+                      <img
+                        src={previewBlobUrl}
+                        alt={asset.original_filename}
+                        className="max-w-full h-auto"
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center p-12">
+                        <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+                      </div>
+                    )}
                   </div>
                 ) : asset.content_type === 'application/pdf' ? (
                   <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden" style={{ height: '600px' }}>
-                    <iframe
-                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
-                      className="w-full h-full"
-                      title={asset.original_filename}
-                    />
+                    {previewBlobUrl ? (
+                      <iframe
+                        src={previewBlobUrl}
+                        className="w-full h-full"
+                        title={asset.original_filename}
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-full">
+                        <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+                      </div>
+                    )}
                   </div>
                 ) : asset.content_type === 'text/html' ? (
                   <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden" style={{ height: '600px' }}>
-                    <iframe
-                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
-                      className="w-full h-full bg-white"
-                      title={asset.original_filename}
-                      sandbox="allow-same-origin"
-                    />
+                    {previewBlobUrl ? (
+                      <iframe
+                        src={previewBlobUrl}
+                        className="w-full h-full bg-white"
+                        title={asset.original_filename}
+                        sandbox="allow-same-origin"
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-full">
+                        <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+                      </div>
+                    )}
                   </div>
                 ) : asset.content_type === 'text/plain' || asset.content_type === 'text/csv' || asset.content_type === 'text/markdown' ? (
                   <div className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden" style={{ height: '600px' }}>
-                    <iframe
-                      src={`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=true`}
-                      className="w-full h-full bg-white dark:bg-gray-900"
-                      title={asset.original_filename}
-                    />
+                    {previewBlobUrl ? (
+                      <iframe
+                        src={previewBlobUrl}
+                        className="w-full h-full bg-white dark:bg-gray-900"
+                        title={asset.original_filename}
+                      />
+                    ) : (
+                      <div className="flex items-center justify-center h-full">
+                        <Loader2 className="w-8 h-8 animate-spin text-indigo-500" />
+                      </div>
+                    )}
                   </div>
                 ) : asset.content_type === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' || asset.content_type === 'application/msword' ? (
                   <div>
@@ -857,12 +910,7 @@ function AssetDetailContent() {
                         <p className="text-red-600 dark:text-red-400 mb-4">{docxError}</p>
                         <Button
                           variant="secondary"
-                          onClick={() => {
-                            if (!token) return
-                            const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                            const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
-                            window.open(url, '_blank')
-                          }}
+                          onClick={handleDownloadOriginal}
                           className="gap-2"
                         >
                           <Download className="w-4 h-4" />
@@ -879,12 +927,7 @@ function AssetDetailContent() {
                           <Button
                             variant="secondary"
                             size="sm"
-                            onClick={() => {
-                              if (!token) return
-                              const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                              const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
-                              window.open(url, '_blank')
-                            }}
+                            onClick={handleDownloadOriginal}
                             className="gap-1"
                           >
                             <Download className="w-3 h-3" />
@@ -918,12 +961,7 @@ function AssetDetailContent() {
                     <div className="flex items-center justify-center gap-3">
                       <Button
                         variant="primary"
-                        onClick={() => {
-                          if (!token) return
-                          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                          const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
-                          window.open(url, '_blank')
-                        }}
+                        onClick={handleDownloadOriginal}
                         className="gap-2"
                       >
                         <Download className="w-4 h-4" />
@@ -948,12 +986,7 @@ function AssetDetailContent() {
                     <div className="flex items-center justify-center gap-3">
                       <Button
                         variant="primary"
-                        onClick={() => {
-                          if (!token) return
-                          const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                          const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}&inline=false`
-                          window.open(url, '_blank')
-                        }}
+                        onClick={handleDownloadOriginal}
                         className="gap-2"
                       >
                         <Download className="w-4 h-4" />
@@ -972,12 +1005,7 @@ function AssetDetailContent() {
                     </p>
                     <Button
                       variant="secondary"
-                      onClick={() => {
-                        if (!token) return
-                        const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-                        const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
-                        window.open(url, '_blank')
-                      }}
+                      onClick={handleDownloadOriginal}
                       className="gap-2"
                     >
                       <Download className="w-4 h-4" />

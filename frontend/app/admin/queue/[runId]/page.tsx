@@ -43,8 +43,10 @@ import type {
   Run,
   RunLogEvent,
   QueueDefinition,
+  QueueRegistryResponse,
   Asset,
 } from '@/lib/api';
+import { useUnifiedJobs } from '@/lib/unified-jobs-context';
 import { formatTimeAgo, formatDateTime, formatDuration, formatShortDateTime } from '@/lib/date-utils';
 
 // Status configuration
@@ -146,6 +148,14 @@ export default function JobDetailPage() {
   const [forceKilling, setForceKilling] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string | null>(null);
 
+  // Cache the registry since it's static config that doesn't change at runtime
+  const registryRef = useRef<QueueRegistryResponse | null>(null);
+
+  // Subscribe to WebSocket job updates for real-time status/progress/logs
+  const { jobs: wsJobs, connectionStatus, subscribeToRunLogs } = useUnifiedJobs();
+  const wsJob = wsJobs.find(j => j.runId === runId);
+
+  // Full data fetch (run + logs + registry + assets)
   const fetchData = useCallback(async (showRefreshing = false) => {
     if (showRefreshing) setRefreshing(true);
 
@@ -153,8 +163,11 @@ export default function JobDetailPage() {
       // Fetch run with logs
       const runWithLogs = await runsApi.getRunWithLogs(runId);
 
-      // Fetch queue registry for capabilities
-      const registry = await queueAdminApi.getRegistry();
+      // Fetch queue registry once and cache it
+      if (!registryRef.current) {
+        registryRef.current = await queueAdminApi.getRegistry();
+      }
+      const registry = registryRef.current;
       const queueDef = registry.queues[runWithLogs.run.run_type] ||
                        registry.queues[registry.run_type_mapping[runWithLogs.run.run_type]];
 
@@ -188,21 +201,95 @@ export default function JobDetailPage() {
     }
   }, [runId]);
 
+  // Subscribe to real-time log events via WebSocket
+  useEffect(() => {
+    if (!runId || !data) return;
+
+    const isActive = ['pending', 'submitted', 'running'].includes(data.run.status);
+    if (!isActive) return;
+
+    const unsubscribe = subscribeToRunLogs(runId, (logEvent) => {
+      setData(prev => {
+        if (!prev) return prev;
+        // Avoid duplicates by checking ID
+        if (prev.logs.some(l => l.id === logEvent.id)) return prev;
+        const newLog = {
+          id: logEvent.id,
+          run_id: logEvent.run_id,
+          level: logEvent.level,
+          event_type: logEvent.event_type,
+          message: logEvent.message,
+          context: logEvent.context,
+          created_at: logEvent.created_at || new Date().toISOString(),
+        } as RunLogEvent;
+        return { ...prev, logs: [...prev.logs, newLog] };
+      });
+    });
+
+    return unsubscribe;
+  }, [runId, data?.run.status, subscribeToRunLogs]);
+
   // Initial fetch
   useEffect(() => {
     fetchData();
   }, [fetchData]);
 
-  // Auto-refresh for active jobs
+  // Merge real-time WebSocket status/progress into local state
+  useEffect(() => {
+    if (!wsJob || !data) return;
+
+    setData(prev => {
+      if (!prev) return prev;
+      const run = { ...prev.run };
+      if (wsJob.status) run.status = wsJob.status;
+      if (wsJob.progress) run.progress = wsJob.progress as any;
+      if (wsJob.errorMessage) run.error_message = wsJob.errorMessage;
+      return { ...prev, run };
+    });
+  }, [wsJob?.status, wsJob?.progress?.current, wsJob?.progress?.phase, wsJob?.progress?.percent]);
+
+  // Track previous status to detect terminal transitions
+  const prevStatusRef = useRef<string | null>(null);
+
+  // When run transitions to terminal status, do a final full fetch for complete data
+  useEffect(() => {
+    if (!data) return;
+    const prevStatus = prevStatusRef.current;
+    const currentStatus = data.run.status;
+    prevStatusRef.current = currentStatus;
+
+    const wasActive = prevStatus && ['pending', 'submitted', 'running'].includes(prevStatus);
+    const isTerminal = ['completed', 'failed', 'cancelled', 'timed_out'].includes(currentStatus);
+
+    if (wasActive && isTerminal) {
+      // Final fetch to get complete logs and results
+      fetchData(false);
+    }
+  }, [data?.run.status, fetchData]);
+
+  // Fallback: poll logs if WebSocket is not connected (polling mode)
   useEffect(() => {
     if (!autoRefresh || !data) return;
+    if (connectionStatus === 'connected') return; // WebSocket handles logs in real-time
 
     const isActive = ['pending', 'submitted', 'running'].includes(data.run.status);
     if (!isActive) return;
 
-    const interval = setInterval(() => fetchData(false), 3000);
+    const pollLogs = async () => {
+      try {
+        const runWithLogs = await runsApi.getRunWithLogs(runId);
+        setData(prev => {
+          if (!prev) return prev;
+          return { ...prev, run: runWithLogs.run, logs: runWithLogs.logs || [] };
+        });
+      } catch (err) {
+        console.warn('Failed to refresh logs:', err);
+      }
+    };
+
+    const interval = setInterval(pollLogs, 5000);
     return () => clearInterval(interval);
-  }, [autoRefresh, data, fetchData]);
+  }, [autoRefresh, data?.run.status, connectionStatus, runId]);
 
   // Handle job cancellation
   const handleCancel = async () => {

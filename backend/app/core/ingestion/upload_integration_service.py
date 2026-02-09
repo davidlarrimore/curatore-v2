@@ -146,7 +146,7 @@ class UploadIntegrationService:
         Returns:
             Tuple of (Run, ExtractionResult) or None if skipped (HTML content)
         """
-        from ..extraction_queue_service import extraction_queue_service
+        from .extraction_queue_service import extraction_queue_service
 
         # Get asset
         asset = await asset_service.get_asset(session, asset_id)
@@ -371,7 +371,7 @@ class UploadIntegrationService:
         Raises:
             ValueError: If asset not found or not in a re-extractable state
         """
-        from ..extraction_queue_service import extraction_queue_service
+        from .extraction_queue_service import extraction_queue_service
 
         # Get asset
         asset = await asset_service.get_asset(session, asset_id)

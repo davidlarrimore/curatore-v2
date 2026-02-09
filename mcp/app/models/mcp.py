@@ -2,7 +2,7 @@
 """Pydantic models for MCP (Model Context Protocol) messages."""
 
 from enum import Enum
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, List, Literal, Optional, Union
 from pydantic import BaseModel, Field
 
 
@@ -46,7 +46,7 @@ class MCPToolCall(BaseModel):
 class MCPTextContent(BaseModel):
     """MCP text content block."""
 
-    type: str = Field(default="text", const=True)
+    type: Literal["text"] = "text"
     text: str = Field(..., description="Text content")
 
 
@@ -116,7 +116,7 @@ class MCPToolsCallResponse(BaseModel):
 class JSONRPCRequest(BaseModel):
     """JSON-RPC 2.0 request."""
 
-    jsonrpc: str = Field(default="2.0", const=True)
+    jsonrpc: Literal["2.0"] = "2.0"
     id: Union[str, int, None] = Field(default=None, description="Request ID")
     method: str = Field(..., description="Method name")
     params: Optional[Dict[str, Any]] = Field(default=None, description="Method params")
@@ -125,7 +125,7 @@ class JSONRPCRequest(BaseModel):
 class JSONRPCResponse(BaseModel):
     """JSON-RPC 2.0 response."""
 
-    jsonrpc: str = Field(default="2.0", const=True)
+    jsonrpc: Literal["2.0"] = "2.0"
     id: Union[str, int, None] = Field(default=None, description="Request ID")
     result: Optional[Any] = Field(default=None, description="Result")
     error: Optional[Dict[str, Any]] = Field(default=None, description="Error")

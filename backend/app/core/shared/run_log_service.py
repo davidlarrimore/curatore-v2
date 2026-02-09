@@ -34,6 +34,7 @@ Usage:
     )
 """
 
+import asyncio
 import logging
 from datetime import datetime
 from typing import Dict, List, Optional, Any
@@ -95,7 +96,6 @@ class RunLogService:
         session.add(event)
 
         # Update run's last_activity_at for activity-based timeout tracking
-        from ...database.models import Run
         run = await session.get(Run, run_id)
         if run and run.status in ("submitted", "running"):
             run.last_activity_at = datetime.utcnow()
@@ -112,7 +112,49 @@ class RunLogService:
 
         log_func(f"[Run {run_id}] {message}")
 
+        # Publish log event to WebSocket clients via pub/sub
+        if run and run.organization_id:
+            self._publish_log_event(
+                organization_id=run.organization_id,
+                event=event,
+                run_id=run_id,
+            )
+
         return event
+
+    def _publish_log_event(
+        self,
+        organization_id: UUID,
+        event: RunLogEvent,
+        run_id: UUID,
+    ) -> None:
+        """
+        Publish a run_log event to Redis pub/sub for WebSocket clients.
+
+        Fire-and-forget - failures are logged but don't affect logging.
+        """
+        try:
+            from .pubsub_service import pubsub_service
+
+            payload = {
+                "id": str(event.id),
+                "run_id": str(run_id),
+                "level": event.level,
+                "event_type": event.event_type,
+                "message": event.message,
+                "context": event.context,
+                "created_at": event.created_at.isoformat() if event.created_at else None,
+            }
+
+            asyncio.create_task(
+                pubsub_service.publish_job_update(
+                    organization_id=organization_id,
+                    event_type="run_log",
+                    payload=payload,
+                )
+            )
+        except Exception as e:
+            logger.debug(f"Failed to publish run_log event: {e}")
 
     # =========================================================================
     # CONVENIENCE LOGGING METHODS

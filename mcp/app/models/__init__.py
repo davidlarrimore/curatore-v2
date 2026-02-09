@@ -1,5 +1,5 @@
 # MCP Gateway Models
-"""Pydantic models for MCP protocol and policy configuration."""
+"""Pydantic models for MCP protocol, OpenAI compatibility, and policy configuration."""
 
 from .mcp import (
     MCPError,
@@ -9,6 +9,11 @@ from .mcp import (
     MCPToolResult,
     MCPContent,
     MCPTextContent,
+)
+from .openai import (
+    OpenAIFunctionDef,
+    OpenAITool,
+    OpenAIToolsResponse,
 )
 from .policy import (
     ClampConfig,
@@ -26,6 +31,10 @@ __all__ = [
     "MCPToolResult",
     "MCPContent",
     "MCPTextContent",
+    # OpenAI models
+    "OpenAIFunctionDef",
+    "OpenAITool",
+    "OpenAIToolsResponse",
     # Policy models
     "ClampConfig",
     "ToolClamps",

@@ -49,7 +49,13 @@ export default function UserEditForm({ user, onSuccess, onCancel }: UserEditForm
 
       // If password is provided, update it separately
       if (newPassword) {
-        await usersApi.changePassword(token, user.id, newPassword)
+        try {
+          await usersApi.changePassword(token, user.id, newPassword)
+        } catch {
+          alert('User updated, but password change is not yet available.')
+          onSuccess()
+          return
+        }
       }
 
       alert('✅ User updated successfully!')

@@ -153,25 +153,7 @@ function SolicitationDetailContent({ params }: PageProps) {
     if (!token || !attachment.asset_id) return
 
     try {
-      // Get asset details to get bucket and key
-      const asset = await assetsApi.getAsset(token, attachment.asset_id)
-
-      // Download file via proxy
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-      const url = `${apiUrl}/api/v1/data/storage/object/download?bucket=${encodeURIComponent(asset.raw_bucket)}&key=${encodeURIComponent(asset.raw_object_key)}`
-
-      const response = await fetch(url, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      })
-
-      if (!response.ok) {
-        throw new Error('Failed to download file')
-      }
-
-      // Create blob and trigger download
-      const blob = await response.blob()
+      const blob = await assetsApi.downloadOriginal(token, attachment.asset_id)
       const downloadUrl = window.URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = downloadUrl

@@ -23,6 +23,7 @@ up:
 	@echo "  🌐 Frontend:    http://localhost:3000"
 	@echo "  🔗 Backend:     http://localhost:8000"
 	@echo "  📦 Extraction:  http://localhost:8010"
+	@echo "  🤖 MCP Gateway: http://localhost:8020"
 	@echo "  🪣 MinIO:       http://localhost:9001"
 	@if [ "$(ENABLE_POSTGRES_SERVICE)" = "true" ] || [ -z "$(ENABLE_POSTGRES_SERVICE)" ]; then \
 		echo "  🐘 PostgreSQL:  localhost:5432"; \
