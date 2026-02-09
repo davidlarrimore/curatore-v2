@@ -1051,6 +1051,7 @@ class PgSearchService:
 
         except Exception as e:
             logger.error(f"Search failed: {e}")
+            await session.rollback()
             return SearchResults(total=0, hits=[])
 
     # =========================================================================

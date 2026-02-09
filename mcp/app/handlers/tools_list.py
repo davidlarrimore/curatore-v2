@@ -29,9 +29,9 @@ async def _get_contracts(
     if _contract_cache and (time.time() - _cache_timestamp) < cache_ttl:
         return _contract_cache
 
-    # Fetch from backend (filter side_effects=False at source)
+    # Fetch ALL contracts from backend (filtering done by policy_service)
     contracts = await backend_client.get_contracts(
-        side_effects=False,
+        side_effects=None,  # Don't filter at source - let policy handle it
         api_key=api_key,
         correlation_id=correlation_id,
     )
@@ -63,12 +63,8 @@ async def handle_tools_list(
     # Get all contracts (cached)
     contracts = await _get_contracts(api_key, correlation_id)
 
-    # Filter by policy allowlist and side_effects
-    allowed_contracts = ContractConverter.filter_safe(
-        contracts,
-        allowlist=policy_service.allowlist,
-        block_side_effects=policy_service.block_side_effects,
-    )
+    # Filter by policy allowlist and side_effects (respects side_effects_allowlist)
+    allowed_contracts = policy_service.filter_allowed(contracts)
 
     # Convert to MCP tool format
     tools = ContractConverter.to_mcp_tools(allowed_contracts)

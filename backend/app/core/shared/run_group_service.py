@@ -369,9 +369,9 @@ class RunGroupService:
             logger.info(f"Skipping after procedure for group {group.id} (status={group.status})")
             return
 
-        from ...database.procedures import Procedure
+        from ..database.procedures import Procedure
         from .run_service import run_service
-        from ...tasks import execute_procedure_task
+        from ..tasks import execute_procedure_task
 
         # Get procedure
         proc_query = select(Procedure).where(

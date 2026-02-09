@@ -3,7 +3,7 @@
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from jsonschema import Draft7Validator, ValidationError
 
@@ -17,8 +17,33 @@ from app.models.mcp import (
 from app.services.backend_client import backend_client
 from app.services.policy_service import policy_service
 from app.services.facet_validator import facet_validator
+from app.services.progress_service import progress_service
 
 logger = logging.getLogger("mcp.handlers.tools_call")
+
+
+def extract_progress_token(arguments: Dict[str, Any]) -> Tuple[Optional[str], Dict[str, Any]]:
+    """
+    Extract MCP _meta.progressToken from arguments.
+
+    Per MCP spec, clients can include:
+    {
+        "_meta": { "progressToken": "xyz" },
+        "query": "...",
+        ...
+    }
+
+    Returns:
+        Tuple of (progress_token, cleaned_arguments without _meta)
+    """
+    progress_token = None
+    clean_args = arguments.copy()
+
+    meta = clean_args.pop("_meta", None)
+    if meta and isinstance(meta, dict):
+        progress_token = meta.get("progressToken")
+
+    return progress_token, clean_args
 
 
 async def handle_tools_call(
@@ -27,6 +52,7 @@ async def handle_tools_call(
     org_id: Optional[str] = None,
     api_key: Optional[str] = None,
     correlation_id: Optional[str] = None,
+    progress_token: Optional[str] = None,
 ) -> MCPToolsCallResponse:
     """
     Handle MCP tools/call request.
@@ -50,70 +76,122 @@ async def handle_tools_call(
     """
     org_id = org_id or settings.default_org_id
 
-    # 1. Check if tool is allowed
-    if not policy_service.is_allowed(name):
-        logger.warning(f"Tool not allowed: {name}")
-        return _error_response(
-            MCPErrorCode.TOOL_NOT_FOUND,
-            f"Tool '{name}' is not available",
-        )
+    # Extract progress token from arguments if not provided directly
+    if not progress_token:
+        progress_token, arguments = extract_progress_token(arguments)
 
-    # 2. Get contract for schema validation
-    contract = await backend_client.get_contract(name, api_key, correlation_id)
-    if not contract:
-        return _error_response(
-            MCPErrorCode.TOOL_NOT_FOUND,
-            f"Tool '{name}' not found",
-        )
+    # Start progress tracking if token provided
+    progress_state = None
+    if progress_token:
+        progress_state = progress_service.start(progress_token, name)
+        progress_service.update(progress_token, progress=0, message="Validating request...")
 
-    # Check side_effects (shouldn't happen if policy is correct, but double-check)
-    if contract.get("side_effects", False) and policy_service.block_side_effects:
-        return _error_response(
-            MCPErrorCode.POLICY_VIOLATION,
-            f"Tool '{name}' has side effects and is not allowed",
-        )
-
-    # 3. Validate arguments against input schema
-    input_schema = contract.get("input_schema", {})
-    validation_errors = _validate_arguments(arguments, input_schema)
-    if validation_errors:
-        return _error_response(
-            MCPErrorCode.INVALID_ARGUMENT,
-            f"Invalid arguments: {'; '.join(validation_errors)}",
-        )
-
-    # 4. Apply policy clamps
-    clamped_arguments = policy_service.apply_clamps(name, arguments)
-    if clamped_arguments != arguments:
-        logger.debug(f"Applied clamps to {name}: {arguments} → {clamped_arguments}")
-
-    # 5. Validate facets if present and enabled
-    if policy_service.validate_facets and org_id:
-        facet_filters = clamped_arguments.get("facet_filters")
-        if facet_filters:
-            is_valid, invalid_facets = await facet_validator.validate_facets(
-                facet_filters,
-                org_id,
-                api_key,
-                correlation_id,
+    try:
+        # 1. Check if tool is allowed
+        if not policy_service.is_allowed(name):
+            logger.warning(f"Tool not allowed: {name}")
+            if progress_state:
+                progress_service.fail(progress_token, f"Tool '{name}' is not available")
+            return _error_response(
+                MCPErrorCode.TOOL_NOT_FOUND,
+                f"Tool '{name}' is not available",
             )
-            if not is_valid:
+
+        if progress_state:
+            progress_service.update(progress_token, progress=10, message="Fetching tool contract...")
+
+        # 2. Get contract for schema validation
+        contract = await backend_client.get_contract(name, api_key, correlation_id)
+        if not contract:
+            if progress_state:
+                progress_service.fail(progress_token, f"Tool '{name}' not found")
+            return _error_response(
+                MCPErrorCode.TOOL_NOT_FOUND,
+                f"Tool '{name}' not found",
+            )
+
+        # Check side_effects (respects side_effects_allowlist)
+        if contract.get("side_effects", False) and policy_service.block_side_effects:
+            # Allow if in side_effects_allowlist
+            if name not in policy_service.policy.settings.side_effects_allowlist:
+                if progress_state:
+                    progress_service.fail(progress_token, f"Tool '{name}' has side effects")
                 return _error_response(
-                    MCPErrorCode.INVALID_ARGUMENT,
-                    f"Unknown facets: {', '.join(invalid_facets)}",
+                    MCPErrorCode.POLICY_VIOLATION,
+                    f"Tool '{name}' has side effects and is not allowed",
                 )
 
-    # 6. Execute via backend
-    logger.info(f"Executing tool: {name}")
-    result = await backend_client.execute_function(
-        name=name,
-        params=clamped_arguments,
-        api_key=api_key,
-        correlation_id=correlation_id,
-    )
+        if progress_state:
+            progress_service.update(progress_token, progress=20, message="Validating arguments...")
 
-    # 7. Convert result to MCP format
-    return _format_result(result)
+        # 3. Validate arguments against input schema
+        input_schema = contract.get("input_schema", {})
+        validation_errors = _validate_arguments(arguments, input_schema)
+        if validation_errors:
+            if progress_state:
+                progress_service.fail(progress_token, f"Invalid arguments: {'; '.join(validation_errors)}")
+            return _error_response(
+                MCPErrorCode.INVALID_ARGUMENT,
+                f"Invalid arguments: {'; '.join(validation_errors)}",
+            )
+
+        # 4. Apply policy clamps
+        clamped_arguments = policy_service.apply_clamps(name, arguments)
+        if clamped_arguments != arguments:
+            logger.debug(f"Applied clamps to {name}: {arguments} → {clamped_arguments}")
+
+        if progress_state:
+            progress_service.update(progress_token, progress=30, message="Validating facets...")
+
+        # 5. Validate facets if present and enabled
+        if policy_service.validate_facets and org_id:
+            facet_filters = clamped_arguments.get("facet_filters")
+            if facet_filters:
+                is_valid, invalid_facets = await facet_validator.validate_facets(
+                    facet_filters,
+                    org_id,
+                    api_key,
+                    correlation_id,
+                )
+                if not is_valid:
+                    if progress_state:
+                        progress_service.fail(progress_token, f"Unknown facets: {', '.join(invalid_facets)}")
+                    return _error_response(
+                        MCPErrorCode.INVALID_ARGUMENT,
+                        f"Unknown facets: {', '.join(invalid_facets)}",
+                    )
+
+        if progress_state:
+            progress_service.update(progress_token, progress=40, message=f"Executing {name}...")
+
+        # 6. Execute via backend
+        logger.info(f"Executing tool: {name}")
+        result = await backend_client.execute_function(
+            name=name,
+            params=clamped_arguments,
+            api_key=api_key,
+            correlation_id=correlation_id,
+        )
+
+        if progress_state:
+            progress_service.update(progress_token, progress=90, message="Formatting response...")
+
+        # 7. Convert result to MCP format
+        response = _format_result(result)
+
+        if progress_state:
+            progress_service.complete(progress_token, result)
+
+        return response
+
+    except Exception as e:
+        logger.exception(f"Error executing tool {name}: {e}")
+        if progress_state:
+            progress_service.fail(progress_token, str(e))
+        return _error_response(
+            MCPErrorCode.EXECUTION_ERROR,
+            f"Execution failed: {str(e)}",
+        )
 
 
 def _validate_arguments(

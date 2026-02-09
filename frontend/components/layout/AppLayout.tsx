@@ -22,7 +22,7 @@
  * - Screen size (responsive sidebar)
  */
 
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { usePathname } from 'next/navigation'
 import { TopNavigation } from './TopNavigation'
 import { LeftSidebar } from './LeftSidebar'
@@ -60,7 +60,6 @@ export function AppLayout({ children }: AppLayoutProps) {
     supportedFormats: [],
     maxFileSize: 52428800
   })
-  const hasShownHealthError = useRef(false)
 
   /**
    * Determine if the current page should show navigation.
@@ -81,47 +80,46 @@ export function AppLayout({ children }: AppLayoutProps) {
     systemStatus.health !== 'healthy' &&
     connectionStatus === 'disconnected'
 
-  // Load system status on mount and set up refresh interval
-  // When WebSocket is connected, we know the backend is healthy, so we can poll less frequently
+  // Load system status on mount using the lightweight backend health check.
+  // The comprehensive health check (10 components) is too heavy for layout-level
+  // availability detection — it's used on the dashboard where details are displayed.
+  // WebSocket connection status already provides real-time connectivity info,
+  // so no polling interval is needed here.
   useEffect(() => {
     if (!isAuthenticated) return
 
     loadSystemStatus()
+  }, [isAuthenticated])
 
-    // Refresh system status every 60 seconds (WebSocket provides real-time connectivity info)
-    const interval = setInterval(() => {
-      // Skip health check if WebSocket is connected - we know backend is reachable
-      if (connectionStatus === 'connected') {
-        setSystemStatus(prev => ({ ...prev, health: 'healthy', isLoading: false }))
-        return
-      }
-      loadSystemStatus()
-    }, 60000)
-    return () => clearInterval(interval)
-  }, [isAuthenticated, connectionStatus])
+  // When WebSocket connects, we know the backend is reachable
+  useEffect(() => {
+    if (connectionStatus === 'connected') {
+      setSystemStatus(prev => ({ ...prev, health: 'healthy', isLoading: false }))
+    }
+  }, [connectionStatus])
 
   const loadSystemStatus = async () => {
     const [healthResult, formatsResult] = await Promise.allSettled([
-      systemApi.getHealth(),
+      systemApi.getBackendHealth(),
       systemApi.getSupportedFormats()
     ])
 
     if (healthResult.status === 'fulfilled' && formatsResult.status === 'fulfilled') {
-      const healthStatus = healthResult.value
+      const backendHealth = healthResult.value
       const formatsData = formatsResult.value
       setSystemStatus({
-        health: healthStatus.status,
-        llmConnected: healthStatus.llm_connected,
+        health: backendHealth.status,
+        llmConnected: false,
         isLoading: false,
         supportedFormats: formatsData.supported_extensions,
         maxFileSize: formatsData.max_file_size,
-        backendVersion: healthStatus.version
+        backendVersion: backendHealth.version,
       })
       return
     }
 
     if (healthResult.status === 'rejected') {
-      console.warn('Failed to load system health:', healthResult.reason)
+      console.warn('Failed to check backend availability:', healthResult.reason)
     }
     if (formatsResult.status === 'rejected') {
       console.warn('Failed to load supported formats:', formatsResult.reason)
@@ -132,12 +130,6 @@ export function AppLayout({ children }: AppLayoutProps) {
       isLoading: false,
       health: 'error'
     }))
-
-    // Only show the error toast once and never while the unavailable modal is visible
-    if (!hasShownHealthError.current) {
-      hasShownHealthError.current = true
-      // Modal will be visible when health is unavailable, so skip toast in that case
-    }
   }
 
   // Handle keyboard shortcuts

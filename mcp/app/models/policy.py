@@ -28,6 +28,10 @@ class PolicySettings(BaseModel):
         default=True,
         description="Block all functions with side_effects=true",
     )
+    side_effects_allowlist: List[str] = Field(
+        default_factory=list,
+        description="Functions with side_effects=true that are allowed anyway (e.g., confirm_email)",
+    )
     validate_facets: bool = Field(
         default=True,
         description="Validate facet_filters against metadata catalog",

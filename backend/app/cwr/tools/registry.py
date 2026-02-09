@@ -230,6 +230,14 @@ class FunctionRegistry:
         except ImportError as e:
             logger.warning(f"Failed to import compound functions: {e}")
 
+        # Import email workflow functions (MCP two-step confirmation)
+        try:
+            from .compounds.email_workflow import PrepareEmailFunction, ConfirmEmailFunction
+            self.register(PrepareEmailFunction)
+            self.register(ConfirmEmailFunction)
+        except ImportError as e:
+            logger.warning(f"Failed to import email workflow functions: {e}")
+
         # Import flow control functions
         try:
             from .primitives.flow.if_branch import IfBranchFunction

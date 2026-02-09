@@ -112,8 +112,11 @@ class PolicyService:
             # Check side_effects if enabled
             if check_side_effects and policy.settings.block_side_effects:
                 if contract.get("side_effects", False):
-                    logger.debug(f"Blocking {name}: has side effects")
-                    continue
+                    # Allow if in side_effects_allowlist
+                    if name not in policy.settings.side_effects_allowlist:
+                        logger.debug(f"Blocking {name}: has side effects")
+                        continue
+                    logger.debug(f"Allowing {name}: in side_effects_allowlist")
 
             result.append(contract)
 

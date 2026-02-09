@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     log_level: str = Field(default="INFO", description="Logging level")
     debug: bool = Field(default=False, description="Debug mode")
 
+    # SSL settings (optional)
+    ssl_keyfile: Optional[str] = Field(default=None, description="Path to SSL private key")
+    ssl_certfile: Optional[str] = Field(default=None, description="Path to SSL certificate")
+
     # Policy file
     policy_file: str = Field(
         default="/app/policy.yaml",

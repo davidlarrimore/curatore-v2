@@ -113,6 +113,12 @@ export const systemApi = {
     }
   },
 
+  async getBackendHealth(): Promise<{ status: string; version: string }> {
+    const res = await fetch(apiUrl('/admin/system/health/backend'), { cache: 'no-store', headers: authHeaders() })
+    const data = await handleJson(res)
+    return { status: data.status ?? 'unknown', version: data.version ?? '' }
+  },
+
   async getSupportedFormats(): Promise<{ supported_extensions: string[]; max_file_size: number }> {
     const res = await fetch(apiUrl('/admin/config/supported-formats'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
@@ -188,6 +194,11 @@ export const systemApi = {
 
   async getComponentHealth(component: 'backend' | 'database' | 'redis' | 'celery' | 'extraction' | 'docling' | 'llm' | 'sharepoint'): Promise<any> {
     const res = await fetch(apiUrl(`/admin/system/health/${component}`), { cache: 'no-store', headers: authHeaders() })
+    return handleJson(res)
+  },
+
+  async getSystemSettings(): Promise<Record<string, any>> {
+    const res = await fetch(apiUrl('/admin/config/system-settings'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 }

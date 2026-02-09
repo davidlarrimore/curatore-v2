@@ -13,6 +13,7 @@ Usage:
     print(contract.input_schema)  # JSON Schema dict
 """
 
+import copy
 import logging
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -130,7 +131,8 @@ class ContractGenerator:
             JSON Schema type definition dict
         """
         normalized = type_str.strip().lower()
-        return dict(_TYPE_MAP.get(normalized, {"type": "string"}))
+        # Use deepcopy to avoid shared nested dicts (e.g., items in array types)
+        return copy.deepcopy(_TYPE_MAP.get(normalized, {"type": "string"}))
 
     @staticmethod
     def _params_to_json_schema(params: List[ParameterDoc]) -> Dict[str, Any]:
@@ -157,7 +159,11 @@ class ContractGenerator:
                 prop["default"] = p.default
 
             if p.enum_values:
-                prop["enum"] = p.enum_values
+                # For array types, enum goes inside items; for scalar types, at top level
+                if prop.get("type") == "array" and "items" in prop:
+                    prop["items"]["enum"] = p.enum_values
+                else:
+                    prop["enum"] = p.enum_values
 
             if p.example is not None:
                 prop["examples"] = [p.example]

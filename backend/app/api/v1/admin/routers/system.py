@@ -731,6 +731,153 @@ async def get_extraction_engines() -> Dict[str, Any]:
         }
 
 
+@router.get("/config/system-settings", tags=["Configuration"])
+async def get_system_settings(
+    current_user=Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Read-only view of system configuration from config.yml.
+
+    Aggregates configuration into grouped sections for display in the
+    admin UI.  Secrets (API keys, passwords, tokens) are explicitly excluded.
+    """
+    from app.core.database.models import Organization
+    from sqlalchemy import select
+
+    sections: Dict[str, Any] = {}
+
+    # ── Embedding & Indexing ───────────────────────────────────────────
+    embedding_state = config_loader.get_embedding_config_state()
+    embedding_section: Dict[str, Any] = {
+        "model": embedding_state.get("model"),
+        "dimensions": embedding_state.get("dimensions"),
+    }
+
+    # Per-org stored config comparison
+    try:
+        async with database_service.get_session() as session:
+            result = await session.execute(
+                select(Organization).where(
+                    Organization.id == current_user.organization_id
+                )
+            )
+            org = result.scalar_one_or_none()
+            if org:
+                org_settings = org.settings or {}
+                stored = org_settings.get("embedding_config")
+                embedding_section["stored_config"] = stored
+                if stored:
+                    embedding_section["config_matches_stored"] = (
+                        stored.get("model") == embedding_state.get("model")
+                        and stored.get("dimensions") == embedding_state.get("dimensions")
+                    )
+                else:
+                    embedding_section["config_matches_stored"] = None
+    except Exception:
+        embedding_section["stored_config"] = None
+        embedding_section["config_matches_stored"] = None
+
+    sections["embedding"] = embedding_section
+
+    # ── Search Configuration ───────────────────────────────────────────
+    search_cfg = config_loader.get_search_config()
+    if search_cfg:
+        sections["search"] = {
+            "enabled": search_cfg.enabled,
+            "default_mode": search_cfg.default_mode,
+            "semantic_weight": search_cfg.semantic_weight,
+            "chunk_size": search_cfg.chunk_size,
+            "chunk_overlap": search_cfg.chunk_overlap,
+            "batch_size": search_cfg.batch_size,
+            "max_content_length": search_cfg.max_content_length,
+        }
+
+    # ── LLM Task Routing ──────────────────────────────────────────────
+    llm_cfg = config_loader.get_llm_config()
+    if llm_cfg:
+        llm_section: Dict[str, Any] = {
+            "provider": llm_cfg.provider,
+            "default_model": llm_cfg.default_model,
+            "base_url": llm_cfg.base_url,
+            "timeout": llm_cfg.timeout,
+            "max_retries": llm_cfg.max_retries,
+            "verify_ssl": llm_cfg.verify_ssl,
+        }
+        if llm_cfg.task_types:
+            task_table = []
+            for task_name, task_cfg in llm_cfg.task_types.items():
+                entry: Dict[str, Any] = {
+                    "task_type": task_name,
+                    "model": task_cfg.model,
+                }
+                if task_cfg.temperature is not None:
+                    entry["temperature"] = task_cfg.temperature
+                if task_cfg.dimensions is not None:
+                    entry["dimensions"] = task_cfg.dimensions
+                if task_cfg.max_tokens is not None:
+                    entry["max_tokens"] = task_cfg.max_tokens
+                task_table.append(entry)
+            llm_section["task_types"] = task_table
+        sections["llm_routing"] = llm_section
+
+    # ── Queue ─────────────────────────────────────────────────────────
+    queue_cfg = config_loader.get_queue_config()
+    if queue_cfg:
+        sections["queue"] = {
+            "broker_url": queue_cfg.broker_url,
+            "result_backend": queue_cfg.result_backend,
+            "default_queue": queue_cfg.default_queue,
+            "worker_concurrency": queue_cfg.worker_concurrency,
+            "task_timeout": queue_cfg.task_timeout,
+        }
+
+    # ── Object Storage ────────────────────────────────────────────────
+    minio_cfg = config_loader.get_minio_config()
+    if minio_cfg:
+        sections["storage"] = {
+            "enabled": minio_cfg.enabled,
+            "endpoint": minio_cfg.endpoint,
+            "secure": minio_cfg.secure,
+            "bucket_uploads": minio_cfg.bucket_uploads,
+            "bucket_processed": minio_cfg.bucket_processed,
+            "bucket_temp": minio_cfg.bucket_temp,
+        }
+
+    # ── Playwright ────────────────────────────────────────────────────
+    pw_cfg = config_loader.get_playwright_config()
+    if pw_cfg:
+        sections["playwright"] = {
+            "enabled": pw_cfg.enabled,
+            "service_url": pw_cfg.service_url,
+            "browser_pool_size": pw_cfg.browser_pool_size,
+            "default_viewport": f"{pw_cfg.default_viewport_width}x{pw_cfg.default_viewport_height}",
+            "default_timeout_ms": pw_cfg.default_timeout_ms,
+            "default_wait_timeout_ms": pw_cfg.default_wait_timeout_ms,
+        }
+
+    # ── SAM.gov ───────────────────────────────────────────────────────
+    sam_cfg = config_loader.get_sam_config()
+    if sam_cfg:
+        sections["sam"] = {
+            "enabled": sam_cfg.enabled,
+            "rate_limit_delay": sam_cfg.rate_limit_delay,
+            "max_pages_per_pull": sam_cfg.max_pages_per_pull,
+            "page_size": sam_cfg.page_size,
+            "timeout": sam_cfg.timeout,
+            "max_retries": sam_cfg.max_retries,
+        }
+
+    # ── Email ─────────────────────────────────────────────────────────
+    email_cfg = config_loader.get_email_config()
+    if email_cfg:
+        sections["email"] = {
+            "backend": email_cfg.backend,
+            "from_address": email_cfg.from_address,
+            "from_name": email_cfg.from_name,
+        }
+
+    return sections
+
+
 # ============================================================================
 # QUEUE ENDPOINTS
 # ============================================================================

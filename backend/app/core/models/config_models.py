@@ -51,6 +51,13 @@ class LLMTaskTypeConfig(BaseModel):
         le=600,
         description="Request timeout in seconds (overrides parent)"
     )
+    dimensions: Optional[int] = Field(
+        default=None,
+        ge=1,
+        le=4096,
+        description="Embedding output dimensions (only applies to embedding task type). "
+                    "If not set, uses model's native dimensions from EMBEDDING_DIMENSIONS lookup."
+    )
 
 
 class LLMConfig(BaseModel):

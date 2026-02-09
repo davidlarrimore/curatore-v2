@@ -380,7 +380,7 @@ class ExtractionQueueService:
         timeout_at = datetime.utcnow() + timedelta(seconds=soft_limit + self.timeout_buffer)
 
         # Import and call Celery task
-        from ...tasks import execute_extraction_task
+        from ..tasks import execute_extraction_task
         from ..ops.queue_registry import QueuePriority
 
         # Determine queue based on priority

@@ -538,11 +538,20 @@ class BaseFunction(ABC):
                 self._check_type(param_doc.name, value, param_doc.type)
 
                 # Enum validation
-                if param_doc.enum_values and value not in param_doc.enum_values:
-                    raise ValueError(
-                        f"Parameter '{param_doc.name}' value '{value}' not in allowed values: "
-                        f"{param_doc.enum_values}"
-                    )
+                if param_doc.enum_values:
+                    # For array types, validate each item; for scalars, validate the value
+                    if param_doc.type.startswith("list") and isinstance(value, list):
+                        for item in value:
+                            if item not in param_doc.enum_values:
+                                raise ValueError(
+                                    f"Parameter '{param_doc.name}' contains invalid value '{item}' "
+                                    f"not in allowed values: {param_doc.enum_values}"
+                                )
+                    elif value not in param_doc.enum_values:
+                        raise ValueError(
+                            f"Parameter '{param_doc.name}' value '{value}' not in allowed values: "
+                            f"{param_doc.enum_values}"
+                        )
 
             elif param_doc.required:
                 raise ValueError(f"Missing required parameter: {param_doc.name}")

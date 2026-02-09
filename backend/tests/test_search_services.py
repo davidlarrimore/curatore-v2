@@ -14,6 +14,55 @@ from app.core.search.embedding_service import EmbeddingService, EMBEDDING_DIMENS
 
 
 # =============================================================================
+# Embedding Dimensions Config Tests
+# =============================================================================
+
+
+class TestEmbeddingDimensionsConfig:
+    """Tests for configurable embedding dimensions."""
+
+    def test_configured_dimensions_override(self):
+        """embedding_dim returns configured dimensions when set."""
+        service = EmbeddingService()
+        service._embedding_dim = None
+        service._configured_dimensions = 256
+        assert service.embedding_dim == 256
+
+    def test_falls_back_to_native_dims(self):
+        """embedding_dim uses native dims when not configured."""
+        service = EmbeddingService()
+        service._embedding_dim = None
+        service._configured_dimensions = None
+        service._model_name = "text-embedding-3-large"
+        with patch.object(service, '_get_configured_dimensions', return_value=None):
+            assert service.embedding_dim == 3072
+
+    def test_falls_back_to_default_for_unknown_model(self):
+        """embedding_dim uses DEFAULT_DIM for unknown models when not configured."""
+        service = EmbeddingService()
+        service._embedding_dim = None
+        service._configured_dimensions = None
+        service._model_name = "unknown-model"
+        with patch.object(service, '_get_configured_dimensions', return_value=None):
+            assert service.embedding_dim == 1536
+
+    def test_embedding_kwargs_includes_dimensions(self):
+        """_embedding_kwargs includes dimensions when configured."""
+        service = EmbeddingService()
+        service._configured_dimensions = 1536
+        kwargs = service._embedding_kwargs("text-embedding-3-large", "test")
+        assert kwargs == {"model": "text-embedding-3-large", "input": "test", "dimensions": 1536}
+
+    def test_embedding_kwargs_omits_dimensions_when_not_configured(self):
+        """_embedding_kwargs omits dimensions when not configured."""
+        service = EmbeddingService()
+        service._configured_dimensions = None
+        with patch.object(service, '_get_configured_dimensions', return_value=None):
+            kwargs = service._embedding_kwargs("text-embedding-3-small", "test")
+            assert "dimensions" not in kwargs
+
+
+# =============================================================================
 # Chunking Service Tests
 # =============================================================================
 

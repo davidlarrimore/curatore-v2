@@ -67,20 +67,33 @@ MCP_LOG_LEVEL=INFO
 
 ### 3. Configure Open WebUI
 
-In Open WebUI settings, add a new MCP server:
+In Open WebUI settings, add a new OpenAPI tool server:
+
+1. Go to **Settings** > **Tools** > **OpenAPI Servers**
+2. Add a new server:
 
 | Field | Value |
 |-------|-------|
 | Name | Curatore |
-| URL | `http://localhost:8020/mcp` |
-| API Key | Your `MCP_API_KEY` value |
-| Transport | HTTP/SSE |
+| URL | See below |
+| Authentication | Bearer Token |
+| Token | Your `MCP_API_KEY` value |
+
+**URL Configuration:**
+
+| Open WebUI Setup | MCP Gateway URL |
+|------------------|-----------------|
+| Host machine (not Docker) | `http://localhost:8020` |
+| Docker (same machine) | `http://host.docker.internal:8020` |
+| Docker (same network as Curatore) | `http://mcp:8020` |
+
+Open WebUI will automatically fetch tools from `GET /openapi.json` and execute them via `POST /{tool_name}`.
 
 ---
 
 ## Available Tools
 
-The MCP Gateway exposes 16 safe functions (no side effects):
+The MCP Gateway exposes safe functions (no side effects) plus controlled side-effect functions via the `side_effects_allowlist`:
 
 ### Search Functions
 
@@ -119,6 +132,35 @@ The MCP Gateway exposes 16 safe functions (no side effects):
 |------|-------------|
 | `analyze_solicitation` | Analyze a SAM.gov solicitation |
 | `classify_document` | Classify a document |
+
+### Email Workflow (Two-Step)
+
+For AI safety, email sending requires a two-step confirmation:
+
+| Tool | Description | Side Effects |
+|------|-------------|--------------|
+| `prepare_email` | Create email preview, returns confirmation token | No |
+| `confirm_email` | Send email using confirmation token (expires in 15 min) | Yes (allowed) |
+
+**Example conversation:**
+```
+User: "Send a summary of document abc-123 to team@company.com"
+
+AI: I'll prepare the email for you to review.
+    [calls prepare_email with to, subject, body]
+
+AI: Here's the email preview:
+    To: team@company.com
+    Subject: Document Summary
+    Body: [summary content]
+
+    Would you like me to send this?
+
+User: "Yes, send it"
+
+AI: [calls confirm_email with token]
+    Email sent successfully!
+```
 
 ---
 
@@ -276,9 +318,15 @@ For production deployments:
 
 ---
 
+## Claude Desktop Integration
+
+Claude Desktop uses **STDIO transport** instead of HTTP. See the [MCP Gateway README](../mcp/README.md#claude-desktop) for Docker-based Claude Desktop setup.
+
+---
+
 ## Related Documentation
 
+- [MCP Gateway README](../mcp/README.md) - Full MCP Gateway documentation
 - [CWR Functions & Procedures](FUNCTIONS_PROCEDURES.md)
 - [Search & Indexing](SEARCH_INDEXING.md)
 - [API Documentation](API_DOCUMENTATION.md)
-- [MCP Requirements](../MCP_REQUIREMENTS.md)

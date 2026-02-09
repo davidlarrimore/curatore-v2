@@ -447,6 +447,47 @@ async def startup_event() -> None:
         llm_status = "available" if llm_service.is_available else "unavailable"
         print(f"🤖 LLM Service: {llm_status}")
 
+        # Validate embedding configuration
+        try:
+            from .core.shared.config_loader import config_loader
+            embedding_state = config_loader.get_embedding_config_state()
+            print(f"🔍 Embedding config: model={embedding_state['model']}, dimensions={embedding_state['dimensions']}")
+
+            from sqlalchemy import select
+            from .core.database.models import Organization
+            from sqlalchemy.orm.attributes import flag_modified
+
+            async with database_service.get_session() as session:
+                result = await session.execute(select(Organization))
+                orgs = result.scalars().all()
+
+                for org in orgs:
+                    org_settings = org.settings or {}
+                    stored_config = org_settings.get("embedding_config")
+
+                    if stored_config is None:
+                        org_settings["embedding_config"] = embedding_state
+                        org.settings = org_settings
+                        flag_modified(org, "settings")
+                        await session.commit()
+                        print(f"   Stored initial embedding config for org {org.name}")
+                    elif stored_config != embedding_state:
+                        print(f"   ⚠️  Embedding config changed for org {org.name}!")
+                        print(f"      Previous: {stored_config}")
+                        print(f"      Current:  {embedding_state}")
+                        org_settings["embedding_config"] = embedding_state
+                        org.settings = org_settings
+                        flag_modified(org, "settings")
+                        await session.commit()
+                        from .core.tasks.extraction import reindex_organization_task
+                        reindex_organization_task.delay(organization_id=str(org.id))
+                        print(f"      Reindex queued for org {org.name}")
+                    else:
+                        print(f"   ✓ Embedding config unchanged for org {org.name}")
+
+        except Exception as e:
+            print(f"   ⚠️  Embedding config check failed: {e}")
+
         print("✅ Startup complete - Curatore v2 ready to process documents")
         
     except Exception as e:

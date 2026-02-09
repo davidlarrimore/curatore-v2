@@ -582,9 +582,27 @@ async def _reindex_organization_async(
     from app.core.search.pg_index_service import pg_index_service
 
     async with database_service.get_session() as session:
-        return await pg_index_service.reindex_organization(
+        result = await pg_index_service.reindex_organization(
             session, organization_id, batch_size or 50
         )
+        # Update stored embedding config after successful reindex
+        if result.get("indexed", 0) > 0:
+            try:
+                from app.core.shared.config_loader import config_loader
+                from app.core.database.models import Organization
+                from sqlalchemy.orm.attributes import flag_modified
+                org = (await session.execute(
+                    select(Organization).where(Organization.id == organization_id)
+                )).scalar_one_or_none()
+                if org:
+                    settings = org.settings or {}
+                    settings["embedding_config"] = config_loader.get_embedding_config_state()
+                    org.settings = settings
+                    flag_modified(org, "settings")
+                    await session.commit()
+            except Exception as e:
+                logger.warning(f"Failed to update embedding config state: {e}")
+        return result
 
 
 # ============================================================================

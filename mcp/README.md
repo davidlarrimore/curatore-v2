@@ -8,34 +8,35 @@ A unified tool server that exposes Curatore CWR (Curatore Workflow Runtime) func
 ## Architecture
 
 ```
-Claude Desktop / Claude Code          Open WebUI / ChatGPT
-        │                                      │
-        ▼ (MCP JSON-RPC)                      ▼ (REST/OpenAPI)
-┌──────────────────────────────────────────────────────────────┐
-│                      MCP Gateway                             │
-│                      (port 8020)                             │
-│  ┌────────────────────────────────────────────────────────┐  │
-│  │  /mcp              MCP JSON-RPC endpoint               │  │
-│  │  /mcp/tools        MCP REST - list tools               │  │
-│  │  /mcp/tools/{n}    MCP REST - execute tool             │  │
-│  │  /openai/tools     OpenAI format - list tools          │  │
-│  │  /openai/tools/{n} OpenAI format - execute tool        │  │
-│  └────────────────────────────────────────────────────────┘  │
-│                                                              │
-│  Policy Enforcement:                                         │
-│  • Allowlist filtering                                       │
-│  • Side-effect blocking                                      │
-│  • Parameter clamping                                        │
-│  • Facet validation                                          │
-└───────────────────────────┬──────────────────────────────────┘
-                            │ (HTTP)
-                            ▼
-┌──────────────────────────────────────────────────────────────┐
-│                    Curatore Backend                          │
-│                      (port 8000)                             │
-│              CWR Functions + Tool Contracts                  │
-└──────────────────────────────────────────────────────────────┘
+Claude Desktop                    Open WebUI / ChatGPT / Claude Code
+      │                                      │
+      ▼ (STDIO)                             ▼ (REST/OpenAPI)
+┌─────────────────────┐         ┌──────────────────────────────────────┐
+│  MCP STDIO Server   │         │         MCP HTTP Gateway             │
+│  (Docker container) │         │           (port 8020)                │
+│                     │         │  ┌────────────────────────────────┐  │
+│  • stdin/stdout     │         │  │  /mcp         JSON-RPC         │  │
+│  • JSON-RPC         │         │  │  /openapi.json OpenAPI spec    │  │
+│  • No auth needed   │         │  │  /{tool}      Execute tool     │  │
+│    (local process)  │         │  └────────────────────────────────┘  │
+└──────────┬──────────┘         │  Policy: allowlist, clamping,        │
+           │                    │          side-effect blocking        │
+           │ (HTTP)             └──────────────────┬───────────────────┘
+           │                                       │ (HTTP)
+           ▼                                       ▼
+┌──────────────────────────────────────────────────────────────────────┐
+│                         Curatore Backend                             │
+│                           (port 8000)                                │
+│                   CWR Functions + Tool Contracts                     │
+└──────────────────────────────────────────────────────────────────────┘
 ```
+
+**Two server modes:**
+
+| Mode | Transport | Use Case | Auth |
+|------|-----------|----------|------|
+| STDIO | stdin/stdout | Claude Desktop | None (local process) |
+| HTTP | REST/JSON-RPC | Open WebUI, Claude Code, APIs | Bearer token |
 
 ## Quick Start
 
@@ -99,8 +100,16 @@ curl -H "Authorization: Bearer mcp_dev_key" \
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
-| `/openai/tools` | GET | Yes | List tools in OpenAI function calling format |
-| `/openai/tools/{name}` | POST | Yes | Execute a tool |
+| `/openapi.json` | GET | No | OpenAPI specification for tool discovery |
+| `/{tool_name}` | POST | Yes | Execute a tool (flat path for Open WebUI) |
+
+### Progress Streaming (MCP notifications/progress)
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/progress` | GET | Yes | List all active progress states |
+| `/progress/{token}` | GET | Yes | Get progress state for a token |
+| `/progress/{token}/stream` | GET | Yes | SSE stream of progress updates |
 
 ### Policy Management
 
@@ -133,38 +142,62 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 
 ### Claude Desktop
 
-Add to your Claude Desktop configuration (`claude_desktop_config.json`):
+Claude Desktop uses **STDIO transport** - it launches MCP servers as local processes and communicates via stdin/stdout. We provide a Docker image that runs an MCP server in STDIO mode.
+
+**Configuration (`~/.claude/claude_desktop_config.json` on macOS/Linux):**
 
 ```json
 {
   "mcpServers": {
     "curatore": {
-      "command": "curl",
+      "command": "docker",
       "args": [
-        "-X", "POST",
-        "-H", "Authorization: Bearer mcp_dev_key",
-        "-H", "Content-Type: application/json",
-        "http://localhost:8020/mcp"
+        "run", "--rm", "-i",
+        "--network", "curatore-v2_default",
+        "-e", "BACKEND_URL=http://backend:8000",
+        "curatore-mcp-stdio"
       ]
     }
   }
 }
 ```
 
-Or use a dedicated MCP client that supports HTTP transport:
+**Windows (`%APPDATA%\Claude\claude_desktop_config.json`):**
 
 ```json
 {
   "mcpServers": {
     "curatore": {
-      "transport": "http",
-      "url": "http://localhost:8020/mcp",
-      "headers": {
-        "Authorization": "Bearer mcp_dev_key"
-      }
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "--network", "curatore-v2_default",
+        "-e", "BACKEND_URL=http://backend:8000",
+        "curatore-mcp-stdio"
+      ]
     }
   }
 }
+```
+
+**Build the STDIO image:**
+```bash
+cd curatore-v2/mcp
+docker build -f Dockerfile.stdio -t curatore-mcp-stdio .
+```
+
+**How it works:**
+1. Claude Desktop launches the Docker container
+2. The `-i` flag keeps stdin open for JSON-RPC messages
+3. The container connects to the Curatore backend via Docker network
+4. Responses are written to stdout
+
+**Test the STDIO server:**
+```bash
+echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | \
+  docker run --rm -i --network curatore-v2_default \
+  -e BACKEND_URL=http://backend:8000 \
+  curatore-mcp-stdio
 ```
 
 ### Claude Code
@@ -190,13 +223,14 @@ Configure in your project's `.mcp.json` or global MCP settings:
 1. Go to **Settings** > **Tools** > **OpenAPI Tools**
 2. Add a new tool server:
    - **Name**: Curatore
-   - **URL**: `http://localhost:8020/openai`
+   - **URL**: `http://localhost:8020`
+   - **OpenAPI Spec**: `openapi.json`
    - **Authentication**: Bearer Token
-   - **Token**: `mcp_dev_key`
+   - **Token**: Your MCP API key
 
 Open WebUI will automatically:
-- Fetch tools from `GET /openai/tools`
-- Execute tools via `POST /openai/tools/{name}`
+- Fetch tools from `GET /openapi.json`
+- Execute tools via `POST /{tool_name}` (flat paths)
 
 ### ChatGPT / OpenAI-Compatible Clients
 
@@ -312,6 +346,75 @@ curl -X POST \
   }'
 ```
 
+#### Progress Streaming (MCP notifications/progress)
+
+For long-running tool calls, clients can request progress updates using the MCP `_meta.progressToken` pattern:
+
+**1. Call tool with progress token:**
+```bash
+curl -X POST \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  http://localhost:8020/search_assets \
+  -d '{
+    "_meta": {"progressToken": "my-unique-token"},
+    "query": "contract management",
+    "limit": 50
+  }'
+```
+
+**2. Stream progress updates (SSE):**
+```bash
+curl -N -H "Authorization: Bearer YOUR_API_KEY" \
+  http://localhost:8020/progress/my-unique-token/stream
+```
+
+**3. Or poll for progress:**
+```bash
+curl -H "Authorization: Bearer YOUR_API_KEY" \
+  http://localhost:8020/progress/my-unique-token
+```
+
+**SSE Event Format:**
+```
+event: progress
+data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"my-unique-token","progress":40,"message":"Executing search_assets..."}}
+
+event: complete
+data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"my-unique-token","progress":100,"status":"completed"}}
+```
+
+**JavaScript Example:**
+```javascript
+// Start SSE listener before calling tool
+const eventSource = new EventSource('/progress/my-token/stream', {
+  headers: { 'Authorization': 'Bearer YOUR_API_KEY' }
+});
+
+eventSource.addEventListener('progress', (e) => {
+  const data = JSON.parse(e.data);
+  console.log(`Progress: ${data.params.progress}% - ${data.params.message}`);
+});
+
+eventSource.addEventListener('complete', (e) => {
+  console.log('Tool execution complete');
+  eventSource.close();
+});
+
+// Then call the tool with the same token
+fetch('/search_assets', {
+  method: 'POST',
+  headers: {
+    'Authorization': 'Bearer YOUR_API_KEY',
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    _meta: { progressToken: 'my-token' },
+    query: 'test'
+  })
+});
+```
+
 ---
 
 ## Available Tools
@@ -354,6 +457,15 @@ The following tools are exposed by default (configurable via `policy.yaml`):
 | `analyze_solicitation` | Full solicitation analysis workflow |
 | `classify_document` | Document classification workflow |
 
+### Email Workflow (Two-Step for AI Safety)
+
+| Tool | Description | Side Effects |
+|------|-------------|--------------|
+| `prepare_email` | Create email preview, returns confirmation token | No |
+| `confirm_email` | Send email using confirmation token (15 min expiry) | Yes (allowed via `side_effects_allowlist`) |
+
+The two-step email workflow prevents AI agents from sending emails without explicit human confirmation. The AI calls `prepare_email` to create a preview, shows it to the user, and only calls `confirm_email` after user approval.
+
 ---
 
 ## Policy Configuration
@@ -375,12 +487,17 @@ allowlist:
 
 ### Side-Effect Blocking
 
-Functions with `side_effects: true` (e.g., `send_email`, `create_artifact`) are automatically blocked:
+Functions with `side_effects: true` (e.g., `send_email`, `create_artifact`) are automatically blocked unless explicitly allowed:
 
 ```yaml
 settings:
   block_side_effects: true
+  # Exceptions: allow these side-effect functions (must also be in allowlist)
+  side_effects_allowlist:
+    - confirm_email  # Safe because it requires a token from prepare_email
 ```
+
+The `side_effects_allowlist` enables controlled side-effect functions like `confirm_email` that have safety mechanisms (confirmation tokens, expiry).
 
 ### Parameter Clamping
 

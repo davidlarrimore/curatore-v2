@@ -534,19 +534,38 @@ class ProcedureValidator:
                 ))
 
             # Enum validation from JSON Schema
-            enum_values = prop_schema.get("enum")
-            if enum_values and value not in enum_values:
-                errors.append(ValidationError(
-                    code=ValidationErrorCode.INVALID_PARAM_TYPE,
-                    message=f"Parameter '{param_name}' for function '{func_name}' value '{value}' not in allowed values: {enum_values}",
-                    path=f"{step_path}.params.{param_name}",
-                    details={
-                        "function": func_name,
-                        "parameter": param_name,
-                        "value": value,
-                        "allowed_values": enum_values,
-                    },
-                ))
+            # For arrays, enum is inside "items"; for scalars, enum is at top level
+            if expected_type == "array":
+                items_schema = prop_schema.get("items", {})
+                enum_values = items_schema.get("enum")
+                if enum_values and isinstance(value, list):
+                    for item in value:
+                        if item not in enum_values:
+                            errors.append(ValidationError(
+                                code=ValidationErrorCode.INVALID_PARAM_TYPE,
+                                message=f"Parameter '{param_name}' for function '{func_name}' contains invalid value '{item}' not in allowed values: {enum_values}",
+                                path=f"{step_path}.params.{param_name}",
+                                details={
+                                    "function": func_name,
+                                    "parameter": param_name,
+                                    "value": item,
+                                    "allowed_values": enum_values,
+                                },
+                            ))
+            else:
+                enum_values = prop_schema.get("enum")
+                if enum_values and value not in enum_values:
+                    errors.append(ValidationError(
+                        code=ValidationErrorCode.INVALID_PARAM_TYPE,
+                        message=f"Parameter '{param_name}' for function '{func_name}' value '{value}' not in allowed values: {enum_values}",
+                        path=f"{step_path}.params.{param_name}",
+                        details={
+                            "function": func_name,
+                            "parameter": param_name,
+                            "value": value,
+                            "allowed_values": enum_values,
+                        },
+                    ))
 
         return errors
 

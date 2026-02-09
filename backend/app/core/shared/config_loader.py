@@ -415,6 +415,28 @@ class ConfigLoader:
             return llm_config.default_model
         return "claude-4-5-sonnet"
 
+    def get_embedding_dimensions(self) -> Optional[int]:
+        """Get configured embedding dimensions, or None if not explicitly set."""
+        llm_config = self.get_llm_config()
+        if llm_config and llm_config.task_types:
+            embedding_config = llm_config.task_types.get("embedding")
+            if embedding_config and embedding_config.dimensions is not None:
+                return embedding_config.dimensions
+        return None
+
+    def get_embedding_config_state(self) -> dict:
+        """Get current embedding config as a dict for tracking/comparison.
+
+        Returns dict with 'model' and 'dimensions' keys representing the
+        effective embedding configuration.
+        """
+        model = self.get_embedding_model()
+        dimensions = self.get_embedding_dimensions()
+        if dimensions is None:
+            from app.core.search.embedding_service import EMBEDDING_DIMENSIONS, EmbeddingService
+            dimensions = EMBEDDING_DIMENSIONS.get(model, EmbeddingService.DEFAULT_DIM)
+        return {"model": model, "dimensions": dimensions}
+
     # Legacy method aliases for backward compatibility during migration
     def get_embedding_model(self) -> str:
         """Get embedding model. Use get_model_for_task(LLMTaskType.EMBEDDING) instead."""

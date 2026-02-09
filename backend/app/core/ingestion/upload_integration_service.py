@@ -254,7 +254,7 @@ class UploadIntegrationService:
         await session.commit()
 
         # Enqueue extraction task (async execution via Celery)
-        from ...tasks import execute_extraction_task
+        from ..tasks import execute_extraction_task
 
         task = execute_extraction_task.apply_async(
             kwargs={
@@ -472,7 +472,7 @@ class UploadIntegrationService:
         await session.commit()
 
         # Enqueue extraction task (async execution via Celery)
-        from ...tasks import execute_extraction_task
+        from ..tasks import execute_extraction_task
 
         task = execute_extraction_task.apply_async(
             kwargs={

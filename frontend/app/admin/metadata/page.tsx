@@ -671,9 +671,12 @@ export default function MetadataCatalogPage() {
 
                 {catalog.facets.map((facet) => (
                   <div key={facet.facet_name} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
-                    <button
+                    <div
                       onClick={() => toggleFacet(facet.facet_name)}
-                      className="w-full flex items-center justify-between p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50"
+                      role="button"
+                      tabIndex={0}
+                      onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggleFacet(facet.facet_name); } }}
+                      className="w-full flex items-center justify-between p-4 hover:bg-gray-50 dark:hover:bg-gray-800/50 cursor-pointer"
                     >
                       <div className="flex items-center space-x-3">
                         {expandedFacets.has(facet.facet_name) ? (
@@ -700,7 +703,7 @@ export default function MetadataCatalogPage() {
                           <Trash2 className="w-3.5 h-3.5" />
                         </button>
                       </div>
-                    </button>
+                    </div>
 
                     {expandedFacets.has(facet.facet_name) && (
                       <div className="border-t border-gray-200 dark:border-gray-700 p-4 space-y-3">

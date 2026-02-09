@@ -4,7 +4,7 @@
 version: "1.0"
 
 # MVP allowlist - all safe functions (no side effects)
-# Functions with side_effects=true are automatically excluded regardless of this list
+# Functions with side_effects=true are automatically excluded unless in side_effects_allowlist
 allowlist:
   # Search functions (thin payload - return IDs/scores)
   - search_assets
@@ -26,6 +26,9 @@ allowlist:
   # Compound functions (safe, read-only)
   - analyze_solicitation
   - classify_document
+  # Email workflow (two-step confirmation for AI safety)
+  - prepare_email    # No side effects - creates preview
+  - confirm_email    # Has side effects - requires confirmation token
 
 # Parameter clamps - limit values that users can request
 # These override user input to enforce resource limits
@@ -84,6 +87,10 @@ clamps:
 settings:
   # Block all functions with side_effects=true (overrides allowlist)
   block_side_effects: true
+  # Exceptions: allow these side-effect functions (must also be in allowlist)
+  # These are "safe" because they require a confirmation token from a prepare step
+  side_effects_allowlist:
+    - confirm_email
   # Validate facet_filters against metadata catalog
   validate_facets: true
   # Cache TTL for contracts (seconds)

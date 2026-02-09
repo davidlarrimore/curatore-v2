@@ -457,7 +457,7 @@ class ExtractionOrchestrator:
                         message="Queueing asset for search indexing...",
                     )
 
-                    from ...tasks import index_asset_task
+                    from ..tasks import index_asset_task
                     index_asset_task.delay(asset_id=str(asset_id))
 
                     logger.info(f"Queued asset {asset_id} for search indexing")

@@ -83,6 +83,7 @@ class EmbeddingService:
         self._client = None
         self._model_name = None
         self._embedding_dim = None
+        self._configured_dimensions = None
 
     def _get_config(self):
         """Get embedding configuration from config_loader."""
@@ -104,6 +105,30 @@ class EmbeddingService:
             self._model_name = self.DEFAULT_MODEL
 
         return self._model_name
+
+    def _get_configured_dimensions(self) -> Optional[int]:
+        """Get explicitly configured embedding dimensions from config, or None."""
+        if hasattr(self, '_configured_dimensions') and self._configured_dimensions is not None:
+            return self._configured_dimensions
+        try:
+            from app.core.shared.config_loader import config_loader
+            llm_config = config_loader.get_llm_config()
+            if llm_config and llm_config.task_types:
+                embedding_config = llm_config.task_types.get("embedding")
+                if embedding_config and embedding_config.dimensions is not None:
+                    self._configured_dimensions = embedding_config.dimensions
+                    return self._configured_dimensions
+        except Exception:
+            pass
+        return None
+
+    def _embedding_kwargs(self, model: str, input_data) -> dict:
+        """Build kwargs for client.embeddings.create(), including dimensions if configured."""
+        kwargs = {"model": model, "input": input_data}
+        configured_dims = self._get_configured_dimensions()
+        if configured_dims is not None:
+            kwargs["dimensions"] = configured_dims
+        return kwargs
 
     def _is_rate_limit_error(self, error: Exception) -> bool:
         """Check if an exception is a rate limit error."""
@@ -201,7 +226,7 @@ class EmbeddingService:
         if not text.strip():
             text = "empty"
 
-        response = client.embeddings.create(model=model, input=text)
+        response = client.embeddings.create(**self._embedding_kwargs(model, text))
         return response.data[0].embedding
 
     def _generate_embeddings_batch_sync(self, texts: List[str]) -> List[List[float]]:
@@ -265,7 +290,7 @@ class EmbeddingService:
 
         for attempt in range(MAX_RETRIES):
             try:
-                response = client.embeddings.create(model=model, input=batch)
+                response = client.embeddings.create(**self._embedding_kwargs(model, batch))
                 # Response data is in same order as input
                 return [item.embedding for item in response.data]
 
@@ -320,7 +345,7 @@ class EmbeddingService:
 
             for attempt in range(MAX_RETRIES):
                 try:
-                    response = client.embeddings.create(model=model, input=text)
+                    response = client.embeddings.create(**self._embedding_kwargs(model, text))
                     embedding = response.data[0].embedding
                     # Reset backoff on success
                     backoff = INITIAL_BACKOFF_SECONDS
@@ -471,10 +496,17 @@ class EmbeddingService:
 
     @property
     def embedding_dim(self) -> int:
-        """Return the dimension of the embeddings based on model."""
+        """Return the dimension of the embeddings based on config or model."""
         if self._embedding_dim:
             return self._embedding_dim
 
+        # Check for explicitly configured dimensions first
+        configured = self._get_configured_dimensions()
+        if configured is not None:
+            self._embedding_dim = configured
+            return self._embedding_dim
+
+        # Fall back to model's native dimensions
         model = self._get_model_name()
         self._embedding_dim = EMBEDDING_DIMENSIONS.get(model, self.DEFAULT_DIM)
         return self._embedding_dim

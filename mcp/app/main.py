@@ -7,7 +7,7 @@ from contextlib import asynccontextmanager
 from typing import Any, Dict, Optional
 
 from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
@@ -21,10 +21,11 @@ from app.models.mcp import (
     MCPToolsCallResponse,
 )
 from app.models.openai import OpenAIToolsResponse
-from app.handlers import handle_initialize, handle_tools_list, handle_tools_call
+from app.handlers import handle_initialize, handle_tools_list, handle_tools_call, extract_progress_token
 from app.services.openai_converter import mcp_tools_to_openai
 from app.services.policy_service import policy_service
 from app.services.backend_client import backend_client
+from app.services.progress_service import progress_service
 
 # Configure logging
 logging.basicConfig(
@@ -52,6 +53,9 @@ app = FastAPI(
     description="MCP-compatible gateway for Curatore CWR functions",
     version=settings.mcp_server_version,
     lifespan=lifespan,
+    openapi_url=None,  # Disable built-in OpenAPI, we generate our own
+    docs_url=None,     # Disable Swagger UI
+    redoc_url=None,    # Disable ReDoc
 )
 
 # Add middleware (order matters - first added = outermost)
@@ -153,12 +157,16 @@ async def mcp_endpoint(request: Request):
             if not tool_name:
                 return _json_rpc_error(rpc_request.id, -32602, "Missing tool name")
 
+            # Extract MCP progress token from _meta
+            progress_token, clean_arguments = extract_progress_token(arguments)
+
             result = await handle_tools_call(
                 name=tool_name,
-                arguments=arguments,
+                arguments=clean_arguments,
                 org_id=org_id,
                 api_key=api_key,
                 correlation_id=correlation_id,
+                progress_token=progress_token,
             )
             return _json_rpc_response(rpc_request.id, result.model_dump())
 
@@ -257,6 +265,91 @@ async def reload_policy():
 
 
 # =============================================================================
+# Progress Streaming Endpoints (MCP notifications/progress)
+# =============================================================================
+
+
+@app.get("/progress/{token}")
+async def get_progress(token: str):
+    """
+    Get current progress state for a token.
+
+    Returns the current state without streaming.
+    """
+    state = progress_service.get(token)
+    if not state:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Progress token not found"},
+        )
+    return state.to_dict()
+
+
+@app.get("/progress/{token}/stream")
+async def stream_progress(token: str, request: Request):
+    """
+    Stream progress updates via Server-Sent Events (SSE).
+
+    This implements MCP's notifications/progress pattern over HTTP.
+    Connect to this endpoint before or immediately after starting a tool
+    call with a progressToken to receive real-time updates.
+
+    Events:
+    - `progress`: Progress update with current state
+    - `complete`: Tool execution completed
+    - `error`: Tool execution failed
+
+    Example:
+        ```javascript
+        const eventSource = new EventSource('/progress/my-token/stream');
+        eventSource.onmessage = (e) => console.log(JSON.parse(e.data));
+        ```
+    """
+    state = progress_service.get(token)
+    if not state:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "Progress token not found"},
+        )
+
+    async def event_generator():
+        """Generate SSE events from progress updates."""
+        async for notification in progress_service.subscribe(token):
+            # Format as SSE
+            params = notification.get("params", {})
+            status = params.get("status", "progress")
+
+            event_type = "progress"
+            if status == "completed":
+                event_type = "complete"
+            elif status == "error":
+                event_type = "error"
+
+            yield f"event: {event_type}\n"
+            yield f"data: {json.dumps(notification)}\n\n"
+
+            # End stream on completion or error
+            if status in ("completed", "error"):
+                break
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+@app.get("/progress")
+async def list_active_progress():
+    """List all active progress states."""
+    return progress_service.list_active()
+
+
+# =============================================================================
 # OpenAI-Compatible Endpoints
 # =============================================================================
 
@@ -321,12 +414,147 @@ async def call_openai_tool(name: str, request: Request):
     return result.model_dump()
 
 
+@app.get("/openapi.json")
+async def get_openapi_spec(request: Request):
+    """
+    Generate OpenAPI specification for Open WebUI integration.
+
+    This dynamically generates an OpenAPI 3.1 spec based on the available
+    tools, allowing Open WebUI to discover and call tools as API endpoints.
+    """
+    api_key = getattr(request.state, "api_key", None)
+    correlation_id = getattr(request.state, "correlation_id", None)
+
+    # Get available tools
+    mcp_result = await handle_tools_list(api_key, correlation_id)
+    openai_tools = mcp_tools_to_openai(mcp_result.tools)
+
+    # Build OpenAPI paths from tools - flat paths like Open WebUI expects
+    paths = {}
+    for tool in openai_tools:
+        func = tool.function
+        tool_name = func.name
+
+        # Create POST endpoint for each tool at root level
+        paths[f"/{tool_name}"] = {
+            "post": {
+                "operationId": tool_name,
+                "summary": func.description.split("\n")[0],  # First line
+                "description": func.description,
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": func.parameters
+                        }
+                    }
+                },
+                "responses": {
+                    "200": {
+                        "description": "Successful response",
+                        "content": {
+                            "application/json": {
+                                "schema": {
+                                    "type": "object",
+                                    "properties": {
+                                        "content": {
+                                            "type": "array",
+                                            "items": {
+                                                "type": "object",
+                                                "properties": {
+                                                    "type": {"type": "string"},
+                                                    "text": {"type": "string"}
+                                                }
+                                            }
+                                        },
+                                        "isError": {"type": "boolean"}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                },
+                "security": [{"BearerAuth": []}]
+            }
+        }
+
+    # Build complete OpenAPI spec
+    openapi_spec = {
+        "openapi": "3.1.0",
+        "info": {
+            "title": "Curatore CWR Tools",
+            "description": "Curatore Workflow Runtime tools for document search, content retrieval, and LLM operations.",
+            "version": settings.mcp_server_version,
+        },
+        "servers": [
+            {
+                "url": "",
+                "description": "Curatore MCP Gateway"
+            }
+        ],
+        "paths": paths,
+        "components": {
+            "securitySchemes": {
+                "BearerAuth": {
+                    "type": "http",
+                    "scheme": "bearer",
+                    "description": "API key authentication"
+                }
+            }
+        },
+        "security": [{"BearerAuth": []}]
+    }
+
+    return openapi_spec
+
+
+@app.post("/{tool_name}")
+async def call_tool_direct(tool_name: str, request: Request):
+    """
+    Execute a tool directly (Open WebUI compatible flat path).
+    """
+    try:
+        body = await request.json()
+    except json.JSONDecodeError:
+        body = {}
+
+    org_id = getattr(request.state, "org_id", None)
+    api_key = getattr(request.state, "api_key", None)
+    correlation_id = getattr(request.state, "correlation_id", None)
+
+    # Support both direct args and wrapped args
+    if "arguments" in body and isinstance(body["arguments"], dict):
+        arguments = body["arguments"]
+    else:
+        arguments = body
+
+    result = await handle_tools_call(
+        name=tool_name,
+        arguments=arguments,
+        org_id=org_id,
+        api_key=api_key,
+        correlation_id=correlation_id,
+    )
+    return result.model_dump()
+
+
 if __name__ == "__main__":
     import uvicorn
 
-    uvicorn.run(
-        "app.main:app",
-        host=settings.host,
-        port=settings.port,
-        reload=settings.debug,
-    )
+    # Build uvicorn config
+    config = {
+        "app": "app.main:app",
+        "host": settings.host,
+        "port": settings.port,
+        "reload": settings.debug,
+    }
+
+    # Add SSL if configured
+    if settings.ssl_certfile and settings.ssl_keyfile:
+        config["ssl_certfile"] = settings.ssl_certfile
+        config["ssl_keyfile"] = settings.ssl_keyfile
+        logger.info(f"Starting with HTTPS on port {settings.port}")
+    else:
+        logger.info(f"Starting with HTTP on port {settings.port}")
+
+    uvicorn.run(**config)

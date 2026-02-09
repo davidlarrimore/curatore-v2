@@ -152,6 +152,7 @@ Provides lazy-loaded services:
 | **Search** (`primitives/search/`) | `search_assets`, `search_solicitations`, `search_notices`, `search_forecasts`, `get`, `get_content`, `query_model` | Query and retrieve data |
 | **Output** (`primitives/output/`) | `update_metadata`, `bulk_update_metadata`, `create_artifact`, `generate_document` | Create/update data |
 | **Notify** (`primitives/notify/`) | `send_email`, `webhook` | External notifications |
+| **Email Workflow** (`compounds/email_workflow.py`) | `prepare_email`, `confirm_email` | Two-step email for AI safety |
 | **Compound** (`compounds/`) | `analyze_solicitation`, `summarize_solicitations`, `generate_digest`, `classify_document` | Multi-step workflows |
 
 ### SAM.gov Search Functions
@@ -681,6 +682,38 @@ meta = FunctionMeta(
 ```
 
 The executor checks exposure profiles before running steps, allowing organizations to block externally-facing functions.
+
+### Two-Step Email Workflow (AI Safety)
+
+For AI agents (MCP, Open WebUI, Claude Desktop), direct email sending is blocked by policy. Instead, use the two-step email workflow:
+
+1. **`prepare_email`** (no side effects) - Creates a preview and returns a confirmation token
+2. **`confirm_email`** (has side effects, but allowed via `side_effects_allowlist`) - Sends the email using the token
+
+```yaml
+# Example: AI agent workflow
+steps:
+  - name: draft_email
+    function: prepare_email
+    params:
+      to: ["team@company.com"]
+      subject: "Daily Report"
+      body: "{{ steps.generate_report }}"
+
+  # AI reviews the preview, then confirms
+  - name: send_email
+    function: confirm_email
+    params:
+      confirmation_token: "{{ steps.draft_email.confirmation_token }}"
+```
+
+**Why this pattern?**
+- Prevents AI agents from sending emails without explicit confirmation
+- Token expires after 15 minutes for security
+- AI can review the preview before confirming
+- Direct `send_email` is still available for procedures (not exposed via MCP)
+
+The MCP Gateway's `policy.yaml` includes `confirm_email` in the `side_effects_allowlist`, allowing it to execute while blocking other side-effect functions.
 
 ---
 
