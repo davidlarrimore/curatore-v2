@@ -12,6 +12,8 @@ Development guidance for Claude Code working with Curatore v2.
 
 **Integrations**: [SAM.gov](docs/SAM_INTEGRATION.md) | [Salesforce](docs/SALESFORCE_INTEGRATION.md) | [SharePoint](docs/SHAREPOINT_INTEGRATION.md) | [Forecasts](docs/FORECAST_INTEGRATION.md) | [Web Scraping](docs/DATA_CONNECTIONS.md#web-scraping)
 
+**AI Clients**: [MCP Gateway](mcp/README.md) | [Open WebUI](docs/MCP_OPEN_WEBUI.md)
+
 **Reference**: [API Docs](docs/API_DOCUMENTATION.md) | [Configuration](docs/CONFIGURATION.md) | [Maintenance Tasks](docs/MAINTENANCE_TASKS.md)
 
 ---
@@ -58,6 +60,7 @@ docker exec curatore-backend python -m app.core.commands.seed --create-admin
 | Frontend | http://localhost:3000 |
 | Backend API | http://localhost:8000 |
 | API Docs | http://localhost:8000/docs |
+| MCP Gateway | http://localhost:8020 |
 | MinIO Console | http://localhost:9001 |
 | PostgreSQL | localhost:5432 (curatore/curatore_dev_password) |
 
@@ -69,6 +72,7 @@ docker exec curatore-backend python -m app.core.commands.seed --create-admin
 | 8000 | Backend API |
 | 8010 | Extraction Service |
 | 8011 | Playwright Service |
+| 8020 | MCP Gateway (AI tool server) |
 | 6379 | Redis |
 | 9000 | MinIO S3 API |
 | 9001 | MinIO Console |
@@ -188,6 +192,18 @@ frontend/
 
 extraction-service/                  # Document conversion microservice
 playwright-service/                  # Browser rendering microservice
+
+mcp/                                 # MCP Gateway (AI tool server)
+├── app/
+│   ├── main.py                      # FastAPI app (HTTP transport)
+│   ├── handlers/                    # MCP protocol handlers
+│   ├── services/                    # Policy, backend client, converters
+│   └── models/                      # MCP, OpenAI, policy models
+├── stdio_server.py                  # STDIO server for Claude Desktop
+├── Dockerfile                       # HTTP server image
+├── Dockerfile.stdio                 # STDIO server image (Claude Desktop)
+├── policy.yaml                      # Tool allowlist, clamps, side-effect policy
+└── README.md                        # Full MCP Gateway documentation
 ```
 
 ---
@@ -692,6 +708,8 @@ docker exec -it curatore-postgres psql -U curatore -d curatore -c "\dt"
 
 | Document | Description |
 |----------|-------------|
+| [MCP Gateway](mcp/README.md) | AI tool server for Claude Desktop, Open WebUI, and MCP clients |
+| [MCP & Open WebUI](docs/MCP_OPEN_WEBUI.md) | Open WebUI integration guide |
 | [Search & Indexing](docs/SEARCH_INDEXING.md) | Hybrid search, pgvector, chunking, embeddings, reindexing |
 | [Queue System](docs/QUEUE_SYSTEM.md) | Queue architecture, job groups, cancellation |
 | [SAM.gov Integration](docs/SAM_INTEGRATION.md) | SAM.gov data model and API |
