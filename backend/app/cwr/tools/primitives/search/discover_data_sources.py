@@ -226,6 +226,7 @@ class DiscoverDataSourcesFunction(BaseFunction):
         elif source_type == "sharepoint":
             SharePointSyncConfig = models["SharePointSyncConfig"]
             Asset = models["Asset"]
+            from app.core.database.models import SharePointSyncedDocument
 
             # Get configs
             result = await ctx.session.execute(
@@ -258,10 +259,41 @@ class DiscoverDataSourcesFunction(BaseFunction):
             else:
                 asset_counts = {}
 
+            # Get top-level folder paths per sync config (first 2 levels of depth)
+            folder_paths_by_config = {}
+            if configs:
+                path_result = await ctx.session.execute(
+                    select(
+                        SharePointSyncedDocument.sync_config_id,
+                        SharePointSyncedDocument.sharepoint_path,
+                    )
+                    .where(
+                        SharePointSyncedDocument.sync_config_id.in_(
+                            [c.id for c in configs]
+                        )
+                    )
+                    .where(SharePointSyncedDocument.sync_status == "synced")
+                    .where(SharePointSyncedDocument.sharepoint_path.isnot(None))
+                )
+                for row in path_result:
+                    cfg_id = str(row.sync_config_id)
+                    path = row.sharepoint_path or ""
+                    # Extract top-level folders (first 2 levels)
+                    parts = [p for p in path.strip("/").split("/") if p]
+                    if len(parts) >= 1:
+                        folder_paths_by_config.setdefault(cfg_id, set()).add(parts[0])
+                    if len(parts) >= 2:
+                        folder_paths_by_config.setdefault(cfg_id, set()).add(
+                            f"{parts[0]}/{parts[1]}"
+                        )
+
             for c in configs:
                 site_name = getattr(c, "site_name", None)
                 counts = asset_counts.get(str(c.id), {"total": 0, "indexed": 0})
-                instances.append({
+                available_folders = sorted(
+                    folder_paths_by_config.get(str(c.id), set())
+                )
+                inst = {
                     "type": "sharepoint_sync",
                     "id": str(c.id),
                     "name": c.name,
@@ -273,7 +305,14 @@ class DiscoverDataSourcesFunction(BaseFunction):
                         "searchable_documents": counts["indexed"],
                     },
                     "last_sync_at": c.last_sync_at.isoformat() if c.last_sync_at else None,
-                })
+                }
+                if available_folders:
+                    inst["available_folders"] = available_folders
+                    inst["folder_path_hint"] = (
+                        "Use these paths with search_assets(folder_path='...') "
+                        "to filter by folder. Prefix-matches subfolders too."
+                    )
+                instances.append(inst)
 
         elif source_type in ("forecast_ag", "forecast_apfs", "forecast_state"):
             ForecastSync = models["ForecastSync"]

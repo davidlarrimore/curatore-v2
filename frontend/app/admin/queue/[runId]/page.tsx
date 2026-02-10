@@ -996,7 +996,8 @@ function ResultsSummaryDisplay({ summary }: { summary: Record<string, unknown> }
   const lists: [string, unknown[]][] = [];
   const others: [string, unknown][] = [];
 
-  Object.entries(summary).forEach(([key, value]) => {
+  const hiddenKeys = new Set(['step_summary', 'step_results']);
+  Object.entries(summary).filter(([key]) => !hiddenKeys.has(key)).forEach(([key, value]) => {
     if (typeof value === 'number') {
       stats.push([key, value]);
     } else if (Array.isArray(value)) {

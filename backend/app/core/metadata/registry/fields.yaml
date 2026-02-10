@@ -65,9 +65,9 @@ fields:
     path:
       data_type: string
       indexed: true
-      facetable: false
+      facetable: true
       applicable_content_types: [asset]
-      description: "Full SharePoint path"
+      description: "Human-readable SharePoint folder path (e.g., 'Reuse Material/Past Performances/CBP')"
 
     folder:
       data_type: string

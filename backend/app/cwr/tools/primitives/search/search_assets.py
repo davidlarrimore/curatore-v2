@@ -21,6 +21,7 @@ from ...base import (
 )
 from ...context import FunctionContext
 from ...content import ContentItem
+from ...filters import WHERE_PARAM, build_jsonb_where
 
 logger = logging.getLogger("curatore.functions.search.search_assets")
 
@@ -58,7 +59,8 @@ class SearchAssetsFunction(BaseFunction):
                     "Use specific names or acronyms, not full sentences. "
                     "Good: 'SOW cybersecurity', 'DISCOVER II proposal'. "
                     "Bad: 'Statement of Work for cybersecurity endpoint protection and monitoring services'. "
-                    "Use filters (source_type, site_name, facet_filters) to narrow results instead of adding more query terms."
+                    "Use filters (source_type, site_name, facet_filters) to narrow results instead of adding more query terms. "
+                    "Use '*' to list all assets matching the provided filters without text search (returns results ordered by creation date)."
                 ),
                 required=True,
             ),
@@ -102,10 +104,15 @@ class SearchAssetsFunction(BaseFunction):
             ParameterDoc(
                 name="folder_path",
                 type="str",
-                description="Filter by folder path. Accepts storage paths (e.g., 'sharepoint/my-site/shared-documents/opportunities') or human-friendly paths (e.g., 'Shared Documents/Opportunities') which are auto-slugified. Copy from the storage browser or asset detail page.",
+                description=(
+                    "Filter by folder path. Accepts human-readable SharePoint paths "
+                    "(e.g., 'Reuse Material/Past Performances') which prefix-match folders and subfolders, "
+                    "or slugified storage paths (e.g., 'sharepoint/my-site/shared-documents'). "
+                    "Use discover_data_sources(source_type='sharepoint') to see available folder paths."
+                ),
                 required=False,
                 default=None,
-                example="sharepoint/my-site/shared-documents/opportunities",
+                example="Reuse Material/Past Performances",
             ),
             ParameterDoc(
                 name="search_mode",
@@ -129,6 +136,7 @@ class SearchAssetsFunction(BaseFunction):
                 required=False,
                 default=20,
             ),
+            WHERE_PARAM,
         ],
         returns="list[ContentItem]: Search results with document metadata",
         output_schema=OutputSchema(
@@ -172,6 +180,14 @@ class SearchAssetsFunction(BaseFunction):
                     "limit": 10,
                 },
             },
+            {
+                "description": "List assets missing site_name metadata",
+                "params": {
+                    "query": "*",
+                    "source_type": "sharepoint",
+                    "where": [{"field": "sharepoint.site_name", "op": "is_empty"}],
+                },
+            },
         ],
     )
 
@@ -192,6 +208,17 @@ class SearchAssetsFunction(BaseFunction):
             return FunctionResult.failed_result(
                 error="Empty query",
                 message="Search query cannot be empty",
+            )
+
+        # Wildcard query: list assets by filters without full-text search
+        if query.strip() == "*":
+            # Allow higher limit for wildcard listing (not constrained by FTS)
+            wildcard_limit = min(params.get("limit", 100), 10000)
+            where_conditions = params.get("where")
+            return await self._list_by_filters(
+                ctx, source_type=source_type, sync_config_id=sync_config_id,
+                collection_id=collection_id, site_name=site_name, limit=wildcard_limit,
+                where_conditions=where_conditions,
             )
 
         try:
@@ -278,15 +305,15 @@ class SearchAssetsFunction(BaseFunction):
 
                 # Parse folder_path from title (title often contains full path like "Folder/SubFolder/file.pdf")
                 title = sr.title or sr.filename or ""
-                folder_path = ""
+                result_folder = ""
                 if "/" in title and sr.filename:
                     # Title contains path, extract folder portion
-                    folder_path = title.rsplit("/", 1)[0] if "/" in title else ""
+                    result_folder = title.rsplit("/", 1)[0] if "/" in title else ""
 
                 # Extract site_name from search chunk metadata
-                site_name = None
+                result_site_name = None
                 if sr.metadata:
-                    site_name = sr.metadata.get("sharepoint", {}).get("site_name")
+                    result_site_name = sr.metadata.get("sharepoint", {}).get("site_name")
 
                 item = ContentItem(
                     id=str(sr.asset_id),
@@ -297,12 +324,12 @@ class SearchAssetsFunction(BaseFunction):
                     text_format="markdown",
                     fields={
                         "original_filename": sr.filename,
-                        "folder_path": folder_path,
+                        "folder_path": result_folder,
                         "content_type": sr.content_type,
                         "source_type": sr.source_type,  # Display type from search service
                         "source_url": sr.url,
                         "status": "ready",  # Only indexed assets are searchable
-                        "site_name": site_name,
+                        "site_name": result_site_name,
                     },
                     metadata={
                         "score": sr.score,
@@ -337,4 +364,115 @@ class SearchAssetsFunction(BaseFunction):
             return FunctionResult.failed_result(
                 error=str(e),
                 message="Search failed",
+            )
+
+    async def _list_by_filters(
+        self,
+        ctx: FunctionContext,
+        source_type: str = None,
+        sync_config_id: str = None,
+        collection_id: str = None,
+        site_name: str = None,
+        limit: int = 100,
+        where_conditions: List[Dict[str, Any]] = None,
+    ) -> FunctionResult:
+        """
+        List assets by filters without full-text search.
+
+        Used when query="*" to return all matching assets ordered by creation date.
+        Queries the Asset table directly instead of search_chunks.
+        """
+        from uuid import UUID as _UUID
+        from sqlalchemy import select, func as sqla_func, or_, and_, literal
+        from app.core.database.models import Asset
+
+        try:
+            query = select(Asset).where(
+                Asset.organization_id == ctx.organization_id,
+            )
+
+            # Apply operator-based where conditions via shared filter module
+            if where_conditions:
+                clauses = build_jsonb_where(Asset.source_metadata, where_conditions)
+                for clause in clauses:
+                    query = query.where(clause)
+
+            if source_type:
+                query = query.where(Asset.source_type == source_type)
+
+            if sync_config_id:
+                sid = sync_config_id if isinstance(sync_config_id, str) else str(sync_config_id)
+                query = query.where(
+                    Asset.source_metadata["sync"]["config_id"].astext == sid
+                )
+
+            if collection_id:
+                cid = collection_id if isinstance(collection_id, str) else str(collection_id)
+                query = query.where(
+                    Asset.source_metadata["scrape"]["collection_id"].astext == cid
+                )
+
+            if site_name:
+                from app.core.database.models import SharePointSyncConfig
+                config_result = await ctx.session.execute(
+                    select(SharePointSyncConfig.id)
+                    .where(SharePointSyncConfig.organization_id == ctx.organization_id)
+                    .where(SharePointSyncConfig.is_active == True)
+                    .where(sqla_func.lower(SharePointSyncConfig.site_name) == site_name.lower())
+                )
+                config_ids = [str(row[0]) for row in config_result.fetchall()]
+                if not config_ids:
+                    return FunctionResult.success_result(
+                        data=[],
+                        message=f"No SharePoint sites found matching '{site_name}'",
+                        items_processed=0,
+                    )
+                query = query.where(
+                    Asset.source_metadata["sync"]["config_id"].astext.in_(config_ids)
+                )
+
+            query = query.order_by(Asset.created_at.desc()).limit(limit)
+
+            result = await ctx.session.execute(query)
+            assets = result.scalars().all()
+
+            results = []
+            for asset in assets:
+                sm = asset.source_metadata or {}
+                sp_meta = sm.get("sharepoint", {})
+                source_meta = sm.get("source", {})
+
+                item = ContentItem(
+                    id=str(asset.id),
+                    type="asset",
+                    display_type="Document",
+                    title=source_meta.get("original_filename") or asset.original_filename or "",
+                    text=None,
+                    fields={
+                        "original_filename": asset.original_filename,
+                        "content_type": asset.content_type,
+                        "source_type": asset.source_type,
+                        "source_url": source_meta.get("url"),
+                        "site_name": sp_meta.get("site_name"),
+                        "status": "ready" if asset.indexed_at else "pending",
+                    },
+                )
+                results.append(item)
+
+            return FunctionResult.success_result(
+                data=results,
+                message=f"Found {len(results)} assets",
+                metadata={
+                    "query": "*",
+                    "mode": "list_by_filters",
+                    "total_found": len(results),
+                },
+                items_processed=len(results),
+            )
+
+        except Exception as e:
+            logger.exception(f"List by filters failed: {e}")
+            return FunctionResult.failed_result(
+                error=str(e),
+                message="Failed to list assets",
             )

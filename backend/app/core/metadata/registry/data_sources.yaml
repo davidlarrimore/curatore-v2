@@ -106,8 +106,12 @@ source_types:
     search_tools:
       - tool: search_assets
         use_for: "Full-text search of synced documents"
-        filter: "site_name='...' or sync_config_id='...'"
+        filter: "site_name='...' or sync_config_id='...' or folder_path='Folder/Subfolder'"
         next_step: "Use get_content(asset_ids=[...]) to read document text"
+      - tool: search_assets
+        use_for: "List all documents in a site or folder (no text search)"
+        filter: "query='*', site_name='...' or sync_config_id='...', where=[{field,op,value}]"
+        next_step: "Returns all matching assets ordered by creation date. Use where for advanced metadata filtering (e.g., is_empty, contains)."
       - tool: sp_list_items
         use_for: "Browse live folder contents"
       - tool: sp_get_site

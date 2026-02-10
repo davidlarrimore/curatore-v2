@@ -422,11 +422,27 @@ class FunctionContext:
                 context["item"] = item
 
             # Handle simple dot-notation access (e.g., "steps.query_notices")
+            # Also supports array indexing (e.g., "steps.data.source_types[0].instances")
+            import re
             parts = expression.split(".")
             if parts[0] in context:
                 result = context[parts[0]]
                 for part in parts[1:]:
-                    if isinstance(result, dict):
+                    # Check for array indexing (e.g., "source_types[0]")
+                    match = re.match(r'^(\w+)\[(\d+)\]$', part)
+                    if match:
+                        key, index = match.group(1), int(match.group(2))
+                        if isinstance(result, dict):
+                            result = result.get(key)
+                        elif hasattr(result, key):
+                            result = getattr(result, key)
+                        else:
+                            return None
+                        if isinstance(result, (list, tuple)) and index < len(result):
+                            result = result[index]
+                        else:
+                            return None
+                    elif isinstance(result, dict):
                         result = result.get(part)
                     elif hasattr(result, part):
                         result = getattr(result, part)

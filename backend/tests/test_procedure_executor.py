@@ -193,8 +193,8 @@ class TestBasicExecution:
             assert result["status"] == "completed"
             assert result["completed_steps"] == 1
             assert result["total_steps"] == 1
-            assert "search" in result["step_results"]
-            assert result["step_results"]["search"]["status"] == "success"
+            assert "search" in result["step_summary"]
+            assert result["step_summary"]["search"]["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_multi_step_procedure(self, executor, mock_session, org_id, test_registry):
@@ -297,7 +297,7 @@ class TestErrorHandling:
             assert result["status"] == "failed"
             assert "failing_step" in result["failed_steps"]
             # Second step should not have a result (execution stopped)
-            assert "should_not_run" not in result["step_results"]
+            assert "should_not_run" not in result["step_summary"]
 
     @pytest.mark.asyncio
     async def test_on_error_skip_continues(self, executor, mock_session, org_id):
@@ -322,8 +322,8 @@ class TestErrorHandling:
             )
 
             # Should continue past the failed step
-            assert "should_run" in result["step_results"]
-            assert result["step_results"]["should_run"]["status"] == "success"
+            assert "should_run" in result["step_summary"]
+            assert result["step_summary"]["should_run"]["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_on_error_continue_proceeds(self, executor, mock_session, org_id):
@@ -347,8 +347,8 @@ class TestErrorHandling:
                 definition=definition,
             )
 
-            assert "should_run" in result["step_results"]
-            assert result["step_results"]["should_run"]["status"] == "success"
+            assert "should_run" in result["step_summary"]
+            assert result["step_summary"]["should_run"]["status"] == "success"
 
     @pytest.mark.asyncio
     async def test_unknown_function_fails_step(self, executor, mock_session, org_id):
@@ -366,8 +366,8 @@ class TestErrorHandling:
             )
 
             assert result["status"] == "failed"
-            assert result["step_results"]["bad_step"]["status"] == "failed"
-            assert "not found" in result["step_results"]["bad_step"]["error"].lower()
+            assert result["step_summary"]["bad_step"]["status"] == "failed"
+            assert "not found" in result["step_summary"]["bad_step"]["error"].lower()
 
 
 # =============================================================================
@@ -619,7 +619,7 @@ class TestConditionEvaluation:
             )
 
             assert result["status"] == "completed"
-            assert result["step_results"]["conditional_step"].get("skipped") is True
+            assert result["step_summary"]["conditional_step"]["status"] == "skipped"
 
 
 # =============================================================================
@@ -718,7 +718,7 @@ class TestGovernance:
                 )
 
                 assert result["status"] == "failed"
-                assert "not available in procedure context" in result["step_results"]["blocked_step"]["error"]
+                assert "not available in procedure context" in result["step_summary"]["blocked_step"]["error"]
 
     @pytest.mark.asyncio
     async def test_side_effect_summary_in_results(self, executor, mock_session, org_id):
@@ -806,10 +806,10 @@ class TestObservability:
                 )
 
                 assert result["status"] == "completed"
-                # Check step result has duration_ms
-                assert "duration_ms" in result["step_results"]["search"]
-                assert isinstance(result["step_results"]["search"]["duration_ms"], int)
-                assert result["step_results"]["search"]["duration_ms"] >= 0
+                # Check overall result has duration_ms
+                assert "duration_ms" in result
+                assert isinstance(result["duration_ms"], int)
+                assert result["duration_ms"] >= 0
 
     @pytest.mark.asyncio
     async def test_step_complete_includes_governance_fields(self, executor, mock_session, org_id):

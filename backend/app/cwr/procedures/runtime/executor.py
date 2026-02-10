@@ -264,10 +264,12 @@ class ProcedureExecutor:
 
         duration_ms = int((datetime.utcnow() - start_time).total_seconds() * 1000)
 
-        # Build step summary for logging
+        # Build step summary for logging and results_summary
+        step_fn_map = {s.name: s.function for s in definition.steps}
         step_summary = {}
         for step_name, step_result in step_results.items():
             step_summary[step_name] = {
+                "function": step_fn_map.get(step_name),
                 "status": step_result.get("status", "skipped" if step_result.get("skipped") else "unknown"),
                 "items_processed": step_result.get("items_processed"),
                 "error": step_result.get("error"),
@@ -292,12 +294,12 @@ class ProcedureExecutor:
         # Update trigger timestamps for cron triggers (regardless of success/failure)
         await self._update_trigger_timestamps(session, organization_id, definition.slug)
 
-        # Collect governance summary
+        # Build lean results_summary — full step output lives in individual log events
         result = {
             "status": status,
             "procedure_slug": definition.slug,
             "procedure_version": definition.version,
-            "step_results": step_results,
+            "step_summary": step_summary,
             "total_steps": total_steps,
             "completed_steps": completed_steps,
             "skipped_steps": skipped_steps,
@@ -505,42 +507,46 @@ class ProcedureExecutor:
             if isinstance(result, FlowResult) and step.branches:
                 flow_result = await self._execute_flow(ctx, step, result, item=item, item_index=item_index)
                 # Log step completion for flow functions
-                if item_index is None:
-                    await ctx.log_run_event(
-                        level="INFO" if flow_result.get("status") == "success" else "ERROR",
-                        event_type="step_complete",
-                        message=f"Step {step.name}: {flow_result.get('status')}",
-                        context={
-                            "step": step.name,
-                            "status": flow_result.get("status"),
-                            "flow_type": step.function,
-                            "duration_ms": flow_result.get("duration_ms"),
-                            "output": self._truncate_for_log(flow_result.get("data")),
-                        },
-                    )
+                flow_log_context = {
+                    "step": step.name,
+                    "status": flow_result.get("status"),
+                    "flow_type": step.function,
+                    "duration_ms": flow_result.get("duration_ms"),
+                    "output": flow_result.get("data"),
+                }
+                if item_index is not None:
+                    flow_log_context["item_index"] = item_index
+                await ctx.log_run_event(
+                    level="INFO" if flow_result.get("status") == "success" else "ERROR",
+                    event_type="step_complete",
+                    message=f"Step {step.name}: {flow_result.get('status')}" + (f" (item {item_index})" if item_index is not None else ""),
+                    context=flow_log_context,
+                )
                 return flow_result
 
             # Serialize data for storage and template access
             serialized_data = self._serialize_data(result.data)
 
-            # Log step completion (only for non-foreach calls)
-            if item_index is None:
-                await ctx.log_run_event(
-                    level="INFO" if result.success else "ERROR",
-                    event_type="step_complete",
-                    message=f"Step {step.name}: {result.status.value}",
-                    context={
-                        "step": step.name,
-                        "function": step.function,
-                        "status": result.status.value,
-                        "items_processed": result.items_processed,
-                        "duration_ms": step_duration_ms,
-                        "output": self._truncate_for_log(serialized_data),
-                        "message": result.message,
-                        "payload_profile": func.meta.payload_profile,
-                        "side_effects": func.meta.side_effects,
-                    },
-                )
+            # Log step completion
+            log_context = {
+                "step": step.name,
+                "function": step.function,
+                "status": result.status.value,
+                "items_processed": result.items_processed,
+                "duration_ms": step_duration_ms,
+                "output": serialized_data,
+                "message": result.message,
+                "payload_profile": func.meta.payload_profile,
+                "side_effects": func.meta.side_effects,
+            }
+            if item_index is not None:
+                log_context["item_index"] = item_index
+            await ctx.log_run_event(
+                level="INFO" if result.success else "ERROR",
+                event_type="step_complete",
+                message=f"Step {step.name}: {result.status.value}" + (f" (item {item_index})" if item_index is not None else ""),
+                context=log_context,
+            )
 
             # Return dict with full serialized data for subsequent steps
             return {

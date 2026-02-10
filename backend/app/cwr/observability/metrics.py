@@ -104,13 +104,13 @@ async def get_function_usage(
     result = await session.execute(query)
     rows = result.scalars().all()
 
-    # Aggregate function usage from step results
+    # Aggregate function usage from step summary
     function_counts: Dict[str, int] = {}
     for summary in rows:
         if not isinstance(summary, dict):
             continue
-        step_results = summary.get("step_results", {})
-        for step_name, step_data in step_results.items():
+        step_summary = summary.get("step_summary", {})
+        for step_name, step_data in step_summary.items():
             if isinstance(step_data, dict):
                 func_name = step_data.get("function")
                 if func_name:

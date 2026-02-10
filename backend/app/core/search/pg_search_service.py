@@ -1065,7 +1065,7 @@ class PgSearchService:
                 params["date_to"] = date_to
 
             if folder_path:
-                from .storage_path_service import slugify
+                from app.core.storage.storage_path_service import slugify
                 clean = folder_path.strip("/")
                 # Slugify each path component for normalization
                 slugified = "/".join(slugify(p) for p in clean.split("/") if p)
@@ -1075,9 +1075,13 @@ class PgSearchService:
                     filters.append("sc.metadata->'source'->>'storage_folder' LIKE :folder_path_prefix")
                     params["folder_path_prefix"] = f"{slugified}%"
                 else:
-                    # Partial path (e.g., "shared-documents/opportunities") — match within folder hierarchy
-                    filters.append("sc.metadata->'source'->>'storage_folder' LIKE :folder_path_prefix")
+                    # Partial path — match slugified storage_folder OR human-readable sharepoint.path
+                    filters.append(
+                        "(sc.metadata->'source'->>'storage_folder' LIKE :folder_path_prefix"
+                        " OR sc.metadata->'sharepoint'->>'path' ILIKE :folder_path_human)"
+                    )
                     params["folder_path_prefix"] = f"%/{slugified}%"
+                    params["folder_path_human"] = f"{clean}%"
 
             if metadata_filters:
                 filters.append("sc.metadata @> CAST(:metadata_filter AS jsonb)")

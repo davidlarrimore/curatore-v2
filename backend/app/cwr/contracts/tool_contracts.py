@@ -152,7 +152,11 @@ class ContractGenerator:
         required: List[str] = []
 
         for p in params:
-            prop = ContractGenerator._param_type_to_json_schema(p.type)
+            # Use explicit schema override if provided, otherwise auto-generate
+            if p.schema:
+                prop = copy.deepcopy(p.schema)
+            else:
+                prop = ContractGenerator._param_type_to_json_schema(p.type)
             prop["description"] = p.description
 
             if p.default is not None:

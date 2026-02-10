@@ -55,6 +55,7 @@ class ParameterDoc:
     default: Any = None
     enum_values: Optional[List[str]] = None
     example: Any = None
+    schema: Optional[Dict[str, Any]] = None  # JSON Schema override for contract generation
 
 
 @dataclass
@@ -168,6 +169,7 @@ class FunctionMeta:
                     "default": p.default,
                     "enum_values": p.enum_values,
                     "example": p.example,
+                    **({"schema": p.schema} if p.schema else {}),
                 }
                 for p in self.parameters
             ],
