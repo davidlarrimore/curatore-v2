@@ -6,6 +6,7 @@ pydantic>=2.6,<3
 
 # Document conversion (MarkItDown handles Office files)
 markitdown[all]>=0.0.1    # Office documents, text files (includes docx, pptx, xlsx extras)
+openpyxl>=3.1.0           # xlsx merged-cell preprocessing (also transitive via markitdown)
 Pillow>=10.0.0            # Image handling for MarkItDown
 
 # Email parsing

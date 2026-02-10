@@ -548,6 +548,7 @@ class SamSummarizationService:
         # Create summary record
         summary = await sam_service.create_summary(
             session=session,
+            organization_id=organization_id,
             solicitation_id=solicitation_id,
             model=model,
             summary=summary_text,

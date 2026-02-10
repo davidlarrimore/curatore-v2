@@ -1,6 +1,29 @@
-# Metadata namespace definitions for Curatore Data Core.
-# Each namespace groups related metadata fields.
-# Global baseline (organization_id = null).
+# ============================================================================
+# Metadata Namespace Definitions — Curatore Data Core
+# ============================================================================
+#
+# Namespaces organize metadata fields into logical groups by data source or
+# domain. They define the top-level keys in the JSONB `search_chunks.metadata`
+# column (e.g., metadata.sam.agency, metadata.sharepoint.site_name).
+#
+# This file provides the global baseline (organization_id = null). Orgs can
+# add custom namespaces via the admin UI; those are stored in the
+# `metadata_field_definitions` table with a non-null organization_id.
+#
+# Fields:
+#   display_name  — Human-readable label shown in the admin Metadata Catalog
+#                   UI, search schema explorer, and MCP resource descriptions.
+#   description   — Explanation of what this namespace contains and which data
+#                   sources populate it. Shown as help text in the admin UI and
+#                   returned by the GET /metadata/catalog API.
+#
+# How namespaces are used:
+#   1. MetadataRegistryService merges these YAML definitions with any DB
+#      overrides, cached for 5 minutes per org.
+#   2. MetadataBuilders write fields into the correct namespace when indexing
+#      documents to search_chunks.metadata.
+#   3. Facet mappings (facets.yaml) reference namespace.field paths.
+#   4. The search metadata-schema endpoint groups fields by namespace.
 
 namespaces:
   source:

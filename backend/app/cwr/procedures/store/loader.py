@@ -8,6 +8,7 @@ Supports:
 - Automatic discovery of procedure files
 """
 
+import json
 import os
 import logging
 from pathlib import Path
@@ -94,9 +95,55 @@ class ProcedureLoader:
             logger.error(f"Failed to load procedure {path}: {e}")
             return None
 
+    def load_json(self, path: Path) -> Optional[ProcedureDefinition]:
+        """Load a single JSON procedure definition."""
+        try:
+            with open(path, "r") as f:
+                data = json.load(f)
+
+            if not data:
+                logger.warning(f"Empty procedure file: {path}")
+                return None
+
+            # Validate required fields
+            if "name" not in data or "slug" not in data:
+                logger.warning(f"Procedure missing name/slug: {path}")
+                return None
+
+            definition = ProcedureDefinition.from_dict(
+                data,
+                source_type="json",
+                source_path=str(path),
+            )
+
+            # Validate flow function branches
+            errors = self._validate_procedure_steps(definition.steps)
+            if errors:
+                for error in errors:
+                    logger.warning(f"Validation error in {path}: {error}")
+
+            logger.debug(f"Loaded procedure: {definition.slug} from {path}")
+            return definition
+
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parse error in {path}: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Failed to load procedure {path}: {e}")
+            return None
+
+    def _load_file(self, path: Path) -> Optional[ProcedureDefinition]:
+        """Load a procedure definition from a YAML or JSON file."""
+        suffix = path.suffix.lower()
+        if suffix == ".json":
+            return self.load_json(path)
+        return self.load_yaml(path)
+
     def discover_all(self) -> Dict[str, ProcedureDefinition]:
         """
         Discover and load all procedure definitions.
+
+        Scans for *.yaml, *.yml, and *.json files in all definition paths.
 
         Returns dict mapping slug -> definition.
         """
@@ -105,19 +152,13 @@ class ProcedureLoader:
         for search_path in self._get_definition_paths():
             logger.info(f"Scanning for procedures in: {search_path}")
 
-            for yaml_file in search_path.glob("*.yaml"):
-                definition = self.load_yaml(yaml_file)
-                if definition:
-                    if definition.slug in self._definitions:
-                        logger.warning(f"Duplicate procedure slug: {definition.slug}")
-                    self._definitions[definition.slug] = definition
-
-            for yml_file in search_path.glob("*.yml"):
-                definition = self.load_yaml(yml_file)
-                if definition:
-                    if definition.slug in self._definitions:
-                        logger.warning(f"Duplicate procedure slug: {definition.slug}")
-                    self._definitions[definition.slug] = definition
+            for ext in ("*.yaml", "*.yml", "*.json"):
+                for def_file in search_path.glob(ext):
+                    definition = self._load_file(def_file)
+                    if definition:
+                        if definition.slug in self._definitions:
+                            logger.warning(f"Duplicate procedure slug: {definition.slug}")
+                        self._definitions[definition.slug] = definition
 
         logger.info(f"Discovered {len(self._definitions)} procedures")
         return self._definitions

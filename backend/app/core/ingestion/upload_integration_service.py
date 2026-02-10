@@ -192,6 +192,7 @@ class UploadIntegrationService:
         cancelled_count = await run_service.cancel_pending_runs_for_asset(
             session=session,
             asset_id=asset_id,
+            organization_id=asset.organization_id,
             run_type="extraction",
         )
         if cancelled_count > 0:
@@ -386,6 +387,7 @@ class UploadIntegrationService:
         cancelled_count = await run_service.cancel_pending_runs_for_asset(
             session=session,
             asset_id=asset_id,
+            organization_id=asset.organization_id,
             run_type="extraction",
         )
         if cancelled_count > 0:

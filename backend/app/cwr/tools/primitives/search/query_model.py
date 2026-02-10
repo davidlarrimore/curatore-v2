@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Type
 from uuid import UUID
 import logging
 
-from sqlalchemy import select, and_, or_, func
+from sqlalchemy import select, and_, or_, func, String, Integer, Float
 from sqlalchemy.orm import selectinload
 
 from ...base import (
@@ -26,21 +26,21 @@ logger = logging.getLogger("curatore.functions.search.query_model")
 
 # Allowed models for querying (whitelist for security)
 ALLOWED_MODELS = {
-    "Asset": "app.database.models.Asset",
-    "ExtractionResult": "app.database.models.ExtractionResult",
-    "Run": "app.database.models.Run",
-    "SamSolicitation": "app.database.models.SamSolicitation",
-    "SamNotice": "app.database.models.SamNotice",
-    "ScrapeCollection": "app.database.models.ScrapeCollection",
-    "SharePointSyncConfig": "app.database.models.SharePointSyncConfig",
+    "Asset": "app.core.database.models.Asset",
+    "ExtractionResult": "app.core.database.models.ExtractionResult",
+    "Run": "app.core.database.models.Run",
+    "SamSolicitation": "app.core.database.models.SamSolicitation",
+    "SamNotice": "app.core.database.models.SamNotice",
+    "ScrapeCollection": "app.core.database.models.ScrapeCollection",
+    "SharePointSyncConfig": "app.core.database.models.SharePointSyncConfig",
     # Salesforce CRM models
-    "SalesforceAccount": "app.database.models.SalesforceAccount",
-    "SalesforceContact": "app.database.models.SalesforceContact",
-    "SalesforceOpportunity": "app.database.models.SalesforceOpportunity",
+    "SalesforceAccount": "app.core.database.models.SalesforceAccount",
+    "SalesforceContact": "app.core.database.models.SalesforceContact",
+    "SalesforceOpportunity": "app.core.database.models.SalesforceOpportunity",
     # Acquisition Forecast models
-    "AgForecast": "app.database.models.AgForecast",
-    "ApfsForecast": "app.database.models.ApfsForecast",
-    "StateForecast": "app.database.models.StateForecast",
+    "AgForecast": "app.core.database.models.AgForecast",
+    "ApfsForecast": "app.core.database.models.ApfsForecast",
+    "StateForecast": "app.core.database.models.StateForecast",
 }
 
 
@@ -63,12 +63,18 @@ class QueryModelFunction(BaseFunction):
     meta = FunctionMeta(
         name="query_model",
         category=FunctionCategory.SEARCH,
-        description="Query SQLAlchemy models with filters",
+        description=(
+            "Query database records directly with filters and pagination. "
+            "Use this to get full details for forecasts (AgForecast, ApfsForecast, StateForecast), "
+            "SAM searches (SamSolicitation, SamNotice), SharePoint configs, scrape collections, "
+            "Salesforce records, and other entities. "
+            "This is the recommended tool for getting forecast details after search_forecasts."
+        ),
         parameters=[
             ParameterDoc(
                 name="model",
                 type="str",
-                description="Model name to query",
+                description="Database record type to query. Use AgForecast/ApfsForecast/StateForecast for forecast details, SamSolicitation/SamNotice for SAM data, Asset for documents, SharePointSyncConfig for SharePoint configs, etc.",
                 required=True,
                 enum_values=list(ALLOWED_MODELS.keys()),
             ),
@@ -124,6 +130,30 @@ class QueryModelFunction(BaseFunction):
                     "limit": 50,
                 },
             },
+            {
+                "description": "Get full details for a specific AG forecast (after search_forecasts)",
+                "params": {
+                    "model": "AgForecast",
+                    "filters": {"id": "<forecast-uuid>"},
+                },
+            },
+            {
+                "description": "Get DHS APFS forecasts for a fiscal year",
+                "params": {
+                    "model": "ApfsForecast",
+                    "filters": {"fiscal_year": 2026},
+                    "limit": 50,
+                },
+            },
+            {
+                "description": "Get recent SAM solicitations",
+                "params": {
+                    "model": "SamSolicitation",
+                    "filters": {"status": "active"},
+                    "order_by": "-created_at",
+                    "limit": 20,
+                },
+            },
         ],
     )
 
@@ -133,12 +163,28 @@ class QueryModelFunction(BaseFunction):
             raise ValueError(f"Model '{model_name}' is not allowed")
 
         # Import the model
-        from ...database import models
+        from app.core.database import models
 
         if hasattr(models, model_name):
             return getattr(models, model_name)
 
         raise ValueError(f"Model '{model_name}' not found")
+
+    def _coerce_value(self, column, value):
+        """Coerce filter value to match the column's SQL type."""
+        try:
+            col_type = column.property.columns[0].type
+        except (AttributeError, IndexError):
+            return value
+
+        if isinstance(col_type, String) and isinstance(value, (int, float)):
+            return str(value)
+        if isinstance(col_type, (Integer, Float)) and isinstance(value, str):
+            try:
+                return int(value) if isinstance(col_type, Integer) else float(value)
+            except ValueError:
+                return value
+        return value
 
     def _build_filters(self, model_class, filters: Dict[str, Any], org_id: UUID):
         """Build SQLAlchemy filter conditions."""
@@ -161,6 +207,7 @@ class QueryModelFunction(BaseFunction):
             if isinstance(value, dict):
                 # Operator-based filter
                 for op, op_value in value.items():
+                    op_value = self._coerce_value(column, op_value)
                     if op == "eq":
                         conditions.append(column == op_value)
                     elif op == "ne":
@@ -174,10 +221,16 @@ class QueryModelFunction(BaseFunction):
                     elif op == "lte":
                         conditions.append(column <= op_value)
                     elif op == "in":
+                        if isinstance(op_value, list):
+                            op_value = [self._coerce_value(column, v) for v in op_value]
                         conditions.append(column.in_(op_value))
+                    elif op == "nin":
+                        if isinstance(op_value, list):
+                            op_value = [self._coerce_value(column, v) for v in op_value]
+                        conditions.append(column.notin_(op_value))
                     elif op == "contains":
                         conditions.append(column.contains(op_value))
-                    elif op == "ilike":
+                    elif op in ("ilike", "icontains"):
                         conditions.append(column.ilike(f"%{op_value}%"))
                     elif op == "is_null":
                         if op_value:
@@ -185,7 +238,8 @@ class QueryModelFunction(BaseFunction):
                         else:
                             conditions.append(column.isnot(None))
             else:
-                # Simple equality
+                # Simple equality with type coercion
+                value = self._coerce_value(column, value)
                 conditions.append(column == value)
 
         return conditions

@@ -1,0 +1,333 @@
+# ============================================================================
+# Facet Reference Data — Canonical Values & Aliases
+# ============================================================================
+#
+# This file seeds canonical values for facets that have
+# `has_reference_data: true` in facets.yaml. It provides a baseline mapping
+# of variant strings → canonical entities so that filters like "agency = DHS"
+# match records regardless of how the agency name is formatted across
+# different data sources (SAM.gov uses "HOMELAND SECURITY, DEPARTMENT OF",
+# forecasts use "Department of Homeland Security", etc.).
+#
+# On startup (or cache refresh), FacetReferenceService loads these entries
+# into the `facet_reference_values` and `facet_reference_aliases` database
+# tables with status='active'. Admins can also add values/aliases via the
+# admin Metadata UI or the "Discover Values" LLM-assisted flow.
+#
+# ── Field Reference ──────────────────────────────────────────────────────────
+#
+#   canonical      — The single authoritative name for this entity. This is
+#                    what search results normalize to and what users see in
+#                    filter dropdowns. Must be unique per facet.
+#                    Example: "Department of Homeland Security"
+#
+#   display_label  — (Optional) A short abbreviation or friendly name used
+#                    in compact UI contexts like filter chips, badges, and
+#                    table columns. Falls back to canonical if omitted.
+#                    Example: "DHS"
+#
+#   aliases        — List of known variant strings that should resolve to
+#                    this canonical value. Each alias has:
+#
+#       value        — The exact string as it appears in source data.
+#                      Matching is case-insensitive (stored as alias_value_lower).
+#                      Example: "HOMELAND SECURITY, DEPARTMENT OF"
+#
+#       source_hint  — (Optional) Which data source typically produces this
+#                      form. Helps with debugging and provenance tracking.
+#                      Common values: sam_gov, forecast_ag, forecast_apfs,
+#                      forecast_state, salesforce, sharepoint, web_scrape.
+#                      Example: sam_gov
+#
+# ── How Resolution Works ─────────────────────────────────────────────────────
+#
+#   1. When a user filters by a facet (e.g., agency="DHS"), the search
+#      service looks up "DHS" in the alias table for that facet.
+#   2. If found, it resolves to the canonical value ("Department of Homeland
+#      Security") and also collects all other aliases for that canonical.
+#   3. The SQL query matches any of: canonical OR any alias value.
+#   4. This means a search for "DHS" also finds records tagged
+#      "HOMELAND SECURITY, DEPARTMENT OF" or "Dept. of Homeland Security".
+#
+# ── Discover Values Flow ─────────────────────────────────────────────────────
+#
+#   The admin Metadata page has a "Discover Values" button that:
+#   1. Scans the search index for distinct values not mapped to any canonical
+#   2. Sends unmapped values to an LLM to suggest groupings
+#   3. Presents suggestions for admin review (approve/reject/edit)
+#   4. Admins can also manually add values or link them to existing canonicals
+#
+
+reference_data:
+
+  # ===========================================================================
+  # AGENCY — Federal agency names
+  # ===========================================================================
+  agency:
+    - canonical: "Department of Homeland Security"
+      display_label: "DHS"
+      aliases:
+        - value: "HOMELAND SECURITY, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "DHS"
+        - value: "Dept. of Homeland Security"
+        - value: "Dept of Homeland Security"
+
+    - canonical: "General Services Administration"
+      display_label: "GSA"
+      aliases:
+        - value: "GENERAL SERVICES ADMINISTRATION"
+          source_hint: sam_gov
+        - value: "GSA"
+
+    - canonical: "Department of Defense"
+      display_label: "DoD"
+      aliases:
+        - value: "DEFENSE, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "DOD"
+        - value: "DoD"
+        - value: "Dept. of Defense"
+
+    - canonical: "Department of Health and Human Services"
+      display_label: "HHS"
+      aliases:
+        - value: "HEALTH AND HUMAN SERVICES, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "HHS"
+        - value: "Dept. of Health and Human Services"
+
+    - canonical: "Department of Veterans Affairs"
+      display_label: "VA"
+      aliases:
+        - value: "VETERANS AFFAIRS, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "VA"
+        - value: "Dept. of Veterans Affairs"
+
+    - canonical: "Department of Energy"
+      display_label: "DOE"
+      aliases:
+        - value: "ENERGY, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "DOE"
+        - value: "Dept. of Energy"
+
+    - canonical: "Environmental Protection Agency"
+      display_label: "EPA"
+      aliases:
+        - value: "ENVIRONMENTAL PROTECTION AGENCY"
+          source_hint: sam_gov
+        - value: "EPA"
+
+    - canonical: "Department of Agriculture"
+      display_label: "USDA"
+      aliases:
+        - value: "AGRICULTURE, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "USDA"
+        - value: "Dept. of Agriculture"
+
+    - canonical: "Department of Transportation"
+      display_label: "DOT"
+      aliases:
+        - value: "TRANSPORTATION, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "DOT"
+        - value: "Dept. of Transportation"
+
+    - canonical: "Department of Justice"
+      display_label: "DOJ"
+      aliases:
+        - value: "JUSTICE, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "DOJ"
+        - value: "Dept. of Justice"
+
+    - canonical: "Department of the Interior"
+      display_label: "DOI"
+      aliases:
+        - value: "INTERIOR, DEPARTMENT OF THE"
+          source_hint: sam_gov
+        - value: "DOI"
+        - value: "Dept. of the Interior"
+
+    - canonical: "Department of State"
+      display_label: "DOS"
+      aliases:
+        - value: "STATE, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "DOS"
+        - value: "Dept. of State"
+        - value: "State Department"
+
+    - canonical: "Department of the Treasury"
+      display_label: "Treasury"
+      aliases:
+        - value: "TREASURY, DEPARTMENT OF THE"
+          source_hint: sam_gov
+        - value: "Treasury"
+        - value: "Dept. of the Treasury"
+
+    - canonical: "Department of Commerce"
+      display_label: "DOC"
+      aliases:
+        - value: "COMMERCE, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "DOC"
+        - value: "Dept. of Commerce"
+
+    - canonical: "Department of Labor"
+      display_label: "DOL"
+      aliases:
+        - value: "LABOR, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "DOL"
+        - value: "Dept. of Labor"
+
+    - canonical: "Department of Education"
+      display_label: "ED"
+      aliases:
+        - value: "EDUCATION, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "ED"
+        - value: "Dept. of Education"
+
+    - canonical: "Department of Housing and Urban Development"
+      display_label: "HUD"
+      aliases:
+        - value: "HOUSING AND URBAN DEVELOPMENT, DEPARTMENT OF"
+          source_hint: sam_gov
+        - value: "HUD"
+        - value: "Dept. of Housing and Urban Development"
+
+    - canonical: "National Aeronautics and Space Administration"
+      display_label: "NASA"
+      aliases:
+        - value: "NATIONAL AERONAUTICS AND SPACE ADMINISTRATION"
+          source_hint: sam_gov
+        - value: "NASA"
+
+    - canonical: "Small Business Administration"
+      display_label: "SBA"
+      aliases:
+        - value: "SMALL BUSINESS ADMINISTRATION"
+          source_hint: sam_gov
+        - value: "SBA"
+
+    - canonical: "Social Security Administration"
+      display_label: "SSA"
+      aliases:
+        - value: "SOCIAL SECURITY ADMINISTRATION"
+          source_hint: sam_gov
+        - value: "SSA"
+
+    - canonical: "Office of Personnel Management"
+      display_label: "OPM"
+      aliases:
+        - value: "OFFICE OF PERSONNEL MANAGEMENT"
+          source_hint: sam_gov
+        - value: "OPM"
+
+    - canonical: "Nuclear Regulatory Commission"
+      display_label: "NRC"
+      aliases:
+        - value: "NUCLEAR REGULATORY COMMISSION"
+          source_hint: sam_gov
+        - value: "NRC"
+
+    - canonical: "Agency for International Development"
+      display_label: "USAID"
+      aliases:
+        - value: "AGENCY FOR INTERNATIONAL DEVELOPMENT"
+          source_hint: sam_gov
+        - value: "USAID"
+
+    - canonical: "National Science Foundation"
+      display_label: "NSF"
+      aliases:
+        - value: "NATIONAL SCIENCE FOUNDATION"
+          source_hint: sam_gov
+        - value: "NSF"
+
+    - canonical: "Securities and Exchange Commission"
+      display_label: "SEC"
+      aliases:
+        - value: "SECURITIES AND EXCHANGE COMMISSION"
+          source_hint: sam_gov
+        - value: "SEC"
+
+  # ===========================================================================
+  # SET-ASIDE — Small business set-aside types
+  # ===========================================================================
+  set_aside:
+    - canonical: "Total Small Business Set-Aside"
+      display_label: "SBA"
+      aliases:
+        - value: "Small Business Set-Aside"
+        - value: "SBA"
+        - value: "Small Business"
+        - value: "Total Small Business"
+
+    - canonical: "8(a) Sole Source"
+      display_label: "8(a)"
+      aliases:
+        - value: "8(a)"
+        - value: "8a"
+        - value: "8(a) Set-Aside"
+        - value: "8(a) Competitive"
+
+    - canonical: "Service-Disabled Veteran-Owned Small Business"
+      display_label: "SDVOSB"
+      aliases:
+        - value: "SDVOSB"
+        - value: "Service-Disabled Veteran"
+        - value: "SDVOSB Set-Aside"
+        - value: "Service-Disabled Veteran-Owned Small Business Set-Aside"
+
+    - canonical: "HUBZone Set-Aside"
+      display_label: "HUBZone"
+      aliases:
+        - value: "HUBZone"
+        - value: "Historically Underutilized Business Zone"
+        - value: "HUBZone Small Business Set-Aside"
+
+    - canonical: "Women-Owned Small Business"
+      display_label: "WOSB"
+      aliases:
+        - value: "WOSB"
+        - value: "Women Owned Small Business"
+        - value: "Women-Owned Small Business Set-Aside"
+        - value: "Economically Disadvantaged Women-Owned Small Business"
+        - value: "EDWOSB"
+
+    - canonical: "Veteran-Owned Small Business"
+      display_label: "VOSB"
+      aliases:
+        - value: "VOSB"
+        - value: "Veteran-Owned Small Business Set-Aside"
+
+    - canonical: "Partial Small Business Set-Aside"
+      display_label: "Partial SBA"
+      aliases:
+        - value: "Partial Small Business"
+        - value: "Partial Set-Aside"
+
+    - canonical: "Sole Source"
+      display_label: "Sole Source"
+      aliases:
+        - value: "Sole Source"
+        - value: "Only One Source"
+
+    - canonical: "Buy Indian Set-Aside"
+      display_label: "Buy Indian"
+      aliases:
+        - value: "Buy Indian"
+        - value: "Indian Small Business Economic Enterprise"
+        - value: "ISBEE"
+
+    - canonical: "Emerging Small Business Set-Aside"
+      display_label: "ESB"
+      aliases:
+        - value: "ESB"
+        - value: "Emerging Small Business"

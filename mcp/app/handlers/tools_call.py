@@ -227,37 +227,196 @@ def _format_result(result: Dict[str, Any]) -> MCPToolsCallResponse:
     """Format backend result as MCP response."""
     status = result.get("status", "unknown")
 
-    if status == "error" or result.get("error"):
-        error_msg = result.get("error", "Unknown error")
+    if status in ("error", "failed") or result.get("error"):
+        error_msg = result.get("error") or result.get("message") or "Unknown error"
         return MCPToolsCallResponse(
             content=[MCPTextContent(type="text", text=f"Error: {error_msg}")],
             isError=True,
         )
 
-    # Format successful result
     data = result.get("data")
     message = result.get("message", "")
-
-    if data is None:
-        text = message or "Operation completed successfully"
-    elif isinstance(data, str):
-        text = data
-    elif isinstance(data, (list, dict)):
-        # Pretty-print JSON data
-        text = json.dumps(data, indent=2, default=str)
-    else:
-        text = str(data)
-
-    # Include metadata if present
     metadata = result.get("metadata", {})
     items_processed = result.get("items_processed", 0)
-    if items_processed:
-        metadata["items_processed"] = items_processed
 
-    if metadata:
-        text += f"\n\n---\nMetadata: {json.dumps(metadata, default=str)}"
+    parts: List[str] = []
+
+    # Always lead with the human-readable message
+    if message:
+        parts.append(message)
+
+    # Format data based on shape
+    if data is None:
+        if not message:
+            parts.append("Operation completed successfully.")
+    elif isinstance(data, str):
+        parts.append(data)
+    elif isinstance(data, list):
+        if len(data) == 0:
+            if not message:
+                parts.append("No results found.")
+        elif _is_formattable_list(data):
+            parts.append(_format_content_items(data))
+        else:
+            parts.append(json.dumps(data, indent=2, default=str))
+    elif isinstance(data, dict):
+        parts.append(json.dumps(data, indent=2, default=str))
+    else:
+        parts.append(str(data))
+
+    # Append clean metadata summary
+    meta_text = _format_metadata(metadata, items_processed)
+    if meta_text:
+        parts.append(meta_text)
+
+    text = "\n\n".join(parts)
 
     return MCPToolsCallResponse(
         content=[MCPTextContent(type="text", text=text)],
         isError=False,
     )
+
+
+def _is_formattable_list(data: List[Any]) -> bool:
+    """Check if a list contains dicts with id + title that we can format."""
+    if not data or not isinstance(data[0], dict):
+        return False
+    first = data[0]
+    return "id" in first and ("title" in first or "display_type" in first or "name" in first)
+
+
+def _format_content_items(items: List[Dict[str, Any]]) -> str:
+    """
+    Format result dicts as readable markdown for LLM consumption.
+
+    Handles both ContentItem dicts (nested fields/metadata) and flat
+    search result dicts (forecasts, query_model results, etc.).
+    """
+    lines: List[str] = []
+
+    for i, item in enumerate(items, 1):
+        title = item.get("title") or item.get("name") or "Untitled"
+        display_type = item.get("display_type") or item.get("type") or item.get("source_type") or "Item"
+        item_id = item.get("id", "")
+
+        lines.append(f"### {i}. {title}")
+        lines.append(f"Type: {display_type} | ID: {item_id}")
+
+        # Collect detail fields from both nested (ContentItem) and flat layouts
+        fields = item.get("fields") or {}
+        meta = item.get("metadata") or {}
+
+        detail_parts: List[str] = []
+
+        # Score — check both nested metadata and top-level
+        score = meta.get("score") or item.get("score")
+        if score is not None:
+            try:
+                detail_parts.append(f"Score: {float(score):.2f}")
+            except (ValueError, TypeError):
+                pass
+
+        # Key fields — check both nested fields dict and top-level keys
+        _DISPLAY_KEYS = (
+            "source_type", "site_name", "content_type", "status",
+            "original_filename", "folder_path", "source_url", "url",
+            "created_at", "solicitation_number", "detail_url",
+            "fiscal_year", "agency_name", "naics_code",
+            "filename", "asset_id", "instance_url",
+            # Salesforce fields
+            "stage_name", "amount", "probability", "close_date",
+            "opportunity_type", "role", "lead_source", "fiscal_quarter",
+            "account_type", "industry", "department", "description",
+            "email", "phone", "website", "custom_dates",
+            # General
+            "notice_type", "set_aside_code", "response_deadline",
+            "posted_date", "bureau_name",
+        )
+        for key in _DISPLAY_KEYS:
+            val = fields.get(key) or item.get(key)
+            if val and key not in ("type", "id", "title", "score", "display_type", "name"):
+                label = key.replace("_", " ").title()
+                # Truncate long text values
+                val_str = str(val)
+                if len(val_str) > 200:
+                    val_str = val_str[:200] + "..."
+                detail_parts.append(f"{label}: {val_str}")
+
+        if detail_parts:
+            lines.append(" | ".join(detail_parts))
+
+        # Snippet / highlights — check nested metadata and top-level
+        snippet = meta.get("snippet") or meta.get("highlights") or item.get("highlights")
+        if snippet:
+            # highlights can be {"content": ["..."]} or a list or a string
+            if isinstance(snippet, dict):
+                # Extract first content highlight
+                content_highlights = snippet.get("content", [])
+                if content_highlights:
+                    snippet = content_highlights[0]
+                else:
+                    snippet = str(snippet)
+            if isinstance(snippet, list):
+                snippet = " ... ".join(str(s) for s in snippet[:3])
+            # Strip HTML mark tags for cleaner display
+            snippet_text = str(snippet)[:500].replace("<mark>", "**").replace("</mark>", "**")
+            lines.append(f"> {snippet_text}")
+
+        # Children count
+        children_count = item.get("children_count", 0)
+        if children_count > 0:
+            lines.append(f"({children_count} attachments)")
+
+        # Full text if present (for get_content results)
+        text_content = item.get("text") or item.get("content")
+        if text_content and isinstance(text_content, str):
+            if len(text_content) > 4000:
+                lines.append(text_content[:4000] + "\n... (truncated)")
+            else:
+                lines.append(text_content)
+
+        lines.append("")  # blank line between items
+
+    return "\n".join(lines).rstrip()
+
+
+def _format_metadata(metadata: Dict[str, Any], items_processed: int = 0) -> str:
+    """Format metadata as a clean summary, omitting null/empty values."""
+    if not metadata and not items_processed:
+        return ""
+
+    # Internal keys to skip
+    skip_keys = {"result_type"}
+
+    # Filter out nulls and internal keys
+    clean: Dict[str, Any] = {}
+    for k, v in metadata.items():
+        if k in skip_keys:
+            continue
+        if v is None:
+            continue
+        if isinstance(v, dict):
+            v = {nk: nv for nk, nv in v.items() if nv is not None}
+            if not v:
+                continue
+        clean[k] = v
+
+    if items_processed:
+        clean["items_processed"] = items_processed
+
+    if not clean:
+        return ""
+
+    # Format as readable key-value lines
+    parts: List[str] = ["---"]
+    for k, v in clean.items():
+        label = k.replace("_", " ").title()
+        if isinstance(v, dict):
+            nested = ", ".join(f"{nk}={nv}" for nk, nv in v.items())
+            parts.append(f"{label}: {nested}")
+        elif isinstance(v, list):
+            parts.append(f"{label}: {', '.join(str(x) for x in v)}")
+        else:
+            parts.append(f"{label}: {v}")
+
+    return "\n".join(parts)

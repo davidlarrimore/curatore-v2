@@ -3,9 +3,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { functionsApi, systemApi, type FunctionMeta, type FunctionExecuteResult } from '@/lib/api'
+import { functionsApi, contractsApi, systemApi, type FunctionMeta, type FunctionExecuteResult, type ToolContract } from '@/lib/api'
 import type { LLMConnectionStatus } from '@/types'
-import { generateFunctionYaml } from '@/lib/yaml-generator'
+import { generateFunctionJson } from '@/lib/yaml-generator'
 import { FunctionInput } from '@/components/functions/inputs'
 import { ParameterTooltip } from '@/components/functions/ParameterTooltip'
 import { Button } from '@/components/ui/Button'
@@ -24,13 +24,17 @@ import {
   Clock,
   Code,
   BookOpen,
-  FileCode,
+  FileJson,
   AlertTriangle,
   Zap,
-  Server,
   Eye,
   ChevronRight,
   ChevronDown,
+  Shield,
+  Server,
+  Layers,
+  Info,
+  ExternalLink,
 } from 'lucide-react'
 
 export default function FunctionLabPage() {
@@ -59,11 +63,9 @@ function OutputViewer({ data, className = '' }: OutputViewerProps) {
   const contentType = useMemo(() => {
     if (data === null || data === undefined) return 'empty'
     if (typeof data === 'string') {
-      // Check if it's HTML
       if (data.trim().startsWith('<') && (data.includes('</') || data.includes('/>'))) {
         return 'html'
       }
-      // Check if it's markdown (has common markdown patterns)
       if (data.includes('# ') || data.includes('**') || data.includes('- ') || data.includes('```')) {
         return 'markdown'
       }
@@ -75,7 +77,6 @@ function OutputViewer({ data, className = '' }: OutputViewerProps) {
     return 'text'
   }, [data])
 
-  // Set initial view mode based on content type
   useEffect(() => {
     if (contentType === 'json') {
       setViewMode('tree')
@@ -90,7 +91,6 @@ function OutputViewer({ data, className = '' }: OutputViewerProps) {
 
   return (
     <div className={`flex flex-col h-full ${className}`}>
-      {/* View Mode Toggle */}
       {showViewToggle && (
         <div className="flex items-center gap-1 mb-3">
           {contentType === 'json' && (
@@ -148,7 +148,6 @@ function OutputViewer({ data, className = '' }: OutputViewerProps) {
         </div>
       )}
 
-      {/* Content Display */}
       <div className="flex-1 overflow-auto">
         {contentType === 'empty' && (
           <p className="text-sm text-gray-500 dark:text-gray-400 italic">No data returned</p>
@@ -159,7 +158,7 @@ function OutputViewer({ data, className = '' }: OutputViewerProps) {
         )}
 
         {contentType === 'json' && viewMode === 'code' && (
-          <pre className="text-xs font-mono text-gray-700 dark:text-gray-300 bg-gray-900 dark:bg-gray-950 text-emerald-300 p-3 rounded-lg overflow-auto">
+          <pre className="text-xs font-mono bg-gray-900 dark:bg-gray-950 text-emerald-400 dark:text-emerald-300 p-3 rounded-lg overflow-auto">
             {JSON.stringify(data, null, 2)}
           </pre>
         )}
@@ -172,7 +171,7 @@ function OutputViewer({ data, className = '' }: OutputViewerProps) {
         )}
 
         {contentType === 'html' && viewMode === 'code' && (
-          <pre className="text-xs font-mono bg-gray-900 dark:bg-gray-950 text-emerald-300 p-3 rounded-lg overflow-auto whitespace-pre-wrap">
+          <pre className="text-xs font-mono bg-gray-900 dark:bg-gray-950 text-emerald-400 dark:text-emerald-300 p-3 rounded-lg overflow-auto whitespace-pre-wrap">
             {data}
           </pre>
         )}
@@ -184,13 +183,13 @@ function OutputViewer({ data, className = '' }: OutputViewerProps) {
         )}
 
         {contentType === 'markdown' && viewMode === 'code' && (
-          <pre className="text-xs font-mono bg-gray-900 dark:bg-gray-950 text-emerald-300 p-3 rounded-lg overflow-auto whitespace-pre-wrap">
+          <pre className="text-xs font-mono bg-gray-900 dark:bg-gray-950 text-emerald-400 dark:text-emerald-300 p-3 rounded-lg overflow-auto whitespace-pre-wrap">
             {data}
           </pre>
         )}
 
         {contentType === 'text' && (
-          <pre className="text-sm font-mono text-gray-700 dark:text-gray-300 bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg overflow-auto whitespace-pre-wrap">
+          <pre className="text-sm font-mono text-gray-800 dark:text-gray-200 bg-gray-50 dark:bg-gray-900/50 p-3 rounded-lg overflow-auto whitespace-pre-wrap">
             {String(data)}
           </pre>
         )}
@@ -211,7 +210,6 @@ interface JsonTreeViewProps {
 function JsonTreeView({ data, depth = 0 }: JsonTreeViewProps) {
   const [expandedKeys, setExpandedKeys] = useState<Set<string>>(new Set())
 
-  // Auto-expand first two levels
   useEffect(() => {
     if (depth === 0) {
       const keys = new Set<string>()
@@ -267,7 +265,7 @@ function JsonTreeView({ data, depth = 0 }: JsonTreeViewProps) {
     }
     if (typeof value === 'string') {
       const displayValue = value.length > 100 ? value.slice(0, 100) + '...' : value
-      return <span className="text-emerald-600 dark:text-emerald-400">"{displayValue}"</span>
+      return <span className="text-emerald-600 dark:text-emerald-400">&quot;{displayValue}&quot;</span>
     }
     if (Array.isArray(value)) {
       const isExpanded = expandedKeys.has(key)
@@ -362,38 +360,54 @@ function JsonTreeView({ data, depth = 0 }: JsonTreeViewProps) {
 // ============================================================================
 
 function MarkdownRenderer({ content }: { content: string }) {
-  // Simple markdown to HTML conversion
   const html = useMemo(() => {
     let result = content
-      // Escape HTML
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
-      // Headers
       .replace(/^### (.*$)/gm, '<h3>$1</h3>')
       .replace(/^## (.*$)/gm, '<h2>$1</h2>')
       .replace(/^# (.*$)/gm, '<h1>$1</h1>')
-      // Bold
       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
-      // Italic
       .replace(/\*(.*?)\*/g, '<em>$1</em>')
-      // Code blocks
       .replace(/```(\w*)\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>')
-      // Inline code
       .replace(/`([^`]+)`/g, '<code>$1</code>')
-      // Lists
       .replace(/^\s*-\s+(.*)$/gm, '<li>$1</li>')
-      // Links
       .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" class="text-indigo-600 hover:underline">$1</a>')
-      // Paragraphs (simple - wrap text blocks)
       .replace(/\n\n/g, '</p><p>')
 
-    // Wrap list items
     result = result.replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
 
     return `<p>${result}</p>`
   }, [content])
 
   return <div dangerouslySetInnerHTML={{ __html: html }} />
+}
+
+// ============================================================================
+// JSON Schema Viewer Component
+// ============================================================================
+
+function SchemaViewer({ schema, title }: { schema: Record<string, any>; title: string }) {
+  const [isExpanded, setIsExpanded] = useState(false)
+
+  if (!schema || Object.keys(schema).length === 0) return null
+
+  return (
+    <div>
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="flex items-center gap-2 text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+      >
+        {isExpanded ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+        {title}
+      </button>
+      {isExpanded && (
+        <pre className="mt-2 text-xs font-mono bg-gray-900 dark:bg-gray-950 text-emerald-400 dark:text-emerald-300 p-3 rounded-lg overflow-auto max-h-64">
+          {JSON.stringify(schema, null, 2)}
+        </pre>
+      )}
+    </div>
+  )
 }
 
 // ============================================================================
@@ -407,6 +421,7 @@ function FunctionLabContent() {
   const functionName = params.name as string
 
   const [func, setFunc] = useState<FunctionMeta | null>(null)
+  const [contract, setContract] = useState<ToolContract | null>(null)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -422,7 +437,7 @@ function FunctionLabContent() {
   const [isDryRun, setIsDryRun] = useState(false)
   const [result, setResult] = useState<FunctionExecuteResult | null>(null)
 
-  // YAML copy state
+  // JSON copy state
   const [copied, setCopied] = useState(false)
 
   // Load LLM status
@@ -441,7 +456,7 @@ function FunctionLabContent() {
     }
   }, [])
 
-  // Load function metadata
+  // Load function metadata and contract
   const loadFunction = useCallback(async () => {
     if (!token || !functionName) return
 
@@ -449,8 +464,12 @@ function FunctionLabContent() {
     setError('')
 
     try {
-      const data = await functionsApi.getFunction(token, functionName)
+      const [data, contractData] = await Promise.all([
+        functionsApi.getFunction(token, functionName),
+        contractsApi.getContract(token, functionName).catch(() => null),
+      ])
       setFunc(data)
+      setContract(contractData)
 
       const defaults: Record<string, any> = {}
       for (const param of data.parameters || []) {
@@ -503,14 +522,14 @@ function FunctionLabContent() {
     }
   }
 
-  const yamlOutput = useMemo(() => {
+  const jsonOutput = useMemo(() => {
     if (!func) return ''
-    return generateFunctionYaml(func.name, paramValues)
+    return generateFunctionJson(func.name, paramValues)
   }, [func, paramValues])
 
-  const handleCopyYaml = async () => {
+  const handleCopyJson = async () => {
     try {
-      await navigator.clipboard.writeText(yamlOutput)
+      await navigator.clipboard.writeText(jsonOutput)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch (err) {
@@ -570,7 +589,6 @@ function FunctionLabContent() {
     )
   }
 
-  // Calculate header height for layout
   const hasLlmWarning = func.requires_llm && llmStatus && !llmStatus.connected
 
   return (
@@ -597,8 +615,8 @@ function FunctionLabContent() {
               </p>
             </div>
 
-            {/* Category & Tags in header */}
-            <div className="flex items-center gap-2 ml-4">
+            {/* Category & Governance Badges in header */}
+            <div className="flex items-center gap-2 ml-4 flex-wrap">
               <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 capitalize">
                 <Code className="w-3 h-3" />
                 {func.category}
@@ -607,6 +625,34 @@ function FunctionLabContent() {
                 <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300">
                   <Brain className="w-3 h-3" />
                   LLM
+                </span>
+              )}
+              {func.side_effects ? (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 dark:bg-red-900/30 text-red-700 dark:text-red-300">
+                  <Zap className="w-3 h-3" />
+                  Side Effects
+                </span>
+              ) : (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300">
+                  <Zap className="w-3 h-3" />
+                  No Side Effects
+                </span>
+              )}
+              {func.payload_profile && (
+                <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium ${
+                  func.payload_profile === 'thin'
+                    ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300'
+                    : func.payload_profile === 'summary'
+                    ? 'bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300'
+                    : 'bg-emerald-100 dark:bg-emerald-900/30 text-emerald-700 dark:text-emerald-300'
+                }`}>
+                  <Layers className="w-3 h-3" />
+                  {func.payload_profile}
+                </span>
+              )}
+              {func.is_primitive === false && (
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                  Compound
                 </span>
               )}
             </div>
@@ -630,21 +676,19 @@ function FunctionLabContent() {
         </div>
       )}
 
-      {/* Main Content: Documentation (30%) + Lab Panel (70%) - Fills remaining space */}
+      {/* Main Content: Documentation (30%) + Lab Panel (70%) */}
       <div className="flex-1 min-h-0 overflow-hidden">
         <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-4 h-full">
           <div className="flex gap-4 h-full">
 
             {/* Documentation Panel (30%) */}
             <div className="w-[30%] flex-shrink-0 flex flex-col bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
-              {/* Panel Header - Fixed height */}
               <div className="flex-shrink-0 h-11 px-4 flex items-center gap-2 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
                 <BookOpen className="w-4 h-4 text-gray-500 dark:text-gray-400" />
                 <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
                   Documentation
                 </h2>
               </div>
-              {/* Panel Content - Scrollable */}
               <div className="flex-1 overflow-y-auto p-4 space-y-6">
                 {/* Description */}
                 <div>
@@ -668,6 +712,80 @@ function FunctionLabContent() {
                   </div>
                 )}
 
+                {/* Governance & Contract Details */}
+                <div>
+                  <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+                    Governance
+                  </h3>
+                  <div className="space-y-2">
+                    <div className="flex items-center gap-2 text-xs">
+                      <Shield className="w-3.5 h-3.5 text-gray-400" />
+                      <span className="text-gray-600 dark:text-gray-400">Version:</span>
+                      <span className="font-mono text-gray-800 dark:text-gray-200">{func.version || '1.0.0'}</span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <Layers className="w-3.5 h-3.5 text-gray-400" />
+                      <span className="text-gray-600 dark:text-gray-400">Payload:</span>
+                      <span className={`font-medium ${
+                        func.payload_profile === 'thin' ? 'text-blue-600 dark:text-blue-400' :
+                        func.payload_profile === 'summary' ? 'text-amber-600 dark:text-amber-400' :
+                        'text-emerald-600 dark:text-emerald-400'
+                      }`}>
+                        {func.payload_profile || 'full'}
+                      </span>
+                      {func.payload_profile === 'thin' && (
+                        <span className="text-gray-400 text-[10px]">(IDs, titles, scores only)</span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <Zap className="w-3.5 h-3.5 text-gray-400" />
+                      <span className="text-gray-600 dark:text-gray-400">Side Effects:</span>
+                      <span className={func.side_effects ? 'text-red-600 dark:text-red-400 font-medium' : 'text-emerald-600 dark:text-emerald-400'}>
+                        {func.side_effects ? 'Yes' : 'None'}
+                      </span>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs">
+                      <Info className="w-3.5 h-3.5 text-gray-400" />
+                      <span className="text-gray-600 dark:text-gray-400">Type:</span>
+                      <span className="text-gray-800 dark:text-gray-200">
+                        {func.is_primitive === false ? 'Compound (multi-step)' : 'Primitive'}
+                      </span>
+                    </div>
+                    {func.exposure_profile && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <ExternalLink className="w-3.5 h-3.5 text-gray-400" />
+                        <span className="text-gray-600 dark:text-gray-400">Exposure:</span>
+                        <div className="flex gap-1.5">
+                          {func.exposure_profile.procedure && (
+                            <span className="px-1.5 py-0.5 rounded bg-indigo-100 dark:bg-indigo-900/30 text-indigo-600 dark:text-indigo-400 text-[10px] font-medium">
+                              Procedure
+                            </span>
+                          )}
+                          {func.exposure_profile.agent && (
+                            <span className="px-1.5 py-0.5 rounded bg-purple-100 dark:bg-purple-900/30 text-purple-600 dark:text-purple-400 text-[10px] font-medium">
+                              MCP / Agent
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    )}
+                    {func.requires_llm && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <Brain className="w-3.5 h-3.5 text-gray-400" />
+                        <span className="text-gray-600 dark:text-gray-400">LLM Required:</span>
+                        <span className="text-purple-600 dark:text-purple-400 font-medium">Yes</span>
+                      </div>
+                    )}
+                    {func.is_async && (
+                      <div className="flex items-center gap-2 text-xs">
+                        <Server className="w-3.5 h-3.5 text-gray-400" />
+                        <span className="text-gray-600 dark:text-gray-400">Async:</span>
+                        <span className="text-gray-800 dark:text-gray-200">Yes</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
                 {/* Parameters Documentation */}
                 {func.parameters && func.parameters.length > 0 && (
                   <div>
@@ -685,10 +803,27 @@ function FunctionLabContent() {
                             {param.required && (
                               <span className="text-xs text-red-500">*</span>
                             )}
+                            {param.default !== undefined && param.default !== null && (
+                              <span className="text-[10px] text-gray-400">
+                                = {JSON.stringify(param.default)}
+                              </span>
+                            )}
                           </div>
                           <p className="text-xs text-gray-500 dark:text-gray-400 leading-relaxed">
                             {param.description}
                           </p>
+                          {param.enum_values && param.enum_values.length > 0 && (
+                            <div className="mt-1 flex flex-wrap gap-1">
+                              {param.enum_values.map((v) => {
+                                const label = v.includes('|') ? v.split('|')[1] : v
+                                return (
+                                  <span key={v} className="text-[10px] px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 text-gray-500 dark:text-gray-400 font-mono">
+                                    {label}
+                                  </span>
+                                )
+                              })}
+                            </div>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -746,6 +881,39 @@ function FunctionLabContent() {
                   </div>
                 )}
 
+                {/* Contract JSON Schemas */}
+                {contract && (
+                  <div className="space-y-4">
+                    <SchemaViewer
+                      schema={contract.input_schema}
+                      title="Input JSON Schema"
+                    />
+                    <SchemaViewer
+                      schema={contract.output_schema}
+                      title="Output JSON Schema"
+                    />
+                  </div>
+                )}
+
+                {/* Examples */}
+                {func.examples && func.examples.length > 0 && (
+                  <div>
+                    <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
+                      Examples ({func.examples.length})
+                    </h3>
+                    <div className="space-y-2">
+                      {func.examples.map((example, idx) => (
+                        <pre
+                          key={idx}
+                          className="text-xs font-mono bg-gray-900 dark:bg-gray-950 text-emerald-400 dark:text-emerald-300 p-3 rounded-lg overflow-auto max-h-40"
+                        >
+                          {JSON.stringify(example, null, 2)}
+                        </pre>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {/* LLM Connection */}
                 {func.requires_llm && llmStatus && llmStatus.connected && (
                   <div>
@@ -767,15 +935,15 @@ function FunctionLabContent() {
             <div className="flex-1 min-w-0 flex flex-col bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
               <div className="flex-1 min-h-0 flex">
 
-                {/* Left Side: Parameters + YAML */}
+                {/* Left Side: Parameters + JSON */}
                 <div className="w-1/2 border-r border-gray-200 dark:border-gray-700 flex flex-col min-h-0">
-                  {/* Parameters Header - Fixed height */}
+                  {/* Parameters Header */}
                   <div className="flex-shrink-0 h-11 px-4 flex items-center border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
                     <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
                       Parameters
                     </h2>
                   </div>
-                  {/* Parameters Content - Scrollable */}
+                  {/* Parameters Content */}
                   <div className="flex-1 overflow-y-auto p-4">
                     {!func.parameters || func.parameters.length === 0 ? (
                       <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">
@@ -821,17 +989,17 @@ function FunctionLabContent() {
                     )}
                   </div>
 
-                  {/* YAML Output Section - Fixed at bottom with max height */}
+                  {/* JSON Output Section */}
                   <div className="flex-shrink-0 max-h-52 flex flex-col border-t border-gray-200 dark:border-gray-700 overflow-hidden">
                     <div className="flex-shrink-0 h-9 px-4 flex items-center justify-between bg-gray-50 dark:bg-gray-900/50">
                       <div className="flex items-center gap-2">
-                        <FileCode className="w-4 h-4 text-gray-500 dark:text-gray-400" />
+                        <FileJson className="w-4 h-4 text-gray-500 dark:text-gray-400" />
                         <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
-                          YAML
+                          Step JSON
                         </h2>
                       </div>
                       <button
-                        onClick={handleCopyYaml}
+                        onClick={handleCopyJson}
                         className="flex items-center gap-1 px-2 py-1 text-xs font-medium rounded bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
                       >
                         {copied ? (
@@ -848,8 +1016,8 @@ function FunctionLabContent() {
                       </button>
                     </div>
                     <div className="flex-1 overflow-y-auto p-3">
-                      <pre className="text-xs font-mono bg-gray-900 dark:bg-gray-950 text-emerald-300 p-3 rounded-lg overflow-x-auto">
-                        {yamlOutput}
+                      <pre className="text-xs font-mono bg-gray-900 dark:bg-gray-950 text-emerald-400 dark:text-emerald-300 p-3 rounded-lg overflow-x-auto">
+                        {jsonOutput}
                       </pre>
                     </div>
                   </div>
@@ -857,7 +1025,7 @@ function FunctionLabContent() {
 
                 {/* Right Side: Controls + Output */}
                 <div className="w-1/2 flex flex-col min-h-0">
-                  {/* Control Bar - Fixed height */}
+                  {/* Control Bar */}
                   <div className="flex-shrink-0 h-11 px-4 flex items-center justify-between border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
                     <h2 className="text-sm font-semibold text-gray-700 dark:text-gray-300">
                       Output
@@ -894,7 +1062,7 @@ function FunctionLabContent() {
                     </div>
                   </div>
 
-                  {/* Output Panel - Scrollable */}
+                  {/* Output Panel */}
                   <div className="flex-1 overflow-y-auto p-4">
                   {!result && !isExecuting && (
                     <div className="flex flex-col items-center justify-center h-full text-center">

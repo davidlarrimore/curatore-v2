@@ -62,6 +62,59 @@ def save_upload_to_disk(file_obj, upload_dir: str) -> str:
     return dest_path
 
 
+def preprocess_xlsx(path: str) -> str:
+    """
+    Unmerge all merged cells in an xlsx workbook and fill each cell in the
+    formerly-merged range with the top-left value.  This prevents pandas /
+    MarkItDown from reading NaN for non-top-left cells.
+
+    Returns the path to the preprocessed file (a temp copy), or the original
+    path on any failure (graceful fallback).
+    """
+    try:
+        import openpyxl
+
+        wb = openpyxl.load_workbook(path)
+        modified = False
+
+        for ws in wb.worksheets:
+            # Collect ranges first – mutating while iterating is not safe
+            merged_ranges = list(ws.merged_cells.ranges)
+            for merged_range in merged_ranges:
+                top_left_value = ws.cell(
+                    row=merged_range.min_row,
+                    column=merged_range.min_col,
+                ).value
+                ws.unmerge_cells(str(merged_range))
+                for row in ws.iter_rows(
+                    min_row=merged_range.min_row,
+                    max_row=merged_range.max_row,
+                    min_col=merged_range.min_col,
+                    max_col=merged_range.max_col,
+                ):
+                    for cell in row:
+                        cell.value = top_left_value
+                modified = True
+
+        if not modified:
+            wb.close()
+            return path
+
+        # Save to a sibling temp file so the caller can find it easily
+        src = Path(path)
+        preprocessed_path = str(
+            src.with_name(src.stem + "_preprocessed" + src.suffix)
+        )
+        wb.save(preprocessed_path)
+        wb.close()
+        logger.info("preprocess_xlsx: wrote preprocessed file %s", preprocessed_path)
+        return preprocessed_path
+
+    except Exception as e:
+        logger.warning("preprocess_xlsx: falling back to original – %s", e)
+        return path
+
+
 def markitdown_convert(path: str) -> str:
     """
     Convert Office files to markdown using MarkItDown.
@@ -325,7 +378,8 @@ def extract_markdown(
         # Modern Office formats - MarkItDown
         if ext in {".docx", ".pptx", ".xlsx"}:
             logger.info("EXTRACT: Processing Office file with MarkItDown: %s", filename)
-            content = markitdown_convert(path)
+            convert_path = preprocess_xlsx(path) if ext == ".xlsx" else path
+            content = markitdown_convert(convert_path)
             if content:
                 logger.info(
                     "EXTRACT SUCCESS: file=%s, method=markitdown, chars=%d",
@@ -344,6 +398,8 @@ def extract_markdown(
             )
             conv_path = libreoffice_convert(path, target)
             if conv_path:
+                if target == "xlsx":
+                    conv_path = preprocess_xlsx(conv_path)
                 content = markitdown_convert(conv_path)
                 if content:
                     logger.info(

@@ -343,6 +343,7 @@ class RunService:
         self,
         session: AsyncSession,
         asset_id: UUID,
+        organization_id: Optional[UUID] = None,
         run_type: Optional[str] = None,
     ) -> int:
         """
@@ -357,6 +358,8 @@ class RunService:
         Args:
             session: Database session
             asset_id: Asset UUID
+            organization_id: Optional org UUID for multi-tenant isolation.
+                If provided, only cancels runs belonging to this org.
             run_type: Optional run type filter (e.g., "extraction")
 
         Returns:
@@ -370,6 +373,10 @@ class RunService:
             .where(Run.input_asset_ids.contains([asset_id_str]))
             .where(Run.status.in_(["pending", "submitted", "running"]))
         )
+
+        # Filter by organization for multi-tenant isolation
+        if organization_id:
+            query = query.where(Run.organization_id == organization_id)
 
         if run_type:
             query = query.where(Run.run_type == run_type)

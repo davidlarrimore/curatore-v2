@@ -387,19 +387,21 @@ def sam_pull_task(
                 new_solicitations = result.get("new_solicitations", 0)
                 updated_solicitations = result.get("updated_solicitations", 0)
                 new_notices = result.get("new_notices", 0)
+                updated_notices = result.get("updated_notices", 0)
                 new_attachments = result.get("new_attachments", 0)
                 error_count = len(result.get("errors", []))
 
                 await run_log_service.log_summary(
                     session=session,
                     run_id=run_uuid,
-                    message=f"SAM.gov pull {status}: {total_fetched} fetched, {new_solicitations} new, {updated_solicitations} updated",
+                    message=f"SAM.gov pull {status}: {total_fetched} fetched, {new_solicitations} new solicitations, {updated_solicitations} updated solicitations, {new_notices} new notices",
                     context={
                         "status": status,
                         "total_fetched": total_fetched,
                         "new_solicitations": new_solicitations,
                         "updated_solicitations": updated_solicitations,
                         "new_notices": new_notices,
+                        "updated_notices": updated_notices,
                         "new_attachments": new_attachments,
                         "errors": error_count,
                     },
@@ -413,6 +415,7 @@ def sam_pull_task(
                     "new_solicitations": result.get("new_solicitations", 0),
                     "updated_solicitations": result.get("updated_solicitations", 0),
                     "new_notices": result.get("new_notices", 0),
+                    "updated_notices": result.get("updated_notices", 0),
                     "new_attachments": result.get("new_attachments", 0),
                     "status": result.get("status"),
                 }
@@ -438,6 +441,7 @@ def sam_pull_task(
                                 "new_solicitations": new_solicitations,
                                 "updated_solicitations": updated_solicitations,
                                 "new_notices": new_notices,
+                                "updated_notices": updated_notices,
                                 "new_attachments": new_attachments,
                             },
                             source_run_id=run_uuid,

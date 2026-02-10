@@ -21,10 +21,19 @@ from app.core.shared.database_service import database_service
 from app.core.search.pg_search_service import pg_search_service
 from app.core.metadata.registry_service import metadata_registry_service
 from app.api.v1.data.schemas import (
+    DataSourceTypeResponse,
+    DataSourceTypeUpdateRequest,
+    FacetAutocompleteResponse,
     FacetCreateRequest,
     FacetDefinitionResponse,
+    FacetDiscoverResponse,
     FacetMappingCreateRequest,
     FacetMappingResponse,
+    FacetPendingSuggestionsResponse,
+    FacetReferenceAliasCreateRequest,
+    FacetReferenceValueCreateRequest,
+    FacetReferenceValueResponse,
+    FacetReferenceValueUpdateRequest,
     FacetUpdateRequest,
     MetadataCatalogResponse,
     MetadataFieldCreateRequest,
@@ -33,6 +42,7 @@ from app.api.v1.data.schemas import (
     MetadataFieldUpdateRequest,
     MetadataNamespaceResponse,
 )
+from app.core.metadata.facet_reference_service import facet_reference_service
 
 logger = logging.getLogger("curatore.api.metadata")
 
@@ -49,15 +59,15 @@ async def get_catalog(current_user: User = Depends(get_current_user)):
     """
     org_id = current_user.organization_id
 
-    # Get namespace info with doc counts
+    # Get namespace doc counts (lightweight — no sample value queries)
     async with database_service.get_session() as session:
-        schema = await pg_search_service.get_metadata_schema(session, org_id)
+        doc_counts = await pg_search_service.get_doc_counts(session, org_id)
 
     registry_namespaces = metadata_registry_service.get_namespaces()
     registry_fields = metadata_registry_service.get_all_fields()
     registry_facets = metadata_registry_service.get_facet_definitions()
 
-    schema_namespaces = schema.get("namespaces", {})
+    schema_namespaces = doc_counts.get("namespaces", {})
 
     # Build namespace responses
     ns_responses = []
@@ -106,7 +116,7 @@ async def get_catalog(current_user: User = Depends(get_current_user)):
     return MetadataCatalogResponse(
         namespaces=ns_responses,
         facets=facet_responses,
-        total_indexed_docs=schema.get("total_indexed_docs", 0),
+        total_indexed_docs=doc_counts.get("total_indexed_docs", 0),
     )
 
 
@@ -116,10 +126,10 @@ async def list_namespaces(current_user: User = Depends(get_current_user)):
     org_id = current_user.organization_id
 
     async with database_service.get_session() as session:
-        schema = await pg_search_service.get_metadata_schema(session, org_id)
+        doc_counts = await pg_search_service.get_doc_counts(session, org_id)
 
     registry_namespaces = metadata_registry_service.get_namespaces()
-    schema_namespaces = schema.get("namespaces", {})
+    schema_namespaces = doc_counts.get("namespaces", {})
 
     return [
         MetadataNamespaceResponse(
@@ -481,6 +491,325 @@ async def remove_facet_mapping(
                 organization_id=org_id,
                 facet_name=facet_name,
                 content_type=content_type,
+            )
+            await session.commit()
+            return result
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+# =============================================================================
+# FACET REFERENCE DATA ENDPOINTS
+# =============================================================================
+
+
+@router.get("/facets/{facet_name}/autocomplete", response_model=List[FacetAutocompleteResponse])
+async def facet_autocomplete(
+    facet_name: str,
+    q: str = "",
+    limit: int = 10,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Autocomplete suggestions for a facet value.
+
+    Searches across canonical values, display labels, and aliases.
+    Returns matches sorted by relevance.
+    """
+    org_id = current_user.organization_id
+
+    if not q or len(q) < 1:
+        return []
+
+    async with database_service.get_session() as session:
+        results = await facet_reference_service.autocomplete(
+            session, org_id, facet_name, q, limit
+        )
+
+    return [FacetAutocompleteResponse(**r) for r in results]
+
+
+@router.get("/facets/{facet_name}/reference-values", response_model=List[FacetReferenceValueResponse])
+async def list_reference_values(
+    facet_name: str,
+    include_suggested: bool = False,
+    current_user: User = Depends(get_current_user),
+):
+    """List canonical reference values and their aliases for a facet."""
+    org_id = current_user.organization_id
+
+    async with database_service.get_session() as session:
+        values = await facet_reference_service.list_values(
+            session, org_id, facet_name, include_suggested=include_suggested
+        )
+
+    return [FacetReferenceValueResponse(**v) for v in values]
+
+
+@router.post("/facets/{facet_name}/reference-values", response_model=dict)
+async def create_reference_value(
+    facet_name: str,
+    request: FacetReferenceValueCreateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Create a new canonical reference value for a facet."""
+    org_id = current_user.organization_id
+
+    async with database_service.get_session() as session:
+        try:
+            result = await facet_reference_service.create_canonical(
+                session=session,
+                org_id=org_id,
+                facet_name=facet_name,
+                canonical_value=request.canonical_value,
+                display_label=request.display_label,
+                description=request.description,
+                aliases=request.aliases,
+            )
+            await session.commit()
+            return result
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.patch("/facets/{facet_name}/reference-values/{value_id}", response_model=dict)
+async def update_reference_value(
+    facet_name: str,
+    value_id: str,
+    request: FacetReferenceValueUpdateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Update a canonical reference value."""
+    org_id = current_user.organization_id
+
+    async with database_service.get_session() as session:
+        result = await facet_reference_service.update_canonical(
+            session=session,
+            reference_value_id=UUID(value_id),
+            org_id=org_id,
+            canonical_value=request.canonical_value,
+            display_label=request.display_label,
+            description=request.description,
+            sort_order=request.sort_order,
+            status=request.status,
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="Reference value not found")
+        await session.commit()
+        return result
+
+
+@router.delete("/facets/{facet_name}/reference-values/{value_id}", response_model=dict)
+async def deactivate_reference_value(
+    facet_name: str,
+    value_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Soft-delete (deactivate) a canonical reference value."""
+    org_id = current_user.organization_id
+
+    async with database_service.get_session() as session:
+        result = await facet_reference_service.update_canonical(
+            session=session,
+            reference_value_id=UUID(value_id),
+            org_id=org_id,
+            status="inactive",
+        )
+        if not result:
+            raise HTTPException(status_code=404, detail="Reference value not found")
+        await session.commit()
+        return {"status": "deactivated", "id": value_id}
+
+
+@router.post("/facets/{facet_name}/reference-values/{value_id}/aliases", response_model=dict)
+async def add_reference_alias(
+    facet_name: str,
+    value_id: str,
+    request: FacetReferenceAliasCreateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """Add an alias to a canonical reference value."""
+    async with database_service.get_session() as session:
+        try:
+            result = await facet_reference_service.add_alias(
+                session=session,
+                reference_value_id=UUID(value_id),
+                alias_value=request.alias_value,
+                source_hint=request.source_hint,
+            )
+            await session.commit()
+            return result
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/facets/{facet_name}/reference-values/{value_id}/aliases/{alias_id}", response_model=dict)
+async def remove_reference_alias(
+    facet_name: str,
+    value_id: str,
+    alias_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Remove an alias from a canonical reference value."""
+    org_id = current_user.organization_id
+
+    async with database_service.get_session() as session:
+        success = await facet_reference_service.delete_alias(
+            session, UUID(alias_id), org_id
+        )
+        if not success:
+            raise HTTPException(status_code=404, detail="Alias not found")
+        await session.commit()
+        return {"status": "deleted", "id": alias_id}
+
+
+@router.post("/facets/{facet_name}/discover", response_model=FacetDiscoverResponse)
+async def discover_facet_values(
+    facet_name: str,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    AI-powered discovery: scan indexed data for unmapped values and
+    suggest canonical groupings using LLM.
+
+    This endpoint may take 10-30 seconds depending on data volume and LLM latency.
+    """
+    org_id = current_user.organization_id
+
+    async with database_service.get_session() as session:
+        unmapped = await facet_reference_service.discover_unmapped(
+            session, org_id, facet_name
+        )
+        suggestions = []
+        llm_error = None
+        if unmapped:
+            result = await facet_reference_service.suggest_groupings(
+                session, org_id, facet_name
+            )
+            suggestions = result.get("suggestions", [])
+            llm_error = result.get("error")
+            await session.commit()
+
+    return FacetDiscoverResponse(
+        facet_name=facet_name,
+        unmapped_count=len(unmapped),
+        unmapped_values=unmapped,
+        suggestions=suggestions,
+        error=llm_error,
+    )
+
+
+@router.post("/facets/{facet_name}/reference-values/{value_id}/approve", response_model=dict)
+async def approve_reference_value(
+    facet_name: str,
+    value_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Approve a suggested canonical value (promotes to active)."""
+    org_id = current_user.organization_id
+
+    async with database_service.get_session() as session:
+        success = await facet_reference_service.approve(
+            session, UUID(value_id), org_id
+        )
+        if not success:
+            raise HTTPException(status_code=404, detail="Reference value not found")
+        await session.commit()
+        return {"status": "approved", "id": value_id}
+
+
+@router.post("/facets/{facet_name}/reference-values/{value_id}/reject", response_model=dict)
+async def reject_reference_value(
+    facet_name: str,
+    value_id: str,
+    current_user: User = Depends(get_current_user),
+):
+    """Reject a suggested canonical value (sets to inactive)."""
+    org_id = current_user.organization_id
+
+    async with database_service.get_session() as session:
+        success = await facet_reference_service.reject(
+            session, UUID(value_id), org_id
+        )
+        if not success:
+            raise HTTPException(status_code=404, detail="Reference value not found")
+        await session.commit()
+        return {"status": "rejected", "id": value_id}
+
+
+@router.get("/facets/pending-suggestions", response_model=FacetPendingSuggestionsResponse)
+async def get_pending_suggestions(
+    current_user: User = Depends(get_current_user),
+):
+    """Get count of pending suggestions across all facets (for admin badge)."""
+    org_id = current_user.organization_id
+
+    async with database_service.get_session() as session:
+        counts = await facet_reference_service.get_pending_suggestion_count(
+            session, org_id
+        )
+
+    return FacetPendingSuggestionsResponse(**counts)
+
+
+# =============================================================================
+# DATA SOURCE TYPE ENDPOINTS
+# =============================================================================
+
+
+@router.get("/data-sources", response_model=List[DataSourceTypeResponse])
+async def list_data_source_types(current_user: User = Depends(get_current_user)):
+    """
+    List all data source type definitions with org-level overrides applied.
+
+    Returns the curated knowledge about each data source type (what it is,
+    what it contains, how to search it) merged with any org customizations.
+    """
+    org_id = current_user.organization_id
+
+    async with database_service.get_session() as session:
+        catalog = await metadata_registry_service.get_data_source_catalog(session, org_id)
+
+    return [
+        DataSourceTypeResponse(
+            source_type=key,
+            display_name=defn.get("display_name", key),
+            description=defn.get("description"),
+            data_contains=defn.get("data_contains"),
+            capabilities=defn.get("capabilities"),
+            example_questions=defn.get("example_questions"),
+            search_tools=defn.get("search_tools"),
+            note=defn.get("note"),
+            is_active=defn.get("is_active", True),
+        )
+        for key, defn in catalog.items()
+    ]
+
+
+@router.patch("/data-sources/{source_type}", response_model=dict)
+async def update_data_source_type(
+    source_type: str,
+    request: DataSourceTypeUpdateRequest,
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Create or update an org-level data source type override.
+
+    Allows admins to customize how a data source type is described for their
+    organization, or hide source types that are not relevant.
+    """
+    org_id = current_user.organization_id
+
+    async with database_service.get_session() as session:
+        try:
+            result = await metadata_registry_service.upsert_data_source_override(
+                session=session,
+                organization_id=org_id,
+                source_type=source_type,
+                display_name=request.display_name,
+                description=request.description,
+                capabilities=request.capabilities,
+                is_active=request.is_active,
             )
             await session.commit()
             return result

@@ -42,12 +42,24 @@ class SearchAssetsFunction(BaseFunction):
     meta = FunctionMeta(
         name="search_assets",
         category=FunctionCategory.SEARCH,
-        description="Search assets (documents, files) using full-text and semantic search. Returns matching documents as ContentItem objects with metadata and relevance scores.",
+        description=(
+            "Search document assets using full-text and semantic search. "
+            "Returns document summaries with relevance scores. To read full document content, "
+            "use get_content(asset_ids=[...]) with IDs from these results. "
+            "This tool searches documents only — use discover_data_sources to see all available "
+            "data sources and the appropriate search tool for each."
+        ),
         parameters=[
             ParameterDoc(
                 name="query",
                 type="str",
-                description="Search query",
+                description=(
+                    "Short keyword query (2-4 key terms work best). "
+                    "Use specific names or acronyms, not full sentences. "
+                    "Good: 'SOW cybersecurity', 'DISCOVER II proposal'. "
+                    "Bad: 'Statement of Work for cybersecurity endpoint protection and monitoring services'. "
+                    "Use filters (source_type, site_name, facet_filters) to narrow results instead of adding more query terms."
+                ),
                 required=True,
             ),
             ParameterDoc(
@@ -69,6 +81,21 @@ class SearchAssetsFunction(BaseFunction):
                 name="sync_config_id",
                 type="str",
                 description="Filter by SharePoint sync config ID",
+                required=False,
+                default=None,
+            ),
+            ParameterDoc(
+                name="site_name",
+                type="str",
+                description="Filter by SharePoint site display name (e.g., 'IT Department'). Case-insensitive. Resolves to sync_config_ids automatically.",
+                required=False,
+                default=None,
+                example="IT Department",
+            ),
+            ParameterDoc(
+                name="facet_filters",
+                type="dict",
+                description="Cross-domain facet filters (e.g., {'agency': 'GSA', 'naics_code': '541512'}). Use discover_metadata to see available facets.",
                 required=False,
                 default=None,
             ),
@@ -126,6 +153,9 @@ class SearchAssetsFunction(BaseFunction):
                               example=0.85),
                 OutputFieldDoc(name="snippet", type="str", description="Highlighted text excerpt",
                               nullable=True),
+                OutputFieldDoc(name="site_name", type="str",
+                              description="SharePoint site display name (SharePoint assets only)",
+                              example="IT Department", nullable=True),
             ],
         ),
         tags=["search", "assets", "hybrid", "content"],
@@ -151,6 +181,8 @@ class SearchAssetsFunction(BaseFunction):
         source_type = params.get("source_type")
         collection_id = params.get("collection_id")
         sync_config_id = params.get("sync_config_id")
+        site_name = params.get("site_name")
+        facet_filters = params.get("facet_filters")
         folder_path = params.get("folder_path")
         search_mode = params.get("search_mode", "hybrid")
         keyword_weight = params.get("keyword_weight", 0.5)
@@ -184,6 +216,41 @@ class SearchAssetsFunction(BaseFunction):
                 sid = UUID(sync_config_id) if isinstance(sync_config_id, str) else sync_config_id
                 sync_config_ids = [sid]
 
+            # Resolve site_name to sync_config_ids (case-insensitive)
+            if site_name and not sync_config_ids:
+                from app.core.database.models import SharePointSyncConfig
+                from sqlalchemy import select, func as sqla_func
+
+                result = await ctx.session.execute(
+                    select(SharePointSyncConfig.id)
+                    .where(SharePointSyncConfig.organization_id == ctx.organization_id)
+                    .where(SharePointSyncConfig.is_active == True)
+                    .where(sqla_func.lower(SharePointSyncConfig.site_name) == site_name.lower())
+                )
+                resolved_ids = [row[0] for row in result.fetchall()]
+                if not resolved_ids:
+                    # Try matching on config name as fallback
+                    result = await ctx.session.execute(
+                        select(SharePointSyncConfig.id)
+                        .where(SharePointSyncConfig.organization_id == ctx.organization_id)
+                        .where(SharePointSyncConfig.is_active == True)
+                        .where(sqla_func.lower(SharePointSyncConfig.name).contains(site_name.lower()))
+                    )
+                    resolved_ids = [row[0] for row in result.fetchall()]
+
+                if resolved_ids:
+                    sync_config_ids = resolved_ids
+                    # Auto-set source_type to sharepoint when filtering by site
+                    if not source_type:
+                        source_types = ["sharepoint"]
+                else:
+                    return FunctionResult.success_result(
+                        data=[],
+                        message=f"No SharePoint sites found matching '{site_name}'",
+                        metadata={"site_name": site_name, "total_found": 0},
+                        items_processed=0,
+                    )
+
             # Execute search
             # PgSearchService uses semantic_weight (0-1), so convert from keyword_weight
             semantic_weight = 1 - keyword_weight
@@ -197,6 +264,7 @@ class SearchAssetsFunction(BaseFunction):
                 collection_ids=collection_ids,
                 sync_config_ids=sync_config_ids,
                 folder_path=folder_path,
+                facet_filters=facet_filters,
                 limit=limit,
             )
 
@@ -215,6 +283,11 @@ class SearchAssetsFunction(BaseFunction):
                     # Title contains path, extract folder portion
                     folder_path = title.rsplit("/", 1)[0] if "/" in title else ""
 
+                # Extract site_name from search chunk metadata
+                site_name = None
+                if sr.metadata:
+                    site_name = sr.metadata.get("sharepoint", {}).get("site_name")
+
                 item = ContentItem(
                     id=str(sr.asset_id),
                     type="asset",
@@ -229,6 +302,7 @@ class SearchAssetsFunction(BaseFunction):
                         "source_type": sr.source_type,  # Display type from search service
                         "source_url": sr.url,
                         "status": "ready",  # Only indexed assets are searchable
+                        "site_name": site_name,
                     },
                     metadata={
                         "score": sr.score,
@@ -249,6 +323,8 @@ class SearchAssetsFunction(BaseFunction):
                         "source_type": source_type,
                         "collection_id": str(collection_id) if collection_id else None,
                         "sync_config_id": str(sync_config_id) if sync_config_id else None,
+                        "site_name": site_name,
+                        "facet_filters": facet_filters,
                         "folder_path": folder_path,
                     },
                     "result_type": "ContentItem",

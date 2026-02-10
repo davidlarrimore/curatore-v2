@@ -119,6 +119,7 @@ class SearchHit:
     highlights: Dict[str, List[str]] = field(default_factory=dict)
     keyword_score: Optional[float] = None
     semantic_score: Optional[float] = None
+    metadata: Optional[Dict[str, Any]] = None
 
 
 @dataclass
@@ -186,6 +187,7 @@ class PgSearchService:
     def __init__(self):
         """Initialize the PostgreSQL search service."""
         self._metadata_schema_cache: Dict[str, Tuple[float, dict]] = {}
+        self._doc_counts_cache: Dict[str, Tuple[float, dict]] = {}
 
     # =========================================================================
     # Helper Methods
@@ -196,15 +198,20 @@ class PgSearchService:
         Escape and format query for PostgreSQL full-text search.
 
         Handles special characters and converts to tsquery format.
+        For short queries (1-3 terms), uses AND for precision.
+        For longer queries (4+ terms), uses OR so partial matches
+        are found and ranked by ts_rank rather than requiring every
+        term to be present.
         """
         # Remove special characters that could break tsquery
         query = re.sub(r"[^\w\s]", " ", query)
-        # Split into words and join with &
-        words = query.split()
+        # Split into words
+        words = [w for w in query.split() if w]
         if not words:
             return ""
-        # Use prefix matching for better UX
-        return " & ".join(f"{word}:*" for word in words if word)
+        # Short queries: AND for precision. Long queries: OR for recall.
+        joiner = " & " if len(words) <= 3 else " | "
+        return joiner.join(f"{word}:*" for word in words)
 
     def _build_base_filters(self, organization_id: UUID) -> Tuple[List[str], Dict[str, Any]]:
         """
@@ -300,6 +307,7 @@ class PgSearchService:
                     sc.url,
                     sc.created_at,
                     sc.content,
+                    sc.metadata,
                     ts_rank(sc.search_vector, to_tsquery('english', :fts_query)) as keyword_score,
                     ROW_NUMBER() OVER (
                         PARTITION BY sc.source_id
@@ -319,6 +327,7 @@ class PgSearchService:
                 url,
                 created_at::text,
                 keyword_score as score,
+                metadata,
                 ts_headline(
                     'english',
                     content,
@@ -354,6 +363,7 @@ class PgSearchService:
                 created_at=row.created_at,
                 highlights={"content": [row.highlight]} if row.highlight else {},
                 keyword_score=float(row.score),
+                metadata=dict(row.metadata) if row.metadata else None,
             ))
 
         return SearchResults(total=total, hits=hits)
@@ -386,6 +396,7 @@ class PgSearchService:
                     sc.url,
                     sc.created_at,
                     sc.content,
+                    sc.metadata,
                     1 - (sc.embedding <=> CAST(:embedding AS vector)) as semantic_score
                 FROM search_chunks sc
                 WHERE {filter_clause}
@@ -411,6 +422,7 @@ class PgSearchService:
                 url,
                 created_at::text,
                 semantic_score as score,
+                metadata,
                 LEFT(content, 500) as snippet
             FROM ranked_chunks
             WHERE rn = 1
@@ -441,6 +453,7 @@ class PgSearchService:
                 created_at=row.created_at,
                 highlights={"content": [row.snippet + "..."]} if row.snippet else {},
                 semantic_score=float(row.score),
+                metadata=dict(row.metadata) if row.metadata else None,
             ))
 
         # Estimate total
@@ -477,6 +490,7 @@ class PgSearchService:
                     sc.url,
                     sc.created_at,
                     sc.content,
+                    sc.metadata,
                     ts_rank(sc.search_vector, to_tsquery('english', :fts_query)) as keyword_score,
                     ROW_NUMBER() OVER (
                         PARTITION BY sc.source_id
@@ -497,6 +511,7 @@ class PgSearchService:
                     sc.url,
                     sc.created_at,
                     sc.content,
+                    sc.metadata,
                     1 - (sc.embedding <=> CAST(:embedding AS vector)) as semantic_score
                 FROM search_chunks sc
                 WHERE {filter_clause}
@@ -529,6 +544,7 @@ class PgSearchService:
                     COALESCE(k.url, s.url) as url,
                     COALESCE(k.created_at, s.created_at) as created_at,
                     COALESCE(k.content, s.content) as content,
+                    COALESCE(k.metadata, s.metadata) as metadata,
                     COALESCE(k.keyword_score, 0) as keyword_score,
                     COALESCE(s.semantic_score, 0) as semantic_score,
                     :keyword_weight * COALESCE(k.keyword_score, 0) +
@@ -548,6 +564,7 @@ class PgSearchService:
                 combined_score as score,
                 keyword_score,
                 semantic_score,
+                metadata,
                 ts_headline(
                     'english',
                     content,
@@ -582,6 +599,7 @@ class PgSearchService:
                 highlights={"content": [row.highlight]} if row.highlight else {},
                 keyword_score=float(row.keyword_score) if row.keyword_score else None,
                 semantic_score=float(row.semantic_score) if row.semantic_score else None,
+                metadata=dict(row.metadata) if row.metadata else None,
             ))
 
         # Get total count
@@ -619,6 +637,60 @@ class PgSearchService:
         cache_key = str(organization_id)
         self._metadata_schema_cache.pop(cache_key, None)
         logger.debug(f"Invalidated metadata schema cache for org {organization_id}")
+
+    async def get_doc_counts(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+    ) -> Dict[str, Any]:
+        """
+        Lightweight query returning only namespace doc counts and total.
+
+        Much faster than get_metadata_schema() because it skips sample value
+        queries entirely. Intended for the metadata catalog endpoint which
+        only needs counts. Cached for SCHEMA_CACHE_TTL seconds.
+        """
+        cache_key = str(organization_id)
+        now = time.time()
+
+        if cache_key in self._doc_counts_cache:
+            cached_at, cached = self._doc_counts_cache[cache_key]
+            if now - cached_at < self.SCHEMA_CACHE_TTL:
+                return cached
+
+        from app.core.metadata.registry_service import metadata_registry_service
+
+        org_id_str = str(organization_id)
+        ns_source_types_map = metadata_registry_service.get_namespace_source_types()
+        registry_namespaces = metadata_registry_service.get_namespaces()
+
+        count_sql = text("""
+            SELECT source_type, COUNT(DISTINCT source_id) as doc_count
+            FROM search_chunks
+            WHERE organization_id = :org_id
+            GROUP BY source_type
+        """)
+        result = await session.execute(count_sql, {"org_id": org_id_str})
+        source_type_counts: Dict[str, int] = {}
+        total_docs = 0
+        for row in result.fetchall():
+            source_type_counts[row.source_type] = row.doc_count
+            total_docs += row.doc_count
+
+        namespaces: Dict[str, Any] = {}
+        for ns in registry_namespaces:
+            ns_doc_count = sum(
+                source_type_counts.get(st, 0)
+                for st in ns_source_types_map.get(ns, [])
+            )
+            namespaces[ns] = {"doc_count": ns_doc_count}
+
+        counts = {
+            "namespaces": namespaces,
+            "total_indexed_docs": total_docs,
+        }
+        self._doc_counts_cache[cache_key] = (now, counts)
+        return counts
 
     async def get_metadata_schema(
         self,
@@ -911,10 +983,19 @@ class PgSearchService:
                 "state_forecast": "state_forecast",
             }
 
+            # Map for SAM.gov display names
+            # "sam_gov" in UI expands to include both notices and solicitations
+            sam_display_map = {
+                "sam_gov": None,  # Expands to all SAM types
+                "sam_notice": "sam_notice",
+                "sam_solicitation": "sam_solicitation",
+            }
+
             # Handle source type filtering
             if source_types:
                 sf_source_types = []
                 forecast_source_types = []
+                sam_source_types = []
                 asset_source_types = []
 
                 for st in source_types:
@@ -928,6 +1009,14 @@ class PgSearchService:
                             forecast_source_types = ["ag_forecast", "apfs_forecast", "state_forecast"]
                         else:
                             forecast_source_types.append(forecast_display_map[st])
+                    elif st in sam_display_map:
+                        if st == "sam_gov":
+                            # Expand "sam_gov" to include both SAM types AND sam_gov assets (attachments)
+                            sam_source_types = ["sam_notice", "sam_solicitation"]
+                            # Also include assets with source_type_filter = 'sam_gov' (SAM attachments)
+                            asset_source_types.append("sam_gov")
+                        else:
+                            sam_source_types.append(sam_display_map[st])
                     else:
                         asset_source_types.append(st)
 
@@ -938,6 +1027,9 @@ class PgSearchService:
                 if forecast_source_types:
                     filter_clauses.append("sc.source_type = ANY(:forecast_source_types)")
                     params["forecast_source_types"] = forecast_source_types
+                if sam_source_types:
+                    filter_clauses.append("sc.source_type = ANY(:sam_source_types)")
+                    params["sam_source_types"] = sam_source_types
                 if asset_source_types:
                     filter_clauses.append("(sc.source_type = 'asset' AND sc.source_type_filter = ANY(:asset_source_types))")
                     params["asset_source_types"] = asset_source_types
@@ -991,9 +1083,10 @@ class PgSearchService:
                 filters.append("sc.metadata @> CAST(:metadata_filter AS jsonb)")
                 params["metadata_filter"] = json.dumps(metadata_filters)
 
-            # Resolve facet_filters via registry service
+            # Resolve facet_filters via registry service (with alias expansion)
             if facet_filters:
                 from app.core.metadata.registry_service import metadata_registry_service
+                from app.core.metadata.facet_reference_service import facet_reference_service
 
                 facet_idx = 0
                 for facet_name, facet_value in facet_filters.items():
@@ -1001,6 +1094,25 @@ class PgSearchService:
                     if not mappings:
                         logger.warning(f"Unknown facet: {facet_name}, skipping")
                         continue
+
+                    # Expand values through reference data if available
+                    facet_def = metadata_registry_service.get_facet_definitions().get(facet_name, {})
+                    has_ref_data = facet_def.get("has_reference_data", False)
+
+                    if has_ref_data:
+                        if isinstance(facet_value, list):
+                            expanded = []
+                            for fv in facet_value:
+                                expanded.extend(await facet_reference_service.resolve_aliases(
+                                    session, organization_id, facet_name, str(fv)
+                                ))
+                            expanded_values = list(set(expanded))
+                        else:
+                            expanded_values = await facet_reference_service.resolve_aliases(
+                                session, organization_id, facet_name, str(facet_value)
+                            )
+                    else:
+                        expanded_values = facet_value if isinstance(facet_value, list) else [str(facet_value)]
 
                     # Build OR clause across all content types for this facet
                     facet_clauses = []
@@ -1012,16 +1124,10 @@ class PgSearchService:
                         ns, field = parts
 
                         param_key = f"facet_{facet_idx}"
-                        if isinstance(facet_value, list):
-                            facet_clauses.append(
-                                f"sc.metadata->'{ns}'->>'{ field}' = ANY(:{param_key})"
-                            )
-                            params[param_key] = facet_value
-                        else:
-                            facet_clauses.append(
-                                f"sc.metadata->'{ns}'->>'{ field}' = :{param_key}"
-                            )
-                            params[param_key] = str(facet_value)
+                        facet_clauses.append(
+                            f"sc.metadata->'{ns}'->>'{ field}' = ANY(:{param_key})"
+                        )
+                        params[param_key] = expanded_values
                         facet_idx += 1
 
                     if facet_clauses:
@@ -1133,21 +1239,41 @@ class PgSearchService:
                 params["notice_types"] = notice_types
 
             if agencies:
+                # Expand agency names through reference data aliases
+                from app.core.metadata.facet_reference_service import facet_reference_service
+                expanded_agencies = []
+                for agency in agencies:
+                    expanded_agencies.extend(
+                        await facet_reference_service.resolve_aliases(
+                            session, organization_id, "agency", agency
+                        )
+                    )
+                expanded_agencies = list(set(expanded_agencies))
                 filters.append("sc.metadata->'sam'->>'agency' = ANY(:agencies)")
-                params["agencies"] = agencies
+                params["agencies"] = expanded_agencies
 
             # NAICS code filter (check metadata field)
             if naics_codes:
                 filters.append("sc.metadata->'sam'->>'naics_code' = ANY(:naics_codes)")
                 params["naics_codes"] = naics_codes
 
-            # Set-aside filter (partial match using ILIKE with ANY)
+            # Set-aside filter (with alias expansion + partial match fallback)
             if set_asides:
+                from app.core.metadata.facet_reference_service import facet_reference_service
+                expanded_set_asides = []
+                for sa in set_asides:
+                    expanded_set_asides.extend(
+                        await facet_reference_service.resolve_aliases(
+                            session, organization_id, "set_aside", sa
+                        )
+                    )
+                expanded_set_asides = list(set(expanded_set_asides))
+
                 set_aside_conditions = []
-                for i, sa in enumerate(set_asides):
+                for i, sa_val in enumerate(expanded_set_asides):
                     param_name = f"set_aside_{i}"
                     set_aside_conditions.append(f"sc.metadata->'sam'->>'set_aside' ILIKE :{param_name}")
-                    params[param_name] = f"%{sa}%"
+                    params[param_name] = f"%{sa_val}%"
                 if set_aside_conditions:
                     filters.append(f"({' OR '.join(set_aside_conditions)})")
 
@@ -1334,8 +1460,19 @@ class PgSearchService:
                 params["fiscal_year"] = fiscal_year
 
             if agency_name:
-                filters.append("sc.metadata->'forecast'->>'agency_name' ILIKE :agency_pattern")
-                params["agency_pattern"] = f"%{agency_name}%"
+                # Expand agency name through reference data aliases
+                from app.core.metadata.facet_reference_service import facet_reference_service
+                expanded_agency = await facet_reference_service.resolve_aliases(
+                    session, organization_id, "agency", agency_name
+                )
+                if len(expanded_agency) > 1:
+                    # Reference data found — use exact match with expanded list
+                    filters.append("sc.metadata->'forecast'->>'agency_name' = ANY(:agency_names)")
+                    params["agency_names"] = expanded_agency
+                else:
+                    # No reference data match — fall back to ILIKE partial match
+                    filters.append("sc.metadata->'forecast'->>'agency_name' ILIKE :agency_pattern")
+                    params["agency_pattern"] = f"%{agency_name}%"
 
             if naics_code:
                 filters.append("""(

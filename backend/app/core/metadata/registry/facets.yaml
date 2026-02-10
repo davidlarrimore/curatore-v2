@@ -1,19 +1,81 @@
-# Cross-domain facet definitions for Curatore Data Core.
-# Facets are user-facing filter abstractions that map to different
-# JSON paths across different content types.
+# ============================================================================
+# Cross-Domain Facet Definitions — Curatore Data Core
+# ============================================================================
 #
-# Each facet specifies:
-#   display_name: human-readable label
-#   data_type: string | number | boolean | date
-#   description: what this facet filters
-#   operators: supported filter operators (eq, in, gte, lte, contains, exists)
-#   mappings: content_type → json_path (namespace.field)
+# Facets are user-facing filter abstractions that let users apply a single
+# filter (e.g., "agency = GSA") across multiple content types, even when the
+# underlying JSON path differs per type (sam.agency vs forecast.agency_name).
+#
+# This file defines the global baseline. Org-level overrides live in the
+# `facet_definitions` and `facet_mappings` database tables.
+#
+# ── Field Reference ──────────────────────────────────────────────────────────
+#
+#   display_name       — Human-readable label shown in search filters, the
+#                        admin Metadata Catalog, and MCP tool descriptions.
+#
+#   data_type          — Value type for the facet. Determines which operators
+#                        are valid and how values are compared.
+#                        Options:
+#                          string  — Text values, compared case-insensitively
+#                          number  — Numeric values (int or float)
+#                          boolean — true / false
+#                          date    — ISO 8601 date strings (YYYY-MM-DD)
+#
+#   description        — Explanation of what this facet filters. Shown as help
+#                        text in the UI and returned by the metadata API.
+#
+#   has_reference_data — (Optional, default false) When true, this facet uses
+#                        the reference data system (reference_data.yaml + DB)
+#                        for canonical value resolution. The "Discover Values"
+#                        feature on the admin Metadata page uses this to find
+#                        unmapped values in the search index and suggest
+#                        groupings via LLM. See reference_data.yaml.
+#
+#   operators          — List of filter operators the search API supports for
+#                        this facet. Used by pg_search_service to build SQL.
+#                        Options:
+#                          eq       — Exact match (field = value).
+#                                     Works with: string, number, boolean, date.
+#                          in       — Match any value in a list (field IN [...]).
+#                                     Works with: string, number.
+#                          gte      — Greater than or equal (field >= value).
+#                                     Works with: number, date.
+#                          lte      — Less than or equal (field <= value).
+#                                     Works with: number, date.
+#                          contains — Substring / partial match (field ILIKE %value%).
+#                                     Works with: string.
+#                          exists   — Field is present and non-null.
+#                                     Works with: any type.
+#
+#   mappings           — Maps content_type → namespace.field JSON path.
+#                        Each key is a content_type value from search_chunks
+#                        (e.g., sam_notice, asset, ag_forecast). The value is
+#                        the dot-separated path into search_chunks.metadata
+#                        (e.g., "sam.agency" means metadata->'sam'->>'agency').
+#                        A facet only applies to content types listed here;
+#                        content types without a mapping are excluded from
+#                        that facet's filter.
+#
+# ── Content Types ────────────────────────────────────────────────────────────
+#
+#   sam_notice              — Individual SAM.gov notice
+#   sam_solicitation        — Grouped SAM.gov solicitation
+#   ag_forecast             — GSA Acquisition Gateway forecast
+#   apfs_forecast           — DHS APFS forecast
+#   state_forecast          — State Department forecast
+#   salesforce_account      — Salesforce account record
+#   salesforce_contact      — Salesforce contact record
+#   salesforce_opportunity  — Salesforce opportunity record
+#   asset                   — Uploaded/synced document (SharePoint, SAM, scrape)
+#
 
 facets:
   agency:
     display_name: "Agency"
     data_type: string
-    description: "Federal agency name — cross-domain filter across SAM.gov and forecasts"
+    description: "Federal agency name — cross-domain filter across SAM.gov, forecasts, and Salesforce"
+    has_reference_data: true
     operators: [eq, in]
     mappings:
       sam_notice: "sam.agency"
@@ -21,6 +83,9 @@ facets:
       ag_forecast: "forecast.agency_name"
       apfs_forecast: "forecast.agency_name"
       state_forecast: "forecast.agency_name"
+      salesforce_account: "salesforce.account_name"
+      salesforce_contact: "salesforce.account_name"
+      salesforce_opportunity: "salesforce.account_name"
       asset: "sam.agency"
 
   naics_code:
@@ -35,6 +100,7 @@ facets:
     display_name: "Set-Aside"
     data_type: string
     description: "Small business set-aside type"
+    has_reference_data: true
     operators: [eq, in]
     mappings:
       sam_solicitation: "sam.set_aside"
@@ -77,6 +143,14 @@ facets:
     operators: [eq, in, contains]
     mappings:
       asset: "sharepoint.folder"
+
+  site_name:
+    display_name: "SharePoint Site"
+    data_type: string
+    description: "SharePoint site display name"
+    operators: [eq, in]
+    mappings:
+      asset: "sharepoint.site_name"
 
   created_by:
     display_name: "Created By"

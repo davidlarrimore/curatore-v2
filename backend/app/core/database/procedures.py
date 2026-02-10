@@ -193,6 +193,9 @@ class ProcedureVersion(Base):
     __tablename__ = "procedure_versions"
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     procedure_id = Column(
         UUID(), ForeignKey("procedures.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -203,12 +206,14 @@ class ProcedureVersion(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
     # Relationships
+    organization = relationship("Organization")
     procedure = relationship("Procedure", backref="versions")
     user = relationship("User")
 
     __table_args__ = (
         UniqueConstraint("procedure_id", "version", name="uq_procedure_version"),
         Index("ix_procedure_versions_proc_version", "procedure_id", "version"),
+        Index("ix_procedure_versions_org", "organization_id"),
     )
 
     def __repr__(self) -> str:

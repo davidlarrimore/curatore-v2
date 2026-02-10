@@ -578,6 +578,7 @@ async def create_procedure(
 
         # Save initial version snapshot
         version_record = ProcedureVersion(
+            organization_id=organization_id,
             procedure_id=procedure.id,
             version=1,
             definition=definition,
@@ -816,6 +817,7 @@ async def update_procedure(
 
             # Save version snapshot
             version_record = ProcedureVersion(
+                organization_id=procedure.organization_id,
                 procedure_id=procedure.id,
                 version=procedure.version,
                 definition=definition,
@@ -1294,6 +1296,7 @@ async def restore_version(
 
         # Save version snapshot
         new_version_record = ProcedureVersion(
+            organization_id=procedure.organization_id,
             procedure_id=procedure.id,
             version=new_version,
             definition=restored_definition,

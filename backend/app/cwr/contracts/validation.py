@@ -514,6 +514,10 @@ class ProcedureValidator:
             if isinstance(value, str) and "{{" in value:
                 continue
 
+            # Skip None for optional parameters (they're treated as absent at runtime)
+            if value is None and param_name not in required_params:
+                continue
+
             prop_schema = properties[param_name]
             expected_type = prop_schema.get("type")
             if not expected_type:

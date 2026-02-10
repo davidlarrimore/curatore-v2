@@ -50,7 +50,11 @@ class SearchNoticesFunction(BaseFunction):
             ParameterDoc(
                 name="keyword",
                 type="str",
-                description="Search query for title and description. Combines with all filters below for refined results.",
+                description=(
+                    "Short keyword query (2-4 key terms work best). "
+                    "Use specific names, solicitation numbers, or acronyms. "
+                    "Use filters (naics_codes, agency_name, notice_type) to narrow results instead of adding more query terms."
+                ),
                 required=False,
                 default=None,
             ),

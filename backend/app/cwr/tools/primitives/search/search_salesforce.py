@@ -57,12 +57,22 @@ class SearchSalesforceFunction(BaseFunction):
     meta = FunctionMeta(
         name="search_salesforce",
         category=FunctionCategory.SEARCH,
-        description="Search Salesforce CRM records (Accounts, Contacts, Opportunities) with hybrid search",
+        description=(
+            "Search Salesforce CRM records with hybrid search. "
+            "Returns record summaries with relevance scores. To get full details, use "
+            "get(item_type='salesforce_account', item_id='...') or the appropriate salesforce_ type. "
+            "Use discover_data_sources(source_type='salesforce') to see configured connections."
+        ),
         parameters=[
             ParameterDoc(
                 name="query",
                 type="str",
-                description="Search query for name, description, email, and other text fields. Combines with all filters below for refined results.",
+                description=(
+                    "Short keyword query (2-4 key terms work best). "
+                    "Use specific names, company names, or acronyms. "
+                    "Good: 'DISCOVER II', 'DHS cybersecurity'. "
+                    "Use filters (entity_types, stage_name) to narrow results instead of adding more query terms."
+                ),
                 required=False,
                 default=None,
             ),

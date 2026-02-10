@@ -43,14 +43,27 @@ class SearchForecastsFunction(BaseFunction):
     meta = FunctionMeta(
         name="search_forecasts",
         category=FunctionCategory.SEARCH,
-        description="Search acquisition forecasts from AG, APFS, and State Department sources using hybrid search",
+        description=(
+            "Search acquisition forecasts (planned federal procurements) using hybrid search. "
+            "Returns forecast summaries with relevance scores. "
+            "IMPORTANT: Forecast IDs are NOT asset IDs — do NOT pass them to get() or get_content(). "
+            "To get full details for a forecast, use query_model with the appropriate model "
+            "(AgForecast, ApfsForecast, or StateForecast). "
+            "Use discover_data_sources to see available forecast sources and their details."
+        ),
         parameters=[
             ParameterDoc(
                 name="query",
                 type="str",
-                description="Search query for title, description, and agency name. Combines with all filters below for refined results.",
+                description=(
+                    "Short keyword query (2-4 key terms work best). "
+                    "Use specific names or acronyms, not full descriptions. "
+                    "Good: 'DISCOVER II', 'cybersecurity endpoint'. "
+                    "Bad: 'Dynamic Integrated Secure Connectivity for Operational Value and End-Point Resiliency'. "
+                    "Use filters (agency_name, fiscal_year, naics_code, source_types) to narrow results instead of adding more query terms."
+                ),
                 required=True,
-                example="artificial intelligence",
+                example="cybersecurity endpoint",
             ),
             ParameterDoc(
                 name="search_mode",
@@ -120,7 +133,7 @@ class SearchForecastsFunction(BaseFunction):
             type="list[dict]",
             description="List of matching acquisition forecasts",
             fields=[
-                OutputFieldDoc(name="id", type="str", description="Forecast UUID"),
+                OutputFieldDoc(name="id", type="str", description="Forecast UUID (NOT an asset ID — do not pass to get() or get_content())"),
                 OutputFieldDoc(name="title", type="str", description="Forecast title/description"),
                 OutputFieldDoc(name="source_type", type="str", description="Source type",
                               example="ag"),
@@ -191,6 +204,12 @@ class SearchForecastsFunction(BaseFunction):
                     "source_types": ["state"],
                     "fiscal_year": 2026,
                     "limit": 50,
+                },
+            },
+            {
+                "description": "After finding forecasts, get full details with query_model",
+                "params": {
+                    "_note": "Use query_model(model='AgForecast', filters={'id': '<forecast_id>'}) to get full details",
                 },
             },
         ],

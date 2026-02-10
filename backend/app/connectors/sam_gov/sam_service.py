@@ -913,6 +913,7 @@ class SamService:
     async def create_attachment(
         self,
         session: AsyncSession,
+        organization_id: UUID,
         solicitation_id: Optional[UUID],
         resource_id: str,
         filename: str,
@@ -929,6 +930,7 @@ class SamService:
 
         Args:
             session: Database session
+            organization_id: Organization UUID for multi-tenant isolation
             solicitation_id: Parent solicitation UUID (None for standalone notice attachments)
             resource_id: SAM.gov resource identifier
             filename: Original filename
@@ -942,6 +944,7 @@ class SamService:
             Created SamAttachment instance
         """
         attachment = SamAttachment(
+            organization_id=organization_id,
             solicitation_id=solicitation_id,
             notice_id=notice_id,
             resource_id=resource_id,
@@ -1151,6 +1154,7 @@ class SamService:
     async def create_summary(
         self,
         session: AsyncSession,
+        organization_id: UUID,
         solicitation_id: UUID,
         model: str,
         summary: str,
@@ -1169,6 +1173,7 @@ class SamService:
 
         Args:
             session: Database session
+            organization_id: Organization UUID for multi-tenant isolation
             solicitation_id: Parent solicitation UUID
             model: LLM model used
             summary: Generated summary text
@@ -1186,6 +1191,7 @@ class SamService:
             Created SamSolicitationSummary instance
         """
         summary_obj = SamSolicitationSummary(
+            organization_id=organization_id,
             solicitation_id=solicitation_id,
             model=model,
             summary=summary,

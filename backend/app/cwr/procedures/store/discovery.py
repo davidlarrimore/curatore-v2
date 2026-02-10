@@ -159,18 +159,17 @@ class ProcedureDiscoveryService:
                 logger.error(f"Failed to register procedure {slug}: {e}")
                 results["errors"].append(f"{slug}: {e}")
 
-        # Clean up stale YAML-based procedures whose source files no longer exist
+        # Clean up stale file-based procedures whose source files no longer exist
         stale_query = select(Procedure).where(
             Procedure.organization_id == organization_id,
-            Procedure.source_type == "yaml",
+            Procedure.source_type.in_(["yaml", "json"]),
         )
         result = await session.execute(stale_query)
-        yaml_procedures = result.scalars().all()
+        file_procedures = result.scalars().all()
 
-        for proc in yaml_procedures:
-            # Check if this procedure's YAML file still exists
+        for proc in file_procedures:
+            # Check if this procedure's source file still exists
             if proc.slug not in discovered_slugs:
-                # YAML file was removed - check if source_path confirms this
                 if proc.source_path and not os.path.exists(proc.source_path):
                     logger.info(f"Removing stale procedure: {proc.slug} (source file deleted: {proc.source_path})")
                     await session.delete(proc)

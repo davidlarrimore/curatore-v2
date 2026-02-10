@@ -1215,6 +1215,163 @@ class DeltaTokenExpiredError(Exception):
     pass
 
 
+def _parse_site_from_url(folder_url: str) -> Tuple[str, str]:
+    """
+    Extract hostname and site path from a SharePoint folder URL.
+
+    Examples:
+        "https://company.sharepoint.com/sites/IT/Shared Documents/Policies"
+            -> ("company.sharepoint.com", "/sites/IT")
+        "https://company.sharepoint.com/teams/Engineering/Shared Documents"
+            -> ("company.sharepoint.com", "/teams/Engineering")
+        "https://company.sharepoint.com/Shared Documents"
+            -> ("company.sharepoint.com", "/")
+
+    Returns:
+        Tuple of (hostname, site_path)
+    """
+    from urllib.parse import urlparse
+
+    parsed = urlparse(folder_url)
+    hostname = parsed.hostname or ""
+    path_parts = parsed.path.strip("/").split("/")
+
+    # Look for /sites/<name> or /teams/<name> pattern
+    for i, part in enumerate(path_parts):
+        if part.lower() in ("sites", "teams") and i + 1 < len(path_parts):
+            return hostname, f"/{part}/{path_parts[i + 1]}"
+
+    # Root site (no /sites/ or /teams/ prefix)
+    return hostname, "/"
+
+
+async def get_site_metadata(
+    folder_url: str,
+    organization_id: Optional[UUID] = None,
+    session: Optional[AsyncSession] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Get comprehensive SharePoint site metadata from Microsoft Graph API.
+
+    Calls GET /sites/{hostname}:/{site_path} and returns the full site object.
+
+    Args:
+        folder_url: Any SharePoint URL — site is extracted automatically
+        organization_id: Optional organization ID for credential lookup
+        session: Optional database session for credential lookup
+
+    Returns:
+        Dict with keys: display_name, name, web_url, site_id, description,
+        created_at, last_modified_at, hostname, site_path.
+        Returns None on failure (non-fatal).
+    """
+    try:
+        hostname, site_path = _parse_site_from_url(folder_url)
+        if not hostname:
+            return None
+
+        credentials = await _get_sharepoint_credentials(organization_id, session)
+        graph_base = _graph_base_url()
+
+        token_manager = TokenManager(
+            tenant_id=credentials["tenant_id"],
+            client_id=credentials["client_id"],
+            client_secret=credentials["client_secret"],
+        )
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            token = await token_manager.get_valid_token(client)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            select_fields = "displayName,name,webUrl,id,description,createdDateTime,lastModifiedDateTime"
+            if site_path == "/":
+                url = f"{graph_base}/sites/{hostname}?$select={select_fields}"
+            else:
+                url = f"{graph_base}/sites/{hostname}:{site_path}?$select={select_fields}"
+
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+            return {
+                "display_name": data.get("displayName"),
+                "name": data.get("name"),
+                "web_url": data.get("webUrl"),
+                "site_id": data.get("id"),
+                "description": data.get("description"),
+                "created_at": data.get("createdDateTime"),
+                "last_modified_at": data.get("lastModifiedDateTime"),
+                "hostname": hostname,
+                "site_path": site_path,
+            }
+    except Exception as e:
+        logger.warning(f"Failed to get site metadata for {folder_url}: {e}")
+        return None
+
+
+async def resolve_site_name(
+    folder_url: str,
+    organization_id: Optional[UUID] = None,
+    session: Optional[AsyncSession] = None,
+) -> Optional[str]:
+    """Resolve site display name. Thin wrapper around get_site_metadata()."""
+    meta = await get_site_metadata(folder_url, organization_id, session)
+    return meta.get("display_name") or meta.get("name") if meta else None
+
+
+async def get_item_metadata(
+    drive_id: str,
+    item_id: str,
+    organization_id: Optional[UUID] = None,
+    session: Optional[AsyncSession] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Get comprehensive metadata for a specific SharePoint drive item.
+
+    Calls GET /drives/{drive_id}/items/{item_id} and normalizes the
+    response through _build_item().
+
+    Args:
+        drive_id: Microsoft Graph drive ID
+        item_id: Microsoft Graph item ID
+        organization_id: Optional organization ID for credential lookup
+        session: Optional database session for credential lookup
+
+    Returns:
+        Normalized item dict (same structure as sharepoint_inventory items),
+        or None on failure.
+    """
+    try:
+        credentials = await _get_sharepoint_credentials(organization_id, session)
+        graph_base = _graph_base_url()
+
+        token_manager = TokenManager(
+            tenant_id=credentials["tenant_id"],
+            client_id=credentials["client_id"],
+            client_secret=credentials["client_secret"],
+        )
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            token = await token_manager.get_valid_token(client)
+            headers = {"Authorization": f"Bearer {token}"}
+
+            url = f"{graph_base}/drives/{drive_id}/items/{item_id}"
+            resp = await client.get(url, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+
+            # Extract folder path from parent reference
+            parent_ref = data.get("parentReference", {})
+            folder_path = _extract_relative_path_from_parent_ref(
+                parent_ref.get("path", "")
+            )
+
+            return _build_item(data, include_folders=True, folder_path=folder_path, index=0)
+    except Exception as e:
+        logger.warning(f"Failed to get item metadata for drive={drive_id} item={item_id}: {e}")
+        return None
+
+
 async def _get_access_token(
     organization_id: Optional[UUID] = None,
     session: Optional[AsyncSession] = None,

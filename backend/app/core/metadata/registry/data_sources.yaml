@@ -1,0 +1,220 @@
+# ============================================================================
+# Data Source Type Registry — Curatore Data Core
+# ============================================================================
+#
+# Describes what each data source IS, what it contains, and how to search it.
+# Consumed by:
+#   - discover_data_sources function (CWR tool) — helps AI understand what
+#     data is available and which tools to use
+#   - MCP Resources — exposes source descriptions to MCP clients
+#   - Admin UI — shows source types in data connection management
+#
+# Admins can override any field at the org level via the
+# `data_source_type_overrides` database table.
+#
+# ── Field Reference ──────────────────────────────────────────────────────────
+#
+#   display_name       — Human-readable name for this data source. Shown in
+#                        UIs and returned to AI clients.
+#
+#   description        — Multi-line explanation of what this source is and
+#                        where the data comes from. Used as context for AI
+#                        clients deciding which source to query.
+#
+#   data_contains      — List of strings describing the types of records or
+#                        documents available in this source. Gives AI clients
+#                        a concrete sense of what they can find.
+#
+#   capabilities       — List of strings describing what a user/AI can DO
+#                        with this source (search, filter, browse, etc.).
+#                        Phrased as actions.
+#
+#   example_questions  — Sample natural-language questions this source can
+#                        answer. Helps AI clients match user intent to the
+#                        right data source.
+#
+#   search_tools       — List of CWR tools that can query this source. Each
+#                        entry has:
+#       tool           — Function name from the CWR tool registry
+#                        (e.g., search_solicitations, search_assets)
+#       use_for        — Short description of when to use this specific tool
+#       filter         — (Optional) Recommended filter parameters to scope
+#                        results to this source type
+#       next_step      — (Optional) Guidance on what to do after getting
+#                        results (e.g., "Use get_content() to read documents")
+#
+#   note               — (Optional) Additional context, caveats, or guidance
+#                        for AI clients. E.g., "Content is org-specific."
+#
+
+source_types:
+  sam_gov:
+    display_name: "SAM.gov (System for Award Management)"
+    description: >
+      Federal procurement notices from the General Services Administration's
+      System for Award Management. The primary system for federal contracting
+      and procurement.
+    data_contains:
+      - "Solicitations (formal requests for proposals/quotes)"
+      - "Combined Synopsis/Solicitations"
+      - "Pre-solicitations (advance notice of upcoming opportunities)"
+      - "Sources Sought / RFIs (market research)"
+      - "Special Notices (industry days, announcements)"
+      - "Award Notices"
+      - "Amendments and modifications to existing notices"
+      - "Attached documents (SOWs, RFPs, evaluation criteria)"
+    capabilities:
+      - "Find open federal solicitations by NAICS code, agency, or keyword"
+      - "Track amendments and updates to solicitations"
+      - "Search small business set-aside opportunities (8(a), HUBZone, SDVOSB)"
+      - "Find upcoming industry day events and RFIs"
+      - "Review recent contract awards"
+    example_questions:
+      - "What IT solicitations are open right now?"
+      - "Show me recent DHS cybersecurity opportunities"
+      - "Find small business set-asides for NAICS 541512"
+      - "Are there any upcoming industry days for cloud services?"
+    search_tools:
+      - tool: search_solicitations
+        use_for: "Grouped solicitations with all amendments"
+        next_step: "Use get(item_type='solicitation') for full details, get_content() for attached documents"
+      - tool: search_notices
+        use_for: "Individual notice versions"
+      - tool: search_assets
+        use_for: "Attached documents (SOWs, RFPs)"
+        filter: "source_type='sam_gov'"
+        next_step: "Use get_content(asset_ids=[...]) to read document text"
+
+  sharepoint:
+    display_name: "SharePoint"
+    description: >
+      Microsoft SharePoint document libraries synced to Curatore. Each sync
+      configuration represents a specific folder on a SharePoint site.
+      Content varies by organization — use discover_data_sources to see
+      what sites and folders are available.
+    data_contains:
+      - "Documents synced from configured SharePoint folders"
+      - "File types depend on what's stored (PDF, DOCX, XLSX, PPTX, etc.)"
+    capabilities:
+      - "Full-text search across synced documents by site name or folder"
+      - "Browse folder contents directly via Microsoft Graph API"
+      - "Get site metadata and structure"
+    example_questions:
+      - "What documents are in the IT Department SharePoint?"
+      - "Search the Contracts folder for SOWs"
+      - "Find proposals related to cybersecurity"
+    search_tools:
+      - tool: search_assets
+        use_for: "Full-text search of synced documents"
+        filter: "site_name='...' or sync_config_id='...'"
+        next_step: "Use get_content(asset_ids=[...]) to read document text"
+      - tool: sp_list_items
+        use_for: "Browse live folder contents"
+      - tool: sp_get_site
+        use_for: "Get site metadata"
+    note: "Content is org-specific. Each synced folder may contain different types of documents."
+
+  forecast_ag:
+    display_name: "GSA Acquisition Gateway Forecasts"
+    description: >
+      Planned federal acquisition forecasts published on the GSA Acquisition
+      Gateway. Shows upcoming procurement opportunities that agencies plan to
+      pursue, often before they appear on SAM.gov.
+    data_contains:
+      - "Planned acquisitions with estimated values and timelines"
+      - "Agency and bureau details"
+      - "NAICS codes and procurement categories"
+      - "Estimated award quarters and fiscal years"
+    capabilities:
+      - "Find planned acquisitions by agency, NAICS code, or keyword"
+      - "Filter by fiscal year and estimated value"
+      - "Track upcoming opportunities before they hit SAM.gov"
+    example_questions:
+      - "What IT acquisitions is DoD planning for FY2026?"
+      - "Show GSA planned procurements over $10M"
+    search_tools:
+      - tool: search_forecasts
+        filter: "source_types=['ag']"
+        next_step: "Forecast IDs are NOT asset IDs. Use query_model(model='AgForecast') for full details."
+
+  forecast_apfs:
+    display_name: "DHS Acquisition Planning Forecast System (APFS)"
+    description: >
+      Department of Homeland Security component acquisition planning forecasts.
+      Shows planned procurements across DHS components (CBP, ICE, TSA, USCIS,
+      Coast Guard, CISA, etc.).
+    data_contains:
+      - "DHS component acquisition plans"
+      - "Procurement timelines and fiscal year targets"
+      - "NAICS codes and estimated values"
+    capabilities:
+      - "Find planned DHS component acquisitions"
+      - "Filter by DHS organization, fiscal year, NAICS code"
+    example_questions:
+      - "What cybersecurity acquisitions is CISA planning?"
+      - "Show TSA procurements for FY2026"
+    search_tools:
+      - tool: search_forecasts
+        filter: "source_types=['apfs']"
+        next_step: "Forecast IDs are NOT asset IDs. Use query_model(model='ApfsForecast') for full details."
+
+  forecast_state:
+    display_name: "State Department Forecasts"
+    description: >
+      U.S. Department of State procurement forecasts. Shows planned
+      acquisitions for State Department bureaus and offices.
+    data_contains:
+      - "State Department acquisition plans"
+      - "Bureau-level procurement details"
+    capabilities:
+      - "Find planned State Department procurements"
+      - "Filter by fiscal year"
+    example_questions:
+      - "What consulting acquisitions is State planning?"
+    search_tools:
+      - tool: search_forecasts
+        filter: "source_types=['state']"
+        next_step: "Forecast IDs are NOT asset IDs. Use query_model(model='StateForecast') for full details."
+
+  salesforce:
+    display_name: "Salesforce CRM"
+    description: >
+      Salesforce customer relationship management data. Contains business
+      development and capture management records.
+    data_contains:
+      - "Accounts (companies, agencies, organizations)"
+      - "Contacts (people, with titles, emails, phone numbers)"
+      - "Opportunities (deals, pursuits, with stages and values)"
+    capabilities:
+      - "Search accounts by name, type, or industry"
+      - "Find contacts by name, email, account, or account"
+      - "Search opportunities by stage, amount, status, name, close date, account, or keyword"
+      - "Track sales pipeline and deal progress"
+    example_questions:
+      - "Who are our contacts at DHS?"
+      - "What opportunities are in the Proposal stage?"
+      - "Show me government accounts"
+    search_tools:
+      - tool: search_salesforce
+        filter: "entity_types=['account','contact','opportunity']"
+        next_step: "Use get(item_type='salesforce_account') or similar for full record details"
+
+  web_scrape:
+    display_name: "Web Scraping Collections"
+    description: >
+      Scraped and monitored web content organized into collections. Each
+      collection targets specific websites for content extraction and monitoring.
+    data_contains:
+      - "Scraped web pages with extracted text"
+      - "Structured records extracted from pages"
+    capabilities:
+      - "Search scraped web pages by keyword"
+      - "Filter by collection, URL path, or content type"
+      - "Browse crawled page hierarchies"
+    example_questions:
+      - "Search the GSA website collection for cloud services"
+    search_tools:
+      - tool: search_scraped_assets
+        filter: "collection_name='...'"
+        next_step: "Use get_content(asset_ids=[...]) to read page text"
+    note: "Content is org-specific. Use discover_data_sources to see available collections."

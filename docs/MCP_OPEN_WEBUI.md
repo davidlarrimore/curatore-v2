@@ -1,19 +1,24 @@
 # MCP Gateway & Open WebUI Integration
 
-This guide explains how to integrate Curatore with Open WebUI using the MCP (Model Context Protocol) Gateway.
+This guide explains how to integrate Curatore with Open WebUI using the MCP Gateway.
 
 ---
 
 ## Overview
 
-The Curatore MCP Gateway exposes CWR functions as MCP-compatible tools, allowing LLMs in Open WebUI to:
+The Curatore MCP Gateway exposes CWR functions to AI assistants through **two protocols**:
 
-- Search documents, SAM.gov notices, forecasts, and Salesforce data
-- Retrieve document content
-- Summarize, classify, and extract information using LLM functions
-- Analyze solicitations and generate classifications
+| Protocol | Transport | Use Case |
+|----------|-----------|----------|
+| **MCP** (Model Context Protocol) | JSON-RPC over HTTP | Native MCP clients |
+| **OpenAPI** | REST with OpenAPI spec | OpenAI-compatible clients |
 
-The gateway acts as a stateless proxy, enforcing policies and validating inputs before forwarding requests to the Curatore backend.
+Open WebUI supports both connection methods. Choose based on your preference:
+
+| Method | Pros | Cons |
+|--------|------|------|
+| **MCP** | Native protocol, richer capabilities | Newer, less widely supported |
+| **OpenAPI** | Widely compatible, familiar REST | Simpler protocol |
 
 ---
 
@@ -21,15 +26,13 @@ The gateway acts as a stateless proxy, enforcing policies and validating inputs 
 
 - Curatore v2 running with `docker-compose`
 - Open WebUI installed and configured
-- An API key for MCP authentication
+- MCP Gateway running (port 8020)
 
 ---
 
 ## Quick Start
 
 ### 1. Start the MCP Gateway
-
-The MCP Gateway is included in the standard `docker-compose.yml`:
 
 ```bash
 docker-compose up -d mcp
@@ -41,59 +44,138 @@ Verify it's running:
 curl http://localhost:8020/health
 ```
 
-Expected response:
-```json
-{
-  "status": "healthy",
-  "service": "curatore-mcp",
-  "version": "1.0.0"
-}
-```
+### 2. Set Environment Variables
 
-### 2. Configure Environment Variables
-
-Set the following in your `.env` file:
+In your `.env` file:
 
 ```bash
-# MCP API Key (used for authentication)
 MCP_API_KEY=your_secure_api_key_here
-
-# Default organization ID (optional - uses first org if not set)
-DEFAULT_ORG_ID=your-org-uuid-here
-
-# Log level (DEBUG, INFO, WARNING, ERROR)
-MCP_LOG_LEVEL=INFO
 ```
 
-### 3. Configure Open WebUI
+---
 
-In Open WebUI settings, add a new OpenAPI tool server:
+## Connection Method 1: MCP Protocol (Streamable HTTP)
 
-1. Go to **Settings** > **Tools** > **OpenAPI Servers**
-2. Add a new server:
+Use this method if you want to connect via the native MCP protocol.
+
+### Open WebUI Configuration
+
+1. Go to **Settings** > **Tools** > **MCP Servers**
+2. Click **Add MCP Server**
+3. Configure:
 
 | Field | Value |
 |-------|-------|
 | Name | Curatore |
-| URL | See below |
+| Type | HTTP (Streamable) |
+| URL | See table below |
+| Headers | `Authorization: Bearer YOUR_MCP_API_KEY` |
+
+**URL by deployment:**
+
+| Open WebUI Setup | URL |
+|------------------|-----|
+| Host machine (not Docker) | `http://localhost:8020/mcp` |
+| Docker (same machine as Curatore) | `http://host.docker.internal:8020/mcp` |
+| Docker (same network as Curatore) | `http://mcp:8020/mcp` |
+
+### How It Works
+
+1. Open WebUI connects to `/mcp` endpoint
+2. Sends JSON-RPC `initialize` request
+3. Fetches tools via `tools/list`
+4. Executes tools via `tools/call`
+
+### MCP Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/mcp` | POST | JSON-RPC endpoint for all MCP operations |
+| `/mcp/tools` | GET | REST endpoint to list tools (for debugging) |
+| `/mcp/tools/{name}/call` | POST | REST endpoint to call a tool (for debugging) |
+
+### Test MCP Connection
+
+```bash
+# Initialize
+curl -X POST http://localhost:8020/mcp \
+  -H "Authorization: Bearer YOUR_MCP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+
+# List tools
+curl -X POST http://localhost:8020/mcp \
+  -H "Authorization: Bearer YOUR_MCP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+```
+
+---
+
+## Connection Method 2: OpenAPI
+
+Use this method if you prefer standard REST/OpenAPI integration.
+
+### Open WebUI Configuration
+
+1. Go to **Settings** > **Tools** > **OpenAPI Servers**
+2. Click **Add Server**
+3. Configure:
+
+| Field | Value |
+|-------|-------|
+| Name | Curatore |
+| URL | See table below |
 | Authentication | Bearer Token |
 | Token | Your `MCP_API_KEY` value |
 
-**URL Configuration:**
+**URL by deployment:**
 
-| Open WebUI Setup | MCP Gateway URL |
-|------------------|-----------------|
+| Open WebUI Setup | URL |
+|------------------|-----|
 | Host machine (not Docker) | `http://localhost:8020` |
-| Docker (same machine) | `http://host.docker.internal:8020` |
+| Docker (same machine as Curatore) | `http://host.docker.internal:8020` |
 | Docker (same network as Curatore) | `http://mcp:8020` |
 
-Open WebUI will automatically fetch tools from `GET /openapi.json` and execute them via `POST /{tool_name}`.
+**Note:** Do NOT include `/openapi.json` in the URL - Open WebUI appends it automatically.
+
+### How It Works
+
+1. Open WebUI fetches `GET /openapi.json` to discover tools
+2. Each tool appears as a function the LLM can call
+3. Tools are executed via `POST /{tool_name}` with JSON body
+
+### OpenAPI Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/openapi.json` | GET | OpenAPI 3.0 specification (auto-generated) |
+| `/{tool_name}` | POST | Execute a tool (e.g., `POST /search_assets`) |
+| `/openai/tools` | GET | List tools in OpenAI function format |
+| `/openai/tools/{name}` | POST | Execute tool (alternative path) |
+
+### Test OpenAPI Connection
+
+```bash
+# Fetch OpenAPI spec
+curl http://localhost:8020/openapi.json | jq '.paths | keys'
+
+# List tools (OpenAI format)
+curl -H "Authorization: Bearer YOUR_MCP_API_KEY" \
+  http://localhost:8020/openai/tools | jq '.tools[].function.name'
+
+# Execute a tool
+curl -X POST http://localhost:8020/search_assets \
+  -H "Authorization: Bearer YOUR_MCP_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "contract management", "limit": 5}'
+```
 
 ---
 
 ## Available Tools
 
-The MCP Gateway exposes safe functions (no side effects) plus controlled side-effect functions via the `side_effects_allowlist`:
+Both connection methods expose the same tools, controlled by `mcp/policy.yaml`:
 
 ### Search Functions
 
@@ -106,7 +188,7 @@ The MCP Gateway exposes safe functions (no side effects) plus controlled side-ef
 | `search_scraped_assets` | Search web-scraped content | Thin |
 | `search_salesforce` | Search Salesforce data | Thin |
 
-**Note:** Thin payload means results contain IDs, titles, and scores. Use `get_content` to retrieve full document text.
+**Note:** Thin payload = IDs, titles, scores. Use `get_content` to retrieve full text.
 
 ### Content Retrieval
 
@@ -135,19 +217,19 @@ The MCP Gateway exposes safe functions (no side effects) plus controlled side-ef
 
 ### Email Workflow (Two-Step)
 
-For AI safety, email sending requires a two-step confirmation:
+For AI safety, email sending requires two-step confirmation:
 
 | Tool | Description | Side Effects |
 |------|-------------|--------------|
 | `prepare_email` | Create email preview, returns confirmation token | No |
-| `confirm_email` | Send email using confirmation token (expires in 15 min) | Yes (allowed) |
+| `confirm_email` | Send email using confirmation token (15 min expiry) | Yes (allowed) |
 
 **Example conversation:**
 ```
 User: "Send a summary of document abc-123 to team@company.com"
 
 AI: I'll prepare the email for you to review.
-    [calls prepare_email with to, subject, body]
+    [calls prepare_email]
 
 AI: Here's the email preview:
     To: team@company.com
@@ -164,55 +246,35 @@ AI: [calls confirm_email with token]
 
 ---
 
-## Example Queries
-
-### Search for Documents
-
-```
-"Search for documents about cybersecurity published in 2024"
-```
-
-The LLM will call `search_assets` with appropriate parameters.
-
-### Summarize a Document
-
-```
-"Summarize the document with ID abc-123"
-```
-
-The LLM will:
-1. Call `get_content` to retrieve the document text
-2. Call `llm_summarize` to generate a summary
-
-### Find GSA Solicitations
-
-```
-"Find active GSA solicitations for cloud services"
-```
-
-The LLM will call `search_solicitations` with filters for agency and keywords.
-
-### Analyze a Solicitation
-
-```
-"Analyze solicitation W912HQ-25-R-0001"
-```
-
-The LLM will call `analyze_solicitation` to get a structured analysis.
-
----
-
 ## Policy Configuration
 
 The MCP Gateway enforces policies defined in `mcp/policy.yaml`:
 
 ### Allowlist
 
-Only functions in the allowlist are exposed. By default, all safe (no side effects) functions are allowed.
+Only functions in the allowlist are exposed:
+
+```yaml
+allowlist:
+  - search_assets
+  - search_notices
+  - prepare_email
+  - confirm_email
+  # ... etc
+```
+
+### Side Effects Control
+
+```yaml
+settings:
+  block_side_effects: true
+  side_effects_allowlist:
+    - confirm_email  # Allowed because it requires a token
+```
 
 ### Parameter Clamps
 
-Limits are enforced on parameters to prevent resource abuse:
+Limits enforced on parameters:
 
 | Tool | Parameter | Max | Default |
 |------|-----------|-----|---------|
@@ -220,64 +282,43 @@ Limits are enforced on parameters to prevent resource abuse:
 | `get_content` | `max_total_chars` | 80,000 | 50,000 |
 | `llm_*` | `max_tokens` | 2,000 | 1,000 |
 
-### Facet Validation
-
-When `validate_facets` is enabled, the gateway validates facet filter names against the metadata catalog to prevent hallucinated facet names.
-
----
-
-## API Reference
-
-### MCP Endpoint
-
-```
-POST /mcp
-Content-Type: application/json
-Authorization: Bearer {MCP_API_KEY}
-```
-
-JSON-RPC methods:
-- `initialize` - Client handshake
-- `tools/list` - List available tools
-- `tools/call` - Execute a tool
-
-### REST Endpoints (for testing)
-
-| Endpoint | Description |
-|----------|-------------|
-| `GET /health` | Health check |
-| `GET /mcp/tools` | List tools (REST) |
-| `POST /mcp/tools/{name}/call` | Execute tool (REST) |
-| `GET /policy` | Get current policy |
-| `POST /policy/reload` | Reload policy from file |
-
 ---
 
 ## Troubleshooting
 
-### Tools Not Appearing in Open WebUI
+### Tools Not Appearing
 
-1. Check MCP Gateway is running: `curl http://localhost:8020/health`
-2. Verify API key matches: Check `MCP_API_KEY` in both places
+1. Check gateway health: `curl http://localhost:8020/health`
+2. Verify API key is correct
 3. Check logs: `docker logs curatore-mcp`
 
 ### "Tool not found" Errors
 
-1. Check the tool is in the allowlist in `policy.yaml`
-2. Verify the tool doesn't have `side_effects=true`
-3. Check the backend is running: `curl http://localhost:8000/api/v1/admin/health`
-
-### "Invalid arguments" Errors
-
-1. Check required parameters are provided
-2. Verify parameter types match the schema
-3. Check for unknown facet names if using `facet_filters`
+1. Check tool is in `policy.yaml` allowlist
+2. Verify tool doesn't have blocked side effects
+3. Check backend is running: `curl http://localhost:8000/api/v1/admin/system/health`
 
 ### Connection Refused
 
-1. Verify Docker network: MCP container should connect to `backend:8000`
-2. Check firewall settings
-3. Ensure backend is healthy before MCP starts
+**For Docker deployments:**
+- Use `host.docker.internal` (same machine) or service name (same network)
+- Don't use `localhost` from inside Docker
+
+**Check network:**
+```bash
+# From Open WebUI container
+docker exec -it open-webui curl http://host.docker.internal:8020/health
+```
+
+### MCP Protocol Errors
+
+Check the JSON-RPC response for error details:
+```bash
+curl -X POST http://localhost:8020/mcp \
+  -H "Authorization: Bearer YOUR_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | jq
+```
 
 ---
 
@@ -285,48 +326,40 @@ JSON-RPC methods:
 
 ```
 Open WebUI
-    ↓ MCP (JSON-RPC over HTTP)
-curatore-mcp (port 8020)
-    ↓ HTTP (REST API)
-curatore-backend (port 8000)
-    ↓
-PostgreSQL / Redis / MinIO
+    │
+    ├─── MCP Protocol ────► POST /mcp (JSON-RPC)
+    │                           │
+    └─── OpenAPI ─────────► GET /openapi.json
+                            POST /{tool_name}
+                                │
+                                ▼
+                    ┌─────────────────────┐
+                    │   MCP Gateway       │
+                    │   (port 8020)       │
+                    │                     │
+                    │  • Policy enforce   │
+                    │  • Input validation │
+                    │  • Parameter clamps │
+                    └──────────┬──────────┘
+                               │ HTTP
+                               ▼
+                    ┌─────────────────────┐
+                    │  Curatore Backend   │
+                    │   (port 8000)       │
+                    └─────────────────────┘
 ```
-
-The MCP Gateway:
-- Does NOT access the database directly
-- Fetches contracts from backend on startup (cached 5 min)
-- Validates inputs against JSON Schema from contracts
-- Applies policy clamps before forwarding requests
-- Returns results in MCP content format
-
----
-
-## Security Considerations
-
-1. **API Key Authentication**: All MCP requests require a valid API key
-2. **Side Effects Blocked**: Functions that modify data are not exposed
-3. **Parameter Clamps**: Limits prevent resource abuse
-4. **Facet Validation**: Prevents injection of invalid metadata filters
-5. **No Direct DB Access**: Gateway only talks to backend over HTTP
-
-For production deployments:
-- Use a strong, randomly generated `MCP_API_KEY`
-- Consider running behind a reverse proxy with TLS
-- Monitor request logs for unusual patterns
-- Regularly review and update the policy file
 
 ---
 
 ## Claude Desktop Integration
 
-Claude Desktop uses **STDIO transport** instead of HTTP. See the [MCP Gateway README](../mcp/README.md#claude-desktop) for Docker-based Claude Desktop setup.
+Claude Desktop uses **STDIO transport** (not HTTP). See the [MCP Gateway README](../mcp/README.md#claude-desktop) for Docker-based setup.
 
 ---
 
 ## Related Documentation
 
-- [MCP Gateway README](../mcp/README.md) - Full MCP Gateway documentation
-- [CWR Functions & Procedures](FUNCTIONS_PROCEDURES.md)
-- [Search & Indexing](SEARCH_INDEXING.md)
-- [API Documentation](API_DOCUMENTATION.md)
+- [MCP Gateway README](../mcp/README.md) - Full gateway documentation
+- [CWR Functions & Procedures](FUNCTIONS_PROCEDURES.md) - Function reference
+- [Search & Indexing](SEARCH_INDEXING.md) - Search capabilities
+- [API Documentation](API_DOCUMENTATION.md) - Backend API reference

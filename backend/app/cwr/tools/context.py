@@ -194,6 +194,14 @@ class FunctionContext:
             self._services["content"] = content_service
         return self._services["content"]
 
+    @property
+    def facet_reference_service(self):
+        """Get or create facet reference service for alias resolution."""
+        if "facet_ref" not in self._services:
+            from app.core.metadata.facet_reference_service import facet_reference_service
+            self._services["facet_ref"] = facet_reference_service
+        return self._services["facet_ref"]
+
     # =========================================================================
     # VARIABLE MANAGEMENT
     # =========================================================================

@@ -122,11 +122,34 @@ Use this checklist when implementing a new data connection:
 - [ ] Search API endpoint in `backend/app/api/v1/data/routers/search.py` (POST and GET)
 - [ ] Display-friendly labels for source_type in search results
 
-### Backend - Functions Engine
-- [ ] ContentItem type in `backend/app/cwr/tools/content/content_item.py`
+### Backend - Adapter (if using external APIs)
+- [ ] Adapter class in `backend/app/connectors/adapters/` or inline config resolution
+- [ ] 3-tier config resolution: DB connection → `config.yml` → environment variables
+- [ ] Connection type registered for `connection_service` lookup
+- [ ] `test_connection()` method for health checks
+- [ ] Retry logic with exponential backoff for transient errors
+
+### Backend - CWR Functions
+- [ ] Search primitive in `backend/app/cwr/tools/primitives/search/search_{name}.py`
+- [ ] Data source primitives in `backend/app/cwr/tools/primitives/{name}/` (if applicable)
+- [ ] Compound functions in `backend/app/cwr/tools/compounds/` (if applicable)
+- [ ] Function registration in `backend/app/cwr/tools/registry.py` (`_discover_functions()`)
+- [ ] ContentItem type mapping in `backend/app/cwr/tools/content/content_item.py`
 - [ ] ContentService methods in `backend/app/cwr/tools/content/service.py`
 - [ ] Content type registration in `backend/app/cwr/tools/content/registry.py`
-- [ ] Search functions in `backend/app/cwr/tools/primitives/search/` (if needed)
+- [ ] `get` function `enum_values` updated in `backend/app/cwr/tools/primitives/search/get.py`
+- [ ] `query_model` `ALLOWED_MODELS` updated in `backend/app/cwr/tools/primitives/search/query_model.py`
+- [ ] Governance fields set correctly (`side_effects`, `payload_profile`, `exposure_profile`, etc.)
+- [ ] `discover_data_sources` function updated to query new config tables
+
+### Backend - Metadata Registry
+- [ ] Namespace in `backend/app/core/metadata/registry/namespaces.yaml`
+- [ ] Field definitions in `backend/app/core/metadata/registry/fields.yaml`
+- [ ] Facet definitions and mappings in `backend/app/core/metadata/registry/facets.yaml`
+- [ ] Data source entry in `backend/app/core/metadata/registry/data_sources.yaml`
+- [ ] Reference data entries in `backend/app/core/metadata/registry/reference_data.yaml` (if applicable)
+- [ ] MetadataBuilder subclass in `backend/app/core/search/metadata_builders.py`
+- [ ] Builder registration in `metadata_builders.py` `_register_defaults()`
 
 ### Frontend - Core
 - [ ] TypeScript interfaces in `frontend/lib/api.ts`
@@ -1567,126 +1590,152 @@ def your_task(self, run_id, zip_path):
 
 ---
 
-## 14. Functions Engine Integration
+## 14. CWR Functions (Primitives & Compounds)
 
-Data connections should integrate with the Functions Engine to enable LLM-powered workflows, procedures, and pipelines. This requires four key integration points:
+Data connections should integrate with the Curatore Workflow Runtime (CWR) to enable LLM-powered workflows, procedures, and pipelines. This requires creating CWR functions, registering content types, and ensuring proper governance metadata.
 
-### ContentTypeRegistry
+### Architecture Overview
 
-**Location**: `backend/app/cwr/tools/content/registry.py`
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           CWR FUNCTION ARCHITECTURE                              │
+└─────────────────────────────────────────────────────────────────────────────────┘
 
-Register your content types in `CONTENT_TYPE_REGISTRY`:
-
-```python
-CONTENT_TYPE_REGISTRY: Dict[str, Dict[str, Any]] = {
-    # ... existing types ...
-
-    "salesforce_account": {
-        "formal_name": "Salesforce Account",
-        "model": "SalesforceAccount",           # SQLAlchemy model name
-        "has_text": True,
-        "text_source": "record",                # Text comes from JSON of record
-        "text_format": "json",
-        "children": [                           # Related entities
-            {"type": "salesforce_contact", "relation": "contacts", "display_name": "Contact"},
-            {"type": "salesforce_opportunity", "relation": "opportunities", "display_name": "Opportunity"},
-        ],
-        "display_names": {
-            "default": "Account",
-            "crm": "Customer Account",
-            "search": "Salesforce Account",
-        },
-        "fields": {                             # Core fields for ContentItem.fields
-            "salesforce_id": "salesforce_id",
-            "name": "name",
-            "account_type": "account_type",
-            "industry": "industry",
-            # ... map field name to model attribute
-        },
-        "metadata_fields": {                    # System/provenance fields for ContentItem.metadata
-            "billing_address": "billing_address",
-            "raw_data": "raw_data",
-            "created_at": "created_at",
-            "updated_at": "updated_at",
-        },
-        "title_field": "name",                  # Field to use as title
-    },
-
-    "salesforce_contact": {
-        "formal_name": "Salesforce Contact",
-        "model": "SalesforceContact",
-        "has_text": True,
-        "text_source": "record",
-        "text_format": "json",
-        "children": [],                         # No children
-        "display_names": {
-            "default": "Contact",
-            "crm": "Customer Contact",
-        },
-        "fields": { ... },
-        "metadata_fields": { ... },
-        "title_field": None,                    # Computed from first_name + last_name
-        "parent_type": "salesforce_account",    # Parent relationship
-        "parent_field": "account_id",
-    },
-}
+  FUNCTION DEFINITION              RUNTIME                      CONTRACTS
+       │                             │                              │
+       ▼                             ▼                              ▼
+┌─────────────┐             ┌─────────────────┐            ┌─────────────────┐
+│ FunctionMeta │            │ FunctionContext  │            │ ToolContract    │
+│ (governance) │            │ (services, DB,  │            │ (JSON Schema)   │
+│              │            │  template engine)│            │ Auto-generated  │
+├─────────────┤            ├─────────────────┤            ├─────────────────┤
+│ BaseFunction │──execute──▶│ FunctionResult  │            │ ContractGen     │
+│ (execute())  │            │ (data, status)  │            │ (from Meta)     │
+└─────────────┘            └─────────────────┘            └─────────────────┘
+       │                                                         │
+       ▼                                                         ▼
+┌─────────────┐                                          ┌─────────────────┐
+│ Registry    │                                          │ Procedure       │
+│ (discovery) │                                          │ Validator       │
+└─────────────┘                                          └─────────────────┘
 ```
 
-### GetFunction Integration
+### Key Base Classes
 
-**Location**: `backend/app/cwr/tools/primitives/search/get.py`
+All classes are in `backend/app/cwr/tools/base.py`.
 
-Add your content types to the `enum_values` list:
+**FunctionCategory** (enum):
+
+| Value | Purpose |
+|-------|---------|
+| `SEARCH` | Search/retrieval functions (search_assets, get_content, etc.) |
+| `LLM` | Functions that call LLM services (generate, extract, summarize) |
+| `OUTPUT` | Side-effect functions (update_metadata, create_artifact) |
+| `NOTIFY` | Notification functions (send_email, webhook) |
+| `DATA` | External data source operations (SharePoint, Salesforce) |
+| `COMPOUND` | Multi-step orchestration functions |
+| `FLOW` | Flow control (if_branch, switch_branch, parallel, foreach) |
+| `UTILITY` | Utility functions |
+| `LOGIC` | Logic functions |
+
+**ParameterDoc** (dataclass):
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `str` | -- | Parameter name (snake_case) |
+| `type` | `str` | -- | Type: `"str"`, `"int"`, `"float"`, `"bool"`, `"list[str]"`, `"list[dict]"`, `"dict"`, `"any"` |
+| `description` | `str` | -- | Human-readable description |
+| `required` | `bool` | `True` | Whether parameter is mandatory. Optional params with `None` values are treated as absent. |
+| `default` | `Any` | `None` | Default value |
+| `enum_values` | `Optional[List[str]]` | `None` | Allowed values (validated at runtime; for arrays, validates each item) |
+| `example` | `Any` | `None` | Example value for documentation |
+
+**OutputFieldDoc** / **OutputSchema** / **OutputVariant** (dataclasses):
 
 ```python
-ParameterDoc(
-    name="item_type",
-    type="str",
-    description="Content type to retrieve",
-    required=True,
-    enum_values=[
-        "asset", "solicitation", "notice", "scraped_asset",
-        "salesforce_account", "salesforce_contact", "salesforce_opportunity",  # Add new types
-    ],
-),
+OutputFieldDoc(name="title", type="str", description="Document title", example="RFP-2026", nullable=False)
+
+OutputSchema(
+    type="list[ContentItem]",
+    description="Search results as ContentItems",
+    fields=[OutputFieldDoc(...)],
+    example=None,
+)
+
+OutputVariant(mode="single", condition="when single ID provided", schema=OutputSchema(...))
 ```
 
-### QueryModelFunction Integration
+**FunctionMeta** — all governance fields:
 
-**Location**: `backend/app/cwr/tools/primitives/search/query_model.py`
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| `name` | `str` | -- | Unique function name (snake_case) |
+| `category` | `FunctionCategory` | -- | Category enum |
+| `description` | `str` | -- | Description for catalog and AI procedure generator |
+| `parameters` | `List[ParameterDoc]` | `[]` | Parameter documentation |
+| `returns` | `str` | `"FunctionResult"` | Return type description |
+| `examples` | `List[Dict]` | `[]` | Usage examples (`{description, params}`) |
+| `tags` | `List[str]` | `[]` | Categorization tags |
+| `version` | `str` | `"1.0.0"` | Semantic version |
+| `requires_llm` | `bool` | `False` | Needs LLM connection |
+| `requires_session` | `bool` | `True` | Needs database session |
+| `output_schema` | `Optional[OutputSchema]` | `None` | Machine-readable output structure |
+| `output_variants` | `List[OutputVariant]` | `[]` | Alternative output schemas for dual-mode functions |
+| **`side_effects`** | `bool` | `False` | Modifies external state (DB writes, email, artifacts). AI generator places these late in workflows. |
+| **`is_primitive`** | `bool` | `True` | `True` = atomic operation, `False` = compound (orchestrates sub-steps) |
+| **`payload_profile`** | `str` | `"full"` | `"thin"` = IDs/titles/scores, `"full"` = complete data, `"summary"` = condensed. AI generator adds `get_content` after `thin` functions before LLM steps. |
+| **`exposure_profile`** | `Dict` | `{"procedure": True, "agent": True}` | Access policy for where the function can be used |
 
-Add your models to `ALLOWED_MODELS`:
+**FunctionResult** — standard return wrapper:
 
 ```python
-ALLOWED_MODELS = {
-    "Asset": "app.database.models.Asset",
-    "ExtractionResult": "app.database.models.ExtractionResult",
-    # ... existing models ...
-    # Salesforce CRM models
-    "SalesforceAccount": "app.database.models.SalesforceAccount",
-    "SalesforceContact": "app.database.models.SalesforceContact",
-    "SalesforceOpportunity": "app.database.models.SalesforceOpportunity",
-}
+FunctionResult.success_result(data=items, message="Found 5 results", items_processed=5, metadata={"query": "test"})
+FunctionResult.failed_result(error="Not found", message="No results")
+FunctionResult.partial_result(data=items, items_processed=10, items_failed=2)
+FunctionResult.skipped_result(message="No input provided")
 ```
 
-### Search Function
+### Governance Field Guidelines
 
-**Location**: Create `backend/app/cwr/tools/primitives/search/search_{name}.py`
+| Scenario | `side_effects` | `payload_profile` | `is_primitive` | `requires_llm` |
+|----------|---------------|-------------------|----------------|----------------|
+| Search returning summaries | `False` | `"thin"` | `True` | `False` |
+| Get/retrieve with full content | `False` | `"full"` | `True` | `False` |
+| Discovery/catalog functions | `False` | `"full"` | `True` | `False` |
+| Data source read (SharePoint) | `False` | `"full"` | `True` | `False` |
+| Update metadata / create artifact | `True` | `"full"` | `True` | `False` |
+| Send email / webhook | `True` | `"full"` | `True` | `False` |
+| LLM-powered multi-step analysis | `True` | `"full"` | `False` | `True` |
 
-Create a dedicated search function for your data type:
+### Creating a Primitive Function
+
+**Location**: `backend/app/cwr/tools/primitives/<category>/`
+
+Primitive functions are single atomic operations. Most data connections need a **search primitive**.
 
 ```python
 """
-Search function for your data connection.
+search_my_data — Search My Data records using hybrid full-text + semantic search.
+
+Returns thin summaries with relevance scores. Use get_content() to retrieve
+full content for LLM consumption.
 """
 from typing import Any, Dict, List, Optional
-from uuid import UUID
+import logging
 
-from sqlalchemy import select, or_
+from ...base import (
+    BaseFunction,
+    FunctionMeta,
+    FunctionCategory,
+    FunctionResult,
+    ParameterDoc,
+    OutputSchema,
+    OutputFieldDoc,
+)
+from ...context import FunctionContext
+from ...content import ContentItem
 
-from ..base import BaseFunction, FunctionMeta, FunctionCategory, FunctionResult, ParameterDoc
-from ..context import FunctionContext
-from ..content import ContentItem
+logger = logging.getLogger("curatore.functions.search.search_my_data")
 
 
 class SearchMyDataFunction(BaseFunction):
@@ -1695,67 +1744,440 @@ class SearchMyDataFunction(BaseFunction):
     meta = FunctionMeta(
         name="search_my_data",
         category=FunctionCategory.SEARCH,
-        description="Search My Data records",
+        description=(
+            "Search My Data records using full-text and semantic search. "
+            "Returns record summaries with relevance scores. To read full content, "
+            "use get_content(asset_ids=[...]) with IDs from these results. "
+            "This searches My Data only — use discover_data_sources to see all "
+            "available data sources and the appropriate search tool for each."
+        ),
         parameters=[
             ParameterDoc(
                 name="query",
                 type="str",
-                description="Text search query",
+                description="Search query. Use keywords, not filters. Example: 'cloud migration'",
                 required=False,
             ),
             ParameterDoc(
                 name="entity_types",
                 type="list[str]",
-                description="Entity types to search",
+                description="Entity types to include",
                 required=False,
                 default=["type_a", "type_b"],
                 enum_values=["type_a", "type_b", "type_c"],
             ),
-            # ... more parameters
+            ParameterDoc(
+                name="facet_filters",
+                type="dict",
+                description="Cross-domain facet filters. Example: {\"agency\": \"GSA\"}",
+                required=False,
+            ),
+            ParameterDoc(
+                name="limit",
+                type="int",
+                description="Maximum results (1–100)",
+                required=False,
+                default=20,
+            ),
         ],
-        returns="list[ContentItem]: Search results",
-        tags=["search", "my_data", "content"],
+        returns="list[ContentItem]: Search results with relevance scores",
+        output_schema=OutputSchema(
+            type="list[ContentItem]",
+            description="My Data search results",
+            fields=[
+                OutputFieldDoc(name="id", type="str", description="Record UUID"),
+                OutputFieldDoc(name="title", type="str", description="Record title"),
+                OutputFieldDoc(name="score", type="float", description="Relevance score"),
+                OutputFieldDoc(name="category", type="str", description="Record category", nullable=True),
+            ],
+        ),
+        tags=["search", "my_data", "hybrid"],
         requires_llm=False,
+        side_effects=False,
+        is_primitive=True,
+        payload_profile="thin",
+        examples=[
+            {
+                "description": "Search by keyword",
+                "params": {"query": "cloud migration"},
+            },
+            {
+                "description": "Filter by entity type",
+                "params": {"query": "security", "entity_types": ["type_a"]},
+            },
+        ],
     )
 
     async def execute(self, ctx: FunctionContext, **params) -> FunctionResult:
         """Execute search."""
         query = params.get("query")
         entity_types = params.get("entity_types") or ["type_a", "type_b"]
-        limit = min(params.get("limit", 20), 100)
+        facet_filters = params.get("facet_filters")
+        limit_val = params.get("limit", 20)
+        if isinstance(limit_val, str):
+            limit_val = int(limit_val) if limit_val else 20
+        limit = min(limit_val, 100)
 
-        results: List[ContentItem] = []
+        try:
+            results: List[ContentItem] = []
 
-        # Search each entity type
-        if "type_a" in entity_types:
-            items = await self._search_type_a(ctx, query, limit)
-            results.extend(items)
+            # Use ctx.search_service for hybrid search
+            search_results = await ctx.search_service.search_my_data(
+                session=ctx.session,
+                organization_id=ctx.organization_id,
+                query=query,
+                entity_types=entity_types,
+                facet_filters=facet_filters,
+                limit=limit,
+            )
 
-        return FunctionResult.success_result(
-            data=results,
-            message=f"Found {len(results)} records",
-            metadata={"result_type": "ContentItem"},
+            for hit in search_results.hits:
+                results.append(ContentItem(
+                    id=str(hit.source_id),
+                    type="my_data_record",
+                    display_type="My Data",
+                    title=hit.title or "",
+                    fields={
+                        "score": hit.score,
+                        "category": hit.metadata.get("category"),
+                        "highlights": hit.highlights,
+                    },
+                ))
+
+            return FunctionResult.success_result(
+                data=results,
+                message=f"Found {len(results)} records",
+                metadata={
+                    "query": query,
+                    "total_found": search_results.total,
+                    "result_type": "ContentItem",
+                    "filters_applied": {"entity_types": entity_types},
+                },
+                items_processed=len(results),
+            )
+
+        except Exception as e:
+            logger.exception(f"Search failed: {e}")
+            return FunctionResult.failed_result(
+                error=str(e),
+                message="Search failed",
+            )
+```
+
+**Key conventions for search primitives:**
+- Always `payload_profile="thin"` — return IDs/titles/scores, not full content
+- Always `side_effects=False`
+- Return `List[ContentItem]` as `data`
+- Include `metadata` with query details, `total_found`, `result_type`, `filters_applied`
+- Description must explain what to use next (e.g., "use get_content() with IDs from these results")
+- Cap limits: `min(params.get("limit", 20), 100)`
+- Handle string-to-int coercion for Jinja2-rendered values
+
+**Name resolution pattern** — for user-friendly identifiers:
+```python
+# Support "site_name" that auto-resolves to sync_config_ids
+site_name = params.get("site_name")
+if site_name:
+    # Exact match first
+    config = await session.execute(
+        select(SharePointSyncConfig).where(
+            func.lower(SharePointSyncConfig.site_name) == site_name.lower()
+        )
+    )
+    if not config:
+        # Fallback to partial match
+        config = await session.execute(
+            select(SharePointSyncConfig).where(
+                SharePointSyncConfig.site_name.ilike(f"%{site_name}%")
+            )
         )
 ```
 
-**Register the function** in `backend/app/cwr/tools/primitives/search/__init__.py`:
+### Creating a Compound Function
+
+**Location**: `backend/app/cwr/tools/compounds/`
+
+Compound functions orchestrate multiple sub-operations. They have `is_primitive=False` and `category=FunctionCategory.COMPOUND`.
 
 ```python
-from .search_my_data import SearchMyDataFunction
+"""
+analyze_my_data — Multi-step analysis of My Data records using LLM.
+"""
+from typing import Any, Dict, Optional
+import logging
 
-__all__ = [
-    # ... existing exports ...
-    "SearchMyDataFunction",
-]
+from ..base import (
+    BaseFunction,
+    FunctionMeta,
+    FunctionCategory,
+    FunctionResult,
+    ParameterDoc,
+    OutputSchema,
+    OutputFieldDoc,
+)
+from ..context import FunctionContext
+from ..content import ContentItem
+
+logger = logging.getLogger("curatore.functions.compounds.analyze_my_data")
+
+
+class AnalyzeMyDataFunction(BaseFunction):
+    """Analyze My Data records using LLM."""
+
+    meta = FunctionMeta(
+        name="analyze_my_data",
+        category=FunctionCategory.COMPOUND,
+        description="Multi-step analysis of My Data records. Fetches record, checks for cached analysis, calls LLM if needed.",
+        parameters=[
+            ParameterDoc(name="record_id", type="str", description="Record UUID", required=True),
+            ParameterDoc(name="depth", type="str", description="Analysis depth", required=False, default="brief", enum_values=["brief", "detailed"]),
+        ],
+        returns="ContentItem: Analysis result",
+        output_schema=OutputSchema(
+            type="dict",
+            description="Analysis result",
+            fields=[
+                OutputFieldDoc(name="record_id", type="str", description="Analyzed record ID"),
+                OutputFieldDoc(name="analysis", type="str", description="LLM analysis text"),
+                OutputFieldDoc(name="model", type="str", description="Model used"),
+            ],
+        ),
+        tags=["compound", "analysis", "my_data", "llm"],
+        requires_llm=True,
+        side_effects=True,       # Saves analysis to database
+        is_primitive=False,       # Multi-step compound
+        payload_profile="full",
+        examples=[
+            {"description": "Brief analysis", "params": {"record_id": "uuid", "depth": "brief"}},
+        ],
+    )
+
+    async def execute(self, ctx: FunctionContext, **params) -> FunctionResult:
+        """Execute multi-step analysis."""
+        record_id = params["record_id"]
+        depth = params.get("depth", "brief")
+
+        try:
+            # Step 1: Fetch the record
+            record = await self._fetch_record(ctx, record_id)
+            if not record:
+                return FunctionResult.failed_result(error=f"Record {record_id} not found")
+
+            # Step 2: Check for cached analysis (avoid redundant LLM calls)
+            cached = await self._get_cached_analysis(ctx, record_id, depth)
+            if cached:
+                return FunctionResult.success_result(
+                    data=cached,
+                    message="Returned cached analysis",
+                )
+
+            # Step 3: Check LLM availability
+            if not ctx.llm_service or not ctx.llm_service.is_available:
+                return FunctionResult.failed_result(error="LLM service not available")
+
+            # Step 4: Build prompt and call LLM
+            prompt = self._build_prompt(record, depth)
+            response = await ctx.llm_service.generate(prompt)
+
+            # Step 5: Save analysis (side effect)
+            if not ctx.dry_run:
+                await self._save_analysis(ctx, record_id, response, depth)
+
+            return FunctionResult.success_result(
+                data={"record_id": record_id, "analysis": response, "model": "..."},
+                message=f"Completed {depth} analysis",
+                items_processed=1,
+            )
+
+        except Exception as e:
+            logger.exception(f"Analysis failed: {e}")
+            return FunctionResult.failed_result(error=str(e))
 ```
 
-**Register in the registry** in `backend/app/cwr/tools/registry.py`:
+**Key conventions for compound functions:**
+- Always `is_primitive=False`, `category=FunctionCategory.COMPOUND`
+- Set `requires_llm=True` if any step calls the LLM
+- Set `side_effects=True` if any step writes data
+- Check `ctx.dry_run` before performing side effects
+- Check `ctx.llm_service.is_available` before LLM calls
+- Cache results when possible to avoid redundant LLM calls
+
+### Creating Data Source Functions
+
+**Location**: `backend/app/cwr/tools/primitives/<source_name>/`
+
+Data source functions interact with external APIs (e.g., SharePoint Graph API). They use `category=FunctionCategory.DATA`.
 
 ```python
-# In _discover_functions():
-from .primitives.search.search_my_data import SearchMyDataFunction
-self.register(SearchMyDataFunction)
+class MySourceGetInfoFunction(BaseFunction):
+    meta = FunctionMeta(
+        name="my_source_get_info",
+        category=FunctionCategory.DATA,
+        description="Get metadata from My Source API",
+        parameters=[
+            ParameterDoc(name="url", type="str", description="Source URL", required=False),
+            ParameterDoc(name="config_id", type="str", description="Sync config UUID", required=False),
+        ],
+        # ...
+        side_effects=False,      # Read-only
+        is_primitive=True,
+        payload_profile="full",  # Returns complete metadata
+    )
 ```
+
+### FunctionContext — What's Available at Runtime
+
+`FunctionContext` (`backend/app/cwr/tools/context.py`) provides lazy-loaded service accessors:
+
+| Property | Service | Purpose |
+|----------|---------|---------|
+| `session` | `AsyncSession` | Database session |
+| `organization_id` | `UUID` | Current organization |
+| `user_id` | `Optional[UUID]` | Triggering user |
+| `run_id` | `Optional[UUID]` | Current run ID |
+| `dry_run` | `bool` | Skip side effects if `True` |
+| `llm_service` | LLM operations | Chat completions, embeddings |
+| `search_service` | `PgSearchService` | Hybrid search |
+| `minio_service` | MinIO/S3 | Object storage |
+| `asset_service` | `AssetService` | Asset CRUD |
+| `run_service` | Run tracking | Run lifecycle |
+| `sam_service` | `SamService` | SAM.gov API |
+| `content_service` | `ContentService` | Type-agnostic content retrieval |
+| `facet_reference_service` | Facet aliases | Cross-source naming resolution |
+
+Template rendering is built in:
+- `ctx.render_template(template_str)` — Renders Jinja2 with access to `params`, `steps`, `org_id`, `now()`, `today()`
+- `ctx.render_params(params_dict)` — Recursively renders all string values; preserves data types for pure expressions like `{{ steps.data }}`
+
+### ContentItem — Universal Content Wrapper
+
+`ContentItem` (`backend/app/cwr/tools/content/content_item.py`) is the standard container:
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `id` | `str` | Unique identifier |
+| `type` | `str` | Content type: `"asset"`, `"solicitation"`, `"notice"`, `"salesforce_account"`, etc. |
+| `display_type` | `str` | Human-friendly label: `"Document"`, `"Account"`, `"Opportunity"` |
+| `title` | `Optional[str]` | Display title |
+| `text` | `Optional[str]` | Primary text content (for LLM consumption) |
+| `text_format` | `str` | `"markdown"` or `"json"` |
+| `fields` | `Dict[str, Any]` | Structured data fields from source model |
+| `metadata` | `Dict[str, Any]` | Additional metadata (scores, timestamps) |
+| `children` | `List[ContentItem]` | Nested items (e.g., attachments) |
+
+Jinja2 templates can access fields directly: `{{ item.source_url }}` maps to `item.fields["source_url"]`.
+
+### ContentTypeRegistry
+
+**Location**: `backend/app/cwr/tools/content/registry.py`
+
+Register your content types for the `ContentService` to support `get()` and `search()`:
+
+```python
+CONTENT_TYPE_REGISTRY: Dict[str, Dict[str, Any]] = {
+    "my_data_record": {
+        "formal_name": "My Data Record",
+        "model": "MyDataRecord",
+        "has_text": True,
+        "text_source": "record",
+        "text_format": "json",
+        "children": [],
+        "display_names": {"default": "Record", "search": "My Data Record"},
+        "fields": {
+            "external_id": "external_id",
+            "name": "name",
+            "category": "category",
+        },
+        "metadata_fields": {"raw_data": "raw_data", "created_at": "created_at"},
+        "title_field": "name",
+    },
+}
+```
+
+### Function Registration
+
+**Location**: `backend/app/cwr/tools/registry.py`
+
+Add your function to `_discover_functions()`:
+
+```python
+def _discover_functions(self):
+    # ... existing imports ...
+
+    # My Data functions
+    from .primitives.search.search_my_data import SearchMyDataFunction
+    self.register(SearchMyDataFunction)
+
+    # My Data source functions (if applicable)
+    from .primitives.my_source.my_source_get_info import MySourceGetInfoFunction
+    self.register(MySourceGetInfoFunction)
+```
+
+Also update these existing functions:
+
+1. **`get` function** (`primitives/search/get.py`) — Add content types to `enum_values`:
+```python
+enum_values=["asset", "solicitation", "notice", "my_data_record"]
+```
+
+2. **`query_model` function** (`primitives/search/query_model.py`) — Add models to `ALLOWED_MODELS`:
+```python
+ALLOWED_MODELS = {
+    # ... existing ...
+    "MyDataRecord": "app.database.models.MyDataRecord",
+}
+```
+
+3. **`discover_data_sources` function** (`primitives/search/discover_data_sources.py`) — Query your config tables so the AI knows about configured instances.
+
+### Tool Contracts (Auto-Generated)
+
+Tool contracts are auto-generated from `FunctionMeta` by `ContractGenerator` (`backend/app/cwr/contracts/tool_contracts.py`). You do **not** need to create contracts manually.
+
+The generated contract includes:
+- `input_schema` — JSON Schema from `parameters` list
+- `output_schema` — JSON Schema from `output_schema`
+- All governance fields (`side_effects`, `payload_profile`, `exposure_profile`, etc.)
+
+The AI procedure generator and procedure validator both use these contracts to:
+- Place `side_effects=True` functions late in workflows
+- Insert `get_content` steps after `payload_profile="thin"` search functions
+- Guard `send_email`/`webhook` with conditionals
+- Validate parameter types and required fields
+
+### Description Writing Convention
+
+The `description` field in `FunctionMeta` is critical — the AI procedure generator uses it to select functions. Include:
+
+1. **What the function does** in one sentence
+2. **What it returns** (thin summaries vs full data)
+3. **What to do next** (e.g., "use get_content() with IDs from these results")
+4. **What NOT to do** (e.g., "Do NOT pass solicitation IDs")
+5. **What other functions to use** for related tasks
+
+Example:
+```python
+description=(
+    "Search document assets using full-text and semantic search. "
+    "Returns document summaries with relevance scores. To read full document content, "
+    "use get_content(asset_ids=[...]) with IDs from these results. "
+    "This tool searches documents only — use discover_data_sources to see all available "
+    "data sources and the appropriate search tool for each."
+)
+```
+
+### CWR Integration Checklist
+
+| Step | File | What to Do |
+|------|------|------------|
+| 1 | `primitives/search/search_{name}.py` | Create search primitive |
+| 2 | `primitives/{name}/` | Create data source functions (optional) |
+| 3 | `compounds/` | Create compound functions (optional) |
+| 4 | `registry.py` | Register all functions in `_discover_functions()` |
+| 5 | `content/registry.py` | Register content types |
+| 6 | `primitives/search/get.py` | Add to `item_type` enum_values |
+| 7 | `primitives/search/query_model.py` | Add to `ALLOWED_MODELS` |
+| 8 | `primitives/search/discover_data_sources.py` | Query config tables |
 
 ---
 
@@ -2501,3 +2923,817 @@ const handleResultClick = (hit: SearchHit) => {
 - [ ] Test search with sample data
 - [ ] Verify facet counts appear correctly
 - [ ] Verify result labels show correctly (Account vs salesforce_account)
+
+---
+
+## 18. Adapter System
+
+When your data connection calls external APIs, implement the **3-tier configuration resolution** pattern using the `ServiceAdapter` base class.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                        3-TIER CONFIG RESOLUTION                                  │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+  Tier 1 (Highest Priority)       Tier 2                      Tier 3 (Fallback)
+  Per-Organization DB              config.yml Section           Environment Variables
+       │                               │                            │
+       ▼                               ▼                            ▼
+┌─────────────────┐           ┌─────────────────┐          ┌─────────────────┐
+│ connections     │           │ config.yml      │          │ settings.*      │
+│ table           │           │ my_source:      │          │ MY_SOURCE_KEY   │
+│ (connection_    │           │   api_key: xxx  │          │ MY_SOURCE_URL   │
+│  service)       │           │   base_url: ... │          │                 │
+└─────────────────┘           └─────────────────┘          └─────────────────┘
+       │                               │                            │
+       └───────────────┬───────────────┘────────────────────────────┘
+                       ▼
+              Merged Configuration
+              (first non-null wins)
+```
+
+### ServiceAdapter ABC
+
+**Location**: `backend/app/connectors/adapters/base.py`
+
+```python
+from app.connectors.adapters.base import ServiceAdapter
+
+class MySourceAdapter(ServiceAdapter):
+    """Adapter for My Source API with 3-tier config resolution."""
+
+    CONNECTION_TYPE = "my_source"  # Must match registered connection type
+
+    def __init__(self, api_key=None, base_url=None, **kwargs):
+        # Tier 3: Environment variable fallback
+        from app.config import settings
+        self.api_key = api_key or settings.my_source_api_key
+        self.base_url = base_url or settings.my_source_base_url or "https://api.mysource.com"
+
+    @classmethod
+    async def from_database(cls, organization_id, session):
+        """Factory: creates adapter with Tier 1 (DB) config."""
+        connection = await cls._get_db_connection(organization_id, session)
+        if connection:
+            config = connection.config or {}
+            return cls(
+                api_key=config.get("api_key"),
+                base_url=config.get("base_url"),
+            )
+        return cls()  # Falls back to Tier 2/3
+
+    async def resolve_config(self) -> dict:
+        """Resolve config from Tiers 2+3 (no DB)."""
+        return {"api_key": self.api_key, "base_url": self.base_url}
+
+    async def resolve_config_for_org(self, organization_id, session) -> dict:
+        """Resolve config with Tier 1 (DB) as highest priority."""
+        connection = await self._get_db_connection(organization_id, session)
+        if connection and connection.config:
+            return {**await self.resolve_config(), **connection.config}
+        return await self.resolve_config()
+
+    async def test_connection(self) -> dict:
+        """Test API connectivity."""
+        try:
+            # Call a lightweight endpoint
+            response = await self._client.get(f"{self.base_url}/health")
+            return {"success": True, "message": "Connected"}
+        except Exception as e:
+            return {"success": False, "message": str(e)}
+
+    @property
+    def is_available(self) -> bool:
+        return bool(self.api_key)
+
+
+# Module-level singleton
+my_source_adapter = MySourceAdapter()
+```
+
+### Existing Adapter Implementations
+
+| Adapter | Connection Type | File |
+|---------|----------------|------|
+| `PlaywrightClient` | `"playwright"` | `backend/app/connectors/adapters/playwright_adapter.py` |
+| `LLMAdapter` | `"llm"` | `backend/app/connectors/adapters/llm_adapter.py` |
+
+### Inline Config Resolution (Alternative)
+
+Some connectors implement config resolution inline rather than subclassing `ServiceAdapter`:
+
+```python
+# In your pull service
+async def _get_api_key_async(self, organization_id, session):
+    """3-tier config resolution without adapter subclass."""
+    # Tier 1: Instance override
+    if self._api_key:
+        return self._api_key
+
+    # Tier 2: Database connection
+    from app.core.auth.connection_service import connection_service
+    conn = await connection_service.get_default_connection(
+        session, organization_id, "my_source"
+    )
+    if conn and conn.config and conn.config.get("api_key"):
+        return conn.config["api_key"]
+
+    # Tier 3: Environment variable
+    from app.config import settings
+    return settings.my_source_api_key
+```
+
+This pattern is used by: SAM.gov (`sam_pull_service.py`), SharePoint (`sharepoint_service.py`), Salesforce.
+
+---
+
+## 19. Connector Service Standards
+
+All connectors follow consistent patterns. This section documents the standards that every new connector should follow.
+
+### File Organization
+
+```
+backend/app/connectors/{name}/
+├── __init__.py
+├── {name}_service.py          # CRUD service (database operations)
+├── {name}_pull_service.py     # Data ingestion from external APIs
+├── {name}_import_service.py   # Data import from files (alternative to pull)
+└── {name}_client.py           # API client (optional, for complex APIs)
+```
+
+### CRUD Service Pattern
+
+```python
+"""
+My Source service for Curatore v2.
+Provides CRUD operations for My Source records.
+"""
+import logging
+from typing import Any, Dict, List, Optional, Tuple
+from uuid import UUID
+
+from sqlalchemy import select, func, and_
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.database.models import MySourceRecord
+
+logger = logging.getLogger("curatore.connectors.my_source")
+
+
+class MySourceService:
+    """CRUD operations for My Source records."""
+
+    # =========================================================================
+    # UPSERT OPERATIONS (by external ID)
+    # =========================================================================
+
+    async def upsert_record(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        external_id: str,
+        data: Dict[str, Any],
+    ) -> Tuple[MySourceRecord, bool]:
+        """
+        Create or update a record by external ID.
+        Returns (record, was_created).
+        """
+        result = await session.execute(
+            select(MySourceRecord).where(
+                and_(
+                    MySourceRecord.organization_id == organization_id,
+                    MySourceRecord.external_id == external_id,
+                )
+            )
+        )
+        record = result.scalar_one_or_none()
+
+        if record:
+            for key, value in data.items():
+                if hasattr(record, key):
+                    setattr(record, key, value)
+            return record, False
+        else:
+            record = MySourceRecord(
+                organization_id=organization_id,
+                external_id=external_id,
+                **data,
+            )
+            session.add(record)
+            return record, True
+
+    # =========================================================================
+    # READ OPERATIONS (always scoped to organization_id)
+    # =========================================================================
+
+    async def list_records(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        keyword: Optional[str] = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> Tuple[List[MySourceRecord], int]:
+        """List with filtering and pagination. Returns (items, total_count)."""
+        query = select(MySourceRecord).where(
+            MySourceRecord.organization_id == organization_id
+        )
+        if keyword:
+            query = query.where(MySourceRecord.name.ilike(f"%{keyword}%"))
+
+        count_query = select(func.count()).select_from(query.subquery())
+        total = (await session.execute(count_query)).scalar() or 0
+
+        query = query.order_by(MySourceRecord.name).limit(limit).offset(offset)
+        result = await session.execute(query)
+        return list(result.scalars().all()), total
+
+
+# Singleton instance
+my_source_service = MySourceService()
+```
+
+### Pull Service Pattern
+
+```python
+"""
+My Source pull service — orchestrates data ingestion from external API.
+"""
+import logging
+from typing import Any, Dict, Optional
+from uuid import UUID
+
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.shared.run_service import run_service
+from app.core.shared.run_log_service import run_log_service
+from app.core.search.pg_index_service import pg_index_service
+
+logger = logging.getLogger("curatore.connectors.my_source.pull")
+
+# Transient errors that should trigger retry
+TRANSIENT_ERRORS = (ConnectionError, TimeoutError, OSError)
+
+
+class MySourcePullService:
+    """Orchestrates data pull from My Source API."""
+
+    async def pull(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        config: Dict[str, Any],
+        run_id: Optional[UUID] = None,
+    ) -> Dict[str, Any]:
+        """
+        Pull data from external API.
+        Returns stats dict: {created, updated, deleted, errors}.
+        """
+        stats = {"created": 0, "updated": 0, "errors": 0}
+
+        # 1. Check if run was cancelled
+        if run_id and await self._is_run_cancelled(session, run_id):
+            return stats
+
+        # 2. Log progress
+        if run_id:
+            await run_log_service.log_event(
+                session, run_id, "INFO", "pull_start",
+                "Starting data pull"
+            )
+
+        # 3. Fetch data with retry
+        try:
+            data = await self._fetch_with_retry(config)
+        except Exception as e:
+            if run_id:
+                await run_log_service.log_event(
+                    session, run_id, "ERROR", "api_error", str(e)
+                )
+            raise
+
+        # 4. Process records
+        for item in data:
+            try:
+                record, created = await my_source_service.upsert_record(
+                    session, organization_id, item["id"], item
+                )
+                stats["created" if created else "updated"] += 1
+
+                # 5. Index for search
+                await pg_index_service.index_my_record(session, record)
+
+            except Exception as e:
+                stats["errors"] += 1
+                logger.warning(f"Error processing record: {e}")
+
+            # 6. Periodic cancellation check
+            if run_id and stats["created"] % 50 == 0:
+                if await self._is_run_cancelled(session, run_id):
+                    break
+
+        return stats
+
+    async def _fetch_with_retry(self, config, max_retries=3):
+        """Fetch data with exponential backoff for transient errors."""
+        import asyncio
+        for attempt in range(max_retries):
+            try:
+                return await self._fetch_data(config)
+            except TRANSIENT_ERRORS as e:
+                if attempt == max_retries - 1:
+                    raise
+                wait = 2 ** attempt
+                logger.warning(f"Transient error, retrying in {wait}s: {e}")
+                await asyncio.sleep(wait)
+
+    async def _is_run_cancelled(self, session, run_id):
+        """Check if the run has been cancelled for graceful stops."""
+        run = await run_service.get_run(session, run_id)
+        return run and run.status in ("cancelled", "cancelling")
+
+
+my_source_pull_service = MySourcePullService()
+```
+
+### Common Patterns Across All Connectors
+
+| Pattern | Description | Used By |
+|---------|-------------|---------|
+| **Organization isolation** | Every query includes `organization_id` filter | All connectors |
+| **Singleton instances** | `service = MyService()` at module bottom | All connectors |
+| **Upsert by external ID** | `(org_id, external_id)` unique constraint | SAM, Salesforce, Forecasts |
+| **Pagination tuple** | `(List[T], total_count)` return pattern | All CRUD services |
+| **Run log integration** | `run_log_service.log_event()` during ingestion | All pull/import services |
+| **Cancellation checks** | `_is_run_cancelled()` during long operations | SAM, SharePoint, Scrape |
+| **Retry with backoff** | Exponential backoff for `TRANSIENT_ERRORS` | SAM, SharePoint |
+| **Slug generation** | URL-friendly identifiers for configs | SAM searches, SharePoint configs |
+| **Source metadata** | Connectors write namespaced `Asset.source_metadata` | SharePoint, SAM, Scrape |
+| **Status tracking** | `status`, `last_sync_at`, `last_sync_run_id` on config models | All sync configs |
+
+### Source Metadata Convention
+
+When creating Assets, write fully namespaced `source_metadata`:
+
+```python
+source_metadata = {
+    "source": {
+        "storage_folder": "my_source/records/",
+    },
+    "my_source": {
+        "item_id": "ext-123",
+        "record_type": "report",
+        "category": "financial",
+        # ... connector-specific fields
+    },
+    "sync": {
+        "config_id": str(config.id),
+        "config_name": config.name,
+    },
+    "file": {
+        "extension": ".pdf",
+        "description": "Financial report Q1 2026",
+    },
+}
+
+asset = await asset_service.create_asset(
+    session=session,
+    organization_id=organization_id,
+    source_type="my_source",
+    source_metadata=source_metadata,
+    # ...
+)
+```
+
+This metadata flows through `AssetPassthroughBuilder` into search chunks automatically.
+
+---
+
+## 20. Metadata Registry System
+
+The metadata registry governs field definitions, facets, namespaces, data source knowledge, and reference data. All baseline definitions live in YAML files under `backend/app/core/metadata/registry/`. Organization-level overrides are stored in the database.
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────────────────┐
+│                           METADATA REGISTRY FLOW                                 │
+└─────────────────────────────────────────────────────────────────────────────────┘
+
+  YAML Baseline                  DB Overrides               Effective Registry
+       │                              │                           │
+       ▼                              ▼                           ▼
+┌─────────────────┐          ┌─────────────────┐         ┌─────────────────┐
+│ namespaces.yaml │          │ metadata_field_ │         │ MetadataRegistry│
+│ fields.yaml     │──seed──▶ │ definitions     │──merge─▶│ Service         │
+│ facets.yaml     │  (DB)    │ facet_defs      │  (5min  │ (cached result) │
+│ data_sources.yaml│         │ facet_mappings  │  cache) │                 │
+│ reference_data.  │         └─────────────────┘         └─────────────────┘
+│  yaml            │                                            │
+└─────────────────┘                                            ▼
+                                                    ┌─────────────────────┐
+                                                    │ Search / Functions  │
+                                                    │ / Procedure Gen     │
+                                                    └─────────────────────┘
+```
+
+### Namespaces (`registry/namespaces.yaml`)
+
+Namespaces organize metadata fields by domain. Each namespace has a `key`, `display_name`, and `description`.
+
+```yaml
+namespaces:
+  - key: source
+    display_name: Source
+    description: Common provenance fields across all content types
+
+  - key: my_source
+    display_name: My Source
+    description: Fields specific to My Source integration
+
+  # Existing namespaces: source, sharepoint, sam, salesforce, forecast, scrape, sync, file, custom
+```
+
+**When to add a namespace**: When your connector has fields that don't fit in existing namespaces. Most connectors need their own namespace.
+
+### Fields (`registry/fields.yaml`)
+
+Field definitions describe every metadata field. Used by the catalog API, search schema discovery, and validation.
+
+```yaml
+fields:
+  # Existing fields in other namespaces...
+
+  # My Source fields
+  - key: my_source.record_type
+    display_name: Record Type
+    namespace: my_source
+    data_type: enum
+    indexed: true
+    facetable: true
+    description: Type of record in My Source
+    applicable_content_types:
+      - my_source_record
+    examples:
+      - report
+      - analysis
+      - memo
+
+  - key: my_source.category
+    display_name: Category
+    namespace: my_source
+    data_type: string
+    indexed: true
+    facetable: true
+    description: Record category
+    applicable_content_types:
+      - my_source_record
+
+  - key: my_source.external_id
+    display_name: External ID
+    namespace: my_source
+    data_type: string
+    indexed: true
+    facetable: false
+    description: External system identifier
+    applicable_content_types:
+      - my_source_record
+```
+
+**Field properties:**
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `key` | `str` | Unique key in `namespace.field_name` format |
+| `display_name` | `str` | Human-friendly label |
+| `namespace` | `str` | Must match a namespace key |
+| `data_type` | `str` | `string`, `number`, `boolean`, `date`, `enum`, `array`, `object` |
+| `indexed` | `bool` | Whether stored in `search_chunks.metadata` |
+| `facetable` | `bool` | Whether usable as a facet filter |
+| `description` | `str` | Human-readable description |
+| `applicable_content_types` | `List[str]` | Content types this field appears on |
+| `examples` | `List` | Example values |
+
+### Facets (`registry/facets.yaml`)
+
+Facets are **cross-domain filters** that map to different JSON paths depending on content type. This is the key abstraction that lets a single filter like `{"agency": "GSA"}` work across SAM notices, forecasts, and Salesforce records.
+
+```yaml
+facets:
+  # Existing facets: agency, naics_code, set_aside, site_name, etc.
+
+  - key: my_category
+    display_name: My Category
+    description: Category filter across My Source records
+    data_type: string
+    operators:
+      - eq    # Exact match
+      - in    # Match any of list
+    mappings:
+      - content_type: my_source_record
+        json_path: my_source.category
+```
+
+**How facet resolution works:**
+
+1. User passes `facet_filters={"agency": "GSA"}` to a search function
+2. `MetadataRegistryService.resolve_facet("agency")` returns mappings per content type
+3. Search service builds content-type-specific JSONB queries:
+   - SAM notices: `metadata->'sam'->>'agency' = 'GSA'`
+   - Forecasts: `metadata->'forecast'->>'agency_name' = 'GSA'`
+   - Salesforce: `metadata->'salesforce'->>'account_name' = 'GSA'`
+
+**Facet operators:**
+
+| Operator | Description | Example |
+|----------|-------------|---------|
+| `eq` | Exact match | `{"agency": "GSA"}` |
+| `in` | Match any value in list | `{"agency": ["GSA", "DOD"]}` |
+| `gte` | Greater than or equal | `{"fiscal_year": {"gte": 2026}}` |
+| `lte` | Less than or equal | `{"estimated_value": {"lte": 1000000}}` |
+| `contains` | Substring match | `{"description": {"contains": "cloud"}}` |
+| `exists` | Field is not null | `{"naics_code": {"exists": true}}` |
+
+### Data Sources (`registry/data_sources.yaml`)
+
+Data source definitions tell the AI procedure generator and `discover_data_sources` function about available data types, their capabilities, and which CWR functions to use.
+
+```yaml
+data_sources:
+  # Existing: sam_gov, sharepoint, forecast_ag, forecast_apfs, forecast_state, salesforce, web_scrape
+
+  my_source:
+    display_name: My Source
+    description: >
+      My Source provides research reports, analysis documents, and memos.
+      Records are synced periodically and indexed for search.
+    data_contains:
+      - Research reports
+      - Analysis documents
+      - Internal memos
+    capabilities:
+      - full_text_search
+      - facet_filtering
+      - semantic_search
+    search_tools:
+      - tool: search_my_source
+        description: Search My Source records
+        filters:
+          - record_type (enum: report, analysis, memo)
+          - category
+          - facet_filters (cross-domain facets)
+        next_steps:
+          - Use get_content(asset_ids=[...]) to read full document text
+          - Use get(item_type="my_source_record", item_id="...") for record details
+    example_questions:
+      - "Find all reports about cloud migration"
+      - "What analysis documents mention cybersecurity?"
+      - "Show me memos from Q1 2026"
+    note: >
+      My Source data is org-specific. Use discover_data_sources to see what
+      is configured for the current organization.
+```
+
+**Key fields:**
+
+| Field | Description |
+|-------|-------------|
+| `display_name` | Human-friendly name |
+| `description` | What this data source contains |
+| `data_contains` | List of content types in plain English |
+| `capabilities` | What you can do with this data |
+| `search_tools` | CWR functions to use, with filter descriptions and next steps |
+| `example_questions` | Natural language queries the AI can answer |
+| `note` | Important caveats (org-specific, rate limits, etc.) |
+
+### Reference Data (`registry/reference_data.yaml`)
+
+Reference data provides canonical values and aliases for facets, enabling cross-source matching. For example, "DHS" should match "HOMELAND SECURITY, DEPARTMENT OF" across SAM.gov and forecasts.
+
+```yaml
+reference_data:
+  agency:
+    description: Federal agency canonical names and aliases
+    entries:
+      - canonical: "GENERAL SERVICES ADMINISTRATION"
+        aliases: ["GSA", "General Services Administration"]
+        category: civilian
+
+      - canonical: "HOMELAND SECURITY, DEPARTMENT OF"
+        aliases: ["DHS", "Department of Homeland Security"]
+        category: civilian
+
+      # Add entries for agencies your data source uses
+      - canonical: "MY AGENCY NAME"
+        aliases: ["MA", "My Agency"]
+        category: civilian
+```
+
+**How reference data works:**
+
+1. `FacetReferenceService` loads entries at startup
+2. When a user searches for `agency: "DHS"`, the service resolves it to all aliases
+3. The search query expands to match "DHS", "HOMELAND SECURITY, DEPARTMENT OF", etc.
+4. `autocomplete()` provides prefix-based suggestions
+5. `discover_unmapped()` finds values in search chunks not yet in reference data
+
+### MetadataRegistryService
+
+**Location**: `backend/app/core/metadata/registry_service.py`
+
+Key methods:
+
+| Method | Description |
+|--------|-------------|
+| `load_baseline()` | Seed DB from YAML files (DELETE + INSERT global records) |
+| `get_effective_registry(org_id)` | Merge global + org-level overrides (5-min cache) |
+| `get_namespace_definitions()` | All namespace definitions |
+| `get_field_definitions(namespace)` | Field definitions, optionally filtered by namespace |
+| `get_facet_definitions()` | All facet definitions with mappings |
+| `resolve_facet(facet_name)` | Returns `{content_type: json_path}` mapping |
+| `get_field_stats(org_id)` | Sample values and document counts per field |
+
+### Validation Service
+
+**Location**: `backend/app/core/metadata/validation_service.py`
+
+Validates at startup:
+1. Builder fields exist in YAML field definitions
+2. YAML fields with `applicable_content_types` have corresponding builders
+3. Facet mapping JSON paths are valid
+
+---
+
+## 21. Metadata Builders
+
+Metadata builders transform connector data into the namespaced JSONB structure stored in `search_chunks.metadata`. This is the bridge between your connector's data model and the search/facet infrastructure.
+
+### Architecture
+
+```
+Connector writes Asset.source_metadata     OR      Connector indexes entity directly
+          │                                                    │
+          ▼                                                    ▼
+┌─────────────────────────┐                     ┌─────────────────────────┐
+│ AssetPassthroughBuilder │                     │ EntityMetadataBuilder   │
+│ (passes metadata thru)  │                     │ (builds from columns)   │
+└─────────────────────────┘                     └─────────────────────────┘
+          │                                                    │
+          └────────────────────┬───────────────────────────────┘
+                               ▼
+                   ┌───────────────────────┐
+                   │ search_chunks.metadata │
+                   │ (namespaced JSONB)     │
+                   └───────────────────────┘
+```
+
+### Two Builder Strategies
+
+**Strategy 1: Asset Pass-through** — Your connector creates `Asset` records with namespaced `source_metadata`. The `AssetPassthroughBuilder` copies it to search chunks unchanged. Used when your data is document-centric (SharePoint files, scraped pages, SAM attachments).
+
+**Strategy 2: Entity Builder** — Your connector has its own database tables (not Assets). Create a custom `MetadataBuilder` subclass that reads model columns and builds namespaced metadata. Used for structured records (SAM solicitations, forecasts, Salesforce records).
+
+### Creating an Entity Builder
+
+**Location**: `backend/app/core/search/metadata_builders.py`
+
+```python
+from .metadata_builders import MetadataBuilder, metadata_builder_registry
+
+
+class MySourceRecordBuilder(MetadataBuilder):
+    """Build search metadata from My Source records."""
+
+    source_type = "my_source_record"
+    namespace = "my_source"
+
+    def build_content(self, **kwargs) -> str:
+        """
+        Build indexable text content from record fields.
+        This text is used for full-text and semantic search.
+        """
+        parts = []
+        if kwargs.get("name"):
+            parts.append(kwargs["name"])
+        if kwargs.get("category"):
+            parts.append(f"Category: {kwargs['category']}")
+        if kwargs.get("description"):
+            parts.append(kwargs["description"])
+        return "\n\n".join(parts)
+
+    def build_metadata(self, **kwargs) -> dict:
+        """
+        Build namespaced JSONB metadata for search_chunks.metadata.
+        Fields here must match what's declared in fields.yaml.
+        """
+        return {
+            self.namespace: {
+                "external_id": kwargs.get("external_id"),
+                "record_type": kwargs.get("record_type"),
+                "category": kwargs.get("category"),
+            }
+        }
+
+    def get_schema(self) -> dict:
+        """Returns {namespace: [field_names]} for validation."""
+        return {
+            self.namespace: ["external_id", "record_type", "category"]
+        }
+```
+
+### Register the Builder
+
+In `_register_defaults()` at the bottom of `metadata_builders.py`:
+
+```python
+def _register_defaults(self):
+    # ... existing builders ...
+    self.register(MySourceRecordBuilder())
+```
+
+### Using the Builder in PgIndexService
+
+**Location**: `backend/app/core/search/pg_index_service.py`
+
+Add an indexing method:
+
+```python
+async def index_my_source_record(
+    self,
+    session: AsyncSession,
+    record: MySourceRecord,
+) -> bool:
+    """Index a My Source record for search."""
+    builder = metadata_builder_registry.get("my_source_record")
+    if not builder:
+        logger.warning("No builder for my_source_record")
+        return False
+
+    try:
+        # Build content and metadata using the builder
+        content = builder.build_content(
+            name=record.name,
+            category=record.category,
+            description=record.description,
+        )
+        metadata = builder.build_metadata(
+            external_id=record.external_id,
+            record_type=record.record_type,
+            category=record.category,
+        )
+
+        # Generate embedding for semantic search
+        embedding = await self._get_embedding(content)
+
+        # Delete existing chunks and insert new
+        await self._delete_chunks(session, "my_source_record", record.id)
+        await self._insert_chunk(
+            session=session,
+            source_type="my_source_record",
+            source_id=record.id,
+            organization_id=record.organization_id,
+            chunk_index=0,
+            content=content,
+            title=record.name,
+            filename=record.external_id,
+            embedding=embedding,
+            source_type_filter="my_source",
+            content_type=record.record_type,
+            metadata=metadata,
+        )
+
+        record.indexed_at = datetime.utcnow()
+        return True
+
+    except Exception as e:
+        logger.error(f"Error indexing record {record.id}: {e}")
+        return False
+```
+
+### Existing Builders Reference
+
+| Builder | Source Type | Namespace | Strategy |
+|---------|-----------|-----------|----------|
+| `AssetPassthroughBuilder` | `asset_*` | (pass-through) | Asset pass-through |
+| `SamNoticeBuilder` | `sam_notice` | `sam` | Entity builder |
+| `SamSolicitationBuilder` | `sam_solicitation` | `sam` | Entity builder |
+| `ForecastBuilder` | `*_forecast` | `forecast` | Entity builder |
+| `SalesforceAccountBuilder` | `salesforce_account` | `salesforce` | Entity builder |
+| `SalesforceContactBuilder` | `salesforce_contact` | `salesforce` | Entity builder |
+| `SalesforceOpportunityBuilder` | `salesforce_opportunity` | `salesforce` | Entity builder |
+
+### End-to-End Integration Checklist
+
+| Step | File | What to Do |
+|------|------|------------|
+| 1 | `registry/namespaces.yaml` | Add your namespace |
+| 2 | `registry/fields.yaml` | Add field definitions with `indexed`, `facetable`, `applicable_content_types` |
+| 3 | `registry/facets.yaml` | Add or extend facets with mappings to your namespace |
+| 4 | `registry/data_sources.yaml` | Add data source entry with search tools and example questions |
+| 5 | `registry/reference_data.yaml` | Add canonical values/aliases for your facets (if applicable) |
+| 6 | `metadata_builders.py` | Create builder subclass + register in `_register_defaults()` |
+| 7 | `pg_index_service.py` | Add `index_my_source_record()` method using your builder |
+| 8 | Your pull/import service | Call `pg_index_service.index_my_source_record()` after data ingestion |

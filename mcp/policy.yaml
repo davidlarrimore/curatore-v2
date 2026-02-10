@@ -6,6 +6,9 @@ version: "1.0"
 # MVP allowlist - all safe functions (no side effects)
 # Functions with side_effects=true are automatically excluded unless in side_effects_allowlist
 allowlist:
+  # Discovery functions (full payload - describe available data)
+  - discover_data_sources
+  - discover_metadata
   # Search functions (thin payload - return IDs/scores)
   - search_assets
   - search_notices
@@ -18,6 +21,10 @@ allowlist:
   - get_content
   - get
   - query_model
+  # SharePoint browsing (read-only)
+  - sp_get_site
+  - sp_list_items
+  - sp_get_item
   # LLM functions
   - llm_summarize
   - llm_extract
@@ -58,6 +65,12 @@ clamps:
     limit:
       max: 50
       default: 20
+
+  # SharePoint browsing - limit result count
+  sp_list_items:
+    limit:
+      max: 200
+      default: 50
 
   # Content functions - limit text size
   get_content:

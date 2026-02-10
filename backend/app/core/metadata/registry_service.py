@@ -49,10 +49,13 @@ class MetadataRegistryService:
         self._namespaces: Dict[str, Dict[str, Any]] = {}
         self._fields: Dict[str, Dict[str, Dict[str, Any]]] = {}  # ns → field → def
         self._facets: Dict[str, Dict[str, Any]] = {}
+        self._data_sources: Dict[str, Dict[str, Any]] = {}  # source_type → definition
         self._loaded = False
 
         # Cache: org_id → (timestamp, effective_registry)
         self._cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
+        # Separate cache for data source catalog: org_id → (timestamp, catalog)
+        self._ds_cache: Dict[str, Tuple[float, Dict[str, Any]]] = {}
 
     # =========================================================================
     # YAML Loading
@@ -81,11 +84,19 @@ class MetadataRegistryService:
                 data = yaml.safe_load(f)
             self._facets = data.get("facets", {})
 
+        # Data sources
+        ds_path = _REGISTRY_DIR / "data_sources.yaml"
+        if ds_path.exists():
+            with open(ds_path) as f:
+                data = yaml.safe_load(f)
+            self._data_sources = data.get("source_types", {})
+
         self._loaded = True
         logger.info(
             f"Loaded metadata registry: {len(self._namespaces)} namespaces, "
             f"{sum(len(v) for v in self._fields.values())} fields, "
-            f"{len(self._facets)} facets"
+            f"{len(self._facets)} facets, "
+            f"{len(self._data_sources)} data source types"
         )
 
     def _ensure_loaded(self) -> None:
@@ -99,9 +110,12 @@ class MetadataRegistryService:
 
     async def load_baseline(self, session: AsyncSession) -> Dict[str, int]:
         """
-        Load YAML baseline and seed DB tables if empty (idempotent).
+        Sync YAML baseline to DB by deleting all global records and re-inserting.
 
-        Returns dict with counts of seeded records.
+        This keeps the DB perfectly in sync with YAML on every startup.
+        Org-level overrides (non-NULL organization_id) are untouched.
+
+        Returns dict with counts of synced records.
         """
         self._ensure_loaded()
 
@@ -113,17 +127,17 @@ class MetadataRegistryService:
 
         counts = {"fields": 0, "facets": 0, "mappings": 0}
 
-        # Check if already seeded (global baseline has org_id=NULL)
-        existing = await session.execute(
-            select(MetadataFieldDefinition.id).where(
-                MetadataFieldDefinition.organization_id.is_(None)
-            ).limit(1)
+        # Delete all global baseline records (org_id IS NULL).
+        # FacetMapping cascades from FacetDefinition via FK ondelete=CASCADE.
+        await session.execute(
+            text("DELETE FROM facet_definitions WHERE organization_id IS NULL")
         )
-        if existing.scalar_one_or_none() is not None:
-            logger.debug("Registry baseline already seeded, skipping")
-            return counts
+        await session.execute(
+            text("DELETE FROM metadata_field_definitions WHERE organization_id IS NULL")
+        )
+        await session.flush()
 
-        # Seed field definitions
+        # Re-insert field definitions from YAML
         for ns, ns_fields in self._fields.items():
             for field_name, field_def in ns_fields.items():
                 record = MetadataFieldDefinition(
@@ -140,7 +154,7 @@ class MetadataRegistryService:
                 session.add(record)
                 counts["fields"] += 1
 
-        # Seed facet definitions + mappings
+        # Re-insert facet definitions + mappings from YAML
         for facet_name, facet_def in self._facets.items():
             facet_record = FacetDefinition(
                 organization_id=None,
@@ -164,7 +178,11 @@ class MetadataRegistryService:
                 counts["mappings"] += 1
 
         await session.flush()
-        logger.info(f"Seeded registry baseline: {counts}")
+
+        # Clear caches so in-memory state reflects new DB state
+        self.invalidate_cache()
+
+        logger.info(f"Registry baseline synced: {counts}")
         return counts
 
     # =========================================================================
@@ -661,6 +679,150 @@ class MetadataRegistryService:
         return {"facet_name": facet_name, "content_type": content_type, "removed": True}
 
     # =========================================================================
+    # Data Source Type Registry
+    # =========================================================================
+
+    def get_data_source_types(self) -> Dict[str, Dict[str, Any]]:
+        """Return all data source type definitions from YAML baseline."""
+        self._ensure_loaded()
+        return {k: dict(v) for k, v in self._data_sources.items()}
+
+    def get_data_source_type(self, source_type: str) -> Optional[Dict[str, Any]]:
+        """Return a single data source type definition."""
+        self._ensure_loaded()
+        defn = self._data_sources.get(source_type)
+        return dict(defn) if defn else None
+
+    async def get_data_source_catalog(
+        self,
+        session: AsyncSession,
+        organization_id: Optional[UUID] = None,
+    ) -> Dict[str, Dict[str, Any]]:
+        """
+        Return the effective data source catalog for an organization.
+
+        Merges YAML baseline with org-level overrides from DB.
+        Cached for CACHE_TTL seconds.
+        """
+        self._ensure_loaded()
+
+        cache_key = f"ds_{organization_id}" if organization_id else "ds___global__"
+        now = time.time()
+
+        if cache_key in self._ds_cache:
+            cached_at, cached_catalog = self._ds_cache[cache_key]
+            if now - cached_at < self.CACHE_TTL:
+                return cached_catalog
+
+        catalog = await self._build_data_source_catalog(session, organization_id)
+        self._ds_cache[cache_key] = (now, catalog)
+        return catalog
+
+    async def _build_data_source_catalog(
+        self,
+        session: AsyncSession,
+        organization_id: Optional[UUID],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Build effective data source catalog by merging baseline + org overrides."""
+        from ..database.models import DataSourceTypeOverride
+
+        # Start with YAML baseline (deep copy)
+        catalog = {}
+        for key, defn in self._data_sources.items():
+            catalog[key] = dict(defn)
+            # Deep copy lists to avoid mutating YAML
+            for list_field in ("data_contains", "capabilities", "example_questions", "search_tools"):
+                if list_field in catalog[key]:
+                    catalog[key][list_field] = list(catalog[key][list_field])
+
+        if organization_id is None:
+            return catalog
+
+        # Load org-level overrides
+        try:
+            result = await session.execute(
+                select(DataSourceTypeOverride).where(
+                    DataSourceTypeOverride.organization_id == organization_id
+                )
+            )
+            for override in result.scalars():
+                key = override.source_type
+                if key not in catalog:
+                    continue
+
+                # Apply non-null overrides
+                if override.display_name:
+                    catalog[key]["display_name"] = override.display_name
+                if override.description:
+                    catalog[key]["description"] = override.description
+                if override.capabilities:
+                    catalog[key]["capabilities"] = override.capabilities
+                if not override.is_active:
+                    catalog[key]["is_active"] = False
+        except Exception as e:
+            logger.warning(f"Failed to load data source overrides: {e}")
+
+        return catalog
+
+    async def upsert_data_source_override(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        source_type: str,
+        display_name: Optional[str] = None,
+        description: Optional[str] = None,
+        capabilities: Optional[List[str]] = None,
+        is_active: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        """Create or update an org-level data source type override."""
+        from ..database.models import DataSourceTypeOverride
+
+        self._ensure_loaded()
+
+        if source_type not in self._data_sources:
+            raise ValueError(f"Unknown source_type '{source_type}'. Must be one of: {list(self._data_sources.keys())}")
+
+        # Look for existing override
+        result = await session.execute(
+            select(DataSourceTypeOverride).where(
+                DataSourceTypeOverride.organization_id == organization_id,
+                DataSourceTypeOverride.source_type == source_type,
+            )
+        )
+        record = result.scalar_one_or_none()
+
+        if record:
+            if display_name is not None:
+                record.display_name = display_name
+            if description is not None:
+                record.description = description
+            if capabilities is not None:
+                record.capabilities = capabilities
+            if is_active is not None:
+                record.is_active = is_active
+        else:
+            record = DataSourceTypeOverride(
+                organization_id=organization_id,
+                source_type=source_type,
+                display_name=display_name,
+                description=description,
+                capabilities=capabilities,
+                is_active=is_active if is_active is not None else True,
+            )
+            session.add(record)
+
+        await session.flush()
+        self._ds_cache.pop(f"ds_{organization_id}", None)
+
+        return {
+            "source_type": source_type,
+            "display_name": record.display_name,
+            "description": record.description,
+            "capabilities": record.capabilities,
+            "is_active": record.is_active,
+        }
+
+    # =========================================================================
     # Cache Management
     # =========================================================================
 
@@ -668,13 +830,16 @@ class MetadataRegistryService:
         """Clear cached effective registry for an organization (or all)."""
         if organization_id is None:
             self._cache.clear()
+            self._ds_cache.clear()
         else:
             self._cache.pop(str(organization_id), None)
+            self._ds_cache.pop(f"ds_{organization_id}", None)
 
     def reload_yaml(self) -> None:
         """Force-reload YAML baseline files and clear all caches."""
         self._loaded = False
         self._cache.clear()
+        self._ds_cache.clear()
         self._load_yaml()
 
 

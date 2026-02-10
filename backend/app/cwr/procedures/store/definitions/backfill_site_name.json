@@ -1,0 +1,84 @@
+{
+  "name": "Backfill SharePoint Site Name",
+  "slug": "backfill_site_name",
+  "description": "Resolve the SharePoint site display name for a sync config via Microsoft Graph API, then propagate it to all linked assets' source_metadata.sharepoint.site_name and the search index. Run once per sync config that is missing site_name.",
+  "version": "1.0.0",
+  "is_system": true,
+  "tags": ["sharepoint", "backfill", "metadata", "maintenance"],
+  "parameters": [
+    {
+      "name": "sync_config_id",
+      "type": "str",
+      "description": "SharePoint sync config UUID to backfill",
+      "required": true,
+      "default": null,
+      "enum_values": null
+    }
+  ],
+  "steps": [
+    {
+      "name": "get_site",
+      "function": "sp_get_site",
+      "description": "Resolve site metadata for the sync config's folder URL",
+      "params": {
+        "sync_config_id": "{{ params.sync_config_id }}"
+      },
+      "on_error": "fail",
+      "condition": null,
+      "foreach": null
+    },
+    {
+      "name": "find_assets",
+      "function": "search_assets",
+      "description": "Find all SharePoint assets belonging to this sync config",
+      "params": {
+        "query": "*",
+        "source_type": "sharepoint",
+        "sync_config_id": "{{ params.sync_config_id }}",
+        "search_mode": "keyword",
+        "limit": 100
+      },
+      "on_error": "fail",
+      "condition": null,
+      "foreach": null
+    },
+    {
+      "name": "update_assets",
+      "function": "update_source_metadata",
+      "description": "Set site_name in source_metadata.sharepoint for each asset",
+      "params": {
+        "asset_id": "{{ item.id }}",
+        "namespace": "sharepoint",
+        "fields": {
+          "site_name": "{{ steps.get_site.fields.display_name }}"
+        },
+        "propagate_to_search": true
+      },
+      "on_error": "continue",
+      "condition": null,
+      "foreach": "{{ steps.find_assets }}"
+    },
+    {
+      "name": "log_result",
+      "function": "log",
+      "description": "Log backfill completion",
+      "params": {
+        "message": "Backfill complete for sync config {{ params.sync_config_id }}. Site name: {{ steps.get_site.title }}.",
+        "level": "info"
+      },
+      "on_error": "continue",
+      "condition": null,
+      "foreach": null
+    }
+  ],
+  "outputs": [
+    {
+      "type": "result",
+      "config": {
+        "include_steps": ["get_site", "find_assets", "update_assets", "log_result"]
+      }
+    }
+  ],
+  "triggers": [],
+  "on_error": "continue"
+}

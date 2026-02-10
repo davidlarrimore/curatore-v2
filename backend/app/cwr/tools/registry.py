@@ -178,6 +178,8 @@ class FunctionRegistry:
             from .primitives.search.search_scraped_assets import SearchScrapedAssetsFunction
             from .primitives.search.search_salesforce import SearchSalesforceFunction
             from .primitives.search.search_forecasts import SearchForecastsFunction
+            from .primitives.search.discover_data_sources import DiscoverDataSourcesFunction
+            from .primitives.search.discover_metadata import DiscoverMetadataFunction
             self.register(QueryModelFunction)
             self.register(GetContentFunction)
             self.register(GetAssetFunction)
@@ -188,6 +190,8 @@ class FunctionRegistry:
             self.register(SearchScrapedAssetsFunction)
             self.register(SearchSalesforceFunction)
             self.register(SearchForecastsFunction)
+            self.register(DiscoverDataSourcesFunction)
+            self.register(DiscoverMetadataFunction)
         except ImportError as e:
             logger.warning(f"Failed to import search functions: {e}")
 
@@ -198,11 +202,13 @@ class FunctionRegistry:
             from .primitives.output.create_artifact import CreateArtifactFunction
             from .primitives.output.generate_document import GenerateDocumentFunction
             from .primitives.output.log import LogFunction
+            from .primitives.output.update_source_metadata import UpdateSourceMetadataFunction
             self.register(UpdateMetadataFunction)
             self.register(BulkUpdateMetadataFunction)
             self.register(CreateArtifactFunction)
             self.register(GenerateDocumentFunction)
             self.register(LogFunction)
+            self.register(UpdateSourceMetadataFunction)
         except ImportError as e:
             logger.warning(f"Failed to import output functions: {e}")
 
@@ -250,6 +256,17 @@ class FunctionRegistry:
             self.register(ForeachFunction)
         except ImportError as e:
             logger.warning(f"Failed to import flow functions: {e}")
+
+        # Import SharePoint/data functions
+        try:
+            from .primitives.sharepoint.sp_get_site import SpGetSiteFunction
+            from .primitives.sharepoint.sp_list_items import SpListItemsFunction
+            from .primitives.sharepoint.sp_get_item import SpGetItemFunction
+            self.register(SpGetSiteFunction)
+            self.register(SpListItemsFunction)
+            self.register(SpGetItemFunction)
+        except ImportError as e:
+            logger.warning(f"Failed to import SharePoint functions: {e}")
 
     def get_contract(self, name: str) -> Optional["ToolContract"]:
         """

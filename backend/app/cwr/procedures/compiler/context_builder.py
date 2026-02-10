@@ -264,15 +264,26 @@ Use ONLY these tools in your plan. Any tool not listed here will be rejected.
 
 Choose the correct search function based on the data source:
 
-- **Documents / SharePoint files** → `search_assets`
-- **SAM.gov solicitations** (grouped by solicitation number) → `search_solicitations`
+- **Documents / SharePoint files** → `search_assets` (supports `site_name` for human-friendly filtering)
+- **SAM.gov solicitations** (grouped by solicitation number) → `search_solicitations` (supports `search_name` for human-friendly filtering)
 - **SAM.gov notices** (individual postings) → `search_notices`
 - **Salesforce records** (accounts, contacts, opportunities) → `search_salesforce`
 - **Acquisition forecasts** (AG, APFS, State Dept) → `search_forecasts`
-- **Scraped web pages** → `search_scraped_assets`
+- **Scraped web pages** → `search_scraped_assets` (supports `collection_name` for human-friendly filtering)
+- **SharePoint live browsing** → `sp_list_items` (browse folder contents), `sp_get_site` (site metadata)
+- **Discover available data** → `discover_data_sources` (what data is available and how to search it)
+- **Discover search filters** → `discover_metadata` (available facets and fields)
 - **Generic model query** (direct DB query) → `query_model`
 - **Get full content by ID** → `get_content`
 - **Get asset metadata by ID** → `get_asset`
+
+## Human-Friendly Names
+
+Search functions accept human-readable names instead of UUIDs:
+- `search_assets(query="contracts", site_name="IT Department")` — resolves to sync_config_ids
+- `search_solicitations(keyword="cyber", search_name="IT Services Opportunities")` — resolves to search_id
+- `search_scraped_assets(keyword="forecast", collection_name="GSA AG")` — resolves to collection_id
+- All search functions accept `facet_filters` for cross-domain filtering: `{"agency": "GSA", "naics_code": "541512"}`
 
 IMPORTANT: Do not confuse these. Using `search_assets` for SAM.gov data will return zero results."""
 
@@ -342,7 +353,13 @@ When using foreach with `on_error: continue`, failed items return null. Use the 
     ) -> str:
         """Build context about available data sources for the organization."""
         from sqlalchemy import select
-        from app.core.database.models import SharePointSyncConfig, SamSearch, SalesforceConnection
+        from app.core.database.models import (
+            SharePointSyncConfig,
+            SamSearch,
+            Connection,
+            ScrapeCollection,
+            ForecastSync,
+        )
 
         sources: List[Dict[str, Any]] = []
 
@@ -355,13 +372,21 @@ When using foreach with `on_error: continue`, failed items return null. Use the 
             )
             configs = result.scalars().all()
             for c in configs:
-                sources.append({
+                site_name = getattr(c, "site_name", None)
+                stats = c.stats if hasattr(c, "stats") and c.stats else {}
+                entry: Dict[str, Any] = {
                     "type": "sharepoint",
                     "name": c.name,
                     "id": str(c.id),
-                    "description": (c.description or "")[:80],
                     "folder": c.folder_name or c.folder_url or "",
-                })
+                }
+                if site_name:
+                    entry["site_name"] = site_name
+                if c.description:
+                    entry["description"] = c.description[:120]
+                if stats:
+                    entry["total_files"] = stats.get("total_files")
+                sources.append(entry)
         except Exception as e:
             logger.warning(f"Failed to fetch SharePoint configs: {e}")
 
@@ -374,30 +399,86 @@ When using foreach with `on_error: continue`, failed items return null. Use the 
             )
             searches = result.scalars().all()
             for s in searches:
-                sources.append({
+                entry = {
                     "type": "sam_search",
                     "name": s.name,
-                    "description": (s.description or "")[:80],
-                })
+                    "id": str(s.id),
+                }
+                if s.description:
+                    entry["description"] = s.description[:120]
+                # Summarize search config filters
+                config = s.search_config or {}
+                filter_parts = []
+                if config.get("naics_codes"):
+                    filter_parts.append(f"NAICS: {', '.join(config['naics_codes'][:5])}")
+                if config.get("agencies"):
+                    filter_parts.append(f"Agencies: {', '.join(config['agencies'][:3])}")
+                if config.get("notice_types"):
+                    filter_parts.append(f"Types: {', '.join(config['notice_types'][:5])}")
+                if filter_parts:
+                    entry["filters"] = " | ".join(filter_parts)
+                sources.append(entry)
         except Exception as e:
             logger.warning(f"Failed to fetch SAM searches: {e}")
 
-        # Salesforce
+        # Salesforce (uses Connection model with connection_type='salesforce')
         try:
             result = await session.execute(
-                select(SalesforceConnection)
-                .where(SalesforceConnection.organization_id == organization_id)
-                .where(SalesforceConnection.is_active == True)
+                select(Connection)
+                .where(Connection.organization_id == organization_id)
+                .where(Connection.connection_type == "salesforce")
+                .where(Connection.is_active == True)
             )
             connections = result.scalars().all()
             for c in connections:
+                config = c.config or {}
                 sources.append({
                     "type": "salesforce",
                     "name": c.name,
-                    "instance_url": c.instance_url or "",
+                    "id": str(c.id),
+                    "instance_url": config.get("instance_url", ""),
                 })
         except Exception as e:
             logger.warning(f"Failed to fetch Salesforce connections: {e}")
+
+        # Scrape Collections
+        try:
+            result = await session.execute(
+                select(ScrapeCollection)
+                .where(ScrapeCollection.organization_id == organization_id)
+                .where(ScrapeCollection.status == "active")
+            )
+            collections = result.scalars().all()
+            for c in collections:
+                entry = {
+                    "type": "scrape_collection",
+                    "name": c.name,
+                    "id": str(c.id),
+                    "root_url": c.root_url,
+                }
+                if c.description:
+                    entry["description"] = c.description[:120]
+                sources.append(entry)
+        except Exception as e:
+            logger.warning(f"Failed to fetch scrape collections: {e}")
+
+        # Forecast Syncs
+        try:
+            result = await session.execute(
+                select(ForecastSync)
+                .where(ForecastSync.organization_id == organization_id)
+                .where(ForecastSync.is_active == True)
+            )
+            syncs = result.scalars().all()
+            for f in syncs:
+                sources.append({
+                    "type": "forecast_sync",
+                    "name": f.name,
+                    "id": str(f.id),
+                    "source_type": f.source_type,
+                })
+        except Exception as e:
+            logger.warning(f"Failed to fetch forecast syncs: {e}")
 
         if not sources:
             return ""
@@ -405,7 +486,7 @@ When using foreach with `on_error: continue`, failed items return null. Use the 
         sources_json = json.dumps(sources, indent=2)
         return f"""# AVAILABLE DATA SOURCES
 
-The organization has these configured data sources. Use the specific IDs/names when the user references them.
+The organization has these configured data sources. Use human-friendly names (site_name, search_name, collection_name) when the user references them. Use `discover_data_sources` to get full details including capabilities and search hints.
 
 ```json
 {sources_json}
@@ -472,7 +553,30 @@ The organization has these configured data sources. Use the specific IDs/names w
         if not ctx:
             return ""
 
+        # Add reference data summary for facets with alias resolution
+        try:
+            from app.core.metadata.facet_reference_service import facet_reference_service
+            ref_summary = await facet_reference_service.get_reference_summary(
+                session, organization_id
+            )
+            if ref_summary:
+                ctx["reference_data"] = {
+                    facet: values[:30]  # Cap at 30 per facet for prompt size
+                    for facet, values in ref_summary.items()
+                }
+        except Exception:
+            pass  # Non-fatal — reference data is optional context
+
         ctx_json = json.dumps(ctx, indent=2)
+        ref_note = ""
+        if ctx.get("reference_data"):
+            ref_note = """
+
+REFERENCE DATA: Some facets (agency, set_aside) have alias resolution.
+The system automatically resolves abbreviations and variants — e.g., searching
+for "DHS" will match "Department of Homeland Security" and all its variants.
+Use the display_label or canonical value from reference_data when specifying filters."""
+
         return f"""# SEARCH FILTERS
 
 Search tools accept `facet_filters` (preferred, cross-domain) and `metadata_filters` (advanced, raw JSONB).
@@ -481,7 +585,7 @@ Search tools accept `facet_filters` (preferred, cross-domain) and `metadata_filt
 {ctx_json}
 ```
 
-Use `facet_filters` when possible: `{{"agency": "GSA", "naics_code": "541512"}}`"""
+Use `facet_filters` when possible: `{{"agency": "GSA", "naics_code": "541512"}}`{ref_note}"""
 
     # ------------------------------------------------------------------
     # Output Instructions

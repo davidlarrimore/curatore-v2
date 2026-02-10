@@ -251,9 +251,10 @@ class BackendClient:
             # Try to extract error message from response
             try:
                 error_data = e.response.json()
+                detail = error_data.get("detail") or error_data.get("message") or str(e)
                 return {
                     "status": "error",
-                    "error": error_data.get("detail", str(e)),
+                    "error": str(detail) if detail else f"HTTP {e.response.status_code}",
                 }
             except Exception:
                 return {
@@ -264,7 +265,7 @@ class BackendClient:
             logger.exception(f"Error executing function {name}: {e}")
             return {
                 "status": "error",
-                "error": str(e),
+                "error": str(e) or f"Unexpected error executing {name}",
             }
 
 

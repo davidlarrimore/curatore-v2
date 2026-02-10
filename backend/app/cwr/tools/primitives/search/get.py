@@ -50,12 +50,16 @@ class GetFunction(BaseFunction):
     meta = FunctionMeta(
         name="get",
         category=FunctionCategory.SEARCH,
-        description="Get a single content item by type and ID, returns ContentItem",
+        description=(
+            "Get a single content item by type and ID. Supported types: asset, solicitation, notice, "
+            "scraped_asset, salesforce_account, salesforce_contact, salesforce_opportunity. "
+            "NOTE: Forecasts are NOT supported here — use query_model for forecast details."
+        ),
         parameters=[
             ParameterDoc(
                 name="item_type",
                 type="str",
-                description="Content type to retrieve",
+                description="Content type to retrieve. Forecasts are NOT supported — use query_model(model='AgForecast') instead.",
                 required=True,
                 enum_values=[
                     "asset", "solicitation", "notice", "scraped_asset",

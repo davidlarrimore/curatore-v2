@@ -290,6 +290,7 @@ class SharePointSyncService:
         sync_config: Optional[Dict[str, Any]] = None,
         sync_frequency: str = "manual",
         created_by: Optional[UUID] = None,
+        site_name: Optional[str] = None,
     ) -> SharePointSyncConfig:
         """
         Create a new SharePoint sync configuration.
@@ -371,6 +372,7 @@ class SharePointSyncService:
             slug=slug,
             description=description,
             folder_url=folder_url,
+            site_name=site_name,
             sync_config=sync_config or {"recursive": True},
             sync_frequency=sync_frequency,
             status="active",
@@ -942,6 +944,7 @@ class SharePointSyncService:
     async def create_synced_document(
         self,
         session: AsyncSession,
+        organization_id: UUID,
         sync_config_id: UUID,
         asset_id: UUID,
         sharepoint_item_id: str,
@@ -963,6 +966,7 @@ class SharePointSyncService:
 
         Args:
             session: Database session
+            organization_id: Organization UUID for multi-tenant isolation
             sync_config_id: Sync config UUID
             asset_id: Asset UUID
             sharepoint_item_id: Microsoft Graph item ID
@@ -983,6 +987,7 @@ class SharePointSyncService:
             Created SharePointSyncedDocument
         """
         doc = SharePointSyncedDocument(
+            organization_id=organization_id,
             sync_config_id=sync_config_id,
             asset_id=asset_id,
             sharepoint_item_id=sharepoint_item_id,
@@ -1095,6 +1100,14 @@ class SharePointSyncService:
         # =================================================================
         # PHASE 1: INITIALIZATION
         # =================================================================
+        await run_service.update_run_progress(
+            session=session,
+            run_id=run_id,
+            current=0,
+            total=None,
+            unit="files",
+            phase="initializing",
+        )
         await run_log_service.log_event(
             session=session,
             run_id=run_id,
@@ -1112,6 +1125,21 @@ class SharePointSyncService:
 
         if config.status != "active" or not config.is_active:
             raise ValueError(f"Sync config {sync_config_id} is not active")
+
+        # Safety net: resolve site_name if not yet set (e.g., config created via API without browse)
+        if not config.site_name:
+            try:
+                from .sharepoint_service import get_site_metadata
+                site_meta = await get_site_metadata(
+                    folder_url=config.folder_url,
+                    organization_id=organization_id,
+                    session=session,
+                )
+                if site_meta:
+                    config.site_name = site_meta.get("display_name") or site_meta.get("name")
+                    await session.flush()
+            except Exception:
+                logger.warning(f"Could not resolve site_name for config {sync_config_id}")
 
         sync_settings = config.sync_config or {}
         recursive = sync_settings.get("recursive", True)
@@ -1252,6 +1280,14 @@ class SharePointSyncService:
         # =================================================================
         # PHASE 2: CONNECTING & STREAMING SYNC (FULL ENUMERATION)
         # =================================================================
+        await run_service.update_run_progress(
+            session=session,
+            run_id=run_id,
+            current=0,
+            total=None,
+            unit="files",
+            phase="connecting",
+        )
         await run_log_service.log_event(
             session=session,
             run_id=run_id,
@@ -1758,6 +1794,14 @@ class SharePointSyncService:
         from app.core.shared.run_log_service import run_log_service
 
         # Log delta sync start
+        await run_service.update_run_progress(
+            session=session,
+            run_id=run_id,
+            current=0,
+            total=None,
+            unit="files",
+            phase="delta_sync",
+        )
         await run_log_service.log_event(
             session=session,
             run_id=run_id,
@@ -2387,6 +2431,7 @@ class SharePointSyncService:
             drive_id = item.get("drive_id") or config.folder_drive_id
             await self.create_synced_document(
                 session=session,
+                organization_id=config.organization_id,
                 sync_config_id=config.id,
                 asset_id=orphan_asset.id,
                 sharepoint_item_id=item_id,
@@ -2429,14 +2474,18 @@ class SharePointSyncService:
         Returns:
             Asset if found, None otherwise
         """
-        # Query assets by source_metadata JSON field
-        # PostgreSQL JSON: column["key"].astext
+        # Query assets by source_metadata JSON field (namespaced format)
+        # Old flat-format assets were already migrated to namespaced by the migration
+        from sqlalchemy import or_
         result = await session.execute(
             select(Asset).where(
                 and_(
                     Asset.organization_id == organization_id,
                     Asset.source_type == "sharepoint",
-                    Asset.source_metadata["sharepoint_item_id"].astext == sharepoint_item_id,
+                    or_(
+                        Asset.source_metadata["sharepoint"]["item_id"].astext == sharepoint_item_id,
+                        Asset.source_metadata["sharepoint_item_id"].astext == sharepoint_item_id,
+                    ),
                 )
             ).limit(1)
         )
@@ -2574,6 +2623,7 @@ class SharePointSyncService:
             drive_id = item.get("drive_id") or config.folder_drive_id
             await self.create_synced_document(
                 session=session,
+                organization_id=config.organization_id,
                 sync_config_id=config.id,
                 asset_id=existing_asset.id,
                 sharepoint_item_id=item_id,
@@ -2612,46 +2662,51 @@ class SharePointSyncService:
             content_type=mime_type or "application/octet-stream",
         )
 
-        # Create asset with comprehensive source metadata
+        # Create asset with comprehensive namespaced source metadata
         actual_size = len(file_content)
         source_metadata = {
-            # Sync identification
-            "sync_config_id": str(config.id),
-            "sync_config_name": config.name,
-            "folder_url": config.folder_url,
-            # SharePoint identification
-            "sharepoint_item_id": item_id,
-            "sharepoint_drive_id": drive_id,
-            "sharepoint_path": folder_path,
-            "sharepoint_folder": folder_path.rsplit("/", 1)[0] if "/" in folder_path else "",
-            "sharepoint_web_url": web_url,
-            "sharepoint_parent_path": parent_path,
-            # File metadata
-            "file_extension": extension,
-            "description": description,
-            # Timestamps (ISO format strings for JSON serialization)
-            "sharepoint_created_at": created_at.isoformat() if created_at else None,
-            "sharepoint_modified_at": modified_at.isoformat() if modified_at else None,
-            "file_created_at": fs_created_at.isoformat() if fs_created_at else None,
-            "file_modified_at": fs_modified_at.isoformat() if fs_modified_at else None,
-            # Creator info
-            "created_by": created_by,
-            "created_by_email": created_by_email,
-            "created_by_id": created_by_id,
-            # Modifier info
-            "modified_by": modified_by,
-            "modified_by_email": modified_by_email,
-            "modified_by_id": modified_by_id,
-            # Content hashes from SharePoint
-            "sharepoint_quick_xor_hash": quick_xor_hash,
-            "sharepoint_sha1_hash": sha1_hash,
-            "sharepoint_sha256_hash": sha256_hash,
-            # Change detection
-            "sharepoint_etag": etag,
-            "sharepoint_ctag": ctag,
+            "source": {
+                "storage_folder": storage_key.rsplit("/", 1)[0] if "/" in storage_key else "",
+            },
+            "sharepoint": {
+                "item_id": item_id,
+                "drive_id": drive_id,
+                "path": folder_path,
+                "folder": folder_path.rsplit("/", 1)[0] if "/" in folder_path else "",
+                "web_url": web_url,
+                "parent_path": parent_path,
+                "site_name": config.site_name,
+                "created_by": created_by,
+                "created_by_email": created_by_email,
+                "created_by_id": created_by_id,
+                "modified_by": modified_by,
+                "modified_by_email": modified_by_email,
+                "modified_by_id": modified_by_id,
+                "created_at": created_at.isoformat() if created_at else None,
+                "modified_at": modified_at.isoformat() if modified_at else None,
+                "file_created_at": fs_created_at.isoformat() if fs_created_at else None,
+                "file_modified_at": fs_modified_at.isoformat() if fs_modified_at else None,
+                "quick_xor_hash": quick_xor_hash,
+                "sha1_hash": sha1_hash,
+                "sha256_hash": sha256_hash,
+                "etag": etag,
+                "ctag": ctag,
+            },
+            "sync": {
+                "config_id": str(config.id),
+                "config_name": config.name,
+                "folder_url": config.folder_url,
+            },
+            "file": {
+                "extension": extension,
+                "description": description,
+            },
         }
-        # Remove None values for cleaner storage
-        source_metadata = {k: v for k, v in source_metadata.items() if v is not None}
+        # Strip None values within each namespace
+        source_metadata = {
+            ns: {k: v for k, v in fields.items() if v is not None}
+            for ns, fields in source_metadata.items()
+        }
 
         try:
             asset = await asset_service.create_asset(
@@ -2684,6 +2739,7 @@ class SharePointSyncService:
                 if existing_asset:
                     await self.create_synced_document(
                         session=session,
+                        organization_id=config.organization_id,
                         sync_config_id=config.id,
                         asset_id=existing_asset.id,
                         sharepoint_item_id=item_id,
@@ -2725,6 +2781,7 @@ class SharePointSyncService:
 
         await self.create_synced_document(
             session=session,
+            organization_id=config.organization_id,
             sync_config_id=config.id,
             asset_id=asset.id,
             sharepoint_item_id=item_id,
@@ -2856,23 +2913,28 @@ class SharePointSyncService:
         asset.status = "pending"  # Re-trigger extraction
         asset.updated_at = datetime.utcnow()
 
-        # Update source_metadata with latest info
+        # Update source_metadata with latest info (namespaced format)
         source_meta = asset.source_metadata or {}
-        updates = {
-            "sharepoint_modified_at": modified_at.isoformat() if modified_at else None,
+        sp_updates = {
+            "site_name": config.site_name,
+            "modified_at": modified_at.isoformat() if modified_at else None,
             "file_modified_at": fs_modified_at.isoformat() if fs_modified_at else None,
             "modified_by": modified_by,
             "modified_by_email": modified_by_email,
             "modified_by_id": modified_by_id,
-            "sharepoint_etag": etag,
-            "sharepoint_ctag": ctag,
-            "description": description,
-            "sharepoint_quick_xor_hash": quick_xor_hash,
-            "sharepoint_sha1_hash": sha1_hash,
-            "sharepoint_sha256_hash": sha256_hash,
+            "etag": etag,
+            "ctag": ctag,
+            "quick_xor_hash": quick_xor_hash,
+            "sha1_hash": sha1_hash,
+            "sha256_hash": sha256_hash,
         }
-        # Only merge non-None values — preserves existing keys
-        source_meta.update({k: v for k, v in updates.items() if v is not None})
+        sp = source_meta.get("sharepoint", {})
+        sp.update({k: v for k, v in sp_updates.items() if v is not None})
+        source_meta["sharepoint"] = sp
+        if description:
+            file_ns = source_meta.get("file", {})
+            file_ns["description"] = description
+            source_meta["file"] = file_ns
         asset.source_metadata = source_meta
 
         # Build updated sync_metadata

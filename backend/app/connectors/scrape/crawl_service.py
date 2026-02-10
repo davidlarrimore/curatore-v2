@@ -961,6 +961,7 @@ class CrawlService:
         # Create scraped asset record
         scraped_asset = await scrape_service.create_scraped_asset(
             session=session,
+            organization_id=collection.organization_id,
             asset_id=asset_id,
             collection_id=collection_id,
             url=normalized_url,
@@ -1427,6 +1428,7 @@ class CrawlService:
 
                 await scrape_service.create_scraped_asset(
                     session=session,
+                    organization_id=collection.organization_id,
                     asset_id=asset.id,
                     collection_id=collection.id,
                     url=doc_url,

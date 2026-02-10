@@ -112,8 +112,16 @@ async def _sharepoint_sync_async(
     logger = logging.getLogger("curatore.tasks.sharepoint_sync")
 
     async with database_service.get_session() as session:
-        # Start the run and send initial heartbeat
+        # Start the run and send initial heartbeat with progress
         await run_service.start_run(session, run_id)
+        await run_service.update_run_progress(
+            session=session,
+            run_id=run_id,
+            current=0,
+            total=None,
+            unit="files",
+            phase="starting",
+        )
         await heartbeat_service.beat(session, run_id)
 
         # Get sync config for automation settings
@@ -860,6 +868,7 @@ async def _sharepoint_import_async(
                     if sync_config_id:
                         await sharepoint_sync_service.create_synced_document(
                             session=session,
+                            organization_id=organization_id,
                             sync_config_id=sync_config_id,
                             asset_id=asset.id,
                             sharepoint_item_id=item_id,

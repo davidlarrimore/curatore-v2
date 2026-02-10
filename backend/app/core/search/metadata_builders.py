@@ -62,6 +62,10 @@ class MetadataBuilder:
         """Build both content and metadata. Returns (content, metadata_dict)."""
         return self.build_content(**kwargs), self.build_metadata(**kwargs)
 
+    def get_schema(self) -> Optional[Dict[str, List[str]]]:
+        """Return {namespace: [field_names]} this builder writes, or None for dynamic builders."""
+        return None
+
 
 class MetadataBuilderRegistry:
     """Registry of metadata builders for all indexable source types."""
@@ -151,6 +155,9 @@ class SamNoticeBuilder(MetadataBuilder):
             display_name="SAM Notice",
         )
 
+    def get_schema(self) -> Optional[Dict[str, List[str]]]:
+        return {"sam": ["notice_id", "solicitation_id", "notice_type", "agency", "posted_date", "response_deadline"]}
+
     def build_content(
         self,
         *,
@@ -192,6 +199,9 @@ class SamSolicitationBuilder(MetadataBuilder):
             namespace="sam",
             display_name="SAM Solicitation",
         )
+
+    def get_schema(self) -> Optional[Dict[str, List[str]]]:
+        return {"sam": ["solicitation_number", "agency", "office", "naics_code", "set_aside", "posted_date", "response_deadline"]}
 
     def build_content(
         self,
@@ -245,6 +255,9 @@ class ForecastBuilder(MetadataBuilder):
             namespace="forecast",
             display_name="Forecast",
         )
+
+    def get_schema(self) -> Optional[Dict[str, List[str]]]:
+        return {"forecast": ["source_type", "source_id", "agency_name", "naics_codes", "set_aside_type", "fiscal_year", "estimated_award_quarter"]}
 
     def build_content(
         self,
@@ -311,6 +324,9 @@ class SalesforceAccountBuilder(MetadataBuilder):
             display_name="Salesforce Account",
         )
 
+    def get_schema(self) -> Optional[Dict[str, List[str]]]:
+        return {"salesforce": ["salesforce_id", "account_type", "industry", "website"]}
+
     def build_content(
         self,
         *,
@@ -357,6 +373,9 @@ class SalesforceContactBuilder(MetadataBuilder):
             namespace="salesforce",
             display_name="Salesforce Contact",
         )
+
+    def get_schema(self) -> Optional[Dict[str, List[str]]]:
+        return {"salesforce": ["salesforce_id", "first_name", "last_name", "email", "title", "account_name"]}
 
     def build_content(
         self,
@@ -413,6 +432,9 @@ class SalesforceOpportunityBuilder(MetadataBuilder):
             namespace="salesforce",
             display_name="Salesforce Opportunity",
         )
+
+    def get_schema(self) -> Optional[Dict[str, List[str]]]:
+        return {"salesforce": ["salesforce_id", "stage_name", "amount", "opportunity_type", "account_name", "close_date"]}
 
     def build_content(
         self,

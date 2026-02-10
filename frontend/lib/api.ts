@@ -3023,6 +3023,48 @@ export interface FacetUpdateRequest {
   status?: string
 }
 
+// Facet Reference Data types
+export interface FacetReferenceAlias {
+  id: string
+  alias_value: string
+  source_hint?: string
+  match_method?: string
+  confidence?: number
+  status: string
+}
+
+export interface FacetReferenceValue {
+  id: string
+  facet_name: string
+  canonical_value: string
+  display_label?: string
+  description?: string
+  sort_order: number
+  status: string
+  aliases: FacetReferenceAlias[]
+}
+
+export interface FacetAutocompleteResult {
+  id: string
+  canonical_value: string
+  display_label?: string
+  facet_name: string
+  matched_on: string
+}
+
+export interface FacetDiscoverResult {
+  facet_name: string
+  unmapped_count: number
+  unmapped_values: Array<{ value: string; count: number }>
+  suggestions: any[]
+  error?: string
+}
+
+export interface FacetPendingSuggestions {
+  facets: Record<string, number>
+  total: number
+}
+
 export const metadataApi = {
   /**
    * Get the full metadata catalog (namespaces, fields, facets)
@@ -3162,6 +3204,107 @@ export const metadataApi = {
     const url = apiUrl('/data/metadata/cache/invalidate')
     const res = await fetch(url, {
       method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  // -- Facet Reference Data --
+
+  async autocomplete(token: string | undefined, facetName: string, query: string, limit: number = 10): Promise<FacetAutocompleteResult[]> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}/autocomplete?q=${encodeURIComponent(query)}&limit=${limit}`)
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async getReferenceValues(token: string | undefined, facetName: string, includeSuggested: boolean = false): Promise<FacetReferenceValue[]> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values?include_suggested=${includeSuggested}`)
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async createReferenceValue(token: string | undefined, facetName: string, data: { canonical_value: string; display_label?: string; description?: string; aliases?: string[] }): Promise<any> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async updateReferenceValue(token: string | undefined, facetName: string, valueId: string, data: { canonical_value?: string; display_label?: string; description?: string; sort_order?: number; status?: string }): Promise<any> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}`)
+    const res = await fetch(url, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteReferenceValue(token: string | undefined, facetName: string, valueId: string): Promise<any> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}`)
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async addReferenceAlias(token: string | undefined, facetName: string, valueId: string, data: { alias_value: string; source_hint?: string }): Promise<any> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/aliases`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async removeReferenceAlias(token: string | undefined, facetName: string, valueId: string, aliasId: string): Promise<any> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/aliases/${aliasId}`)
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async discoverReferenceValues(token: string | undefined, facetName: string): Promise<FacetDiscoverResult> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}/discover`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async approveReferenceValue(token: string | undefined, facetName: string, valueId: string): Promise<any> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/approve`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async rejectReferenceValue(token: string | undefined, facetName: string, valueId: string): Promise<any> {
+    const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/reject`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async getPendingSuggestionCount(token: string | undefined): Promise<FacetPendingSuggestions> {
+    const url = apiUrl('/data/metadata/facets/pending-suggestions')
+    const res = await fetch(url, {
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
@@ -3982,6 +4125,7 @@ export interface SharePointSyncConfig {
   folder_name: string | null
   folder_drive_id: string | null
   folder_item_id: string | null
+  site_name: string | null
   sync_config: Record<string, any>
   status: string
   is_active: boolean
@@ -4089,6 +4233,7 @@ export const sharepointSyncApi = {
       folder_url: string
       sync_config?: Record<string, any>
       sync_frequency?: string
+      site_name?: string
     }
   ): Promise<SharePointSyncConfig> {
     const res = await fetch(apiUrl('/data/sharepoint-sync/configs'), {
@@ -4281,6 +4426,7 @@ export const sharepointSyncApi = {
     drive_id: string
     items: SharePointBrowseItem[]
     total_items: number
+    site_name: string | null
   }> {
     const res = await fetch(apiUrl('/data/sharepoint-sync/browse'), {
       method: 'POST',
@@ -4310,6 +4456,7 @@ export const sharepointSyncApi = {
       sync_config_description?: string
       create_sync_config?: boolean
       sync_frequency?: string
+      site_name?: string
     }
   ): Promise<{
     run_id: string

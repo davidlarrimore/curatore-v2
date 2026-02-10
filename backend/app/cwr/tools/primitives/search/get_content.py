@@ -40,12 +40,16 @@ class GetContentFunction(BaseFunction):
     meta = FunctionMeta(
         name="get_content",
         category=FunctionCategory.SEARCH,
-        description="Get extracted markdown content for assets",
+        description=(
+            "Get extracted markdown content for document assets (files uploaded, synced from SharePoint, "
+            "or scraped from the web). Only accepts asset IDs from search_assets results. "
+            "Do NOT pass solicitation IDs, forecast IDs, or Salesforce record IDs — those are not assets."
+        ),
         parameters=[
             ParameterDoc(
                 name="asset_ids",
                 type="list[str]",
-                description="Asset IDs to get content for",
+                description="Asset IDs (from search_assets results) to get content for. Must be document asset UUIDs — solicitation, forecast, and Salesforce IDs will not work.",
                 required=True,
             ),
             ParameterDoc(

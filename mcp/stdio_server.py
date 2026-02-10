@@ -83,7 +83,7 @@ class MCPStdioServer:
             elif method == "tools/call":
                 result = await self.handle_tools_call(params)
             elif method == "resources/list":
-                result = {"resources": []}
+                result = await self.handle_resources_list()
             elif method == "prompts/list":
                 result = {"prompts": []}
             else:
@@ -143,6 +143,50 @@ class MCPStdioServer:
             # Return empty list on error
             return {"tools": []}
 
+    async def handle_resources_list(self) -> Dict[str, Any]:
+        """Handle resources/list request by calling discover_data_sources."""
+        try:
+            response = await self.http_client.post(
+                "/api/v1/cwr/functions/discover_data_sources/execute",
+                json={"params": {}},
+            )
+            response.raise_for_status()
+            result = response.json()
+
+            # Convert to MCP resources format
+            data = result.get("data") or result.get("result", {}).get("data", {})
+            resources = []
+
+            for source_type in data.get("source_types", []):
+                st_key = source_type.get("type", "unknown")
+                display_name = source_type.get("display_name", st_key)
+                description = source_type.get("description", "")
+                capabilities = source_type.get("capabilities", [])
+                instances = source_type.get("instances", [])
+
+                # Build description
+                desc_parts = [description.strip()] if description else []
+                if capabilities:
+                    desc_parts.append("Capabilities: " + "; ".join(capabilities[:3]))
+                if instances:
+                    names = [i.get("name", "") for i in instances[:5] if i.get("name")]
+                    if names:
+                        desc_parts.append(f"Configured: {', '.join(names)}")
+
+                resources.append({
+                    "uri": f"curatore://data-sources/{st_key}",
+                    "name": display_name,
+                    "description": " | ".join(desc_parts),
+                    "mimeType": "text/plain",
+                })
+
+            logger.info(f"Loaded {len(resources)} resources")
+            return {"resources": resources}
+
+        except Exception as e:
+            logger.warning(f"Failed to fetch resources: {e}")
+            return {"resources": []}
+
     async def handle_tools_call(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """Handle tools/call request."""
         tool_name = params.get("name")
@@ -155,21 +199,18 @@ class MCPStdioServer:
 
         try:
             # Execute function via backend
+            # Note: Backend expects {"params": {...}}, not {"arguments": {...}}
             response = await self.http_client.post(
                 f"/api/v1/cwr/functions/{tool_name}/execute/",
-                json={"arguments": arguments},
+                json={"params": arguments},
             )
             response.raise_for_status()
             result = response.json()
 
-            # Format as MCP tool result
+            # Format as MCP tool result with readable text
+            text = _format_function_result(result)
             return {
-                "content": [
-                    {
-                        "type": "text",
-                        "text": json.dumps(result.get("result", result), indent=2),
-                    }
-                ],
+                "content": [{"type": "text", "text": text}],
                 "isError": False,
             }
 
@@ -202,6 +243,127 @@ class MCPStdioServer:
             "id": msg_id,
             "error": {"code": code, "message": message},
         }
+
+
+def _format_function_result(result: Dict[str, Any]) -> str:
+    """
+    Format a backend function result as readable text for LLM consumption.
+
+    Shared formatting logic for the STDIO server. Produces clean markdown
+    instead of raw JSON dumps.
+    """
+    status = result.get("status", "unknown")
+    if status in ("error", "failed") or result.get("error"):
+        error_msg = result.get("error") or result.get("message") or "Unknown error"
+        return f"Error: {error_msg}"
+
+    data = result.get("data")
+    message = result.get("message", "")
+    metadata = result.get("metadata", {})
+    items_processed = result.get("items_processed", 0)
+
+    parts: List[str] = []
+
+    if message:
+        parts.append(message)
+
+    if data is None:
+        if not message:
+            parts.append("Operation completed successfully.")
+    elif isinstance(data, str):
+        parts.append(data)
+    elif isinstance(data, list):
+        if len(data) == 0:
+            if not message:
+                parts.append("No results found.")
+        elif data and isinstance(data[0], dict) and "id" in data[0] and ("title" in data[0] or "display_type" in data[0] or "name" in data[0]):
+            # Dict list with identifiable items — format as readable markdown
+            for i, item in enumerate(data, 1):
+                title = item.get("title") or item.get("name") or "Untitled"
+                display_type = item.get("display_type") or item.get("type") or item.get("source_type") or "Item"
+                item_id = item.get("id", "")
+                fields = item.get("fields") or {}
+                meta = item.get("metadata") or {}
+
+                parts.append(f"### {i}. {title}")
+                parts.append(f"Type: {display_type} | ID: {item_id}")
+
+                detail_parts = []
+                score = meta.get("score") or item.get("score")
+                if score is not None:
+                    try:
+                        detail_parts.append(f"Score: {float(score):.2f}")
+                    except (ValueError, TypeError):
+                        pass
+                for key in ("source_type", "site_name", "content_type", "original_filename",
+                            "folder_path", "source_url", "url", "created_at",
+                            "detail_url", "fiscal_year", "agency_name", "naics_code",
+                            "stage_name", "amount", "probability", "close_date",
+                            "opportunity_type", "role", "lead_source", "fiscal_quarter",
+                            "account_type", "industry", "department", "description",
+                            "email", "phone", "website", "custom_dates",
+                            "notice_type", "set_aside_code", "response_deadline",
+                            "posted_date", "bureau_name"):
+                    val = fields.get(key) or item.get(key)
+                    if val and key not in ("type", "id", "title", "score", "display_type", "name"):
+                        val_str = str(val)
+                        if len(val_str) > 200:
+                            val_str = val_str[:200] + "..."
+                        detail_parts.append(f"{key.replace('_', ' ').title()}: {val_str}")
+                if detail_parts:
+                    parts.append(" | ".join(detail_parts))
+
+                snippet = meta.get("snippet") or meta.get("highlights") or item.get("highlights")
+                if snippet:
+                    if isinstance(snippet, dict):
+                        content_highlights = snippet.get("content", [])
+                        snippet = content_highlights[0] if content_highlights else str(snippet)
+                    if isinstance(snippet, list):
+                        snippet = " ... ".join(str(s) for s in snippet[:3])
+                    parts.append(f"> {str(snippet)[:500].replace('<mark>', '**').replace('</mark>', '**')}")
+
+                text_content = item.get("text") or item.get("content")
+                if text_content and isinstance(text_content, str):
+                    if len(text_content) > 4000:
+                        parts.append(text_content[:4000] + "\n... (truncated)")
+                    else:
+                        parts.append(text_content)
+
+                parts.append("")
+        else:
+            parts.append(json.dumps(data, indent=2, default=str))
+    elif isinstance(data, dict):
+        parts.append(json.dumps(data, indent=2, default=str))
+    else:
+        parts.append(str(data))
+
+    # Clean metadata (omit nulls)
+    clean_meta: Dict[str, Any] = {}
+    for k, v in metadata.items():
+        if k == "result_type" or v is None:
+            continue
+        if isinstance(v, dict):
+            v = {nk: nv for nk, nv in v.items() if nv is not None}
+            if not v:
+                continue
+        clean_meta[k] = v
+    if items_processed:
+        clean_meta["items_processed"] = items_processed
+
+    if clean_meta:
+        meta_lines = ["---"]
+        for k, v in clean_meta.items():
+            label = k.replace("_", " ").title()
+            if isinstance(v, dict):
+                nested = ", ".join(f"{nk}={nv}" for nk, nv in v.items())
+                meta_lines.append(f"{label}: {nested}")
+            elif isinstance(v, list):
+                meta_lines.append(f"{label}: {', '.join(str(x) for x in v)}")
+            else:
+                meta_lines.append(f"{label}: {v}")
+        parts.append("\n".join(meta_lines))
+
+    return "\n\n".join(parts)
 
 
 async def read_message() -> Optional[Dict[str, Any]]:

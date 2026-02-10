@@ -123,6 +123,64 @@ class LLMService:
     # Business logic methods (unchanged)
     # ========================================================================
 
+    async def generate(
+        self,
+        prompt: str,
+        system_prompt: str = "You are a helpful assistant.",
+        temperature: float = 0.3,
+        max_tokens: int = 4000,
+        organization_id: Optional[UUID] = None,
+        session: Optional[AsyncSession] = None,
+    ) -> Dict[str, Any]:
+        """
+        General-purpose LLM generation for arbitrary prompts.
+
+        Args:
+            prompt: The user prompt to send
+            system_prompt: System instructions for the model
+            temperature: Sampling temperature (0.0-1.0)
+            max_tokens: Maximum tokens in response
+            organization_id: Organization ID for database connection lookup
+            session: Database session for connection lookup
+
+        Returns:
+            Dict with "content" key containing the response text,
+            or "content" empty string and "error" key on failure.
+        """
+        task_config = await llm_routing_service.get_config_for_task(
+            task_type=LLMTaskType.STANDARD,
+            organization_id=organization_id,
+            session=session,
+        )
+
+        client = self._client
+        model = task_config.model
+
+        if organization_id and session:
+            config = await self._get_llm_config(organization_id, session)
+            client = await self._create_client_from_config(config)
+
+        if not client:
+            return {"content": "", "error": "LLM client not available"}
+
+        try:
+            resp = client.chat.completions.create(
+                model=model,
+                temperature=temperature,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": prompt},
+                ],
+                max_tokens=max_tokens,
+            )
+
+            content = resp.choices[0].message.content.strip()
+            return {"content": content}
+
+        except Exception as e:
+            logger.error(f"LLM generate failed: {e}")
+            return {"content": "", "error": str(e)}
+
     async def evaluate_document(
         self,
         markdown_text: str,

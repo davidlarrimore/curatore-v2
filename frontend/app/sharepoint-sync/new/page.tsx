@@ -69,6 +69,7 @@ function NewSharePointSyncContent() {
   const [includePatterns, setIncludePatterns] = useState('')
   const [excludePatterns, setExcludePatterns] = useState('~$*,*.tmp')
   const [minModifiedDate, setMinModifiedDate] = useState('')
+  const [siteName, setSiteName] = useState<string | null>(null)
 
   // Load connections
   const loadConnections = useCallback(async () => {
@@ -118,6 +119,7 @@ function NewSharePointSyncContent() {
         drive_id: response.drive_id,
       })
       setBrowseItems(response.items)
+      setSiteName(response.site_name || null)
 
       // Auto-suggest sync name from folder name
       if (!syncName && response.folder_name) {
@@ -220,6 +222,7 @@ function NewSharePointSyncContent() {
           sync_config_description: syncDescription,
           create_sync_config: true,
           sync_frequency: syncFrequency,
+          site_name: siteName || undefined,
         })
         syncConfigId = result.sync_config_id
       } else {
@@ -231,6 +234,7 @@ function NewSharePointSyncContent() {
           folder_url: folderUrl,
           sync_config: syncConfig,
           sync_frequency: syncFrequency,
+          site_name: siteName || undefined,
         })
         syncConfigId = result.id
       }
@@ -664,6 +668,16 @@ function NewSharePointSyncContent() {
               </p>
 
               <div className="space-y-6">
+                {siteName && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                      SharePoint Site
+                    </label>
+                    <div className="px-3 py-2 border border-gray-200 dark:border-gray-700 rounded-lg bg-gray-50 dark:bg-gray-800 text-gray-600 dark:text-gray-400 text-sm">
+                      {siteName}
+                    </div>
+                  </div>
+                )}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
                     Sync Name *
@@ -849,6 +863,12 @@ function NewSharePointSyncContent() {
 
               <div className="space-y-4">
                 <div className="p-4 bg-gray-50 dark:bg-gray-900/50 rounded-lg space-y-3">
+                  {siteName && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-sm text-gray-500 dark:text-gray-400">SharePoint Site</span>
+                      <span className="text-sm font-medium text-gray-900 dark:text-white">{siteName}</span>
+                    </div>
+                  )}
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-gray-500 dark:text-gray-400">Name</span>
                     <span className="text-sm font-medium text-gray-900 dark:text-white">{syncName}</span>

@@ -1031,6 +1031,104 @@ class FacetUpdateRequest(BaseModel):
 
 
 # =========================================================================
+# FACET REFERENCE DATA MODELS
+# =========================================================================
+
+class FacetReferenceAliasResponse(BaseModel):
+    """An alias mapping for a facet reference value."""
+    id: str = Field(..., description="Alias UUID")
+    alias_value: str = Field(..., description="The alias string")
+    source_hint: Optional[str] = Field(None, description="Which data source uses this form")
+    match_method: Optional[str] = Field(None, description="How created: baseline, manual, auto_matched, ai_suggested")
+    confidence: Optional[float] = Field(None, description="Match confidence for auto/AI entries")
+    status: str = Field("active", description="active, suggested, or inactive")
+
+
+class FacetReferenceValueResponse(BaseModel):
+    """Canonical reference value for a facet dimension."""
+    id: str = Field(..., description="Reference value UUID")
+    facet_name: str = Field(..., description="Facet name (e.g., agency)")
+    canonical_value: str = Field(..., description="Authoritative form of the value")
+    display_label: Optional[str] = Field(None, description="Short display form (e.g., DHS)")
+    description: Optional[str] = Field(None, description="Description")
+    sort_order: int = Field(0, description="Sort order for display")
+    status: str = Field("active", description="active, suggested, or inactive")
+    aliases: List[FacetReferenceAliasResponse] = Field(default_factory=list, description="Known aliases")
+
+
+class FacetReferenceValueCreateRequest(BaseModel):
+    """Request to create a canonical reference value."""
+    canonical_value: str = Field(..., description="The canonical form", min_length=1, max_length=500)
+    display_label: Optional[str] = Field(None, description="Short display label", max_length=200)
+    description: Optional[str] = Field(None, description="Description")
+    aliases: Optional[List[str]] = Field(None, description="Initial alias values")
+
+
+class FacetReferenceValueUpdateRequest(BaseModel):
+    """Request to update a canonical reference value."""
+    canonical_value: Optional[str] = Field(None, max_length=500)
+    display_label: Optional[str] = Field(None, max_length=200)
+    description: Optional[str] = None
+    sort_order: Optional[int] = None
+    status: Optional[str] = Field(None, description="active, suggested, or inactive")
+
+
+class FacetReferenceAliasCreateRequest(BaseModel):
+    """Request to add an alias to a canonical value."""
+    alias_value: str = Field(..., description="The alias string", min_length=1, max_length=500)
+    source_hint: Optional[str] = Field(None, description="Which data source uses this form", max_length=100)
+
+
+class FacetAutocompleteResponse(BaseModel):
+    """Autocomplete suggestion for a facet value."""
+    id: str = Field(..., description="Reference value UUID")
+    canonical_value: str = Field(..., description="Canonical form")
+    display_label: Optional[str] = Field(None, description="Short display label")
+    facet_name: str = Field(..., description="Facet name")
+    matched_on: str = Field(..., description="What matched: canonical_value, display_label, or alias:value")
+
+
+class FacetDiscoverResponse(BaseModel):
+    """Response from AI-powered facet value discovery."""
+    facet_name: str = Field(..., description="Facet that was analyzed")
+    unmapped_count: int = Field(0, description="Number of unmapped values found")
+    unmapped_values: List[Dict[str, Any]] = Field(default_factory=list, description="Raw unmapped {value, count} list")
+    suggestions: List[Dict[str, Any]] = Field(default_factory=list, description="AI-suggested groupings")
+    error: Optional[str] = Field(None, description="Error message if LLM suggestion failed")
+
+
+class FacetPendingSuggestionsResponse(BaseModel):
+    """Counts of pending suggestions across facets."""
+    facets: Dict[str, int] = Field(default_factory=dict, description="Pending count per facet")
+    total: int = Field(0, description="Total pending suggestions")
+
+
+# =========================================================================
+# DATA SOURCE TYPE MODELS
+# =========================================================================
+
+class DataSourceTypeResponse(BaseModel):
+    """Response for a data source type definition."""
+    source_type: str = Field(..., description="Source type key (sam_gov, sharepoint, etc.)")
+    display_name: str = Field(..., description="Human-readable name")
+    description: Optional[str] = Field(None, description="What this data source is")
+    data_contains: Optional[List[str]] = Field(None, description="Types of data available")
+    capabilities: Optional[List[str]] = Field(None, description="What you can do with this data")
+    example_questions: Optional[List[str]] = Field(None, description="Example questions this source can answer")
+    search_tools: Optional[List[Dict[str, Any]]] = Field(None, description="Tools to search this data")
+    note: Optional[str] = Field(None, description="Additional notes")
+    is_active: bool = Field(True, description="Whether source type is enabled for this org")
+
+
+class DataSourceTypeUpdateRequest(BaseModel):
+    """Request to update an org-level data source type override."""
+    display_name: Optional[str] = Field(None, description="Override display name")
+    description: Optional[str] = Field(None, description="Override description")
+    capabilities: Optional[List[str]] = Field(None, description="Override capabilities list")
+    is_active: Optional[bool] = Field(None, description="Enable/disable this source type")
+
+
+# =========================================================================
 # SCRAPE MODELS
 # =========================================================================
 
@@ -1304,6 +1402,7 @@ class SharePointSyncConfigResponse(BaseModel):
     folder_name: Optional[str] = Field(None, description="Cached folder name")
     folder_drive_id: Optional[str] = Field(None, description="Microsoft Graph drive ID")
     folder_item_id: Optional[str] = Field(None, description="Microsoft Graph item ID")
+    site_name: Optional[str] = Field(None, description="SharePoint site display name")
     sync_config: Dict[str, Any] = Field(default_factory=dict, description="Sync configuration")
     status: str = Field(..., description="Status: active, paused, archived")
     is_active: bool = Field(..., description="Whether sync is enabled")
@@ -1366,6 +1465,7 @@ class SharePointSyncConfigCreateRequest(BaseModel):
         default="manual",
         description="Sync frequency: manual, hourly, daily"
     )
+    site_name: Optional[str] = Field(None, max_length=500, description="SharePoint site display name")
 
     class Config:
         json_schema_extra = {
@@ -1564,6 +1664,7 @@ class SharePointBrowseFolderResponse(BaseModel):
     drive_id: str = Field(..., description="Drive ID")
     items: List[Dict[str, Any]] = Field(..., description="Files and folders in the folder")
     total_items: int = Field(..., description="Total number of items")
+    site_name: Optional[str] = Field(None, description="SharePoint site display name")
 
     class Config:
         json_schema_extra = {
@@ -1576,7 +1677,8 @@ class SharePointBrowseFolderResponse(BaseModel):
                     {"name": "Policies", "type": "folder", "id": "folder1"},
                     {"name": "report.pdf", "type": "file", "id": "file1", "size": 1024}
                 ],
-                "total_items": 2
+                "total_items": 2,
+                "site_name": "IT Department"
             }
         }
 
@@ -1615,6 +1717,7 @@ class SharePointImportRequest(BaseModel):
         default="manual",
         description="Sync frequency: manual, hourly, daily"
     )
+    site_name: Optional[str] = Field(None, max_length=500, description="SharePoint site display name")
 
     class Config:
         json_schema_extra = {
@@ -1807,6 +1910,15 @@ __all__ = [
     "FacetMappingCreateRequest",
     "FacetCreateRequest",
     "FacetUpdateRequest",
+    # Facet Reference Data
+    "FacetReferenceAliasResponse",
+    "FacetReferenceValueResponse",
+    "FacetReferenceValueCreateRequest",
+    "FacetReferenceValueUpdateRequest",
+    "FacetReferenceAliasCreateRequest",
+    "FacetAutocompleteResponse",
+    "FacetDiscoverResponse",
+    "FacetPendingSuggestionsResponse",
     # Scrape
     "ScrapeCollectionResponse",
     "ScrapeCollectionCreateRequest",

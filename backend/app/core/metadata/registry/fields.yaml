@@ -132,6 +132,14 @@ fields:
       applicable_content_types: [asset]
       description: "SharePoint modification timestamp"
 
+    site_name:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [asset]
+      description: "SharePoint site display name"
+      examples: ["IT Department", "Engineering", "Corporate Communications"]
+
   # =========================================================================
   # SAM namespace
   # =========================================================================

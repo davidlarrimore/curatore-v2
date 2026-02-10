@@ -34,6 +34,7 @@ class FunctionCategory(str, Enum):
     COMPOUND = "compound"
     UTILITY = "utility"
     FLOW = "flow"
+    DATA = "data"  # External data source operations (SharePoint, Salesforce, etc.)
 
 
 class FunctionStatus(str, Enum):
@@ -528,6 +529,11 @@ class BaseFunction(ABC):
         for param_doc in self.meta.parameters:
             if param_doc.name in params:
                 value = params[param_doc.name]
+
+                # Optional parameters with None values are treated as absent
+                if value is None and not param_doc.required:
+                    continue
+
                 validated[param_doc.name] = value
 
                 # Skip type/enum validation for template strings

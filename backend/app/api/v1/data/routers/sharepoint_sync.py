@@ -87,6 +87,7 @@ def _config_to_response(
         folder_name=config.folder_name,
         folder_drive_id=config.folder_drive_id,
         folder_item_id=config.folder_item_id,
+        site_name=config.site_name,
         sync_config=config.sync_config or {},
         status=config.status,
         is_active=config.is_active,
@@ -256,6 +257,7 @@ async def create_sync_config(
                 sync_config=request.sync_config,
                 sync_frequency=request.sync_frequency,
                 created_by=current_user.id,
+                site_name=request.site_name,
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
@@ -903,7 +905,7 @@ async def browse_sharepoint_folder(
     current_user: User = Depends(get_current_user),
 ):
     """Browse a SharePoint folder for the import wizard."""
-    from app.connectors.sharepoint.sharepoint_service import sharepoint_inventory
+    from app.connectors.sharepoint.sharepoint_service import sharepoint_inventory, get_site_metadata
 
     async with database_service.get_session() as session:
         try:
@@ -926,6 +928,19 @@ async def browse_sharepoint_folder(
         folder_info = inventory.get("folder", {})
         items = inventory.get("items", [])
 
+        # Resolve site display name (non-fatal)
+        site_name = None
+        try:
+            site_meta = await get_site_metadata(
+                folder_url=request.folder_url,
+                organization_id=current_user.organization_id,
+                session=session,
+            )
+            if site_meta:
+                site_name = site_meta.get("display_name") or site_meta.get("name")
+        except Exception as e:
+            logger.warning(f"Could not resolve site name during browse: {e}")
+
         return SharePointBrowseFolderResponse(
             folder_name=folder_info.get("name", ""),
             folder_id=folder_info.get("id", ""),
@@ -933,6 +948,7 @@ async def browse_sharepoint_folder(
             drive_id=folder_info.get("drive_id", ""),
             items=items,
             total_items=len(items),
+            site_name=site_name,
         )
 
 
@@ -1014,6 +1030,7 @@ async def import_sharepoint_files(
                     sync_config=default_sync_config,
                     sync_frequency=request.sync_frequency,
                     created_by=current_user.id,
+                    site_name=request.site_name,
                 )
                 sync_config_id = str(config.id)
             except ValueError as e:

@@ -674,6 +674,7 @@ async def add_source(
 
         source = await scrape_service.add_source(
             session=session,
+            organization_id=current_user.organization_id,
             collection_id=UUID(collection_id),
             url=request.url,
             source_type=request.source_type,

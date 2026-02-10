@@ -30,7 +30,7 @@ async def handle_initialize(params: Dict[str, Any]) -> MCPInitializeResponse:
 
     return MCPInitializeResponse(
         protocolVersion=settings.mcp_protocol_version,
-        capabilities={"tools": {}},
+        capabilities={"tools": {}, "resources": {}},
         serverInfo={
             "name": settings.mcp_server_name,
             "version": settings.mcp_server_version,

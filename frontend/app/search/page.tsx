@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { searchApi, SearchHit, SearchResponse, SearchFacets } from '@/lib/api'
+import { searchApi, SearchHit, SearchResponse, SearchFacets, metadataApi } from '@/lib/api'
+import FacetAutocomplete from '@/components/search/FacetAutocomplete'
 import { formatDate } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import {
@@ -98,18 +99,18 @@ const sourceTypeDisplayConfig: Record<string, { name: string; icon: React.ReactN
     icon: <DollarSign className="w-4 h-4" />,
     color: 'bg-sky-100 text-sky-700 dark:bg-sky-900/30 dark:text-sky-400',
   },
-  // Forecast result display labels (individual sources)
-  ag_forecast: {
+  // Forecast result display labels (keys match backend display names from FORECAST_DISPLAY_TYPES)
+  'AG Forecast': {
     name: 'AG Forecast',
     icon: <TrendingUp className="w-4 h-4" />,
     color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
   },
-  apfs_forecast: {
+  'APFS Forecast': {
     name: 'DHS Forecast',
     icon: <TrendingUp className="w-4 h-4" />,
     color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
   },
-  state_forecast: {
+  'State Forecast': {
     name: 'State Forecast',
     icon: <TrendingUp className="w-4 h-4" />,
     color: 'bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400',
@@ -143,6 +144,9 @@ function SearchContent() {
   const searchInputRef = useRef<HTMLInputElement>(null)
   const [searchMode, setSearchMode] = useState<SearchMode>('hybrid')
   const [semanticWeight, setSemanticWeight] = useState(0.5)
+  const [facetFilters, setFacetFilters] = useState<Record<string, string[]>>({})
+  // AbortController to cancel in-flight requests when filters change
+  const abortControllerRef = useRef<AbortController | null>(null)
 
   // Number of content types to show before "Show more"
   const CONTENT_TYPE_INITIAL_COUNT = 5
@@ -165,23 +169,51 @@ function SearchContent() {
       return
     }
 
+    // Cancel any in-flight request before starting a new one
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort()
+    }
+
+    // Create new AbortController for this request
+    const abortController = new AbortController()
+    abortControllerRef.current = abortController
+
     setIsLoading(true)
     setError('')
 
     try {
+      // Build facet_filters from selected facet values
+      const activeFacetFilters: Record<string, any> = {}
+      for (const [facetName, values] of Object.entries(facetFilters)) {
+        if (values.length === 1) {
+          activeFacetFilters[facetName] = values[0]
+        } else if (values.length > 1) {
+          activeFacetFilters[facetName] = values
+        }
+      }
+
       const response = await searchApi.search(token, {
         query: debouncedQuery.trim(),
         search_mode: searchMode,
         semantic_weight: searchMode === 'hybrid' ? semanticWeight : undefined,
         source_types: selectedSourceTypes.length > 0 ? selectedSourceTypes : undefined,
         content_types: selectedContentTypes.length > 0 ? selectedContentTypes : undefined,
+        facet_filters: Object.keys(activeFacetFilters).length > 0 ? activeFacetFilters : undefined,
         include_facets: true,
         limit,
         offset,
       })
-      setResults(response)
-      setFacets(response.facets || null)
+
+      // Only update state if this request wasn't aborted
+      if (!abortController.signal.aborted) {
+        setResults(response)
+        setFacets(response.facets || null)
+      }
     } catch (err: any) {
+      // Ignore abort errors - they're expected when we cancel requests
+      if (err.name === 'AbortError' || abortController.signal.aborted) {
+        return
+      }
       if (err.status === 503) {
         setError('Search is not enabled. Enable SEARCH_ENABLED to use this feature.')
       } else {
@@ -190,9 +222,12 @@ function SearchContent() {
       setResults(null)
       setFacets(null)
     } finally {
-      setIsLoading(false)
+      // Only clear loading if this was the current request
+      if (abortControllerRef.current === abortController) {
+        setIsLoading(false)
+      }
     }
-  }, [token, debouncedQuery, searchMode, semanticWeight, selectedSourceTypes, selectedContentTypes, limit, offset])
+  }, [token, debouncedQuery, searchMode, semanticWeight, selectedSourceTypes, selectedContentTypes, facetFilters, limit, offset])
 
   useEffect(() => {
     executeSearch()
@@ -222,6 +257,19 @@ function SearchContent() {
   const clearFilters = () => {
     setSelectedSourceTypes([])
     setSelectedContentTypes([])
+    setFacetFilters({})
+    setOffset(0)
+  }
+
+  // Update facet filter values
+  const updateFacetFilter = (facetName: string, values: string[]) => {
+    setFacetFilters(prev => {
+      if (values.length === 0) {
+        const { [facetName]: _, ...rest } = prev
+        return rest
+      }
+      return { ...prev, [facetName]: values }
+    })
     setOffset(0)
   }
 
@@ -261,6 +309,7 @@ function SearchContent() {
   }
 
   // Navigate to detail page - routes to appropriate page based on source type
+  // Note: source_type values are display names from the backend's display_type_mapper
   const handleResultClick = (hit: SearchHit) => {
     // Route Salesforce records to their specific pages
     if (hit.source_type === 'Account') {
@@ -269,8 +318,9 @@ function SearchContent() {
       router.push(`/salesforce/contacts/${hit.asset_id}`)
     } else if (hit.source_type === 'Opportunity') {
       router.push(`/salesforce/opportunities/${hit.asset_id}`)
-    } else if (hit.source_type === 'ag_forecast' || hit.source_type === 'apfs_forecast' || hit.source_type === 'state_forecast') {
+    } else if (hit.source_type === 'AG Forecast' || hit.source_type === 'APFS Forecast' || hit.source_type === 'State Forecast') {
       // Route forecast records to forecast detail page
+      // Backend sends display names: "AG Forecast", "APFS Forecast", "State Forecast"
       router.push(`/forecasts/${hit.asset_id}`)
     } else {
       // Default to asset page for documents
@@ -356,6 +406,7 @@ function SearchContent() {
               {(['keyword', 'hybrid', 'semantic'] as const).map((mode) => (
                 <button
                   key={mode}
+                  disabled={isLoading}
                   onClick={() => {
                     setSearchMode(mode)
                     setOffset(0)
@@ -364,7 +415,7 @@ function SearchContent() {
                     searchMode === mode
                       ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300'
                       : 'text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-200'
-                  }`}
+                  } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   {mode === 'keyword' && 'Keyword'}
                   {mode === 'semantic' && 'Semantic'}
@@ -392,11 +443,12 @@ function SearchContent() {
                 <button
                   key={type}
                   onClick={() => toggleSourceType(type)}
+                  disabled={isLoading}
                   className={`inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-sm font-medium transition-all ${
                     isSelected
                       ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400 ring-2 ring-indigo-500'
                       : 'bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700'
-                  }`}
+                  } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                 >
                   {config.icon}
                   <span>{config.name}</span>
@@ -412,14 +464,35 @@ function SearchContent() {
                 </button>
               )
             })}
-            {(selectedSourceTypes.length > 0 || selectedContentTypes.length > 0) && (
+            {(selectedSourceTypes.length > 0 || selectedContentTypes.length > 0 || Object.keys(facetFilters).length > 0) && (
               <button
                 onClick={clearFilters}
-                className="text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 underline"
+                disabled={isLoading}
+                className={`text-sm text-gray-500 hover:text-gray-700 dark:text-gray-400 dark:hover:text-gray-300 underline ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
               >
                 Clear filters
               </button>
             )}
+          </div>
+
+          {/* Facet Filters (Agency, Set-Aside) */}
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <FacetAutocomplete
+              facetName="agency"
+              label="Agency"
+              selectedValues={facetFilters.agency || []}
+              onSelectionChange={(values) => updateFacetFilter('agency', values)}
+              placeholder="Search agencies (e.g., DHS, GSA)..."
+              disabled={isLoading}
+            />
+            <FacetAutocomplete
+              facetName="set_aside"
+              label="Set-Aside"
+              selectedValues={facetFilters.set_aside || []}
+              onSelectionChange={(values) => updateFacetFilter('set_aside', values)}
+              placeholder="Search set-asides (e.g., SBA, 8(a))..."
+              disabled={isLoading}
+            />
           </div>
 
           {/* Content Type Filters */}
@@ -436,11 +509,12 @@ function SearchContent() {
                     <button
                       key={bucket.value}
                       onClick={() => toggleContentType(bucket.value)}
+                      disabled={isLoading}
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-medium transition-all border ${
                         isSelected
                           ? 'bg-indigo-50 text-indigo-700 border-indigo-300 dark:bg-indigo-900/30 dark:text-indigo-400 dark:border-indigo-700'
                           : 'bg-white text-gray-600 border-gray-200 dark:bg-gray-800 dark:text-gray-400 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
-                      }`}
+                      } ${isLoading ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >
                       {isSelected && <Check className="w-3 h-3" />}
                       <span>{formatContentType(bucket.value)}</span>
@@ -631,7 +705,7 @@ function SearchContent() {
                   variant="secondary"
                   size="sm"
                   onClick={() => goToPage(currentPage - 1)}
-                  disabled={currentPage === 1}
+                  disabled={currentPage === 1 || isLoading}
                 >
                   <ChevronLeft className="w-4 h-4" />
                 </Button>
@@ -642,7 +716,7 @@ function SearchContent() {
                   variant="secondary"
                   size="sm"
                   onClick={() => goToPage(currentPage + 1)}
-                  disabled={currentPage === totalPages}
+                  disabled={currentPage === totalPages || isLoading}
                 >
                   <ChevronRight className="w-4 h-4" />
                 </Button>

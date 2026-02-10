@@ -158,6 +158,10 @@ class ContractGenerator:
             if p.default is not None:
                 prop["default"] = p.default
 
+            # Optional parameters accept null values
+            if not p.required:
+                prop["nullable"] = True
+
             if p.enum_values:
                 # For array types, enum goes inside items; for scalar types, at top level
                 if prop.get("type") == "array" and "items" in prop:

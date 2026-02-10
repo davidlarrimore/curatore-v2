@@ -46,12 +46,23 @@ class SearchSolicitationsFunction(BaseFunction):
     meta = FunctionMeta(
         name="search_solicitations",
         category=FunctionCategory.SEARCH,
-        description="Search SAM.gov solicitations with hybrid search and filters, returns ContentItem list",
+        description=(
+            "Search SAM.gov solicitations with hybrid search and filters. "
+            "Returns solicitation summaries with relevance scores. "
+            "To get full details, use get(item_type='solicitation', item_id='...'). "
+            "To read attached documents (SOWs, RFPs), use get_content() with asset IDs from the solicitation's children."
+        ),
         parameters=[
             ParameterDoc(
                 name="keyword",
                 type="str",
-                description="Search query for title and description. Combines with all filters below for refined results.",
+                description=(
+                    "Short keyword query (2-4 key terms work best). "
+                    "Use specific names, solicitation numbers, or acronyms. "
+                    "Good: 'LESA deployment', 'cybersecurity SDVOSB'. "
+                    "Bad: 'Law Enforcement Systems and Analysis Professional Support Services Deployment'. "
+                    "Use filters (naics_codes, agency_name, set_aside_code) to narrow results instead of adding more query terms."
+                ),
                 required=False,
                 default=None,
             ),
@@ -125,6 +136,14 @@ class SearchSolicitationsFunction(BaseFunction):
                 description="Filter by SAM search ID (to get solicitations from a specific search)",
                 required=False,
                 default=None,
+            ),
+            ParameterDoc(
+                name="search_name",
+                type="str",
+                description="Filter by SAM saved search name (e.g., 'IT Services Opportunities'). Case-insensitive. Resolves to search_id automatically. search_id takes precedence if both provided.",
+                required=False,
+                default=None,
+                example="IT Services Opportunities",
             ),
             ParameterDoc(
                 name="has_summary",
@@ -271,6 +290,7 @@ class SearchSolicitationsFunction(BaseFunction):
         posted_within_days = params.get("posted_within_days")
         response_deadline_after = params.get("response_deadline_after")
         search_id = params.get("search_id")
+        search_name = params.get("search_name")
         has_summary = params.get("has_summary")
         order_by = params.get("order_by", "-posted_date")
         include_assets = params.get("include_assets", False)
@@ -286,6 +306,37 @@ class SearchSolicitationsFunction(BaseFunction):
             posted_within_days = int(posted_within_days) if posted_within_days else None
 
         try:
+            # Resolve search_name to search_id (case-insensitive)
+            if search_name and not search_id:
+                from app.core.database.models import SamSearch
+                from sqlalchemy import func as sqla_func
+
+                result = await ctx.session.execute(
+                    select(SamSearch.id)
+                    .where(SamSearch.organization_id == ctx.organization_id)
+                    .where(SamSearch.is_active == True)
+                    .where(sqla_func.lower(SamSearch.name) == search_name.lower())
+                )
+                row = result.first()
+                if not row:
+                    # Try partial match as fallback
+                    result = await ctx.session.execute(
+                        select(SamSearch.id)
+                        .where(SamSearch.organization_id == ctx.organization_id)
+                        .where(SamSearch.is_active == True)
+                        .where(sqla_func.lower(SamSearch.name).contains(search_name.lower()))
+                    )
+                    row = result.first()
+
+                if row:
+                    search_id = str(row[0])
+                else:
+                    return FunctionResult.success_result(
+                        data=[],
+                        message=f"No SAM search found matching '{search_name}'",
+                        metadata={"search_name": search_name, "total_found": 0},
+                        items_processed=0,
+                    )
             # If keyword is provided, use PgSearchService for hybrid search
             if keyword and keyword.strip():
                 return await self._search_with_pg_service(

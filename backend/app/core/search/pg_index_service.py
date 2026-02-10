@@ -506,6 +506,152 @@ class PgIndexService:
             logger.error(f"Error propagating metadata for asset {asset_id}: {e}")
             return False
 
+    async def propagate_source_metadata(
+        self,
+        session: AsyncSession,
+        asset_id: UUID,
+    ) -> bool:
+        """
+        Merge Asset.source_metadata into search_chunks.metadata namespaces.
+
+        This bridges the Asset.source_metadata column (written by connectors
+        and backfill operations) into the search index so that connector-
+        specific metadata becomes searchable and filterable.
+
+        Unlike propagate_asset_metadata (which writes to the 'custom' namespace),
+        this writes to source-specific namespaces (sharepoint, sam, salesforce, etc.).
+
+        Args:
+            session: Database session
+            asset_id: Asset UUID whose source_metadata to propagate
+
+        Returns:
+            True if propagation succeeded or no metadata to propagate
+        """
+        import json
+
+        try:
+            from sqlalchemy import select as sa_select
+            from app.core.database.models import Asset as AssetModel
+
+            result = await session.execute(
+                sa_select(AssetModel).where(AssetModel.id == asset_id)
+            )
+            asset = result.scalar_one_or_none()
+            if not asset or not asset.source_metadata:
+                return True
+
+            source_metadata = asset.source_metadata
+            if not isinstance(source_metadata, dict):
+                return True
+
+            # Propagate each namespace (skip 'custom' — managed by propagate_asset_metadata)
+            for namespace, fields in source_metadata.items():
+                if namespace == "custom" or not isinstance(fields, dict) or not fields:
+                    continue
+
+                sql = text("""
+                    UPDATE search_chunks
+                    SET metadata = jsonb_set(
+                        COALESCE(metadata, '{}'::jsonb),
+                        CAST(:ns_path AS text[]),
+                        COALESCE(metadata->CAST(:ns AS text), '{}'::jsonb) || CAST(:fields AS jsonb),
+                        true
+                    )
+                    WHERE source_type = 'asset' AND source_id = CAST(:aid AS UUID)
+                """)
+                await session.execute(sql, {
+                    "ns_path": "{" + namespace + "}",
+                    "ns": namespace,
+                    "fields": json.dumps(fields),
+                    "aid": str(asset_id),
+                })
+
+            # Invalidate metadata schema cache
+            org_id = asset.organization_id
+            if org_id:
+                from .pg_search_service import pg_search_service
+                pg_search_service.invalidate_metadata_cache(org_id)
+
+            logger.debug(f"Propagated source_metadata for asset {asset_id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Error propagating source_metadata for asset {asset_id}: {e}")
+            return False
+
+    async def _detect_facet_values(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        metadata: Dict,
+        content_type: Optional[str],
+    ) -> None:
+        """
+        Non-blocking detection of unmapped facet values at index time.
+
+        For facets with has_reference_data=True, checks if metadata values
+        are in the reference data. If not, attempts fuzzy matching (inline)
+        or queues LLM classification (async).
+
+        This is fire-and-forget — indexing is never blocked by this.
+        """
+        try:
+            from app.core.metadata.registry_service import metadata_registry_service
+            from app.core.metadata.facet_reference_service import facet_reference_service
+
+            facets = metadata_registry_service.get_facet_definitions()
+
+            for facet_name, facet_def in facets.items():
+                if not facet_def.get("has_reference_data", False):
+                    continue
+
+                mappings = facet_def.get("mappings", {})
+                for ct, json_path in mappings.items():
+                    parts = json_path.split(".", 1)
+                    if len(parts) != 2:
+                        continue
+                    ns, field = parts
+
+                    # Extract value from metadata
+                    ns_data = metadata.get(ns)
+                    if not isinstance(ns_data, dict):
+                        continue
+                    value = ns_data.get(field)
+                    if not value or not isinstance(value, str):
+                        continue
+
+                    # Check if value is mapped
+                    _, is_mapped = await facet_reference_service.check_and_resolve_value(
+                        session, organization_id, facet_name, value
+                    )
+
+                    if not is_mapped:
+                        # Fast path: try fuzzy match (inline, ~microseconds)
+                        match = await facet_reference_service.try_fuzzy_match(
+                            session, organization_id, facet_name, value, threshold=0.90
+                        )
+                        if match:
+                            await facet_reference_service.auto_add_alias(
+                                session, organization_id, facet_name, value,
+                                match["matched_alias"], match["confidence"],
+                                match_method="auto_matched",
+                            )
+                            logger.debug(
+                                f"Auto-matched facet value '{value}' to existing alias "
+                                f"(confidence={match['confidence']:.2f}) for facet '{facet_name}'"
+                            )
+                        else:
+                            # Log for potential future LLM classification
+                            logger.info(
+                                f"Unmapped facet value '{value}' for facet '{facet_name}' "
+                                f"(org={organization_id}) — no fuzzy match found"
+                            )
+
+        except Exception as e:
+            # Never let detection failure block indexing
+            logger.debug(f"Facet value detection skipped: {e}")
+
     async def _insert_chunk(
         self,
         session: AsyncSession,
@@ -526,6 +672,10 @@ class PgIndexService:
     ) -> None:
         """Insert a single chunk into search_chunks table."""
         import json
+
+        # Detect unmapped facet values (non-blocking, first chunk only)
+        if metadata and chunk_index == 0:
+            await self._detect_facet_values(session, organization_id, metadata, content_type)
 
         # Format embedding as pgvector string: '[0.1, 0.2, ...]'
         embedding_str = "[" + ",".join(str(f) for f in embedding) + "]"

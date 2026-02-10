@@ -21,7 +21,7 @@ from app.models.mcp import (
     MCPToolsCallResponse,
 )
 from app.models.openai import OpenAIToolsResponse
-from app.handlers import handle_initialize, handle_tools_list, handle_tools_call, extract_progress_token
+from app.handlers import handle_initialize, handle_tools_list, handle_tools_call, extract_progress_token, handle_resources_list
 from app.services.openai_converter import mcp_tools_to_openai
 from app.services.policy_service import policy_service
 from app.services.backend_client import backend_client
@@ -169,6 +169,10 @@ async def mcp_endpoint(request: Request):
                 progress_token=progress_token,
             )
             return _json_rpc_response(rpc_request.id, result.model_dump())
+
+        elif method == "resources/list":
+            result = await handle_resources_list(api_key, correlation_id)
+            return _json_rpc_response(rpc_request.id, result)
 
         else:
             return _json_rpc_error(rpc_request.id, -32601, f"Method not found: {method}")

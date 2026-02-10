@@ -1395,6 +1395,9 @@ class FacetMapping(Base):
     __tablename__ = "facet_mappings"
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True  # NULL = global mapping
+    )
     facet_definition_id = Column(
         UUID(), ForeignKey("facet_definitions.id", ondelete="CASCADE"), nullable=False
     )
@@ -1402,12 +1405,130 @@ class FacetMapping(Base):
     json_path = Column(String(500), nullable=False)  # e.g., "sam.agency"
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
+    # Relationships
+    organization = relationship("Organization", backref="facet_mappings")
+
     __table_args__ = (
         Index("ix_facet_mappings_facet_id", "facet_definition_id"),
+        Index("ix_facet_mappings_org", "organization_id"),
     )
 
     def __repr__(self) -> str:
         return f"<FacetMapping(facet={self.facet_definition_id}, {self.content_type} → {self.json_path})>"
+
+
+class FacetReferenceValue(Base):
+    """
+    Canonical reference value for a facet dimension.
+
+    Stores the authoritative form of a value (e.g., "Department of Homeland Security")
+    along with a short display label (e.g., "DHS"). Used to resolve cross-source
+    naming inconsistencies in facet filters.
+
+    organization_id=NULL means global baseline (from YAML).
+    """
+
+    __tablename__ = "facet_reference_values"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True
+    )
+    facet_name = Column(String(100), nullable=False)
+    canonical_value = Column(String(500), nullable=False)
+    display_label = Column(String(200), nullable=True)
+    description = Column(Text, nullable=True)
+    sort_order = Column(Integer, default=0, nullable=False)
+    status = Column(String(20), nullable=False, default="active")  # active, suggested, inactive
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    organization = relationship("Organization", backref="facet_reference_values")
+    aliases = relationship("FacetReferenceAlias", backref="reference_value", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        Index("ix_facet_ref_values_facet", "facet_name"),
+        Index("ix_facet_ref_values_org_facet", "organization_id", "facet_name"),
+        Index(
+            "ix_facet_ref_values_unique",
+            "organization_id", "facet_name", "canonical_value",
+            unique=True,
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<FacetReferenceValue({self.facet_name}: {self.canonical_value}, org={self.organization_id})>"
+
+
+class FacetReferenceAlias(Base):
+    """
+    Alias string mapping to a canonical facet reference value.
+
+    Each alias maps a raw value (e.g., "HOMELAND SECURITY, DEPARTMENT OF")
+    to its canonical form. Pre-computed lowercase for fast lookup.
+    """
+
+    __tablename__ = "facet_reference_aliases"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    reference_value_id = Column(
+        UUID(), ForeignKey("facet_reference_values.id", ondelete="CASCADE"), nullable=False
+    )
+    alias_value = Column(String(500), nullable=False)
+    alias_value_lower = Column(String(500), nullable=False)
+    source_hint = Column(String(100), nullable=True)  # e.g., sam_gov, forecast
+    match_method = Column(String(50), nullable=True)  # baseline, manual, auto_matched, ai_suggested
+    confidence = Column(Float, nullable=True)
+    status = Column(String(20), nullable=False, default="active")  # active, suggested, inactive
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        Index("ix_facet_ref_aliases_ref_id", "reference_value_id"),
+        Index("ix_facet_ref_aliases_lower", "alias_value_lower"),
+        Index(
+            "ix_facet_ref_aliases_unique",
+            "reference_value_id", "alias_value_lower",
+            unique=True,
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<FacetReferenceAlias({self.alias_value} → ref={self.reference_value_id})>"
+
+
+class DataSourceTypeOverride(Base):
+    """
+    Org-level overrides for data source type definitions.
+
+    The baseline definitions live in data_sources.yaml. Admins can override
+    display_name, description, capabilities, etc. for their organization,
+    or hide source types that are not relevant.
+    """
+
+    __tablename__ = "data_source_type_overrides"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True  # NULL = global override
+    )
+    source_type = Column(String(100), nullable=False)  # matches YAML key (sam_gov, sharepoint, etc.)
+    display_name = Column(String(255), nullable=True)  # nullable = use baseline
+    description = Column(Text, nullable=True)
+    capabilities = Column(JSON, nullable=True)  # list of strings
+    is_active = Column(Boolean, default=True, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+    # Relationships
+    organization = relationship("Organization", backref="data_source_type_overrides")
+
+    __table_args__ = (
+        Index("ix_ds_override_org_type", "organization_id", "source_type", unique=True),
+    )
+
+    def __repr__(self) -> str:
+        return f"<DataSourceTypeOverride(org={self.organization_id}, type={self.source_type})>"
 
 
 # ============================================================================
@@ -1557,6 +1678,9 @@ class ScrapeSource(Base):
     __tablename__ = "scrape_sources"
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     collection_id = Column(
         UUID(), ForeignKey("scrape_collections.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -1586,12 +1710,14 @@ class ScrapeSource(Base):
     )
 
     # Relationships
+    organization = relationship("Organization", backref="scrape_sources")
     collection = relationship("ScrapeCollection", back_populates="sources")
 
     # Indexes
     __table_args__ = (
         Index("ix_scrape_sources_collection_url", "collection_id", "url"),
         Index("ix_scrape_sources_collection_active", "collection_id", "is_active"),
+        Index("ix_scrape_sources_org", "organization_id"),
     )
 
     def __repr__(self) -> str:
@@ -1641,6 +1767,9 @@ class ScrapedAsset(Base):
     __tablename__ = "scraped_assets"
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     asset_id = Column(
         UUID(), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -1685,6 +1814,7 @@ class ScrapedAsset(Base):
     )
 
     # Relationships
+    organization = relationship("Organization", backref="scraped_assets")
     asset = relationship("Asset", backref="scraped_info")
     collection = relationship("ScrapeCollection", backref="scraped_assets")
     source = relationship("ScrapeSource", backref="scraped_assets")
@@ -1704,6 +1834,8 @@ class ScrapedAsset(Base):
         Index("ix_scraped_assets_crawl_run", "crawl_run_id"),
         # Ensure no duplicate URLs in collection
         Index("ix_scraped_assets_collection_url", "collection_id", "url", unique=True),
+        # Org-scoped queries
+        Index("ix_scraped_assets_org", "organization_id"),
     )
 
     def __repr__(self) -> str:
@@ -2351,6 +2483,9 @@ class SamAttachment(Base):
     __tablename__ = "sam_attachments"
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     # Nullable for standalone notice attachments
     solicitation_id = Column(
         UUID(), ForeignKey("sam_solicitations.id", ondelete="CASCADE"), nullable=True, index=True
@@ -2385,6 +2520,7 @@ class SamAttachment(Base):
     )
 
     # Relationships
+    organization = relationship("Organization", backref="sam_attachments")
     solicitation = relationship("SamSolicitation", back_populates="attachments")
     notice = relationship("SamNotice", back_populates="attachments")
     asset = relationship("Asset", backref="sam_attachment")
@@ -2393,6 +2529,7 @@ class SamAttachment(Base):
     __table_args__ = (
         Index("ix_sam_attachments_sol_status", "solicitation_id", "download_status"),
         Index("ix_sam_attachments_resource", "resource_id"),
+        Index("ix_sam_attachments_org_status", "organization_id", "download_status"),
     )
 
     def __repr__(self) -> str:
@@ -2441,6 +2578,9 @@ class SamSolicitationSummary(Base):
     __tablename__ = "sam_solicitation_summaries"
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     solicitation_id = Column(
         UUID(), ForeignKey("sam_solicitations.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -2474,6 +2614,7 @@ class SamSolicitationSummary(Base):
     promoted_at = Column(DateTime, nullable=True)
 
     # Relationships
+    organization = relationship("Organization", backref="sam_solicitation_summaries")
     solicitation = relationship("SamSolicitation", back_populates="summaries")
     asset_metadata = relationship("AssetMetadata", backref="sam_summaries")
 
@@ -2481,6 +2622,7 @@ class SamSolicitationSummary(Base):
     __table_args__ = (
         Index("ix_sam_summaries_sol_canonical", "solicitation_id", "is_canonical"),
         Index("ix_sam_summaries_sol_type", "solicitation_id", "summary_type"),
+        Index("ix_sam_summaries_org_canonical", "organization_id", "is_canonical"),
     )
 
     def __repr__(self) -> str:
@@ -2723,6 +2865,7 @@ class SharePointSyncConfig(Base):
     folder_name = Column(String(500), nullable=True)  # Cached folder name
     folder_drive_id = Column(String(255), nullable=True)  # Graph API drive ID
     folder_item_id = Column(String(255), nullable=True)  # Graph API item ID
+    site_name = Column(String(500), nullable=True)  # SharePoint site display name
 
     # Sync configuration (JSONB for filters)
     sync_config = Column(JSON, nullable=False, default=dict, server_default="{}")
@@ -2845,6 +2988,9 @@ class SharePointSyncedDocument(Base):
     __tablename__ = "sharepoint_synced_documents"
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
     asset_id = Column(
         UUID(), ForeignKey("assets.id", ondelete="CASCADE"), nullable=False, index=True
     )
@@ -2890,6 +3036,7 @@ class SharePointSyncedDocument(Base):
     )
 
     # Relationships
+    organization = relationship("Organization", backref="sharepoint_synced_documents")
     asset = relationship("Asset", backref="sharepoint_sync_info")
     sync_config = relationship("SharePointSyncConfig", back_populates="synced_documents")
     last_sync_run = relationship("Run", foreign_keys=[last_sync_run_id])
@@ -2902,6 +3049,7 @@ class SharePointSyncedDocument(Base):
         Index("ix_sp_synced_config_path", "sync_config_id", "sharepoint_path"),
         Index("ix_sp_synced_asset", "asset_id"),
         Index("ix_sp_synced_run", "last_sync_run_id"),
+        Index("ix_sp_synced_docs_org", "organization_id"),
     )
 
     def __repr__(self) -> str:

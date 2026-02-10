@@ -263,6 +263,7 @@ Return your analysis in markdown format."""
 
                 # Create new summary record
                 summary_record = SamSolicitationSummary(
+                    organization_id=ctx.organization_id,
                     solicitation_id=solicitation.id,
                     summary_type="executive",
                     is_canonical=True,

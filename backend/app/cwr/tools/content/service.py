@@ -8,8 +8,9 @@ Provides a consistent interface for:
 - Extracting text for LLM consumption
 
 This service abstracts away the differences between content types
-(Asset, SamSolicitation, SamNotice, ScrapedAsset) and provides
-a unified ContentItem interface.
+(Asset, SamSolicitation, SamNotice, ScrapedAsset, SalesforceAccount,
+SalesforceContact, SalesforceOpportunity) and provides a unified
+ContentItem interface.
 """
 
 import json
@@ -75,6 +76,9 @@ class ContentService:
                 SamNotice,
                 ScrapedAsset,
                 ScrapeCollection,
+                SalesforceAccount,
+                SalesforceContact,
+                SalesforceOpportunity,
             )
 
             models = {
@@ -83,6 +87,9 @@ class ContentService:
                 "SamNotice": SamNotice,
                 "ScrapedAsset": ScrapedAsset,
                 "ScrapeCollection": ScrapeCollection,
+                "SalesforceAccount": SalesforceAccount,
+                "SalesforceContact": SalesforceContact,
+                "SalesforceOpportunity": SalesforceOpportunity,
             }
             model = models.get(model_name)
             if model:
@@ -167,7 +174,10 @@ class ContentService:
         query = select(model).where(model.id == item_id)
 
         # Add organization filter based on type
-        if item_type in ("asset", "solicitation", "scrape_collection"):
+        if item_type in (
+            "asset", "solicitation", "scrape_collection",
+            "salesforce_account", "salesforce_contact", "salesforce_opportunity",
+        ):
             query = query.where(model.organization_id == organization_id)
         elif item_type == "notice":
             # Notices may be standalone (have organization_id) or linked to solicitation
@@ -200,6 +210,12 @@ class ContentService:
                 from app.core.database.models import ScrapedAsset
                 query = query.options(
                     selectinload(ScrapedAsset.asset),
+                )
+            elif item_type == "salesforce_account":
+                from app.core.database.models import SalesforceAccount
+                query = query.options(
+                    selectinload(SalesforceAccount.contacts),
+                    selectinload(SalesforceAccount.opportunities),
                 )
 
         result = await session.execute(query)
@@ -235,6 +251,12 @@ class ContentService:
                 title = record.asset.original_filename
             elif hasattr(record, "scrape_metadata") and record.scrape_metadata:
                 title = record.scrape_metadata.get("title")
+
+        # Handle salesforce_contact title (computed from first + last name)
+        if item_type == "salesforce_contact" and not title:
+            first = getattr(record, "first_name", "") or ""
+            last = getattr(record, "last_name", "") or ""
+            title = f"{first} {last}".strip() or None
 
         # Get text content
         text = None
@@ -495,7 +517,10 @@ class ContentService:
         # Build base query with organization filter
         query = select(model)
 
-        if item_type in ("asset", "solicitation", "scrape_collection"):
+        if item_type in (
+            "asset", "solicitation", "scrape_collection",
+            "salesforce_account", "salesforce_contact", "salesforce_opportunity",
+        ):
             query = query.where(model.organization_id == organization_id)
         elif item_type == "notice":
             from app.core.database.models import SamSolicitation

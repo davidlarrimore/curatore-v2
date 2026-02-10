@@ -156,6 +156,7 @@ class ScrapeService:
         # Auto-create a seed source from root_url
         # This eliminates the need for manual source management
         source = ScrapeSource(
+            organization_id=organization_id,
             collection_id=collection.id,
             url=root_url,
             source_type="seed",
@@ -359,6 +360,7 @@ class ScrapeService:
     async def add_source(
         self,
         session: AsyncSession,
+        organization_id: UUID,
         collection_id: UUID,
         url: str,
         source_type: str = "seed",
@@ -366,6 +368,7 @@ class ScrapeService:
     ) -> ScrapeSource:
         """Add a URL source to a collection."""
         source = ScrapeSource(
+            organization_id=organization_id,
             collection_id=collection_id,
             url=url,
             source_type=source_type,
@@ -456,6 +459,7 @@ class ScrapeService:
     async def create_scraped_asset(
         self,
         session: AsyncSession,
+        organization_id: UUID,
         asset_id: UUID,
         collection_id: UUID,
         url: str,
@@ -471,6 +475,7 @@ class ScrapeService:
         Create a scraped asset record linking an asset to a collection.
 
         Args:
+            organization_id: Organization UUID for multi-tenant isolation
             asset_id: Asset UUID
             collection_id: Collection UUID
             url: Original URL
@@ -489,6 +494,7 @@ class ScrapeService:
             url_path = extract_url_path(url)
 
         scraped = ScrapedAsset(
+            organization_id=organization_id,
             asset_id=asset_id,
             collection_id=collection_id,
             source_id=source_id,

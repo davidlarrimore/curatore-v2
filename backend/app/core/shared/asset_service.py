@@ -285,6 +285,7 @@ class AssetService:
         self,
         session: AsyncSession,
         asset_id: UUID,
+        organization_id: Optional[UUID] = None,
     ) -> Optional[Asset]:
         """
         Get asset by ID.
@@ -292,13 +293,17 @@ class AssetService:
         Args:
             session: Database session
             asset_id: Asset UUID
+            organization_id: Optional org UUID for multi-tenant isolation.
+                If provided, only returns the asset if it belongs to this org.
+                This provides defense-in-depth for callers who have org context.
 
         Returns:
             Asset instance or None
         """
-        result = await session.execute(
-            select(Asset).where(Asset.id == asset_id)
-        )
+        query = select(Asset).where(Asset.id == asset_id)
+        if organization_id:
+            query = query.where(Asset.organization_id == organization_id)
+        result = await session.execute(query)
         return result.scalar_one_or_none()
 
     async def get_asset_with_latest_extraction(

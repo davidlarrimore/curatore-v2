@@ -45,18 +45,36 @@ class SearchScrapedAssetsFunction(BaseFunction):
     meta = FunctionMeta(
         name="search_scraped_assets",
         category=FunctionCategory.SEARCH,
-        description="Search scraped assets with hybrid search and filters, returns ContentItem list",
+        description=(
+            "Search web-scraped content within a specific collection using hybrid search. "
+            "Returns page summaries with relevance scores. To read full page content, "
+            "use get_content(asset_ids=[...]) with IDs from these results. "
+            "Use discover_data_sources(source_type='web_scrape') to see available collections."
+        ),
         parameters=[
             ParameterDoc(
                 name="collection_id",
                 type="str",
-                description="Filter by scrape collection ID (required)",
-                required=True,
+                description="Filter by scrape collection ID. Required unless collection_name is provided.",
+                required=False,
+                default=None,
+            ),
+            ParameterDoc(
+                name="collection_name",
+                type="str",
+                description="Filter by collection name (e.g., 'GSA AG'). Case-insensitive. Resolves to collection_id automatically. collection_id takes precedence if both provided.",
+                required=False,
+                default=None,
+                example="GSA Acquisition Gateway",
             ),
             ParameterDoc(
                 name="keyword",
                 type="str",
-                description="Search query for content (uses hybrid search)",
+                description=(
+                    "Short keyword query (2-4 key terms work best). "
+                    "Use specific terms, not full sentences. "
+                    "Use collection_name or collection_id to narrow results instead of adding more query terms."
+                ),
                 required=False,
                 default=None,
             ),
@@ -204,6 +222,7 @@ class SearchScrapedAssetsFunction(BaseFunction):
         from sqlalchemy.orm import selectinload
 
         collection_id = params.get("collection_id")
+        collection_name = params.get("collection_name")
         keyword = params.get("keyword")
         search_mode = params.get("search_mode", "hybrid")
         semantic_weight = params.get("semantic_weight", 0.5)
@@ -221,10 +240,41 @@ class SearchScrapedAssetsFunction(BaseFunction):
             limit_val = int(limit_val) if limit_val else 50
         limit = min(limit_val, 500)
 
+        # Resolve collection_name to collection_id (case-insensitive)
+        if collection_name and not collection_id:
+            from sqlalchemy import func as sqla_func
+
+            result = await ctx.session.execute(
+                select(ScrapeCollection.id)
+                .where(ScrapeCollection.organization_id == ctx.organization_id)
+                .where(ScrapeCollection.status == "active")
+                .where(sqla_func.lower(ScrapeCollection.name) == collection_name.lower())
+            )
+            row = result.first()
+            if not row:
+                # Try partial match as fallback
+                result = await ctx.session.execute(
+                    select(ScrapeCollection.id)
+                    .where(ScrapeCollection.organization_id == ctx.organization_id)
+                    .where(ScrapeCollection.status == "active")
+                    .where(sqla_func.lower(ScrapeCollection.name).contains(collection_name.lower()))
+                )
+                row = result.first()
+
+            if row:
+                collection_id = str(row[0])
+            else:
+                return FunctionResult.success_result(
+                    data=[],
+                    message=f"No scrape collection found matching '{collection_name}'",
+                    metadata={"collection_name": collection_name, "total_found": 0},
+                    items_processed=0,
+                )
+
         if not collection_id:
             return FunctionResult.failed_result(
-                error="collection_id is required",
-                message="Must specify a collection_id to search scraped assets",
+                error="collection_id or collection_name is required",
+                message="Must specify a collection_id or collection_name to search scraped assets",
             )
 
         try:
@@ -354,7 +404,7 @@ class SearchScrapedAssetsFunction(BaseFunction):
             query=keyword,
             search_mode=search_mode,
             semantic_weight=semantic_weight,
-            source_types=["asset"],  # Scraped assets are stored as assets
+            source_types=["web_scrape"],  # Scraped assets have source_type_filter='web_scrape'
             collection_ids=[collection_id],
             limit=limit,
             offset=offset,

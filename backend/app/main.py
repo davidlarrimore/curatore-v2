@@ -290,6 +290,64 @@ async def startup_event() -> None:
             print(f"   ⚠️  Queue registry initialization warning: {e}")
             # Non-fatal - registry will use defaults
 
+        # Seed facet reference data baseline (YAML → DB, idempotent)
+        try:
+            print("📊 Seeding facet reference data baseline...")
+            async with database_service.get_session() as session:
+                from .core.metadata.facet_reference_service import facet_reference_service
+                counts = await facet_reference_service.load_baseline(session)
+                await session.commit()
+                if counts["values"] > 0:
+                    print(f"   ✅ Facet reference data seeded: {counts['values']} values, {counts['aliases']} aliases")
+                else:
+                    print("   ➡️  Facet reference data already seeded")
+        except Exception as e:
+            print(f"   ⚠️  Facet reference data seeding warning: {e}")
+            # Non-fatal - reference data can be loaded later
+
+        # Sync metadata registry baseline (YAML → DB, delete-and-reinsert)
+        try:
+            print("📋 Syncing metadata registry baseline...")
+            async with database_service.get_session() as session:
+                from .core.metadata.registry_service import metadata_registry_service
+                counts = await metadata_registry_service.load_baseline(session)
+                await session.commit()
+                print(
+                    f"   ✅ Registry baseline synced: "
+                    f"{counts['fields']} fields, {counts['facets']} facets, "
+                    f"{counts['mappings']} mappings"
+                )
+        except Exception as e:
+            print(f"   ⚠️  Registry baseline sync warning: {e}")
+            # Non-fatal - registry can still serve from YAML in-memory
+
+        # Validate metadata registry consistency
+        try:
+            print("🔍 Validating metadata registry...")
+            from .core.metadata.registry_service import metadata_registry_service
+            from .core.metadata.validation_service import metadata_validation_service
+            from .core.search.metadata_builders import metadata_builder_registry
+
+            warnings, errors = metadata_validation_service.validate_all(
+                metadata_builder_registry, metadata_registry_service
+            )
+            if errors:
+                for err in errors:
+                    print(f"   ❌ {err}")
+            if warnings:
+                for warn in warnings:
+                    print(f"   ⚠️  {warn}")
+            if not errors and not warnings:
+                print("   ✅ Metadata registry validation passed")
+            else:
+                print(
+                    f"   ℹ️  Validation complete: {len(errors)} errors, "
+                    f"{len(warnings)} warnings"
+                )
+        except Exception as e:
+            print(f"   ⚠️  Registry validation warning: {e}")
+            # Non-fatal - validation is advisory
+
         # Discover and register procedures and pipelines
         try:
             print("🔄 Discovering procedures and pipelines...")
