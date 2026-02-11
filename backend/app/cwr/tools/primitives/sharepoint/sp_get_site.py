@@ -17,9 +17,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 from ...content import ContentItem
@@ -41,45 +38,68 @@ class SpGetSiteFunction(BaseFunction):
         name="sp_get_site",
         category=FunctionCategory.DATA,
         description="Get comprehensive SharePoint site metadata from Microsoft Graph API. Returns site display name, URL, description, and timestamps.",
-        parameters=[
-            ParameterDoc(
-                name="url",
-                type="str",
-                description="Any SharePoint URL — site is extracted automatically",
-                required=False,
-            ),
-            ParameterDoc(
-                name="sync_config_id",
-                type="str",
-                description="Sync config UUID — uses its folder_url",
-                required=False,
-            ),
-        ],
-        returns="ContentItem: SharePoint site metadata",
-        output_schema=OutputSchema(
-            type="ContentItem",
-            description="SharePoint site metadata as a ContentItem",
-            fields=[
-                OutputFieldDoc(name="display_name", type="str",
-                              description="Site display name", example="IT Department"),
-                OutputFieldDoc(name="name", type="str",
-                              description="Site URL segment name", example="IT"),
-                OutputFieldDoc(name="web_url", type="str",
-                              description="Full site URL"),
-                OutputFieldDoc(name="site_id", type="str",
-                              description="Microsoft Graph site ID"),
-                OutputFieldDoc(name="description", type="str",
-                              description="Site description", nullable=True),
-                OutputFieldDoc(name="created_at", type="str",
-                              description="Site creation timestamp", nullable=True),
-                OutputFieldDoc(name="last_modified_at", type="str",
-                              description="Site last modified timestamp", nullable=True),
-                OutputFieldDoc(name="hostname", type="str",
-                              description="SharePoint hostname"),
-                OutputFieldDoc(name="site_path", type="str",
-                              description="Site path segment", example="/sites/IT"),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Any SharePoint URL — site is extracted automatically",
+                },
+                "sync_config_id": {
+                    "type": "string",
+                    "description": "Sync config UUID — uses its folder_url",
+                },
+            },
+            "required": [],
+        },
+        output_schema={
+            "type": "object",
+            "description": "SharePoint site metadata as a ContentItem",
+            "properties": {
+                "display_name": {
+                    "type": "string",
+                    "description": "Site display name",
+                    "examples": ["IT Department"],
+                },
+                "name": {
+                    "type": "string",
+                    "description": "Site URL segment name",
+                    "examples": ["IT"],
+                },
+                "web_url": {
+                    "type": "string",
+                    "description": "Full site URL",
+                },
+                "site_id": {
+                    "type": "string",
+                    "description": "Microsoft Graph site ID",
+                },
+                "description": {
+                    "type": "string",
+                    "description": "Site description",
+                    "nullable": True,
+                },
+                "created_at": {
+                    "type": "string",
+                    "description": "Site creation timestamp",
+                    "nullable": True,
+                },
+                "last_modified_at": {
+                    "type": "string",
+                    "description": "Site last modified timestamp",
+                    "nullable": True,
+                },
+                "hostname": {
+                    "type": "string",
+                    "description": "SharePoint hostname",
+                },
+                "site_path": {
+                    "type": "string",
+                    "description": "Site path segment",
+                    "examples": ["/sites/IT"],
+                },
+            },
+        },
         tags=["data", "sharepoint", "graph-api", "site"],
         requires_llm=False,
         side_effects=False,

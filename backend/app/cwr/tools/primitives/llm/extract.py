@@ -19,10 +19,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
-    OutputVariant,
 )
 from ...context import FunctionContext
 from app.core.models.llm_models import LLMTaskType
@@ -56,81 +52,72 @@ class ExtractFunction(BaseFunction):
         name="llm_extract",
         category=FunctionCategory.LLM,
         description="Extract structured data from text using an LLM",
-        parameters=[
-            ParameterDoc(
-                name="text",
-                type="str",
-                description="The text to extract from",
-                required=True,
-            ),
-            ParameterDoc(
-                name="fields",
-                type="list[str]",
-                description="Fields to extract",
-                required=True,
-                example=["name", "email", "phone"],
-            ),
-            ParameterDoc(
-                name="field_descriptions",
-                type="dict[str, str]",
-                description="Optional descriptions for each field",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="instructions",
-                type="str",
-                description="Additional extraction instructions",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="model",
-                type="str",
-                description="Model to use",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="items",
-                type="list",
-                description="Collection of items to iterate over. When provided, the text is rendered for each item with {{ item.xxx }} placeholders replaced by item data.",
-                required=False,
-                default=None,
-                example=[{"content": "Text 1"}, {"content": "Text 2"}],
-            ),
-        ],
-        returns="dict or list: Extracted fields (single) or list of extractions (collection)",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Dictionary with extracted field values (keys match requested fields)",
-            fields=[
-                OutputFieldDoc(name="<field_name>", type="any",
-                              description="Each requested field is returned as a key. Value is null if not found.",
-                              example="John Smith", nullable=True),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The text to extract from",
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Fields to extract",
+                    "examples": [["name", "email", "phone"]],
+                },
+                "field_descriptions": {
+                    "type": "object",
+                    "description": "Optional descriptions for each field",
+                    "default": None,
+                },
+                "instructions": {
+                    "type": "string",
+                    "description": "Additional extraction instructions",
+                    "default": None,
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Model to use",
+                    "default": None,
+                },
+                "items": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Collection of items to iterate over. When provided, the text is rendered for each item with {{ item.xxx }} placeholders replaced by item data.",
+                    "default": None,
+                    "examples": [[{"content": "Text 1"}, {"content": "Text 2"}]],
+                },
+            },
+            "required": ["text", "fields"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Dictionary with extracted field values (keys match requested fields)",
+            "properties": {
+                "<field_name>": {
+                    "type": "string",
+                    "description": "Each requested field is returned as a key. Value is null if not found.",
+                    "nullable": True,
+                    "examples": ["John Smith"],
+                },
+            },
+            "examples": [{"name": "John Smith", "email": "john@example.com", "phone": "555-1234"}],
+            "variants": [
+                {
+                    "type": "array",
+                    "description": "collection: when `items` parameter is provided",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "item_id": {"type": "string", "description": "ID of the processed item"},
+                            "result": {"type": "object", "description": "Extracted fields dictionary"},
+                            "success": {"type": "boolean", "description": "Whether extraction succeeded"},
+                            "error": {"type": "string", "description": "Error message if failed", "nullable": True},
+                        },
+                    },
+                },
             ],
-            example={"name": "John Smith", "email": "john@example.com", "phone": "555-1234"},
-        ),
-        output_variants=[
-            OutputVariant(
-                mode="collection",
-                condition="when `items` parameter is provided",
-                schema=OutputSchema(
-                    type="list[dict]",
-                    description="List of extraction results for each item",
-                    fields=[
-                        OutputFieldDoc(name="item_id", type="str",
-                                      description="ID of the processed item"),
-                        OutputFieldDoc(name="result", type="dict",
-                                      description="Extracted fields dictionary"),
-                        OutputFieldDoc(name="success", type="bool",
-                                      description="Whether extraction succeeded"),
-                        OutputFieldDoc(name="error", type="str",
-                                      description="Error message if failed", nullable=True),
-                    ],
-                ),
-            ),
-        ],
+        },
         tags=["llm", "extraction", "structured"],
         requires_llm=True,
         side_effects=False,

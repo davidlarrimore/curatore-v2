@@ -18,9 +18,6 @@ from ..base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -48,53 +45,65 @@ class AnalyzeSolicitationFunction(BaseFunction):
         name="analyze_solicitation",
         category=FunctionCategory.COMPOUND,
         description="Analyze a SAM.gov solicitation for business development",
-        parameters=[
-            ParameterDoc(
-                name="solicitation_id",
-                type="str",
-                description="Solicitation ID to analyze",
-                required=True,
-            ),
-            ParameterDoc(
-                name="analysis_depth",
-                type="str",
-                description="Depth of analysis",
-                required=False,
-                default="standard",
-                enum_values=["brief", "standard", "detailed"],
-            ),
-            ParameterDoc(
-                name="focus_areas",
-                type="list[str]",
-                description="Specific areas to focus on",
-                required=False,
-                default=None,
-                example=["technical_requirements", "pricing", "past_performance"],
-            ),
-        ],
-        returns="dict: Structured analysis including summary, requirements, and recommendations",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Comprehensive solicitation analysis for business development",
-            fields=[
-                OutputFieldDoc(name="solicitation_id", type="str",
-                              description="UUID of the analyzed solicitation"),
-                OutputFieldDoc(name="notice_id", type="str",
-                              description="SAM.gov notice ID"),
-                OutputFieldDoc(name="title", type="str",
-                              description="Solicitation title"),
-                OutputFieldDoc(name="analysis", type="str",
-                              description="Markdown-formatted analysis with executive summary, requirements, evaluation criteria, timeline, and recommendations"),
-                OutputFieldDoc(name="analysis_depth", type="str",
-                              description="Depth of analysis (brief, standard, detailed)",
-                              example="standard"),
-                OutputFieldDoc(name="model", type="str",
-                              description="LLM model used for analysis"),
-                OutputFieldDoc(name="cached", type="bool",
-                              description="True if returned from cache (brief analysis only)",
-                              nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "solicitation_id": {
+                    "type": "string",
+                    "description": "Solicitation ID to analyze",
+                },
+                "analysis_depth": {
+                    "type": "string",
+                    "description": "Depth of analysis",
+                    "default": "standard",
+                    "enum": ["brief", "standard", "detailed"],
+                },
+                "focus_areas": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Specific areas to focus on",
+                    "default": None,
+                    "examples": [["technical_requirements", "pricing", "past_performance"]],
+                },
+            },
+            "required": ["solicitation_id"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Comprehensive solicitation analysis for business development",
+            "properties": {
+                "solicitation_id": {
+                    "type": "string",
+                    "description": "UUID of the analyzed solicitation",
+                },
+                "notice_id": {
+                    "type": "string",
+                    "description": "SAM.gov notice ID",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Solicitation title",
+                },
+                "analysis": {
+                    "type": "string",
+                    "description": "Markdown-formatted analysis with executive summary, requirements, evaluation criteria, timeline, and recommendations",
+                },
+                "analysis_depth": {
+                    "type": "string",
+                    "description": "Depth of analysis (brief, standard, detailed)",
+                    "examples": ["standard"],
+                },
+                "model": {
+                    "type": "string",
+                    "description": "LLM model used for analysis",
+                },
+                "cached": {
+                    "type": "boolean",
+                    "description": "True if returned from cache (brief analysis only)",
+                    "nullable": True,
+                },
+            },
+        },
         tags=["compound", "sam", "analysis", "bd"],
         requires_llm=True,
         side_effects=True,

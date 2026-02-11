@@ -19,9 +19,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -51,41 +48,30 @@ class DiscoverDataSourcesFunction(BaseFunction):
             "example questions, recommended search tools with usage guidance, "
             "and live configuration details (configured sites, searches, collections)."
         ),
-        parameters=[
-            ParameterDoc(
-                name="source_type",
-                type="str",
-                description="Filter to a specific source type",
-                required=False,
-                default=None,
-                enum_values=[
-                    "sam_gov", "sharepoint", "forecast_ag", "forecast_apfs",
-                    "forecast_state", "salesforce", "web_scrape",
-                ],
-            ),
-        ],
-        returns="dict: Catalog of source types with capabilities, search tools, and live instances",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Two-level data source catalog",
-            fields=[
-                OutputFieldDoc(
-                    name="source_types",
-                    type="list[dict]",
-                    description="Source type definitions with instances",
-                ),
-                OutputFieldDoc(
-                    name="total_source_types",
-                    type="int",
-                    description="Number of source types returned",
-                ),
-                OutputFieldDoc(
-                    name="total_instances",
-                    type="int",
-                    description="Total configured instances across all types",
-                ),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "source_type": {
+                    "type": "string",
+                    "description": "Filter to a specific source type",
+                    "default": None,
+                    "enum": [
+                        "sam_gov", "sharepoint", "forecast_ag", "forecast_apfs",
+                        "forecast_state", "salesforce", "web_scrape",
+                    ],
+                },
+            },
+            "required": [],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Two-level data source catalog",
+            "properties": {
+                "source_types": {"type": "array", "items": {"type": "object"}, "description": "Source type definitions with instances"},
+                "total_source_types": {"type": "integer", "description": "Number of source types returned"},
+                "total_instances": {"type": "integer", "description": "Total configured instances across all types"},
+            },
+        },
         tags=["search", "discovery", "metadata", "data-sources"],
         requires_llm=False,
         side_effects=False,

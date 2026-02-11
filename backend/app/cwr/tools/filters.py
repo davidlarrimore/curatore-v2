@@ -4,7 +4,7 @@ CWR-wide ``where`` filter standard.
 
 Provides a reusable operator-based condition format for filtering records by
 JSONB metadata fields.  Any CWR tool that needs field-level filtering can
-import ``WHERE_PARAM`` (a ready-made ``ParameterDoc``) and
+import ``WHERE_SCHEMA`` (a ready-made JSON Schema fragment) and
 ``build_jsonb_where`` (the SQLAlchemy clause builder).
 
 Condition format::
@@ -20,8 +20,6 @@ from typing import Any, Dict, List
 from sqlalchemy import or_
 from sqlalchemy import func as sqla_func
 from sqlalchemy.sql.elements import ClauseElement
-
-from .base import ParameterDoc
 
 # ---------------------------------------------------------------------------
 # Operator catalogue
@@ -68,13 +66,12 @@ WHERE_CONDITION_SCHEMA: Dict[str, Any] = {
 }
 
 # ---------------------------------------------------------------------------
-# Reusable ParameterDoc — import this into any tool that needs ``where``
+# Reusable JSON Schema fragment — import into any tool that needs ``where``
 # ---------------------------------------------------------------------------
 
-WHERE_PARAM = ParameterDoc(
-    name="where",
-    type="list[dict]",
-    description=(
+WHERE_SCHEMA: Dict[str, Any] = {
+    "type": "array",
+    "description": (
         "Operator-based metadata conditions. Each condition has 'field' "
         "(namespace.key JSONB path), 'op' (operator), and optional 'value'. "
         "Conditions are ANDed together. "
@@ -83,14 +80,9 @@ WHERE_PARAM = ParameterDoc(
         "Use 'is_empty' to find records where a field is null, missing, or "
         "empty string. Only applies when query='*'."
     ),
-    required=False,
-    default=None,
-    example=[{"field": "sharepoint.site_name", "op": "is_empty"}],
-    schema={
-        "type": "array",
-        "items": WHERE_CONDITION_SCHEMA,
-    },
-)
+    "items": WHERE_CONDITION_SCHEMA,
+    "examples": [[{"field": "sharepoint.site_name", "op": "is_empty"}]],
+}
 
 # ---------------------------------------------------------------------------
 # Validation helper

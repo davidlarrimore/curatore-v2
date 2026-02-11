@@ -18,9 +18,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 from ...content import ContentItem
@@ -51,130 +48,104 @@ class SearchScrapedAssetsFunction(BaseFunction):
             "use get_content(asset_ids=[...]) with IDs from these results. "
             "Use discover_data_sources(source_type='web_scrape') to see available collections."
         ),
-        parameters=[
-            ParameterDoc(
-                name="collection_id",
-                type="str",
-                description="Filter by scrape collection ID. Required unless collection_name is provided.",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="collection_name",
-                type="str",
-                description="Filter by collection name (e.g., 'GSA AG'). Case-insensitive. Resolves to collection_id automatically. collection_id takes precedence if both provided.",
-                required=False,
-                default=None,
-                example="GSA Acquisition Gateway",
-            ),
-            ParameterDoc(
-                name="keyword",
-                type="str",
-                description=(
-                    "Short keyword query (2-4 key terms work best). "
-                    "Use specific terms, not full sentences. "
-                    "Use collection_name or collection_id to narrow results instead of adding more query terms."
-                ),
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="search_mode",
-                type="str",
-                description="Search mode: keyword (exact matches), semantic (conceptual), or hybrid (both)",
-                required=False,
-                default="hybrid",
-                enum_values=["keyword", "semantic", "hybrid"],
-            ),
-            ParameterDoc(
-                name="semantic_weight",
-                type="float",
-                description="Weight for semantic search in hybrid mode (0-1, default 0.5)",
-                required=False,
-                default=0.5,
-            ),
-            ParameterDoc(
-                name="asset_subtype",
-                type="str",
-                description="Filter by asset subtype",
-                required=False,
-                default=None,
-                enum_values=["page", "record"],
-            ),
-            ParameterDoc(
-                name="is_promoted",
-                type="bool",
-                description="Filter by promotion status",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="url_path_prefix",
-                type="str",
-                description="Filter by URL path prefix (for hierarchical browsing)",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="crawl_depth",
-                type="int",
-                description="Filter by specific crawl depth",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="max_crawl_depth",
-                type="int",
-                description="Filter by maximum crawl depth",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="order_by",
-                type="str",
-                description="Field to order by (only used when no keyword search)",
-                required=False,
-                default="-created_at",
-                enum_values=["-created_at", "created_at", "url_path", "-crawl_depth", "crawl_depth"],
-            ),
-            ParameterDoc(
-                name="limit",
-                type="int",
-                description="Maximum number of results",
-                required=False,
-                default=50,
-            ),
-            ParameterDoc(
-                name="offset",
-                type="int",
-                description="Number of results to skip for pagination",
-                required=False,
-                default=0,
-            ),
-        ],
-        returns="list[ContentItem]: Matching scraped assets as ContentItem instances",
-        output_schema=OutputSchema(
-            type="list[ContentItem]",
-            description="List of matching scraped web pages and records",
-            fields=[
-                OutputFieldDoc(name="id", type="str", description="Scraped asset UUID"),
-                OutputFieldDoc(name="title", type="str", description="Page title or filename"),
-                OutputFieldDoc(name="url", type="str", description="Full URL of the page"),
-                OutputFieldDoc(name="url_path", type="str", description="URL path portion"),
-                OutputFieldDoc(name="parent_url", type="str",
-                              description="URL of the parent page", nullable=True),
-                OutputFieldDoc(name="asset_subtype", type="str",
-                              description="Asset type: page or record", example="page"),
-                OutputFieldDoc(name="crawl_depth", type="int",
-                              description="Depth from seed URL", example=2),
-                OutputFieldDoc(name="is_promoted", type="bool",
-                              description="Whether asset is promoted to main collection"),
-                OutputFieldDoc(name="score", type="float", description="Relevance score",
-                              nullable=True),
-                OutputFieldDoc(name="highlights", type="dict",
-                              description="Highlighted search matches", nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "collection_id": {
+                    "type": "string",
+                    "description": "Filter by scrape collection ID. Required unless collection_name is provided.",
+                    "default": None,
+                },
+                "collection_name": {
+                    "type": "string",
+                    "description": "Filter by collection name (e.g., 'GSA AG'). Case-insensitive. Resolves to collection_id automatically. collection_id takes precedence if both provided.",
+                    "default": None,
+                    "examples": ["GSA Acquisition Gateway"],
+                },
+                "keyword": {
+                    "type": "string",
+                    "description": (
+                        "Short keyword query (2-4 key terms work best). "
+                        "Use specific terms, not full sentences. "
+                        "Use collection_name or collection_id to narrow results instead of adding more query terms."
+                    ),
+                    "default": None,
+                },
+                "search_mode": {
+                    "type": "string",
+                    "description": "Search mode: keyword (exact matches), semantic (conceptual), or hybrid (both)",
+                    "default": "hybrid",
+                    "enum": ["keyword", "semantic", "hybrid"],
+                },
+                "semantic_weight": {
+                    "type": "number",
+                    "description": "Weight for semantic search in hybrid mode (0-1, default 0.5)",
+                    "default": 0.5,
+                },
+                "asset_subtype": {
+                    "type": "string",
+                    "description": "Filter by asset subtype",
+                    "default": None,
+                    "enum": ["page", "record"],
+                },
+                "is_promoted": {
+                    "type": "boolean",
+                    "description": "Filter by promotion status",
+                    "default": None,
+                },
+                "url_path_prefix": {
+                    "type": "string",
+                    "description": "Filter by URL path prefix (for hierarchical browsing)",
+                    "default": None,
+                },
+                "crawl_depth": {
+                    "type": "integer",
+                    "description": "Filter by specific crawl depth",
+                    "default": None,
+                },
+                "max_crawl_depth": {
+                    "type": "integer",
+                    "description": "Filter by maximum crawl depth",
+                    "default": None,
+                },
+                "order_by": {
+                    "type": "string",
+                    "description": "Field to order by (only used when no keyword search)",
+                    "default": "-created_at",
+                    "enum": ["-created_at", "created_at", "url_path", "-crawl_depth", "crawl_depth"],
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results",
+                    "default": 50,
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of results to skip for pagination",
+                    "default": 0,
+                },
+            },
+            "required": [],
+        },
+        output_schema={
+            "type": "array",
+            "description": "List of matching scraped web pages and records",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Scraped asset UUID"},
+                    "title": {"type": "string", "description": "Page title or filename"},
+                    "url": {"type": "string", "description": "Full URL of the page"},
+                    "url_path": {"type": "string", "description": "URL path portion"},
+                    "parent_url": {"type": "string", "description": "URL of the parent page", "nullable": True},
+                    "asset_subtype": {"type": "string", "description": "Asset type: page or record", "examples": ["page"]},
+                    "crawl_depth": {"type": "integer", "description": "Depth from seed URL", "examples": [2]},
+                    "is_promoted": {"type": "boolean", "description": "Whether asset is promoted to main collection"},
+                    "score": {"type": "number", "description": "Relevance score", "nullable": True},
+                    "highlights": {"type": "object", "description": "Highlighted search matches", "nullable": True},
+                },
+            },
+        },
         tags=["search", "scrape", "web", "content", "hybrid"],
         requires_llm=False,
         side_effects=False,

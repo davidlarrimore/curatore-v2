@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
-import { functionsApi, type FunctionMeta } from '@/lib/api'
+import { functionsApi, type FunctionMeta, getParametersFromSchema } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import {
@@ -335,13 +335,13 @@ function FunctionsContent() {
                       {expandedFunctions.has(fn.name) && (
                         <div className="mt-4 ml-6 space-y-4">
                           {/* Parameters */}
-                          {fn.parameters && fn.parameters.length > 0 && (
+                          {(() => { const params = getParametersFromSchema(fn); return params.length > 0 && (
                             <div>
                               <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
-                                Parameters ({fn.parameters.length})
+                                Parameters ({params.length})
                               </h4>
                               <div className="space-y-2">
-                                {fn.parameters.map((param) => (
+                                {params.map((param) => (
                                   <div key={param.name} className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900/50">
                                     <div className="flex items-center gap-2">
                                       <span className="text-sm font-mono font-medium text-gray-900 dark:text-white">
@@ -370,10 +370,10 @@ function FunctionsContent() {
                                 ))}
                               </div>
                             </div>
-                          )}
+                          ); })()}
 
                           {/* Output Schema */}
-                          {fn.output_schema && (
+                          {fn.output_schema && fn.output_schema.type && (
                             <div>
                               <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
                                 Returns
@@ -384,26 +384,52 @@ function FunctionsContent() {
                                     {fn.output_schema.type}
                                   </span>
                                 </div>
-                                <p className="text-sm text-gray-600 dark:text-gray-400">
-                                  {fn.output_schema.description}
-                                </p>
-                                {fn.output_schema.fields && fn.output_schema.fields.length > 0 && (
+                                {fn.output_schema.description && (
+                                  <p className="text-sm text-gray-600 dark:text-gray-400">
+                                    {fn.output_schema.description}
+                                  </p>
+                                )}
+                                {/* Properties from JSON Schema */}
+                                {fn.output_schema.properties && Object.keys(fn.output_schema.properties).length > 0 && (
                                   <div className="mt-2 space-y-1.5">
-                                    {fn.output_schema.fields.map((field) => (
-                                      <div key={field.name} className="flex items-start gap-2 text-sm">
+                                    {Object.entries(fn.output_schema.properties).map(([name, prop]: [string, any]) => (
+                                      <div key={name} className="flex items-start gap-2 text-sm">
                                         <span className="font-mono text-indigo-600 dark:text-indigo-400">
-                                          {field.name}
+                                          {name}
                                         </span>
                                         <span className="text-xs px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
-                                          {field.type}
+                                          {prop.type}
                                         </span>
-                                        {field.nullable && (
+                                        {prop.nullable && (
                                           <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-500">
                                             nullable
                                           </span>
                                         )}
                                         <span className="text-gray-500 dark:text-gray-400 flex-1">
-                                          {field.description}
+                                          {prop.description}
+                                        </span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                )}
+                                {/* Array items properties */}
+                                {fn.output_schema.items?.properties && Object.keys(fn.output_schema.items.properties).length > 0 && (
+                                  <div className="mt-2 space-y-1.5">
+                                    {Object.entries(fn.output_schema.items.properties).map(([name, prop]: [string, any]) => (
+                                      <div key={name} className="flex items-start gap-2 text-sm">
+                                        <span className="font-mono text-indigo-600 dark:text-indigo-400">
+                                          {name}
+                                        </span>
+                                        <span className="text-xs px-1.5 py-0.5 rounded bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-400">
+                                          {prop.type}
+                                        </span>
+                                        {prop.nullable && (
+                                          <span className="text-xs px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-800 text-gray-500 dark:text-gray-500">
+                                            nullable
+                                          </span>
+                                        )}
+                                        <span className="text-gray-500 dark:text-gray-400 flex-1">
+                                          {prop.description}
                                         </span>
                                       </div>
                                     ))}
@@ -412,32 +438,41 @@ function FunctionsContent() {
                               </div>
 
                               {/* Output Variants */}
-                              {fn.output_variants && fn.output_variants.length > 0 && (
+                              {fn.output_schema.variants && fn.output_schema.variants.length > 0 && (
                                 <div className="mt-3 space-y-2">
-                                  {fn.output_variants.map((variant, idx) => (
+                                  {fn.output_schema.variants.map((variant: any, idx: number) => (
                                     <div key={idx} className="p-3 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-900/50">
                                       <div className="flex items-center gap-2 mb-2">
                                         <span className="text-xs font-semibold text-indigo-700 dark:text-indigo-300 uppercase">
-                                          {variant.mode} mode
+                                          {variant.type}
                                         </span>
                                         <span className="text-xs text-indigo-600 dark:text-indigo-400">
-                                          ({variant.condition})
+                                          {variant.description}
                                         </span>
                                       </div>
-                                      <div className="flex items-center gap-2 mb-1">
-                                        <span className="text-sm font-mono text-gray-900 dark:text-white">
-                                          {variant.schema.type}
-                                        </span>
-                                      </div>
-                                      {variant.schema.fields && variant.schema.fields.length > 0 && (
+                                      {variant.properties && Object.keys(variant.properties).length > 0 && (
                                         <div className="mt-2 space-y-1">
-                                          {variant.schema.fields.map((field) => (
-                                            <div key={field.name} className="flex items-start gap-2 text-xs">
+                                          {Object.entries(variant.properties).map(([name, prop]: [string, any]) => (
+                                            <div key={name} className="flex items-start gap-2 text-xs">
                                               <span className="font-mono text-indigo-600 dark:text-indigo-400">
-                                                {field.name}
+                                                {name}
                                               </span>
                                               <span className="text-gray-500 dark:text-gray-400">
-                                                ({field.type})
+                                                ({prop.type})
+                                              </span>
+                                            </div>
+                                          ))}
+                                        </div>
+                                      )}
+                                      {variant.items?.properties && Object.keys(variant.items.properties).length > 0 && (
+                                        <div className="mt-2 space-y-1">
+                                          {Object.entries(variant.items.properties).map(([name, prop]: [string, any]) => (
+                                            <div key={name} className="flex items-start gap-2 text-xs">
+                                              <span className="font-mono text-indigo-600 dark:text-indigo-400">
+                                                {name}
+                                              </span>
+                                              <span className="text-gray-500 dark:text-gray-400">
+                                                ({prop.type})
                                               </span>
                                             </div>
                                           ))}
@@ -447,20 +482,6 @@ function FunctionsContent() {
                                   ))}
                                 </div>
                               )}
-                            </div>
-                          )}
-
-                          {/* Fallback: Returns string if no output_schema */}
-                          {!fn.output_schema && fn.returns && (
-                            <div>
-                              <h4 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-2">
-                                Returns
-                              </h4>
-                              <div className="p-3 rounded-lg bg-gray-50 dark:bg-gray-900/50">
-                                <span className="text-sm font-mono text-gray-700 dark:text-gray-300">
-                                  {fn.returns}
-                                </span>
-                              </div>
                             </div>
                           )}
 

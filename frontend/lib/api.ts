@@ -4500,6 +4500,10 @@ export const sharepointSyncApi = {
 // FUNCTIONS API
 // =============================================================================
 
+/**
+ * UI-friendly parameter shape derived from JSON Schema properties.
+ * Used by input components (FunctionInput, ParameterTooltip, etc.).
+ */
 export interface FunctionParameter {
   name: string
   type: string
@@ -4510,35 +4514,12 @@ export interface FunctionParameter {
   example?: any
 }
 
-export interface OutputField {
-  name: string
-  type: string
-  description: string
-  example?: any
-  nullable: boolean
-}
-
-export interface OutputSchema {
-  type: string
-  description: string
-  fields: OutputField[]
-  example?: any
-}
-
-export interface OutputVariant {
-  mode: string
-  condition: string
-  schema: OutputSchema
-}
-
 export interface FunctionMeta {
   name: string
   description: string
   category: string
-  parameters: FunctionParameter[]
-  returns: string
-  output_schema?: OutputSchema
-  output_variants?: OutputVariant[]
+  input_schema: Record<string, any>
+  output_schema: Record<string, any>
   examples?: Array<Record<string, any>>
   tags: string[]
   is_async: boolean
@@ -4550,6 +4531,54 @@ export interface FunctionMeta {
   is_primitive?: boolean
   payload_profile?: string
   exposure_profile?: Record<string, any>
+}
+
+/**
+ * Convert a FunctionMeta's input_schema (JSON Schema) to a FunctionParameter array.
+ * Used by UI components that need the old parameter list format.
+ */
+export function getParametersFromSchema(meta: FunctionMeta): FunctionParameter[] {
+  const schema = meta.input_schema
+  if (!schema || !schema.properties) return []
+
+  const required: string[] = schema.required || []
+  return Object.entries(schema.properties).map(([name, prop]: [string, any]) => {
+    // Map JSON Schema type to the simple type strings the UI expects
+    let type = prop.type || 'string'
+    if (type === 'array') {
+      const itemType = prop.items?.type || 'object'
+      type = `list[${itemType === 'string' ? 'str' : itemType}]`
+    } else if (type === 'integer') {
+      type = 'int'
+    } else if (type === 'number') {
+      type = 'float'
+    } else if (type === 'boolean') {
+      type = 'bool'
+    } else if (type === 'string') {
+      type = 'str'
+    }
+
+    // Enum values: check top-level or items-level
+    let enum_values: string[] | undefined
+    if (prop.enum) {
+      enum_values = prop.enum
+    } else if (prop.items?.enum) {
+      enum_values = prop.items.enum
+    }
+
+    // Example: take first from examples array
+    const example = prop.examples?.[0]
+
+    return {
+      name,
+      type,
+      description: prop.description || '',
+      required: required.includes(name),
+      default: prop.default,
+      enum_values,
+      example,
+    }
+  })
 }
 
 export interface FunctionListResponse {

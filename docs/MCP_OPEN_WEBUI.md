@@ -171,7 +171,7 @@ curl -X POST http://localhost:8020/search_assets \
 
 ## Available Tools
 
-Both connection methods expose the same tools, controlled by `mcp/policy.yaml`:
+Both connection methods expose the same tools, auto-derived from backend contracts with `exposure_profile.agent: true` (see `mcp/policy.yaml` for denylist overrides):
 
 ### Search Functions
 
@@ -246,17 +246,16 @@ AI: [calls confirm_email with token]
 
 The MCP Gateway enforces policies defined in `mcp/policy.yaml`:
 
-### Allowlist
+### Auto-Derive Mode (v2.0)
 
-Only functions in the allowlist are exposed:
+Tools are automatically exposed based on their backend contract's `exposure_profile.agent` field. No allowlist needed — add a function to the backend with `agent: true` and it appears in MCP.
+
+To block specific tools, add them to the **denylist**:
 
 ```yaml
-allowlist:
-  - search_assets
-  - search_notices
-  - prepare_email
-  - confirm_email
-  # ... etc
+version: "2.0"
+denylist:
+  - dangerous_function  # Block regardless of exposure_profile
 ```
 
 ### Side Effects Control
@@ -290,9 +289,10 @@ Limits enforced on parameters:
 
 ### "Tool not found" Errors
 
-1. Check tool is in `policy.yaml` allowlist
-2. Verify tool doesn't have blocked side effects
-3. Check backend is running: `curl http://localhost:8000/api/v1/admin/system/health`
+1. Check the function has `exposure_profile.agent: true` in its backend contract
+2. Check the function is not in `policy.yaml` denylist
+3. Verify tool doesn't have blocked side effects (or is in `side_effects_allowlist`)
+4. Check backend is running: `curl http://localhost:8000/api/v1/admin/system/health`
 
 ### Connection Refused
 
@@ -349,7 +349,7 @@ Open WebUI
 
 ## Claude Desktop Integration
 
-Claude Desktop uses **STDIO transport** (not HTTP). See the [MCP Gateway README](../mcp/README.md#claude-desktop) for Docker-based setup.
+Claude Desktop connects via **MCP Streamable HTTP transport** (same as Open WebUI's MCP method). See the [MCP Gateway README](../mcp/README.md#claude-desktop) for configuration.
 
 ---
 

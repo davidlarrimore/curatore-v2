@@ -1,4 +1,4 @@
-# backend/app/functions/base.py
+# backend/app/cwr/tools/base.py
 """
 Base classes for the Curatore Functions Framework.
 
@@ -10,7 +10,6 @@ Key Classes:
     - BaseFunction: Abstract base class for all functions
     - FunctionResult: Standard result wrapper for function outputs
     - FunctionMeta: Metadata about a function for discovery/documentation
-    - ParameterDoc: Documentation for function parameters
 """
 
 from abc import ABC, abstractmethod
@@ -46,108 +45,31 @@ class FunctionStatus(str, Enum):
 
 
 @dataclass
-class ParameterDoc:
-    """Documentation for a single function parameter."""
-    name: str
-    type: str
-    description: str
-    required: bool = True
-    default: Any = None
-    enum_values: Optional[List[str]] = None
-    example: Any = None
-    schema: Optional[Dict[str, Any]] = None  # JSON Schema override for contract generation
-
-
-@dataclass
-class OutputFieldDoc:
-    """
-    Documentation for a single output field.
-
-    Used within OutputSchema to document the structure of function outputs,
-    making it easier for engineers and AI to understand and use the fields
-    in templates.
-
-    Attributes:
-        name: Field name (used in templates as {{ item.name }})
-        type: Data type ("str", "int", "float", "bool", "list[str]", "dict", etc.)
-        description: Human-readable description of the field
-        example: Optional example value
-        nullable: Whether the field can be None/null
-    """
-    name: str
-    type: str
-    description: str
-    example: Any = None
-    nullable: bool = False
-
-
-@dataclass
-class OutputSchema:
-    """
-    Structured documentation for function output.
-
-    Provides machine-readable documentation of what a function returns,
-    including field names, types, and descriptions. This enables:
-    - Engineers to know exact field names when writing procedures
-    - AI procedure generator to reliably generate correct template references
-    - API consumers to understand the output structure programmatically
-
-    Attributes:
-        type: Top-level return type ("str", "dict", "list[ContentItem]", etc.)
-        description: Human-readable description of the output
-        fields: List of field documentation for structured types
-        example: Optional complete example of the output
-    """
-    type: str
-    description: str
-    fields: List[OutputFieldDoc] = field(default_factory=list)
-    example: Any = None
-
-
-@dataclass
-class OutputVariant:
-    """
-    Alternative output schema for dual-mode functions.
-
-    Some functions (like LLM functions) return different types depending on
-    their mode of operation. For example, llm_generate returns a string in
-    single mode but a list of dicts in collection mode. OutputVariant allows
-    documenting these alternative outputs.
-
-    Attributes:
-        mode: Mode name (e.g., "single", "collection")
-        condition: When this variant applies (e.g., "when items parameter provided")
-        schema: The OutputSchema for this mode
-    """
-    mode: str
-    condition: str
-    schema: OutputSchema
-
-
-@dataclass
 class FunctionMeta:
     """
     Metadata about a function for discovery and documentation.
 
+    Functions define their parameters and outputs as JSON Schema dicts directly.
     This metadata is used by:
     - The functions API for listing available functions
     - The procedure/pipeline executor for validation
-    - Documentation generation
+    - The contract system for governance and AI procedure generation
     """
     name: str
     category: FunctionCategory
     description: str
-    parameters: List[ParameterDoc] = field(default_factory=list)
-    returns: str = "FunctionResult"
+    input_schema: Dict[str, Any] = field(default_factory=lambda: {
+        "type": "object", "properties": {}, "required": []
+    })
+    output_schema: Dict[str, Any] = field(default_factory=lambda: {
+        "type": "object", "description": "Function output"
+    })
     examples: List[Dict[str, Any]] = field(default_factory=list)
     tags: List[str] = field(default_factory=list)
     requires_llm: bool = False
     requires_session: bool = True
     is_async: bool = True
     version: str = "1.0.0"
-    # Structured output documentation (optional, supplements 'returns' string)
-    output_schema: Optional[OutputSchema] = None
-    output_variants: List[OutputVariant] = field(default_factory=list)
     # Governance metadata for Tool Contracts
     side_effects: bool = False
     is_primitive: bool = True
@@ -156,24 +78,12 @@ class FunctionMeta:
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
-        result = {
+        return {
             "name": self.name,
             "category": self.category.value,
             "description": self.description,
-            "parameters": [
-                {
-                    "name": p.name,
-                    "type": p.type,
-                    "description": p.description,
-                    "required": p.required,
-                    "default": p.default,
-                    "enum_values": p.enum_values,
-                    "example": p.example,
-                    **({"schema": p.schema} if p.schema else {}),
-                }
-                for p in self.parameters
-            ],
-            "returns": self.returns,
+            "input_schema": self.input_schema,
+            "output_schema": self.output_schema,
             "examples": self.examples,
             "tags": self.tags,
             "requires_llm": self.requires_llm,
@@ -186,50 +96,28 @@ class FunctionMeta:
             "exposure_profile": self.exposure_profile,
         }
 
-        # Add output_schema if present
-        if self.output_schema:
-            result["output_schema"] = {
-                "type": self.output_schema.type,
-                "description": self.output_schema.description,
-                "fields": [
-                    {
-                        "name": f.name,
-                        "type": f.type,
-                        "description": f.description,
-                        "example": f.example,
-                        "nullable": f.nullable,
-                    }
-                    for f in self.output_schema.fields
-                ],
-                "example": self.output_schema.example,
-            }
+    def to_contract_dict(self) -> Dict[str, Any]:
+        """Same shape as old ToolContract.to_dict()."""
+        return {
+            "name": self.name,
+            "description": self.description,
+            "category": self.category.value,
+            "version": self.version,
+            "input_schema": self.input_schema,
+            "output_schema": self.output_schema,
+            "side_effects": self.side_effects,
+            "is_primitive": self.is_primitive,
+            "payload_profile": self.payload_profile,
+            "exposure_profile": self.exposure_profile,
+            "requires_llm": self.requires_llm,
+            "requires_session": self.requires_session,
+            "tags": list(self.tags),
+        }
 
-        # Add output_variants if present
-        if self.output_variants:
-            result["output_variants"] = [
-                {
-                    "mode": v.mode,
-                    "condition": v.condition,
-                    "schema": {
-                        "type": v.schema.type,
-                        "description": v.schema.description,
-                        "fields": [
-                            {
-                                "name": f.name,
-                                "type": f.type,
-                                "description": f.description,
-                                "example": f.example,
-                                "nullable": f.nullable,
-                            }
-                            for f in v.schema.fields
-                        ],
-                        "example": v.schema.example,
-                    },
-                }
-                for v in self.output_variants
-            ]
-
-        return result
+    def as_contract(self) -> "ContractView":
+        """Create a ContractView from this metadata."""
+        from .schema_utils import ContractView
+        return ContractView(**self.to_contract_dict())
 
 
 @dataclass
@@ -417,6 +305,17 @@ class FlowResult(FunctionResult):
 T = TypeVar("T")
 
 
+# JSON Schema type to Python type mapping for validation
+_JSON_SCHEMA_TYPE_CHECKS: Dict[str, type] = {
+    "string": str,
+    "integer": int,
+    "number": (int, float),
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
+
+
 class BaseFunction(ABC):
     """
     Abstract base class for all Curatore functions.
@@ -437,10 +336,14 @@ class BaseFunction(ABC):
                 name="generate",
                 category=FunctionCategory.LLM,
                 description="Generate text using LLM",
-                parameters=[
-                    ParameterDoc("prompt", "str", "The prompt to generate from"),
-                    ParameterDoc("model", "str", "Model to use", required=False),
-                ],
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "prompt": {"type": "string", "description": "The prompt to generate from"},
+                        "model": {"type": "string", "description": "Model to use"},
+                    },
+                    "required": ["prompt"],
+                },
             )
 
             async def execute(self, ctx: FunctionContext, **params) -> FunctionResult:
@@ -459,59 +362,16 @@ class BaseFunction(ABC):
 
         Args:
             ctx: Function context with services and state
-            **params: Function parameters (validated against meta.parameters)
+            **params: Function parameters (validated against meta.input_schema)
 
         Returns:
             FunctionResult with the output
         """
         pass
 
-    # Type string to Python type mapping for validation
-    _TYPE_CHECKS: Dict[str, type] = {
-        "str": str,
-        "string": str,
-        "int": int,
-        "integer": int,
-        "float": (int, float),
-        "number": (int, float),
-        "bool": bool,
-        "boolean": bool,
-        "list": list,
-        "list[str]": list,
-        "list[string]": list,
-        "list[int]": list,
-        "list[dict]": list,
-        "list[object]": list,
-        "dict": dict,
-        "object": dict,
-    }
-
-    def _check_type(self, name: str, value: Any, type_str: str) -> None:
-        """
-        Check that a parameter value matches its declared type.
-
-        Args:
-            name: Parameter name
-            value: Parameter value
-            type_str: Type string from ParameterDoc
-
-        Raises:
-            ValueError: If value doesn't match the expected type
-        """
-        expected = self._TYPE_CHECKS.get(type_str.strip().lower())
-        if expected is None:
-            return  # Unknown type, skip check
-
-        if not isinstance(value, expected):
-            expected_name = type_str
-            actual_name = type(value).__name__
-            raise ValueError(
-                f"Parameter '{name}' expects type '{expected_name}' but got '{actual_name}'"
-            )
-
     def validate_params(self, params: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Validate and normalize input parameters.
+        Validate and normalize input parameters against the JSON Schema input_schema.
 
         Checks required parameters, applies defaults, validates types,
         and checks enum constraints. Template strings (Jinja2 {{ ... }})
@@ -526,45 +386,65 @@ class BaseFunction(ABC):
         Raises:
             ValueError: If required parameters are missing or types are invalid
         """
+        schema = self.meta.input_schema
+        properties = schema.get("properties", {})
+        required = set(schema.get("required", []))
+
         validated = {}
 
-        for param_doc in self.meta.parameters:
-            if param_doc.name in params:
-                value = params[param_doc.name]
+        for name, prop_schema in properties.items():
+            if name in params:
+                value = params[name]
 
                 # Optional parameters with None values are treated as absent
-                if value is None and not param_doc.required:
+                if value is None and name not in required:
                     continue
 
-                validated[param_doc.name] = value
+                validated[name] = value
 
                 # Skip type/enum validation for template strings
                 if isinstance(value, str) and "{{" in value:
                     continue
 
-                # Type checking
-                self._check_type(param_doc.name, value, param_doc.type)
-
-                # Enum validation
-                if param_doc.enum_values:
-                    # For array types, validate each item; for scalars, validate the value
-                    if param_doc.type.startswith("list") and isinstance(value, list):
-                        for item in value:
-                            if item not in param_doc.enum_values:
-                                raise ValueError(
-                                    f"Parameter '{param_doc.name}' contains invalid value '{item}' "
-                                    f"not in allowed values: {param_doc.enum_values}"
-                                )
-                    elif value not in param_doc.enum_values:
+                # Type checking from JSON Schema type field
+                json_type = prop_schema.get("type")
+                if json_type and json_type in _JSON_SCHEMA_TYPE_CHECKS:
+                    expected = _JSON_SCHEMA_TYPE_CHECKS[json_type]
+                    if not isinstance(value, expected):
                         raise ValueError(
-                            f"Parameter '{param_doc.name}' value '{value}' not in allowed values: "
-                            f"{param_doc.enum_values}"
+                            f"Parameter '{name}' expects type '{json_type}' "
+                            f"but got '{type(value).__name__}'"
                         )
 
-            elif param_doc.required:
-                raise ValueError(f"Missing required parameter: {param_doc.name}")
-            elif param_doc.default is not None:
-                validated[param_doc.name] = param_doc.default
+                # Enum validation
+                enum_values = prop_schema.get("enum")
+                items_enum = prop_schema.get("items", {}).get("enum") if isinstance(prop_schema.get("items"), dict) else None
+
+                if enum_values:
+                    if isinstance(value, list):
+                        for item in value:
+                            if item not in enum_values:
+                                raise ValueError(
+                                    f"Parameter '{name}' contains invalid value '{item}' "
+                                    f"not in allowed values: {enum_values}"
+                                )
+                    elif value not in enum_values:
+                        raise ValueError(
+                            f"Parameter '{name}' value '{value}' not in allowed values: "
+                            f"{enum_values}"
+                        )
+                elif items_enum and isinstance(value, list):
+                    for item in value:
+                        if item not in items_enum:
+                            raise ValueError(
+                                f"Parameter '{name}' contains invalid value '{item}' "
+                                f"not in allowed values: {items_enum}"
+                            )
+
+            elif name in required:
+                raise ValueError(f"Missing required parameter: {name}")
+            elif "default" in prop_schema:
+                validated[name] = prop_schema["default"]
 
         return validated
 
@@ -612,3 +492,4 @@ class BaseFunction(ABC):
 from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from .context import FunctionContext
+    from .schema_utils import ContractView

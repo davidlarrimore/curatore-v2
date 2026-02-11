@@ -21,9 +21,6 @@ from ..base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -84,68 +81,59 @@ class PrepareEmailFunction(BaseFunction):
         name="prepare_email",
         category=FunctionCategory.NOTIFY,
         description="Prepare an email for sending. Returns a preview and confirmation token. Call confirm_email with the token to actually send.",
-        parameters=[
-            ParameterDoc(
-                name="to",
-                type="list[str]",
-                description="Recipient email addresses",
-                required=True,
-                example=["user@example.com"],
-            ),
-            ParameterDoc(
-                name="subject",
-                type="str",
-                description="Email subject line",
-                required=True,
-            ),
-            ParameterDoc(
-                name="body",
-                type="str",
-                description="Email body content (plain text or HTML)",
-                required=True,
-            ),
-            ParameterDoc(
-                name="html",
-                type="bool",
-                description="Whether body is HTML formatted",
-                required=False,
-                default=False,
-            ),
-            ParameterDoc(
-                name="cc",
-                type="list[str]",
-                description="CC recipients",
-                required=False,
-                default=None,
-            ),
-        ],
-        returns="dict: Email preview with confirmation token",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Email preview and confirmation details",
-            fields=[
-                OutputFieldDoc(
-                    name="confirmation_token",
-                    type="str",
-                    description="Token to confirm and send the email. Pass to confirm_email.",
-                ),
-                OutputFieldDoc(
-                    name="preview",
-                    type="dict",
-                    description="Preview of the email that will be sent",
-                ),
-                OutputFieldDoc(
-                    name="expires_in_minutes",
-                    type="int",
-                    description="Minutes until the confirmation token expires",
-                ),
-                OutputFieldDoc(
-                    name="instructions",
-                    type="str",
-                    description="Instructions for the user/agent",
-                ),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Recipient email addresses",
+                    "examples": [["user@example.com"]],
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Email subject line",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Email body content (plain text or HTML)",
+                },
+                "html": {
+                    "type": "boolean",
+                    "description": "Whether body is HTML formatted",
+                    "default": False,
+                },
+                "cc": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "CC recipients",
+                    "default": None,
+                },
+            },
+            "required": ["to", "subject", "body"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Email preview and confirmation details",
+            "properties": {
+                "confirmation_token": {
+                    "type": "string",
+                    "description": "Token to confirm and send the email. Pass to confirm_email.",
+                },
+                "preview": {
+                    "type": "object",
+                    "description": "Preview of the email that will be sent",
+                },
+                "expires_in_minutes": {
+                    "type": "integer",
+                    "description": "Minutes until the confirmation token expires",
+                },
+                "instructions": {
+                    "type": "string",
+                    "description": "Instructions for the user/agent",
+                },
+            },
+        },
         tags=["notify", "email", "mcp", "confirmation"],
         requires_llm=False,
         side_effects=False,  # No side effects - just prepares
@@ -248,30 +236,40 @@ class ConfirmEmailFunction(BaseFunction):
         name="confirm_email",
         category=FunctionCategory.NOTIFY,
         description="Confirm and send a prepared email. Requires the confirmation_token from prepare_email.",
-        parameters=[
-            ParameterDoc(
-                name="confirmation_token",
-                type="str",
-                description="The confirmation token from prepare_email",
-                required=True,
-            ),
-        ],
-        returns="dict: Email send result",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Email send operation result",
-            fields=[
-                OutputFieldDoc(name="success", type="bool",
-                              description="Whether the email was sent"),
-                OutputFieldDoc(name="to", type="list[str]",
-                              description="Recipients"),
-                OutputFieldDoc(name="subject", type="str",
-                              description="Email subject"),
-                OutputFieldDoc(name="message_id", type="str",
-                              description="Email service message ID",
-                              nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "confirmation_token": {
+                    "type": "string",
+                    "description": "The confirmation token from prepare_email",
+                },
+            },
+            "required": ["confirmation_token"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Email send operation result",
+            "properties": {
+                "success": {
+                    "type": "boolean",
+                    "description": "Whether the email was sent",
+                },
+                "to": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Recipients",
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Email subject",
+                },
+                "message_id": {
+                    "type": "string",
+                    "description": "Email service message ID",
+                    "nullable": True,
+                },
+            },
+        },
         tags=["notify", "email", "mcp", "confirmation"],
         requires_llm=False,
         side_effects=True,  # Actually sends the email

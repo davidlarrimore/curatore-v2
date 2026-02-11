@@ -19,9 +19,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -47,48 +44,52 @@ class UpdateSourceMetadataFunction(BaseFunction):
         name="update_source_metadata",
         category=FunctionCategory.OUTPUT,
         description="Update Asset.source_metadata for a specific namespace with shallow merge, then propagate to search index.",
-        parameters=[
-            ParameterDoc(
-                name="asset_id",
-                type="str",
-                description="Asset UUID",
-                required=True,
-            ),
-            ParameterDoc(
-                name="namespace",
-                type="str",
-                description="Namespace to update (e.g. 'sharepoint', 'sam', 'salesforce', 'forecast', 'source', 'file')",
-                required=True,
-            ),
-            ParameterDoc(
-                name="fields",
-                type="dict",
-                description="Fields to merge into namespace (shallow merge — provided keys overwrite, unprovided keys preserved)",
-                required=True,
-            ),
-            ParameterDoc(
-                name="propagate_to_search",
-                type="bool",
-                description="Propagate changes to search_chunks.metadata",
-                required=False,
-                default=True,
-            ),
-        ],
-        returns="dict: Update result with asset_id, namespace, fields_updated, propagated",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Result of source metadata update operation",
-            fields=[
-                OutputFieldDoc(name="asset_id", type="str",
-                              description="UUID of the updated asset"),
-                OutputFieldDoc(name="namespace", type="str",
-                              description="Namespace that was updated"),
-                OutputFieldDoc(name="fields_updated", type="list[str]",
-                              description="List of field keys that were updated"),
-                OutputFieldDoc(name="propagated", type="bool",
-                              description="Whether changes were propagated to search index"),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string",
+                    "description": "Asset UUID",
+                },
+                "namespace": {
+                    "type": "string",
+                    "description": "Namespace to update (e.g. 'sharepoint', 'sam', 'salesforce', 'forecast', 'source', 'file')",
+                },
+                "fields": {
+                    "type": "object",
+                    "description": "Fields to merge into namespace (shallow merge — provided keys overwrite, unprovided keys preserved)",
+                },
+                "propagate_to_search": {
+                    "type": "boolean",
+                    "description": "Propagate changes to search_chunks.metadata",
+                    "default": True,
+                },
+            },
+            "required": ["asset_id", "namespace", "fields"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Result of source metadata update operation",
+            "properties": {
+                "asset_id": {
+                    "type": "string",
+                    "description": "UUID of the updated asset",
+                },
+                "namespace": {
+                    "type": "string",
+                    "description": "Namespace that was updated",
+                },
+                "fields_updated": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of field keys that were updated",
+                },
+                "propagated": {
+                    "type": "boolean",
+                    "description": "Whether changes were propagated to search index",
+                },
+            },
+        },
         tags=["output", "metadata", "source-metadata", "assets"],
         requires_llm=False,
         side_effects=True,

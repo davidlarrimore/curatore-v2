@@ -1605,11 +1605,11 @@ Data connections should integrate with the Curatore Workflow Runtime (CWR) to en
        │                             │                              │
        ▼                             ▼                              ▼
 ┌─────────────┐             ┌─────────────────┐            ┌─────────────────┐
-│ FunctionMeta │            │ FunctionContext  │            │ ToolContract    │
+│ FunctionMeta │            │ FunctionContext  │            │ ContractView    │
 │ (governance) │            │ (services, DB,  │            │ (JSON Schema)   │
-│              │            │  template engine)│            │ Auto-generated  │
+│              │            │  template engine)│            │ Auto-derived    │
 ├─────────────┤            ├─────────────────┤            ├─────────────────┤
-│ BaseFunction │──execute──▶│ FunctionResult  │            │ ContractGen     │
+│ BaseFunction │──execute──▶│ FunctionResult  │            │meta.as_contract()│
 │ (execute())  │            │ (data, status)  │            │ (from Meta)     │
 └─────────────┘            └─────────────────┘            └─────────────────┘
        │                                                         │
@@ -1638,31 +1638,43 @@ All classes are in `backend/app/cwr/tools/base.py`.
 | `UTILITY` | Utility functions |
 | `LOGIC` | Logic functions |
 
-**ParameterDoc** (dataclass):
+**input_schema** (JSON Schema dict):
 
-| Field | Type | Default | Description |
-|-------|------|---------|-------------|
-| `name` | `str` | -- | Parameter name (snake_case) |
-| `type` | `str` | -- | Type: `"str"`, `"int"`, `"float"`, `"bool"`, `"list[str]"`, `"list[dict]"`, `"dict"`, `"any"` |
-| `description` | `str` | -- | Human-readable description |
-| `required` | `bool` | `True` | Whether parameter is mandatory. Optional params with `None` values are treated as absent. |
-| `default` | `Any` | `None` | Default value |
-| `enum_values` | `Optional[List[str]]` | `None` | Allowed values (validated at runtime; for arrays, validates each item) |
-| `example` | `Any` | `None` | Example value for documentation |
-
-**OutputFieldDoc** / **OutputSchema** / **OutputVariant** (dataclasses):
+Function parameters are defined as a standard JSON Schema `"type": "object"` dict:
 
 ```python
-OutputFieldDoc(name="title", type="str", description="Document title", example="RFP-2026", nullable=False)
+input_schema={
+    "type": "object",
+    "properties": {
+        "query": {"type": "string", "description": "Search query"},
+        "limit": {"type": "integer", "description": "Max results", "default": 20},
+        "tags": {"type": "array", "items": {"type": "string"}, "description": "Filter tags"},
+        "mode": {"type": "string", "description": "Search mode", "enum": ["keyword", "semantic", "hybrid"]},
+    },
+    "required": ["query"],
+}
+```
 
-OutputSchema(
-    type="list[ContentItem]",
-    description="Search results as ContentItems",
-    fields=[OutputFieldDoc(...)],
-    example=None,
-)
+Type mappings: `string`, `integer`, `number`, `boolean`, `array` (with `items`), `object`. Use `"default"` for defaults, `"enum"` for allowed values, `"examples"` for examples.
 
-OutputVariant(mode="single", condition="when single ID provided", schema=OutputSchema(...))
+**output_schema** (JSON Schema dict):
+
+```python
+output_schema={
+    "type": "array",
+    "description": "Search results as ContentItems",
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "description": "Asset UUID"},
+            "title": {"type": "string", "description": "Document title"},
+            "score": {"type": "number", "description": "Relevance score"},
+        },
+    },
+    "variants": [
+        {"mode": "single", "description": "when single ID provided", "schema": {"type": "object", "properties": {...}}}
+    ],
+}
 ```
 
 **FunctionMeta** — all governance fields:
@@ -1672,15 +1684,13 @@ OutputVariant(mode="single", condition="when single ID provided", schema=OutputS
 | `name` | `str` | -- | Unique function name (snake_case) |
 | `category` | `FunctionCategory` | -- | Category enum |
 | `description` | `str` | -- | Description for catalog and AI procedure generator |
-| `parameters` | `List[ParameterDoc]` | `[]` | Parameter documentation |
-| `returns` | `str` | `"FunctionResult"` | Return type description |
+| `input_schema` | `Dict[str, Any]` | `{}` | JSON Schema for function parameters |
 | `examples` | `List[Dict]` | `[]` | Usage examples (`{description, params}`) |
 | `tags` | `List[str]` | `[]` | Categorization tags |
 | `version` | `str` | `"1.0.0"` | Semantic version |
 | `requires_llm` | `bool` | `False` | Needs LLM connection |
 | `requires_session` | `bool` | `True` | Needs database session |
-| `output_schema` | `Optional[OutputSchema]` | `None` | Machine-readable output structure |
-| `output_variants` | `List[OutputVariant]` | `[]` | Alternative output schemas for dual-mode functions |
+| `output_schema` | `Dict[str, Any]` | `{}` | JSON Schema for function output |
 | **`side_effects`** | `bool` | `False` | Modifies external state (DB writes, email, artifacts). AI generator places these late in workflows. |
 | **`is_primitive`** | `bool` | `True` | `True` = atomic operation, `False` = compound (orchestrates sub-steps) |
 | **`payload_profile`** | `str` | `"full"` | `"thin"` = IDs/titles/scores, `"full"` = complete data, `"summary"` = condensed. AI generator adds `get_content` after `thin` functions before LLM steps. |
@@ -1728,9 +1738,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputSchema,
-    OutputFieldDoc,
 )
 from ...context import FunctionContext
 from ...content import ContentItem
@@ -1751,46 +1758,44 @@ class SearchMyDataFunction(BaseFunction):
             "This searches My Data only — use discover_data_sources to see all "
             "available data sources and the appropriate search tool for each."
         ),
-        parameters=[
-            ParameterDoc(
-                name="query",
-                type="str",
-                description="Search query. Use keywords, not filters. Example: 'cloud migration'",
-                required=False,
-            ),
-            ParameterDoc(
-                name="entity_types",
-                type="list[str]",
-                description="Entity types to include",
-                required=False,
-                default=["type_a", "type_b"],
-                enum_values=["type_a", "type_b", "type_c"],
-            ),
-            ParameterDoc(
-                name="facet_filters",
-                type="dict",
-                description="Cross-domain facet filters. Example: {\"agency\": \"GSA\"}",
-                required=False,
-            ),
-            ParameterDoc(
-                name="limit",
-                type="int",
-                description="Maximum results (1–100)",
-                required=False,
-                default=20,
-            ),
-        ],
-        returns="list[ContentItem]: Search results with relevance scores",
-        output_schema=OutputSchema(
-            type="list[ContentItem]",
-            description="My Data search results",
-            fields=[
-                OutputFieldDoc(name="id", type="str", description="Record UUID"),
-                OutputFieldDoc(name="title", type="str", description="Record title"),
-                OutputFieldDoc(name="score", type="float", description="Relevance score"),
-                OutputFieldDoc(name="category", type="str", description="Record category", nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Search query. Use keywords, not filters. Example: 'cloud migration'",
+                },
+                "entity_types": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["type_a", "type_b", "type_c"]},
+                    "description": "Entity types to include",
+                    "default": ["type_a", "type_b"],
+                },
+                "facet_filters": {
+                    "type": "object",
+                    "description": 'Cross-domain facet filters. Example: {"agency": "GSA"}',
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum results (1–100)",
+                    "default": 20,
+                },
+            },
+            "required": [],
+        },
+        output_schema={
+            "type": "array",
+            "description": "My Data search results",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Record UUID"},
+                    "title": {"type": "string", "description": "Record title"},
+                    "score": {"type": "number", "description": "Relevance score"},
+                    "category": {"type": "string", "description": "Record category", "nullable": True},
+                },
+            },
+        },
         tags=["search", "my_data", "hybrid"],
         requires_llm=False,
         side_effects=False,
@@ -1911,9 +1916,6 @@ from ..base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputSchema,
-    OutputFieldDoc,
 )
 from ..context import FunctionContext
 from ..content import ContentItem
@@ -1928,20 +1930,23 @@ class AnalyzeMyDataFunction(BaseFunction):
         name="analyze_my_data",
         category=FunctionCategory.COMPOUND,
         description="Multi-step analysis of My Data records. Fetches record, checks for cached analysis, calls LLM if needed.",
-        parameters=[
-            ParameterDoc(name="record_id", type="str", description="Record UUID", required=True),
-            ParameterDoc(name="depth", type="str", description="Analysis depth", required=False, default="brief", enum_values=["brief", "detailed"]),
-        ],
-        returns="ContentItem: Analysis result",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Analysis result",
-            fields=[
-                OutputFieldDoc(name="record_id", type="str", description="Analyzed record ID"),
-                OutputFieldDoc(name="analysis", type="str", description="LLM analysis text"),
-                OutputFieldDoc(name="model", type="str", description="Model used"),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "record_id": {"type": "string", "description": "Record UUID"},
+                "depth": {"type": "string", "description": "Analysis depth", "default": "brief", "enum": ["brief", "detailed"]},
+            },
+            "required": ["record_id"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Analysis result",
+            "properties": {
+                "record_id": {"type": "string", "description": "Analyzed record ID"},
+                "analysis": {"type": "string", "description": "LLM analysis text"},
+                "model": {"type": "string", "description": "Model used"},
+            },
+        },
         tags=["compound", "analysis", "my_data", "llm"],
         requires_llm=True,
         side_effects=True,       # Saves analysis to database
@@ -2014,10 +2019,14 @@ class MySourceGetInfoFunction(BaseFunction):
         name="my_source_get_info",
         category=FunctionCategory.DATA,
         description="Get metadata from My Source API",
-        parameters=[
-            ParameterDoc(name="url", type="str", description="Source URL", required=False),
-            ParameterDoc(name="config_id", type="str", description="Sync config UUID", required=False),
-        ],
+        input_schema={
+            "type": "object",
+            "properties": {
+                "url": {"type": "string", "description": "Source URL"},
+                "config_id": {"type": "string", "description": "Sync config UUID"},
+            },
+            "required": [],
+        },
         # ...
         side_effects=False,      # Read-only
         is_primitive=True,
@@ -2132,10 +2141,10 @@ ALLOWED_MODELS = {
 
 ### Tool Contracts (Auto-Generated)
 
-Tool contracts are auto-generated from `FunctionMeta` by `ContractGenerator` (`backend/app/cwr/contracts/tool_contracts.py`). You do **not** need to create contracts manually.
+Tool contracts are auto-derived from `FunctionMeta` via `meta.as_contract()` (returns a `ContractView` from `backend/app/cwr/tools/schema_utils.py`). You do **not** need to create contracts manually.
 
 The generated contract includes:
-- `input_schema` — JSON Schema from `parameters` list
+- `input_schema` — JSON Schema dict (defined directly on `FunctionMeta`)
 - `output_schema` — JSON Schema from `output_schema`
 - All governance fields (`side_effects`, `payload_profile`, `exposure_profile`, etc.)
 

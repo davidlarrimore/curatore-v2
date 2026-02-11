@@ -13,6 +13,7 @@ import {
   type ValidationResult,
   type FunctionMeta,
   type Procedure,
+  getParametersFromSchema,
 } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
@@ -334,7 +335,7 @@ function ProcedureEditor() {
   // Copy function snippet
   const copyFunctionSnippet = (func: FunctionMeta) => {
     const params: Record<string, any> = {}
-    func.parameters.forEach(p => {
+    getParametersFromSchema(func).forEach(p => {
       if (p.required) {
         params[p.name] = p.example || p.default || `<${p.type}>`
       }
@@ -845,13 +846,13 @@ function ProcedureEditor() {
                                       )}
 
                                       {/* Parameters */}
-                                      {func.parameters.length > 0 && (
+                                      {(() => { const params = getParametersFromSchema(func); return params.length > 0 && (
                                         <div>
                                           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
                                             Parameters
                                           </p>
                                           <div className="space-y-1">
-                                            {func.parameters.map((param) => (
+                                            {params.map((param) => (
                                               <div key={param.name} className="flex items-start gap-2 text-xs">
                                                 <span className="font-mono text-gray-700 dark:text-gray-300">
                                                   {param.name}
@@ -867,10 +868,10 @@ function ProcedureEditor() {
                                             ))}
                                           </div>
                                         </div>
-                                      )}
+                                      ); })()}
 
                                       {/* Output Schema */}
-                                      {func.output_schema && (
+                                      {func.output_schema && func.output_schema.type && (
                                         <div>
                                           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
                                             Output
@@ -878,41 +879,43 @@ function ProcedureEditor() {
                                           <p className="text-xs font-mono text-indigo-600 dark:text-indigo-400">
                                             {func.output_schema.type}
                                           </p>
-                                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
-                                            {func.output_schema.description}
-                                          </p>
-                                          {func.output_schema.fields && func.output_schema.fields.length > 0 && (
+                                          {func.output_schema.description && (
+                                            <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                                              {func.output_schema.description}
+                                            </p>
+                                          )}
+                                          {func.output_schema.properties && Object.keys(func.output_schema.properties).length > 0 && (
                                             <div className="mt-1 space-y-0.5">
-                                              {func.output_schema.fields.map((field) => (
-                                                <div key={field.name} className="flex items-start gap-1.5 text-[10px]">
-                                                  <span className="font-mono text-gray-600 dark:text-gray-400">.{field.name}</span>
-                                                  <span className="text-gray-400">({field.type})</span>
-                                                  <span className="text-gray-500 truncate">{field.description}</span>
+                                              {Object.entries(func.output_schema.properties).map(([name, prop]: [string, any]) => (
+                                                <div key={name} className="flex items-start gap-1.5 text-[10px]">
+                                                  <span className="font-mono text-gray-600 dark:text-gray-400">.{name}</span>
+                                                  <span className="text-gray-400">({prop.type})</span>
+                                                  <span className="text-gray-500 truncate">{prop.description}</span>
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                          {func.output_schema.items?.properties && Object.keys(func.output_schema.items.properties).length > 0 && (
+                                            <div className="mt-1 space-y-0.5">
+                                              {Object.entries(func.output_schema.items.properties).map(([name, prop]: [string, any]) => (
+                                                <div key={name} className="flex items-start gap-1.5 text-[10px]">
+                                                  <span className="font-mono text-gray-600 dark:text-gray-400">.{name}</span>
+                                                  <span className="text-gray-400">({prop.type})</span>
+                                                  <span className="text-gray-500 truncate">{prop.description}</span>
                                                 </div>
                                               ))}
                                             </div>
                                           )}
                                           {/* Output variants */}
-                                          {func.output_variants && func.output_variants.length > 0 && (
+                                          {func.output_schema.variants && func.output_schema.variants.length > 0 && (
                                             <div className="mt-1.5">
-                                              {func.output_variants.map((variant) => (
-                                                <div key={variant.mode} className="text-[10px] text-gray-500 dark:text-gray-400 italic">
-                                                  {variant.mode} mode: {variant.condition}
+                                              {func.output_schema.variants.map((variant: any, idx: number) => (
+                                                <div key={idx} className="text-[10px] text-gray-500 dark:text-gray-400 italic">
+                                                  {variant.description}
                                                 </div>
                                               ))}
                                             </div>
                                           )}
-                                        </div>
-                                      )}
-                                      {/* Fallback: show returns string if no structured output_schema */}
-                                      {!func.output_schema && func.returns && (
-                                        <div>
-                                          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
-                                            Returns
-                                          </p>
-                                          <p className="text-xs font-mono text-gray-600 dark:text-gray-400">
-                                            {func.returns}
-                                          </p>
                                         </div>
                                       )}
 

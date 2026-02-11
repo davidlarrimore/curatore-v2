@@ -3,7 +3,7 @@
 Tests for the Tool Contracts system.
 
 Covers:
-- Contract generation from FunctionMeta
+- Contract generation from FunctionMeta (via as_contract())
 - JSON Schema correctness (types, required, enum)
 - Parameter type validation (pass/fail cases)
 - Enum validation
@@ -16,13 +16,9 @@ from app.cwr.tools.base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputSchema,
-    OutputFieldDoc,
-    OutputVariant,
     BaseFunction,
 )
-from app.cwr.contracts import ToolContract, ContractGenerator
+from app.cwr.tools.schema_utils import ContractView
 
 
 # =============================================================================
@@ -36,11 +32,18 @@ def _make_meta(**overrides) -> FunctionMeta:
         name="test_func",
         category=FunctionCategory.SEARCH,
         description="A test function",
-        parameters=[
-            ParameterDoc(name="query", type="str", description="Search query", required=True),
-            ParameterDoc(name="limit", type="int", description="Max results", required=False, default=10),
-        ],
-        returns="list: Search results",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "limit": {"type": "integer", "description": "Max results", "default": 10},
+            },
+            "required": ["query"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Search results",
+        },
         tags=["test"],
         requires_llm=False,
     )
@@ -49,47 +52,50 @@ def _make_meta(**overrides) -> FunctionMeta:
 
 
 def _make_meta_with_output() -> FunctionMeta:
-    """Create a FunctionMeta with output schema."""
+    """Create a FunctionMeta with detailed output schema."""
     return FunctionMeta(
         name="test_with_output",
         category=FunctionCategory.LLM,
         description="Test function with output schema",
-        parameters=[
-            ParameterDoc(name="text", type="str", description="Input text", required=True),
-            ParameterDoc(
-                name="style", type="str", description="Output style",
-                required=False, default="paragraph",
-                enum_values=["paragraph", "bullets", "one_sentence"],
-            ),
-            ParameterDoc(name="count", type="int", description="Count", required=False, default=5),
-            ParameterDoc(name="items", type="list[str]", description="Items", required=False),
-            ParameterDoc(name="config", type="dict", description="Config", required=False),
-            ParameterDoc(name="verbose", type="bool", description="Verbose", required=False, default=False),
-            ParameterDoc(name="threshold", type="float", description="Threshold", required=False, default=0.5),
-        ],
-        returns="dict: Result",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Classification result",
-            fields=[
-                OutputFieldDoc(name="category", type="str", description="Category"),
-                OutputFieldDoc(name="confidence", type="float", description="Score"),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "text": {"type": "string", "description": "Input text"},
+                "style": {
+                    "type": "string",
+                    "description": "Output style",
+                    "default": "paragraph",
+                    "enum": ["paragraph", "bullets", "one_sentence"],
+                },
+                "count": {"type": "integer", "description": "Count", "default": 5},
+                "items": {"type": "array", "description": "Items", "items": {"type": "string"}},
+                "config": {"type": "object", "description": "Config"},
+                "verbose": {"type": "boolean", "description": "Verbose", "default": False},
+                "threshold": {"type": "number", "description": "Threshold", "default": 0.5},
+            },
+            "required": ["text"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Classification result",
+            "properties": {
+                "category": {"type": "string", "description": "Category"},
+                "confidence": {"type": "number", "description": "Score"},
+            },
+            "variants": [
+                {
+                    "description": "collection: when items provided",
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "item_id": {"type": "string", "description": "Item ID"},
+                            "result": {"type": "object", "description": "Result"},
+                        },
+                    },
+                },
             ],
-        ),
-        output_variants=[
-            OutputVariant(
-                mode="collection",
-                condition="when items provided",
-                schema=OutputSchema(
-                    type="list[dict]",
-                    description="List of results",
-                    fields=[
-                        OutputFieldDoc(name="item_id", type="str", description="Item ID"),
-                        OutputFieldDoc(name="result", type="dict", description="Result"),
-                    ],
-                ),
-            ),
-        ],
+        },
         tags=["llm", "test"],
         requires_llm=True,
         side_effects=False,
@@ -104,20 +110,28 @@ class DummyFunction(BaseFunction):
         name="dummy",
         category=FunctionCategory.SEARCH,
         description="Dummy",
-        parameters=[
-            ParameterDoc(name="query", type="str", description="Query", required=True),
-            ParameterDoc(name="limit", type="int", description="Limit", required=False, default=10),
-            ParameterDoc(
-                name="mode", type="str", description="Mode",
-                required=False, default="keyword",
-                enum_values=["keyword", "semantic", "hybrid"],
-            ),
-            ParameterDoc(name="tags", type="list[str]", description="Tags", required=False),
-            ParameterDoc(name="config", type="dict", description="Config", required=False),
-            ParameterDoc(name="flag", type="bool", description="Flag", required=False, default=False),
-            ParameterDoc(name="score", type="float", description="Score", required=False, default=0.5),
-        ],
-        returns="list",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Query"},
+                "limit": {"type": "integer", "description": "Limit", "default": 10},
+                "mode": {
+                    "type": "string",
+                    "description": "Mode",
+                    "default": "keyword",
+                    "enum": ["keyword", "semantic", "hybrid"],
+                },
+                "tags": {"type": "array", "description": "Tags", "items": {"type": "string"}},
+                "config": {"type": "object", "description": "Config"},
+                "flag": {"type": "boolean", "description": "Flag", "default": False},
+                "score": {"type": "number", "description": "Score", "default": 0.5},
+            },
+            "required": ["query"],
+        },
+        output_schema={
+            "type": "array",
+            "description": "Search results",
+        },
         tags=["test"],
         requires_llm=False,
         side_effects=False,
@@ -135,13 +149,13 @@ class DummyFunction(BaseFunction):
 
 
 class TestContractGeneration:
-    """Tests for ToolContract generation from FunctionMeta."""
+    """Tests for ContractView generation from FunctionMeta via as_contract()."""
 
     def test_basic_contract_generation(self):
         meta = _make_meta()
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
 
-        assert isinstance(contract, ToolContract)
+        assert isinstance(contract, ContractView)
         assert contract.name == "test_func"
         assert contract.description == "A test function"
         assert contract.category == "search"
@@ -151,7 +165,7 @@ class TestContractGeneration:
 
     def test_governance_fields_defaults(self):
         meta = _make_meta()
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
 
         assert contract.side_effects is False
         assert contract.is_primitive is True
@@ -165,7 +179,7 @@ class TestContractGeneration:
             payload_profile="thin",
             exposure_profile={"procedure": True, "agent": False},
         )
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
 
         assert contract.side_effects is True
         assert contract.is_primitive is False
@@ -174,7 +188,7 @@ class TestContractGeneration:
 
     def test_to_dict(self):
         meta = _make_meta()
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
         d = contract.to_dict()
 
         assert d["name"] == "test_func"
@@ -192,11 +206,11 @@ class TestContractGeneration:
 
 
 class TestInputSchema:
-    """Tests for JSON Schema generation from parameters."""
+    """Tests for JSON Schema on ContractView input_schema."""
 
     def test_basic_input_schema(self):
         meta = _make_meta()
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
         schema = contract.input_schema
 
         assert schema["type"] == "object"
@@ -207,18 +221,18 @@ class TestInputSchema:
 
     def test_string_type(self):
         meta = _make_meta()
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
         assert contract.input_schema["properties"]["query"]["type"] == "string"
 
     def test_integer_type(self):
         meta = _make_meta()
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
         assert contract.input_schema["properties"]["limit"]["type"] == "integer"
         assert contract.input_schema["properties"]["limit"]["default"] == 10
 
     def test_all_types(self):
         meta = _make_meta_with_output()
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
         props = contract.input_schema["properties"]
 
         assert props["text"]["type"] == "string"
@@ -231,14 +245,18 @@ class TestInputSchema:
 
     def test_enum_values(self):
         meta = _make_meta_with_output()
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
         style_prop = contract.input_schema["properties"]["style"]
 
         assert style_prop["enum"] == ["paragraph", "bullets", "one_sentence"]
 
     def test_empty_params(self):
-        meta = _make_meta(parameters=[])
-        contract = ContractGenerator.generate(meta)
+        meta = _make_meta(input_schema={
+            "type": "object",
+            "properties": {},
+            "required": [],
+        })
+        contract = meta.as_contract()
 
         assert contract.input_schema["type"] == "object"
         assert contract.input_schema["properties"] == {}
@@ -246,18 +264,19 @@ class TestInputSchema:
 
 
 class TestOutputSchema:
-    """Tests for JSON Schema generation from output schema."""
+    """Tests for output_schema on ContractView."""
 
     def test_no_output_schema(self):
         meta = _make_meta()
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
 
+        # Default output_schema was overridden in _make_meta to have description
         assert contract.output_schema["type"] == "object"
-        assert contract.output_schema["description"] == "Function output"
+        assert "description" in contract.output_schema
 
     def test_dict_output_schema(self):
         meta = _make_meta_with_output()
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
 
         assert contract.output_schema["type"] == "object"
         assert "properties" in contract.output_schema
@@ -266,7 +285,7 @@ class TestOutputSchema:
 
     def test_output_variants(self):
         meta = _make_meta_with_output()
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
 
         assert "variants" in contract.output_schema
         assert len(contract.output_schema["variants"]) == 1
@@ -280,7 +299,7 @@ class TestOutputSchema:
 
 
 class TestParameterValidation:
-    """Tests for enhanced validate_params in BaseFunction."""
+    """Tests for validate_params in BaseFunction using JSON Schema input_schema."""
 
     def setup_method(self):
         self.func = DummyFunction()
@@ -295,32 +314,32 @@ class TestParameterValidation:
             self.func.validate_params({})
 
     def test_type_check_string(self):
-        with pytest.raises(ValueError, match="expects type 'str'"):
+        with pytest.raises(ValueError, match="expects type 'string'"):
             self.func.validate_params({"query": 123})
 
     def test_type_check_int(self):
-        with pytest.raises(ValueError, match="expects type 'int'"):
+        with pytest.raises(ValueError, match="expects type 'integer'"):
             self.func.validate_params({"query": "test", "limit": "abc"})
 
     def test_type_check_list(self):
-        with pytest.raises(ValueError, match="expects type 'list\\[str\\]'"):
+        with pytest.raises(ValueError, match="expects type 'array'"):
             self.func.validate_params({"query": "test", "tags": "not-a-list"})
 
     def test_type_check_dict(self):
-        with pytest.raises(ValueError, match="expects type 'dict'"):
+        with pytest.raises(ValueError, match="expects type 'object'"):
             self.func.validate_params({"query": "test", "config": "not-a-dict"})
 
     def test_type_check_bool(self):
-        with pytest.raises(ValueError, match="expects type 'bool'"):
+        with pytest.raises(ValueError, match="expects type 'boolean'"):
             self.func.validate_params({"query": "test", "flag": "yes"})
 
     def test_type_check_float(self):
-        # int should be accepted for float
+        # int should be accepted for number type
         result = self.func.validate_params({"query": "test", "score": 1})
         assert result["score"] == 1
 
     def test_type_check_float_rejects_string(self):
-        with pytest.raises(ValueError, match="expects type 'float'"):
+        with pytest.raises(ValueError, match="expects type 'number'"):
             self.func.validate_params({"query": "test", "score": "high"})
 
     def test_enum_validation_pass(self):
@@ -441,7 +460,7 @@ class TestValidatorWithContracts:
 
 
 class TestTypeMapping:
-    """Tests for the type string to JSON Schema mapping."""
+    """Tests for the type string to JSON Schema mapping in schema_utils."""
 
     @pytest.mark.parametrize("type_str,expected_type", [
         ("str", "string"),
@@ -457,7 +476,8 @@ class TestTypeMapping:
         ("object", "object"),
     ])
     def test_basic_type_mapping(self, type_str, expected_type):
-        schema = ContractGenerator._param_type_to_json_schema(type_str)
+        from app.cwr.tools.schema_utils import param_type_to_json_schema
+        schema = param_type_to_json_schema(type_str)
         assert schema["type"] == expected_type
 
     @pytest.mark.parametrize("type_str,expected_items_type", [
@@ -466,10 +486,58 @@ class TestTypeMapping:
         ("list[int]", "integer"),
     ])
     def test_parameterized_list_mapping(self, type_str, expected_items_type):
-        schema = ContractGenerator._param_type_to_json_schema(type_str)
+        from app.cwr.tools.schema_utils import param_type_to_json_schema
+        schema = param_type_to_json_schema(type_str)
         assert schema["type"] == "array"
         assert schema["items"]["type"] == expected_items_type
 
     def test_unknown_type_defaults_to_string(self):
-        schema = ContractGenerator._param_type_to_json_schema("unknown_type")
+        from app.cwr.tools.schema_utils import param_type_to_json_schema
+        schema = param_type_to_json_schema("unknown_type")
         assert schema["type"] == "string"
+
+
+# =============================================================================
+# EXPLICIT OUTPUT SCHEMA TESTS
+# =============================================================================
+
+
+class TestExplicitOutputSchemas:
+    """Verify that the 4 tools that previously lacked output_schema now have explicit ones."""
+
+    def test_get_content_output_schema(self):
+        from app.cwr.tools.primitives.search.get_content import GetContentFunction
+        schema = GetContentFunction.meta.output_schema
+        assert schema is not None
+        assert schema["type"] == "array"
+        assert "items" in schema
+        assert "asset_id" in schema["items"]["properties"]
+        assert "content" in schema["items"]["properties"]
+
+    def test_get_asset_output_schema(self):
+        from app.cwr.tools.primitives.search.get_asset import GetAssetFunction
+        schema = GetAssetFunction.meta.output_schema
+        assert schema is not None
+        assert schema["type"] == "object"
+        assert "asset_id" in schema["properties"]
+        assert "filename" in schema["properties"]
+        assert "content" in schema["properties"]
+
+    def test_get_output_schema(self):
+        from app.cwr.tools.primitives.search.get import GetFunction
+        schema = GetFunction.meta.output_schema
+        assert schema is not None
+        assert schema["type"] == "object"
+        assert "id" in schema["properties"]
+        assert "title" in schema["properties"]
+        assert "text" in schema["properties"]
+
+    def test_query_model_output_schema(self):
+        from app.cwr.tools.primitives.search.query_model import QueryModelFunction
+        schema = QueryModelFunction.meta.output_schema
+        assert schema is not None
+        assert schema["type"] == "array"
+        # Dynamic schema — items is generic object
+        assert schema["items"]["type"] == "object"
+        # No properties defined (fields vary by model)
+        assert "properties" not in schema["items"]

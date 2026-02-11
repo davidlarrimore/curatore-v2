@@ -17,9 +17,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 from ...content import ContentItem
@@ -63,142 +60,105 @@ class SearchSalesforceFunction(BaseFunction):
             "get(item_type='salesforce_account', item_id='...') or the appropriate salesforce_ type. "
             "Use discover_data_sources(source_type='salesforce') to see configured connections."
         ),
-        parameters=[
-            ParameterDoc(
-                name="query",
-                type="str",
-                description=(
-                    "Short keyword query (2-4 key terms work best). "
-                    "Use specific names, company names, or acronyms. "
-                    "Good: 'DISCOVER II', 'DHS cybersecurity'. "
-                    "Use filters (entity_types, stage_name) to narrow results instead of adding more query terms."
-                ),
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="search_mode",
-                type="str",
-                description="Search mode: 'keyword' for exact term matches, 'semantic' for conceptual similarity, 'hybrid' combines both for best results.",
-                required=False,
-                default="hybrid",
-                enum_values=["keyword", "semantic", "hybrid"],
-            ),
-            ParameterDoc(
-                name="semantic_weight",
-                type="float",
-                description="Balance between keyword and semantic search in hybrid mode. 0.0 = keyword only, 1.0 = semantic only, 0.5 = equal weight.",
-                required=False,
-                default=0.5,
-            ),
-            ParameterDoc(
-                name="entity_types",
-                type="list[str]",
-                description="Which Salesforce entity types to search. Use 'account' for companies, 'contact' for people, 'opportunity' for deals/pursuits.",
-                required=False,
-                default=["account", "contact", "opportunity"],
-                enum_values=["account", "contact", "opportunity"],
-            ),
-            ParameterDoc(
-                name="account_id",
-                type="str",
-                description="Filter contacts and opportunities by their parent account UUID. Use to find all records related to a specific account.",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="account_type",
-                type="str",
-                description="Filter accounts by their type classification (e.g., 'Customer', 'Partner', 'Prospect').",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="industry",
-                type="str",
-                description="Filter accounts by industry (e.g., 'Government', 'Technology', 'Healthcare').",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="stage_name",
-                type="str",
-                description="Filter opportunities by sales stage (e.g., 'Qualification', 'Proposal', 'Negotiation', 'Closed Won').",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="is_open",
-                type="bool",
-                description="Filter opportunities: True for open/active opportunities, False for closed. Works with query to find matching open deals.",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="is_current_employee",
-                type="bool",
-                description="Filter contacts by employment status: True for current employees only, False for former employees.",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="limit",
-                type="int",
-                description="Maximum number of results",
-                required=False,
-                default=20,
-            ),
-            ParameterDoc(
-                name="offset",
-                type="int",
-                description="Number of results to skip for pagination",
-                required=False,
-                default=0,
-            ),
-        ],
-        returns="list[ContentItem]: Search results as ContentItem instances",
-        output_schema=OutputSchema(
-            type="list[ContentItem]",
-            description="List of matching Salesforce records (accounts, contacts, opportunities)",
-            fields=[
-                OutputFieldDoc(name="id", type="str", description="Record UUID"),
-                OutputFieldDoc(name="title", type="str", description="Record name"),
-                OutputFieldDoc(name="type", type="str",
-                              description="Entity type: salesforce_account, salesforce_contact, salesforce_opportunity",
-                              example="salesforce_opportunity"),
-                OutputFieldDoc(name="salesforce_id", type="str",
-                              description="Salesforce record ID", nullable=True),
-                # Account fields
-                OutputFieldDoc(name="account_type", type="str",
-                              description="Account type (for accounts)", nullable=True),
-                OutputFieldDoc(name="industry", type="str",
-                              description="Industry (for accounts)", nullable=True),
-                OutputFieldDoc(name="website", type="str",
-                              description="Website URL (for accounts)", nullable=True),
-                # Contact fields
-                OutputFieldDoc(name="first_name", type="str",
-                              description="First name (for contacts)", nullable=True),
-                OutputFieldDoc(name="last_name", type="str",
-                              description="Last name (for contacts)", nullable=True),
-                OutputFieldDoc(name="email", type="str",
-                              description="Email address (for contacts)", nullable=True),
-                OutputFieldDoc(name="phone", type="str",
-                              description="Phone number", nullable=True),
-                # Opportunity fields
-                OutputFieldDoc(name="stage_name", type="str",
-                              description="Sales stage (for opportunities)", nullable=True),
-                OutputFieldDoc(name="amount", type="float",
-                              description="Deal amount (for opportunities)", nullable=True),
-                OutputFieldDoc(name="close_date", type="str",
-                              description="Expected close date (for opportunities)", nullable=True),
-                OutputFieldDoc(name="is_closed", type="bool",
-                              description="Whether opportunity is closed", nullable=True),
-                OutputFieldDoc(name="is_won", type="bool",
-                              description="Whether opportunity was won", nullable=True),
-                OutputFieldDoc(name="score", type="float", description="Relevance score",
-                              nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Short keyword query (2-4 key terms work best). "
+                        "Use specific names, company names, or acronyms. "
+                        "Good: 'DISCOVER II', 'DHS cybersecurity'. "
+                        "Use filters (entity_types, stage_name) to narrow results instead of adding more query terms."
+                    ),
+                    "default": None,
+                },
+                "search_mode": {
+                    "type": "string",
+                    "description": "Search mode: 'keyword' for exact term matches, 'semantic' for conceptual similarity, 'hybrid' combines both for best results.",
+                    "default": "hybrid",
+                    "enum": ["keyword", "semantic", "hybrid"],
+                },
+                "semantic_weight": {
+                    "type": "number",
+                    "description": "Balance between keyword and semantic search in hybrid mode. 0.0 = keyword only, 1.0 = semantic only, 0.5 = equal weight.",
+                    "default": 0.5,
+                },
+                "entity_types": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["account", "contact", "opportunity"]},
+                    "description": "Which Salesforce entity types to search. Use 'account' for companies, 'contact' for people, 'opportunity' for deals/pursuits.",
+                    "default": ["account", "contact", "opportunity"],
+                },
+                "account_id": {
+                    "type": "string",
+                    "description": "Filter contacts and opportunities by their parent account UUID. Use to find all records related to a specific account.",
+                    "default": None,
+                },
+                "account_type": {
+                    "type": "string",
+                    "description": "Filter accounts by their type classification (e.g., 'Customer', 'Partner', 'Prospect').",
+                    "default": None,
+                },
+                "industry": {
+                    "type": "string",
+                    "description": "Filter accounts by industry (e.g., 'Government', 'Technology', 'Healthcare').",
+                    "default": None,
+                },
+                "stage_name": {
+                    "type": "string",
+                    "description": "Filter opportunities by sales stage (e.g., 'Qualification', 'Proposal', 'Negotiation', 'Closed Won').",
+                    "default": None,
+                },
+                "is_open": {
+                    "type": "boolean",
+                    "description": "Filter opportunities: True for open/active opportunities, False for closed. Works with query to find matching open deals.",
+                    "default": None,
+                },
+                "is_current_employee": {
+                    "type": "boolean",
+                    "description": "Filter contacts by employment status: True for current employees only, False for former employees.",
+                    "default": None,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results",
+                    "default": 20,
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of results to skip for pagination",
+                    "default": 0,
+                },
+            },
+            "required": [],
+        },
+        output_schema={
+            "type": "array",
+            "description": "List of matching Salesforce records (accounts, contacts, opportunities)",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Record UUID"},
+                    "title": {"type": "string", "description": "Record name"},
+                    "type": {"type": "string", "description": "Entity type: salesforce_account, salesforce_contact, salesforce_opportunity", "examples": ["salesforce_opportunity"]},
+                    "salesforce_id": {"type": "string", "description": "Salesforce record ID", "nullable": True},
+                    "account_type": {"type": "string", "description": "Account type (for accounts)", "nullable": True},
+                    "industry": {"type": "string", "description": "Industry (for accounts)", "nullable": True},
+                    "website": {"type": "string", "description": "Website URL (for accounts)", "nullable": True},
+                    "first_name": {"type": "string", "description": "First name (for contacts)", "nullable": True},
+                    "last_name": {"type": "string", "description": "Last name (for contacts)", "nullable": True},
+                    "email": {"type": "string", "description": "Email address (for contacts)", "nullable": True},
+                    "phone": {"type": "string", "description": "Phone number", "nullable": True},
+                    "stage_name": {"type": "string", "description": "Sales stage (for opportunities)", "nullable": True},
+                    "amount": {"type": "number", "description": "Deal amount (for opportunities)", "nullable": True},
+                    "close_date": {"type": "string", "description": "Expected close date (for opportunities)", "nullable": True},
+                    "is_closed": {"type": "boolean", "description": "Whether opportunity is closed", "nullable": True},
+                    "is_won": {"type": "boolean", "description": "Whether opportunity was won", "nullable": True},
+                    "score": {"type": "number", "description": "Relevance score", "nullable": True},
+                },
+            },
+        },
         tags=["search", "salesforce", "crm", "content", "hybrid"],
         requires_llm=False,
         side_effects=False,

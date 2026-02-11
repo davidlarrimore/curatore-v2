@@ -18,7 +18,6 @@ from app.cwr.tools.base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
 )
 
 
@@ -33,10 +32,13 @@ class DummyGatherFunction(BaseFunction):
         name="test_gather",
         category=FunctionCategory.SEARCH,
         description="Test gather function",
-        parameters=[
-            ParameterDoc(name="query", type="str", description="Query", required=False, default="*"),
-        ],
-        returns="list",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Query", "default": "*"},
+            },
+            "required": [],
+        },
         tags=["test"],
     )
 
@@ -57,11 +59,14 @@ class DummyFilterFunction(BaseFunction):
         name="test_filter",
         category=FunctionCategory.LOGIC,
         description="Test filter function",
-        parameters=[
-            ParameterDoc(name="item", type="dict", description="Item to filter", required=False),
-            ParameterDoc(name="threshold", type="float", description="Score threshold", required=False, default=0.5),
-        ],
-        returns="bool",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "item": {"type": "object", "description": "Item to filter"},
+                "threshold": {"type": "number", "description": "Score threshold", "default": 0.5},
+            },
+            "required": [],
+        },
         tags=["test"],
     )
 
@@ -78,10 +83,13 @@ class DummyTransformFunction(BaseFunction):
         name="test_transform",
         category=FunctionCategory.OUTPUT,
         description="Test transform function",
-        parameters=[
-            ParameterDoc(name="item", type="dict", description="Item to transform", required=False),
-        ],
-        returns="dict",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "item": {"type": "object", "description": "Item to transform"},
+            },
+            "required": [],
+        },
         tags=["test"],
     )
 
@@ -97,10 +105,13 @@ class DummyOutputFunction(BaseFunction):
         name="test_output",
         category=FunctionCategory.OUTPUT,
         description="Test output function",
-        parameters=[
-            ParameterDoc(name="items", type="list", description="Items to output", required=False),
-        ],
-        returns="dict",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "items": {"type": "array", "description": "Items to output"},
+            },
+            "required": [],
+        },
         tags=["test"],
     )
 
@@ -118,10 +129,13 @@ class DummyFailTransform(BaseFunction):
         name="test_fail_transform",
         category=FunctionCategory.OUTPUT,
         description="Test failing transform",
-        parameters=[
-            ParameterDoc(name="item", type="dict", description="Item", required=False),
-        ],
-        returns="dict",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "item": {"type": "object", "description": "Item"},
+            },
+            "required": [],
+        },
         tags=["test"],
     )
 

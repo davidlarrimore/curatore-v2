@@ -15,7 +15,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
 )
 from ...context import FunctionContext
 from ...content import ContentItem, content_service, content_type_registry
@@ -55,46 +54,54 @@ class GetFunction(BaseFunction):
             "scraped_asset, salesforce_account, salesforce_contact, salesforce_opportunity. "
             "NOTE: Forecasts are NOT supported here — use query_model for forecast details."
         ),
-        parameters=[
-            ParameterDoc(
-                name="item_type",
-                type="str",
-                description="Content type to retrieve. Forecasts are NOT supported — use query_model(model='AgForecast') instead.",
-                required=True,
-                enum_values=[
-                    "asset", "solicitation", "notice", "scraped_asset",
-                    "salesforce_account", "salesforce_contact", "salesforce_opportunity",
-                ],
-            ),
-            ParameterDoc(
-                name="item_id",
-                type="str",
-                description="UUID of the item to retrieve",
-                required=True,
-            ),
-            ParameterDoc(
-                name="include_text",
-                type="bool",
-                description="Whether to load text content",
-                required=False,
-                default=True,
-            ),
-            ParameterDoc(
-                name="include_children",
-                type="bool",
-                description="Whether to load child items (e.g., attachments)",
-                required=False,
-                default=True,
-            ),
-            ParameterDoc(
-                name="context",
-                type="str",
-                description="Display context for type names",
-                required=False,
-                default="default",
-            ),
-        ],
-        returns="ContentItem: The retrieved content item",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "item_type": {
+                    "type": "string",
+                    "description": "Content type to retrieve. Forecasts are NOT supported -- use query_model(model='AgForecast') instead.",
+                    "enum": [
+                        "asset", "solicitation", "notice", "scraped_asset",
+                        "salesforce_account", "salesforce_contact", "salesforce_opportunity",
+                    ],
+                },
+                "item_id": {
+                    "type": "string",
+                    "description": "UUID of the item to retrieve",
+                },
+                "include_text": {
+                    "type": "boolean",
+                    "description": "Whether to load text content",
+                    "default": True,
+                },
+                "include_children": {
+                    "type": "boolean",
+                    "description": "Whether to load child items (e.g., attachments)",
+                    "default": True,
+                },
+                "context": {
+                    "type": "string",
+                    "description": "Display context for type names",
+                    "default": "default",
+                },
+            },
+            "required": ["item_type", "item_id"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "ContentItem with metadata and optional text",
+            "properties": {
+                "id": {"type": "string"},
+                "type": {"type": "string"},
+                "display_type": {"type": "string"},
+                "title": {"type": "string", "nullable": True},
+                "text": {"type": "string", "nullable": True},
+                "text_format": {"type": "string"},
+                "fields": {"type": "object"},
+                "metadata": {"type": "object"},
+                "children": {"type": "array"},
+            },
+        },
         tags=["search", "content", "get"],
         requires_llm=False,
         side_effects=False,

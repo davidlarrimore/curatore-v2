@@ -13,9 +13,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -40,69 +37,76 @@ class SendEmailFunction(BaseFunction):
         name="send_email",
         category=FunctionCategory.NOTIFY,
         description="Send email notification",
-        parameters=[
-            ParameterDoc(
-                name="to",
-                type="list[str] | str",
-                description="Recipient email addresses (list, single email, or comma-separated string)",
-                required=True,
-            ),
-            ParameterDoc(
-                name="subject",
-                type="str",
-                description="Email subject",
-                required=True,
-            ),
-            ParameterDoc(
-                name="body",
-                type="str",
-                description="Email body (plain text or HTML)",
-                required=True,
-            ),
-            ParameterDoc(
-                name="html",
-                type="bool",
-                description="Whether body is HTML",
-                required=False,
-                default=False,
-            ),
-            ParameterDoc(
-                name="cc",
-                type="list[str] | str",
-                description="CC recipients (list, single email, or comma-separated string)",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="attachments",
-                type="list[dict]",
-                description="Attachments: [{filename, content, content_type}]",
-                required=False,
-                default=None,
-            ),
-        ],
-        returns="dict: Email send result",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Email send operation result",
-            fields=[
-                OutputFieldDoc(name="to", type="list[str]",
-                              description="List of recipient email addresses"),
-                OutputFieldDoc(name="subject", type="str",
-                              description="Email subject line"),
-                OutputFieldDoc(name="status", type="str",
-                              description="Send status (sent, logged)",
-                              example="sent"),
-                OutputFieldDoc(name="success", type="bool",
-                              description="Whether the email was sent successfully"),
-                OutputFieldDoc(name="message_id", type="str",
-                              description="Email service message ID",
-                              nullable=True),
-                OutputFieldDoc(name="error", type="str",
-                              description="Error message if send failed",
-                              nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "to": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Recipient email addresses (list, single email, or comma-separated string)",
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Email subject",
+                },
+                "body": {
+                    "type": "string",
+                    "description": "Email body (plain text or HTML)",
+                },
+                "html": {
+                    "type": "boolean",
+                    "description": "Whether body is HTML",
+                    "default": False,
+                },
+                "cc": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "CC recipients (list, single email, or comma-separated string)",
+                    "default": None,
+                },
+                "attachments": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Attachments: [{filename, content, content_type}]",
+                    "default": None,
+                },
+            },
+            "required": ["to", "subject", "body"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Email send operation result",
+            "properties": {
+                "to": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of recipient email addresses",
+                },
+                "subject": {
+                    "type": "string",
+                    "description": "Email subject line",
+                },
+                "status": {
+                    "type": "string",
+                    "description": "Send status (sent, logged)",
+                    "examples": ["sent"],
+                },
+                "success": {
+                    "type": "boolean",
+                    "description": "Whether the email was sent successfully",
+                },
+                "message_id": {
+                    "type": "string",
+                    "description": "Email service message ID",
+                    "nullable": True,
+                },
+                "error": {
+                    "type": "string",
+                    "description": "Error message if send failed",
+                    "nullable": True,
+                },
+            },
+        },
         tags=["notify", "email"],
         requires_llm=False,
         side_effects=True,

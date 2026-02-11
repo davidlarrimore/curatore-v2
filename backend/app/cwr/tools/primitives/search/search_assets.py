@@ -15,13 +15,10 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 from ...content import ContentItem
-from ...filters import WHERE_PARAM, build_jsonb_where
+from ...filters import WHERE_SCHEMA, build_jsonb_where
 
 logger = logging.getLogger("curatore.functions.search.search_assets")
 
@@ -50,122 +47,97 @@ class SearchAssetsFunction(BaseFunction):
             "This tool searches documents only — use discover_data_sources to see all available "
             "data sources and the appropriate search tool for each."
         ),
-        parameters=[
-            ParameterDoc(
-                name="query",
-                type="str",
-                description=(
-                    "Short keyword query (2-4 key terms work best). "
-                    "Use specific names or acronyms, not full sentences. "
-                    "Good: 'SOW cybersecurity', 'DISCOVER II proposal'. "
-                    "Bad: 'Statement of Work for cybersecurity endpoint protection and monitoring services'. "
-                    "Use filters (source_type, site_name, facet_filters) to narrow results instead of adding more query terms. "
-                    "Use '*' to list all assets matching the provided filters without text search (returns results ordered by creation date)."
-                ),
-                required=True,
-            ),
-            ParameterDoc(
-                name="source_type",
-                type="str",
-                description="Filter by source type",
-                required=False,
-                default=None,
-                enum_values=["upload", "sharepoint", "web_scrape", "sam_gov"],
-            ),
-            ParameterDoc(
-                name="collection_id",
-                type="str",
-                description="Filter by scrape collection ID",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="sync_config_id",
-                type="str",
-                description="Filter by SharePoint sync config ID",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="site_name",
-                type="str",
-                description="Filter by SharePoint site display name (e.g., 'IT Department'). Case-insensitive. Resolves to sync_config_ids automatically.",
-                required=False,
-                default=None,
-                example="IT Department",
-            ),
-            ParameterDoc(
-                name="facet_filters",
-                type="dict",
-                description="Cross-domain facet filters (e.g., {'agency': 'GSA', 'naics_code': '541512'}). Use discover_metadata to see available facets.",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="folder_path",
-                type="str",
-                description=(
-                    "Filter by folder path. Accepts human-readable SharePoint paths "
-                    "(e.g., 'Reuse Material/Past Performances') which prefix-match folders and subfolders, "
-                    "or slugified storage paths (e.g., 'sharepoint/my-site/shared-documents'). "
-                    "Use discover_data_sources(source_type='sharepoint') to see available folder paths."
-                ),
-                required=False,
-                default=None,
-                example="Reuse Material/Past Performances",
-            ),
-            ParameterDoc(
-                name="search_mode",
-                type="str",
-                description="Search mode",
-                required=False,
-                default="hybrid",
-                enum_values=["hybrid", "keyword", "semantic"],
-            ),
-            ParameterDoc(
-                name="keyword_weight",
-                type="float",
-                description="Weight for keyword search (0-1, only for hybrid mode)",
-                required=False,
-                default=0.5,
-            ),
-            ParameterDoc(
-                name="limit",
-                type="int",
-                description="Maximum number of results",
-                required=False,
-                default=20,
-            ),
-            WHERE_PARAM,
-        ],
-        returns="list[ContentItem]: Search results with document metadata",
-        output_schema=OutputSchema(
-            type="list[ContentItem]",
-            description="List of matching documents as ContentItem objects",
-            fields=[
-                OutputFieldDoc(name="id", type="str", description="Asset UUID",
-                              example="550e8400-e29b-41d4-a716-446655440000"),
-                OutputFieldDoc(name="title", type="str", description="Full document path/title",
-                              example="Opportunities/DHS/TSA/proposal.pdf"),
-                OutputFieldDoc(name="original_filename", type="str", description="File name only",
-                              example="proposal.pdf"),
-                OutputFieldDoc(name="folder_path", type="str", description="Folder path for SharePoint",
-                              example="Opportunities/DHS/TSA", nullable=True),
-                OutputFieldDoc(name="source_url", type="str", description="Direct URL to document",
-                              nullable=True),
-                OutputFieldDoc(name="content_type", type="str", description="MIME type",
-                              example="application/pdf"),
-                OutputFieldDoc(name="source_type", type="str", description="Source type",
-                              example="sharepoint"),
-                OutputFieldDoc(name="score", type="float", description="Relevance score (0-1)",
-                              example=0.85),
-                OutputFieldDoc(name="snippet", type="str", description="Highlighted text excerpt",
-                              nullable=True),
-                OutputFieldDoc(name="site_name", type="str",
-                              description="SharePoint site display name (SharePoint assets only)",
-                              example="IT Department", nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Short keyword query (2-4 key terms work best). "
+                        "Use specific names or acronyms, not full sentences. "
+                        "Good: 'SOW cybersecurity', 'DISCOVER II proposal'. "
+                        "Bad: 'Statement of Work for cybersecurity endpoint protection and monitoring services'. "
+                        "Use filters (source_type, site_name, facet_filters) to narrow results instead of adding more query terms. "
+                        "Use '*' to list all assets matching the provided filters without text search (returns results ordered by creation date)."
+                    ),
+                },
+                "source_type": {
+                    "type": "string",
+                    "description": "Filter by source type",
+                    "default": None,
+                    "enum": ["upload", "sharepoint", "web_scrape", "sam_gov"],
+                },
+                "collection_id": {
+                    "type": "string",
+                    "description": "Filter by scrape collection ID",
+                    "default": None,
+                },
+                "sync_config_id": {
+                    "type": "string",
+                    "description": "Filter by SharePoint sync config ID",
+                    "default": None,
+                },
+                "site_name": {
+                    "type": "string",
+                    "description": "Filter by SharePoint site display name (e.g., 'IT Department'). Case-insensitive. Resolves to sync_config_ids automatically.",
+                    "default": None,
+                    "examples": ["IT Department"],
+                },
+                "facet_filters": {
+                    "type": "object",
+                    "description": "Cross-domain facet filters (e.g., {'agency': 'GSA', 'naics_code': '541512'}). Use discover_metadata to see available facets.",
+                    "default": None,
+                },
+                "folder_path": {
+                    "type": "string",
+                    "description": (
+                        "Filter by folder path. Accepts human-readable SharePoint paths "
+                        "(e.g., 'Reuse Material/Past Performances') which prefix-match folders and subfolders, "
+                        "or slugified storage paths (e.g., 'sharepoint/my-site/shared-documents'). "
+                        "Use discover_data_sources(source_type='sharepoint') to see available folder paths."
+                    ),
+                    "default": None,
+                    "examples": ["Reuse Material/Past Performances"],
+                },
+                "search_mode": {
+                    "type": "string",
+                    "description": "Search mode",
+                    "default": "hybrid",
+                    "enum": ["hybrid", "keyword", "semantic"],
+                },
+                "keyword_weight": {
+                    "type": "number",
+                    "description": "Weight for keyword search (0-1, only for hybrid mode)",
+                    "default": 0.5,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results",
+                    "default": 20,
+                },
+                "where": WHERE_SCHEMA,
+            },
+            "required": ["query"],
+        },
+        output_schema={
+            "type": "array",
+            "description": "List of matching documents as ContentItem objects",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Asset UUID", "examples": ["550e8400-e29b-41d4-a716-446655440000"]},
+                    "title": {"type": "string", "description": "Full document path/title", "examples": ["Opportunities/DHS/TSA/proposal.pdf"]},
+                    "original_filename": {"type": "string", "description": "File name only", "examples": ["proposal.pdf"]},
+                    "folder_path": {"type": "string", "description": "Folder path for SharePoint", "examples": ["Opportunities/DHS/TSA"], "nullable": True},
+                    "source_url": {"type": "string", "description": "Direct URL to document", "nullable": True},
+                    "content_type": {"type": "string", "description": "MIME type", "examples": ["application/pdf"]},
+                    "source_type": {"type": "string", "description": "Source type", "examples": ["sharepoint"]},
+                    "score": {"type": "number", "description": "Relevance score (0-1)", "examples": [0.85]},
+                    "snippet": {"type": "string", "description": "Highlighted text excerpt", "nullable": True},
+                    "site_name": {"type": "string", "description": "SharePoint site display name (SharePoint assets only)", "examples": ["IT Department"], "nullable": True},
+                },
+            },
+        },
         tags=["search", "assets", "hybrid", "content"],
         requires_llm=False,
         side_effects=False,

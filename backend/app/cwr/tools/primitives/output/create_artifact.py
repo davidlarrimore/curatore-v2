@@ -16,9 +16,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -43,62 +40,67 @@ class CreateArtifactFunction(BaseFunction):
         name="create_artifact",
         category=FunctionCategory.OUTPUT,
         description="Create an artifact (file) in object storage",
-        parameters=[
-            ParameterDoc(
-                name="content",
-                type="str | bytes | dict",
-                description="Content to save (str, bytes, or dict for JSON)",
-                required=True,
-            ),
-            ParameterDoc(
-                name="filename",
-                type="str",
-                description="Filename for the artifact",
-                required=True,
-            ),
-            ParameterDoc(
-                name="content_type",
-                type="str",
-                description="MIME type of the content",
-                required=False,
-                default="text/plain",
-            ),
-            ParameterDoc(
-                name="folder",
-                type="str",
-                description="Folder path within the bucket",
-                required=False,
-                default="artifacts",
-            ),
-            ParameterDoc(
-                name="bucket",
-                type="str",
-                description="Bucket to store in (default: processed bucket)",
-                required=False,
-                default=None,
-            ),
-        ],
-        returns="dict: Artifact info with bucket, key, and URL",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Created artifact information with storage location",
-            fields=[
-                OutputFieldDoc(name="bucket", type="str",
-                              description="MinIO bucket where artifact is stored"),
-                OutputFieldDoc(name="object_key", type="str",
-                              description="Full object key/path in the bucket"),
-                OutputFieldDoc(name="filename", type="str",
-                              description="Original filename of the artifact"),
-                OutputFieldDoc(name="content_type", type="str",
-                              description="MIME type of the content",
-                              example="text/markdown"),
-                OutputFieldDoc(name="size", type="int",
-                              description="Size of the artifact in bytes"),
-                OutputFieldDoc(name="download_url", type="str",
-                              description="Presigned URL for downloading (valid for 1 hour)",
-                              nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "content": {
+                    "type": "string",
+                    "description": "Content to save (str, bytes, or dict for JSON)",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Filename for the artifact",
+                },
+                "content_type": {
+                    "type": "string",
+                    "description": "MIME type of the content",
+                    "default": "text/plain",
+                },
+                "folder": {
+                    "type": "string",
+                    "description": "Folder path within the bucket",
+                    "default": "artifacts",
+                },
+                "bucket": {
+                    "type": "string",
+                    "description": "Bucket to store in (default: processed bucket)",
+                    "default": None,
+                },
+            },
+            "required": ["content", "filename"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Created artifact information with storage location",
+            "properties": {
+                "bucket": {
+                    "type": "string",
+                    "description": "MinIO bucket where artifact is stored",
+                },
+                "object_key": {
+                    "type": "string",
+                    "description": "Full object key/path in the bucket",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Original filename of the artifact",
+                },
+                "content_type": {
+                    "type": "string",
+                    "description": "MIME type of the content",
+                    "examples": ["text/markdown"],
+                },
+                "size": {
+                    "type": "integer",
+                    "description": "Size of the artifact in bytes",
+                },
+                "download_url": {
+                    "type": "string",
+                    "description": "Presigned URL for downloading (valid for 1 hour)",
+                    "nullable": True,
+                },
+            },
+        },
         tags=["output", "storage", "artifact"],
         requires_llm=False,
         side_effects=True,

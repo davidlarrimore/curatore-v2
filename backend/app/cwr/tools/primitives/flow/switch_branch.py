@@ -30,9 +30,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FlowResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -58,29 +55,35 @@ class SwitchBranchFunction(BaseFunction):
         name="switch_branch",
         category=FunctionCategory.FLOW,
         description="Route execution to one of several named branches based on a value. REQUIRES 'branches' with at least one case (e.g., 'branches.contract', 'branches.invoice'). Optional 'branches.default' for fallback. Value is matched against branch keys (exact, case-sensitive).",
-        parameters=[
-            ParameterDoc(
-                name="value",
-                type="str",
-                description="Expression that produces the routing value. The result is string-coerced and matched against branch keys (exact, case-sensitive).",
-                required=True,
-                example="{{ steps.classify_document.category }}",
-            ),
-        ],
-        returns="FlowResult with branch_key set to matched case or 'default'",
-        output_schema=OutputSchema(
-            type="FlowResult",
-            description="Flow control result indicating which branch to execute",
-            fields=[
-                OutputFieldDoc(name="value", type="any",
-                              description="The original value that was evaluated"),
-                OutputFieldDoc(name="string_value", type="str",
-                              description="String-coerced value used for matching"),
-                OutputFieldDoc(name="branch", type="str",
-                              description="Branch key to execute (matches a case or 'default')",
-                              example="contract"),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "value": {
+                    "type": "string",
+                    "description": "Expression that produces the routing value. The result is string-coerced and matched against branch keys (exact, case-sensitive).",
+                    "examples": ["{{ steps.classify_document.category }}"],
+                },
+            },
+            "required": ["value"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Flow control result indicating which branch to execute",
+            "properties": {
+                "value": {
+                    "description": "The original value that was evaluated",
+                },
+                "string_value": {
+                    "type": "string",
+                    "description": "String-coerced value used for matching",
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "Branch key to execute (matches a case or 'default')",
+                    "examples": ["contract"],
+                },
+            },
+        },
         tags=["flow", "branching", "routing", "switch", "case"],
         requires_llm=False,
         side_effects=False,

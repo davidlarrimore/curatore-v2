@@ -17,7 +17,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
 )
 from ...context import FunctionContext
 
@@ -70,52 +69,49 @@ class QueryModelFunction(BaseFunction):
             "Salesforce records, and other entities. "
             "This is the recommended tool for getting forecast details after search_forecasts."
         ),
-        parameters=[
-            ParameterDoc(
-                name="model",
-                type="str",
-                description="Database record type to query. Use AgForecast/ApfsForecast/StateForecast for forecast details, SamSolicitation/SamNotice for SAM data, Asset for documents, SharePointSyncConfig for SharePoint configs, etc.",
-                required=True,
-                enum_values=list(ALLOWED_MODELS.keys()),
-            ),
-            ParameterDoc(
-                name="filters",
-                type="dict",
-                description="Filters to apply (field: value or field: {op: value})",
-                required=False,
-                default=None,
-                example={"status": "ready", "created_at": {"gte": "2026-01-01"}},
-            ),
-            ParameterDoc(
-                name="order_by",
-                type="str",
-                description="Field to order by (prefix with - for descending)",
-                required=False,
-                default="-created_at",
-            ),
-            ParameterDoc(
-                name="limit",
-                type="int",
-                description="Maximum number of results",
-                required=False,
-                default=100,
-            ),
-            ParameterDoc(
-                name="offset",
-                type="int",
-                description="Number of results to skip",
-                required=False,
-                default=0,
-            ),
-            ParameterDoc(
-                name="fields",
-                type="list[str]",
-                description="Fields to include in results (default: all)",
-                required=False,
-                default=None,
-            ),
-        ],
-        returns="list[dict]: Query results",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "model": {
+                    "type": "string",
+                    "description": "Database record type to query. Use AgForecast/ApfsForecast/StateForecast for forecast details, SamSolicitation/SamNotice for SAM data, Asset for documents, SharePointSyncConfig for SharePoint configs, etc.",
+                    "enum": list(ALLOWED_MODELS.keys()),
+                },
+                "filters": {
+                    "type": "object",
+                    "description": "Filters to apply (field: value or field: {op: value})",
+                    "default": None,
+                    "examples": [{"status": "ready", "created_at": {"gte": "2026-01-01"}}],
+                },
+                "order_by": {
+                    "type": "string",
+                    "description": "Field to order by (prefix with - for descending)",
+                    "default": "-created_at",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results",
+                    "default": 100,
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of results to skip",
+                    "default": 0,
+                },
+                "fields": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Fields to include in results (default: all)",
+                    "default": None,
+                },
+            },
+            "required": ["model"],
+        },
+        output_schema={
+            "type": "array",
+            "description": "List of model records. Fields vary by model type.",
+            "items": {"type": "object"},
+        },
         tags=["search", "database", "query"],
         requires_llm=False,
         side_effects=False,

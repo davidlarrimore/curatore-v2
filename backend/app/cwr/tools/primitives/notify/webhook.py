@@ -15,9 +15,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -41,63 +38,57 @@ class WebhookFunction(BaseFunction):
         name="webhook",
         category=FunctionCategory.NOTIFY,
         description="Call an external webhook endpoint",
-        parameters=[
-            ParameterDoc(
-                name="url",
-                type="str",
-                description="Webhook URL",
-                required=True,
-            ),
-            ParameterDoc(
-                name="payload",
-                type="dict",
-                description="JSON payload to send",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="method",
-                type="str",
-                description="HTTP method",
-                required=False,
-                default="POST",
-                enum_values=["GET", "POST", "PUT", "PATCH"],
-            ),
-            ParameterDoc(
-                name="headers",
-                type="dict",
-                description="Additional headers",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="timeout",
-                type="int",
-                description="Request timeout in seconds",
-                required=False,
-                default=30,
-            ),
-            ParameterDoc(
-                name="retry_count",
-                type="int",
-                description="Number of retries on failure",
-                required=False,
-                default=2,
-            ),
-        ],
-        returns="dict: Response status and body",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Webhook call result with HTTP response",
-            fields=[
-                OutputFieldDoc(name="status_code", type="int",
-                              description="HTTP response status code",
-                              example=200),
-                OutputFieldDoc(name="response", type="any",
-                              description="Response body (JSON object or text string)",
-                              nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "url": {
+                    "type": "string",
+                    "description": "Webhook URL",
+                },
+                "payload": {
+                    "type": "object",
+                    "description": "JSON payload to send",
+                    "default": None,
+                },
+                "method": {
+                    "type": "string",
+                    "description": "HTTP method",
+                    "default": "POST",
+                    "enum": ["GET", "POST", "PUT", "PATCH"],
+                },
+                "headers": {
+                    "type": "object",
+                    "description": "Additional headers",
+                    "default": None,
+                },
+                "timeout": {
+                    "type": "integer",
+                    "description": "Request timeout in seconds",
+                    "default": 30,
+                },
+                "retry_count": {
+                    "type": "integer",
+                    "description": "Number of retries on failure",
+                    "default": 2,
+                },
+            },
+            "required": ["url"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Webhook call result with HTTP response",
+            "properties": {
+                "status_code": {
+                    "type": "integer",
+                    "description": "HTTP response status code",
+                    "examples": [200],
+                },
+                "response": {
+                    "description": "Response body (JSON object or text string)",
+                    "nullable": True,
+                },
+            },
+        },
         tags=["notify", "webhook", "http"],
         requires_llm=False,
         side_effects=True,

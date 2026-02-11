@@ -17,9 +17,6 @@ from ..base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -87,42 +84,46 @@ class EnrichAssetsFunction(BaseFunction):
         name="enrich_assets",
         category=FunctionCategory.COMPOUND,
         description="Auto-enrich assets with derived metadata using rules",
-        parameters=[
-            ParameterDoc(
-                name="asset_ids",
-                type="list[str]",
-                description="Asset IDs to enrich (if empty, enrich recent unenriched)",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="limit",
-                type="int",
-                description="Maximum assets to enrich",
-                required=False,
-                default=50,
-            ),
-            ParameterDoc(
-                name="force",
-                type="bool",
-                description="Re-enrich even if already enriched",
-                required=False,
-                default=False,
-            ),
-        ],
-        returns="dict: Enrichment results",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Asset enrichment operation results",
-            fields=[
-                OutputFieldDoc(name="processed", type="int",
-                              description="Number of assets processed"),
-                OutputFieldDoc(name="enriched", type="int",
-                              description="Number of assets that received new metadata"),
-                OutputFieldDoc(name="skipped", type="int",
-                              description="Number of assets skipped (already enriched)"),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "asset_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Asset IDs to enrich (if empty, enrich recent unenriched)",
+                    "default": None,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum assets to enrich",
+                    "default": 50,
+                },
+                "force": {
+                    "type": "boolean",
+                    "description": "Re-enrich even if already enriched",
+                    "default": False,
+                },
+            },
+            "required": [],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Asset enrichment operation results",
+            "properties": {
+                "processed": {
+                    "type": "integer",
+                    "description": "Number of assets processed",
+                },
+                "enriched": {
+                    "type": "integer",
+                    "description": "Number of assets that received new metadata",
+                },
+                "skipped": {
+                    "type": "integer",
+                    "description": "Number of assets skipped (already enriched)",
+                },
+            },
+        },
         tags=["compound", "enrichment", "metadata"],
         requires_llm=False,
         side_effects=True,

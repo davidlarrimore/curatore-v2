@@ -2,8 +2,7 @@
 """
 CWR Contracts - Tool contracts and procedure validation.
 
-Provides formal JSON Schema contracts for functions and validation
-for procedure definitions.
+Provides ContractView for functions and validation for procedure definitions.
 """
 
 from .validation import validate_procedure, ValidationResult, ValidationError
@@ -11,12 +10,9 @@ from .validation import validate_procedure, ValidationResult, ValidationError
 
 def __getattr__(name):
     """Lazy imports to avoid circular import with tools package."""
-    if name == "ToolContract":
-        from .tool_contracts import ToolContract
-        return ToolContract
-    if name == "ContractGenerator":
-        from .tool_contracts import ContractGenerator
-        return ContractGenerator
+    if name == "ContractView":
+        from ..tools.schema_utils import ContractView
+        return ContractView
     if name == "ToolContractPack":
         from .contract_pack import ToolContractPack
         return ToolContractPack
@@ -27,8 +23,7 @@ def __getattr__(name):
 
 
 __all__ = [
-    "ToolContract",
-    "ContractGenerator",
+    "ContractView",
     "ToolContractPack",
     "get_tool_contract_pack",
     "validate_procedure",

@@ -14,9 +14,6 @@ from ..base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -41,49 +38,43 @@ class GenerateDigestFunction(BaseFunction):
         name="generate_digest",
         category=FunctionCategory.COMPOUND,
         description="Generate a formatted digest or report from data",
-        parameters=[
-            ParameterDoc(
-                name="title",
-                type="str",
-                description="Digest title",
-                required=True,
-            ),
-            ParameterDoc(
-                name="items",
-                type="list[dict]",
-                description="Items to include in the digest",
-                required=True,
-            ),
-            ParameterDoc(
-                name="template",
-                type="str",
-                description="Template to use",
-                required=False,
-                default="default",
-                enum_values=["default", "sam_digest", "asset_report", "executive_summary"],
-            ),
-            ParameterDoc(
-                name="include_ai_summary",
-                type="bool",
-                description="Include AI-generated executive summary",
-                required=False,
-                default=True,
-            ),
-            ParameterDoc(
-                name="format",
-                type="str",
-                description="Output format",
-                required=False,
-                default="markdown",
-                enum_values=["markdown", "html", "text"],
-            ),
-        ],
-        returns="str: Formatted digest content",
-        output_schema=OutputSchema(
-            type="str",
-            description="Formatted digest content in markdown, HTML, or plain text",
-            example="# Daily Opportunities\n\n**Total Opportunities: 5**\n\n...",
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "title": {
+                    "type": "string",
+                    "description": "Digest title",
+                },
+                "items": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Items to include in the digest",
+                },
+                "template": {
+                    "type": "string",
+                    "description": "Template to use",
+                    "default": "default",
+                    "enum": ["default", "sam_digest", "asset_report", "executive_summary"],
+                },
+                "include_ai_summary": {
+                    "type": "boolean",
+                    "description": "Include AI-generated executive summary",
+                    "default": True,
+                },
+                "format": {
+                    "type": "string",
+                    "description": "Output format",
+                    "default": "markdown",
+                    "enum": ["markdown", "html", "text"],
+                },
+            },
+            "required": ["title", "items"],
+        },
+        output_schema={
+            "type": "string",
+            "description": "Formatted digest content in markdown, HTML, or plain text",
+            "examples": ["# Daily Opportunities\n\n**Total Opportunities: 5**\n\n..."],
+        },
         tags=["compound", "report", "digest"],
         requires_llm=False,  # LLM is optional
         side_effects=False,

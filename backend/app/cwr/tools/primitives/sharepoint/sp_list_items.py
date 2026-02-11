@@ -17,9 +17,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 from ...content import ContentItem
@@ -44,68 +41,110 @@ class SpListItemsFunction(BaseFunction):
         name="sp_list_items",
         category=FunctionCategory.DATA,
         description="Browse SharePoint folder contents via Microsoft Graph API. Returns file/folder items with comprehensive metadata.",
-        parameters=[
-            ParameterDoc(
-                name="folder_url",
-                type="str",
-                description="SharePoint folder URL",
-                required=False,
-            ),
-            ParameterDoc(
-                name="sync_config_id",
-                type="str",
-                description="Sync config UUID — uses its folder_url",
-                required=False,
-            ),
-            ParameterDoc(
-                name="recursive",
-                type="bool",
-                description="Recurse into subfolders",
-                required=False,
-                default=False,
-            ),
-            ParameterDoc(
-                name="include_folders",
-                type="bool",
-                description="Include folder items in results",
-                required=False,
-                default=False,
-            ),
-            ParameterDoc(
-                name="file_extensions",
-                type="list[str]",
-                description="Filter by extension (e.g. ['pdf', 'docx'])",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="limit",
-                type="int",
-                description="Maximum items to return (capped at 500)",
-                required=False,
-                default=100,
-            ),
-        ],
-        returns="list[ContentItem]: SharePoint file/folder items",
-        output_schema=OutputSchema(
-            type="list[ContentItem]",
-            description="List of SharePoint items as ContentItem objects",
-            fields=[
-                OutputFieldDoc(name="name", type="str", description="File or folder name"),
-                OutputFieldDoc(name="item_type", type="str", description="'file' or 'folder'"),
-                OutputFieldDoc(name="size", type="int", description="File size in bytes", nullable=True),
-                OutputFieldDoc(name="extension", type="str", description="File extension", nullable=True),
-                OutputFieldDoc(name="folder", type="str", description="Parent folder path"),
-                OutputFieldDoc(name="web_url", type="str", description="Direct SharePoint link"),
-                OutputFieldDoc(name="drive_id", type="str", description="Graph drive ID"),
-                OutputFieldDoc(name="mime", type="str", description="MIME type", nullable=True),
-                OutputFieldDoc(name="created", type="str", description="Created timestamp", nullable=True),
-                OutputFieldDoc(name="modified", type="str", description="Modified timestamp", nullable=True),
-                OutputFieldDoc(name="created_by", type="str", description="Creator display name", nullable=True),
-                OutputFieldDoc(name="last_modified_by", type="str", description="Modifier display name", nullable=True),
-                OutputFieldDoc(name="etag", type="str", description="Change detection tag", nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "folder_url": {
+                    "type": "string",
+                    "description": "SharePoint folder URL",
+                },
+                "sync_config_id": {
+                    "type": "string",
+                    "description": "Sync config UUID — uses its folder_url",
+                },
+                "recursive": {
+                    "type": "boolean",
+                    "description": "Recurse into subfolders",
+                    "default": False,
+                },
+                "include_folders": {
+                    "type": "boolean",
+                    "description": "Include folder items in results",
+                    "default": False,
+                },
+                "file_extensions": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Filter by extension (e.g. ['pdf', 'docx'])",
+                    "default": None,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum items to return (capped at 500)",
+                    "default": 100,
+                },
+            },
+            "required": [],
+        },
+        output_schema={
+            "type": "array",
+            "description": "List of SharePoint items as ContentItem objects",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "File or folder name",
+                    },
+                    "item_type": {
+                        "type": "string",
+                        "description": "'file' or 'folder'",
+                    },
+                    "size": {
+                        "type": "integer",
+                        "description": "File size in bytes",
+                        "nullable": True,
+                    },
+                    "extension": {
+                        "type": "string",
+                        "description": "File extension",
+                        "nullable": True,
+                    },
+                    "folder": {
+                        "type": "string",
+                        "description": "Parent folder path",
+                    },
+                    "web_url": {
+                        "type": "string",
+                        "description": "Direct SharePoint link",
+                    },
+                    "drive_id": {
+                        "type": "string",
+                        "description": "Graph drive ID",
+                    },
+                    "mime": {
+                        "type": "string",
+                        "description": "MIME type",
+                        "nullable": True,
+                    },
+                    "created": {
+                        "type": "string",
+                        "description": "Created timestamp",
+                        "nullable": True,
+                    },
+                    "modified": {
+                        "type": "string",
+                        "description": "Modified timestamp",
+                        "nullable": True,
+                    },
+                    "created_by": {
+                        "type": "string",
+                        "description": "Creator display name",
+                        "nullable": True,
+                    },
+                    "last_modified_by": {
+                        "type": "string",
+                        "description": "Modifier display name",
+                        "nullable": True,
+                    },
+                    "etag": {
+                        "type": "string",
+                        "description": "Change detection tag",
+                        "nullable": True,
+                    },
+                },
+            },
+        },
         tags=["data", "sharepoint", "graph-api", "browse"],
         requires_llm=False,
         side_effects=False,

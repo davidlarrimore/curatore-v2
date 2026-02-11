@@ -63,6 +63,7 @@ class ValidationErrorCode(str, Enum):
     # Semantic warnings (non-blocking but suspicious)
     FUNCTION_MISMATCH_WARNING = "FUNCTION_MISMATCH_WARNING"
     INVALID_FACET_FILTER = "INVALID_FACET_FILTER"
+    INVALID_OUTPUT_FIELD_REFERENCE = "INVALID_OUTPUT_FIELD_REFERENCE"
 
 
 @dataclass
@@ -97,6 +98,42 @@ class ValidationResult:
             "error_count": len(self.errors),
             "warning_count": len(self.warnings),
         }
+
+
+def resolve_output_fields(output_schema: Dict[str, Any]) -> tuple:
+    """
+    Extract the output type and set of valid field names from an output_schema.
+
+    Returns:
+        (schema_type, fields) where:
+        - schema_type is "string", "object", "array", or None (can't validate)
+        - fields is a set of field names, empty set for string, or None if generic
+    """
+    if not output_schema:
+        return (None, None)
+
+    schema_type = output_schema.get("type")
+    if not schema_type:
+        return (None, None)
+
+    if schema_type == "string":
+        return ("string", set())  # String output has no fields
+
+    if schema_type == "object":
+        props = output_schema.get("properties")
+        if props:
+            return ("object", set(props.keys()))
+        return (None, None)  # Generic object, can't validate
+
+    if schema_type == "array":
+        items = output_schema.get("items", {})
+        if items.get("type") == "object":
+            item_props = items.get("properties")
+            if item_props:
+                return ("array", set(item_props.keys()))
+        return ("array", None)  # Known array, but can't validate item fields
+
+    return (None, None)
 
 
 class ProcedureValidator:
@@ -153,6 +190,9 @@ class ProcedureValidator:
 
     # Param reference pattern in templates: params.param_name or params.param_name.xxx
     PARAM_REF_PATTERN = re.compile(r"params\.([a-zA-Z_][a-zA-Z0-9_]*)")
+
+    # Output field reference pattern: steps.step_name.field_name
+    OUTPUT_FIELD_REF_PATTERN = re.compile(r"steps\.([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)")
 
     # Mapping of keywords in step names to expected functions
     # Used to detect when step name suggests a different function than what's used
@@ -290,6 +330,11 @@ class ProcedureValidator:
         # Template reference validation
         ref_errors = self._validate_template_references(steps, defined_params)
         errors.extend(ref_errors)
+
+        # Output field reference validation
+        output_errors, output_warnings = self._validate_output_field_refs(steps, defined_params)
+        errors.extend(output_errors)
+        warnings.extend(output_warnings)
 
         # Facet filter validation
         for idx, step in enumerate(steps):
@@ -1120,6 +1165,177 @@ class ProcedureValidator:
         elif isinstance(value, list):
             for i, item in enumerate(value):
                 self._check_template_refs_in_value(item, seen_steps, defined_params, f"{path}[{i}]", current_step, errors, extra_context)
+
+    def _validate_output_field_refs(
+        self,
+        steps: List[Dict[str, Any]],
+        defined_params: set,
+        base_path: str = "steps",
+    ) -> Tuple[List[ValidationError], List[ValidationError]]:
+        """
+        Validate output field references in procedure steps.
+
+        Checks {{ steps.X.field }} references against the function's output_schema.
+        String-field-ref → error. Array-field-ref / unknown-object-field → warning.
+        Generic schema → skip.
+
+        Returns:
+            (errors, warnings)
+        """
+        errors: List[ValidationError] = []
+        warnings: List[ValidationError] = []
+
+        # Build step_name -> function_name map
+        step_func_map: Dict[str, str] = {}
+        for step in steps:
+            sname = step.get("name", "")
+            sfunc = step.get("function", "")
+            if sname and sfunc:
+                step_func_map[sname] = sfunc
+
+        registry = self._get_function_registry()
+
+        for idx, step in enumerate(steps):
+            step_path = f"{base_path}[{idx}]"
+            step_name = step.get("name", "")
+
+            # Check params, condition, foreach for output field refs
+            for section_key in ("params", "condition", "foreach"):
+                value = step.get(section_key)
+                if value is not None:
+                    section_path = f"{step_path}.{section_key}"
+                    self._check_output_field_refs_in_value(
+                        value, step_func_map, registry,
+                        section_path, step_name, errors, warnings,
+                    )
+
+            # Recurse into branches
+            branches = step.get("branches")
+            if branches and isinstance(branches, dict):
+                for branch_name, branch_steps in branches.items():
+                    if isinstance(branch_steps, list):
+                        branch_errors, branch_warnings = self._validate_output_field_refs(
+                            branch_steps, defined_params,
+                            base_path=f"{step_path}.branches.{branch_name}",
+                        )
+                        errors.extend(branch_errors)
+                        warnings.extend(branch_warnings)
+
+        return errors, warnings
+
+    def _check_output_field_refs_in_value(
+        self,
+        value: Any,
+        step_func_map: Dict[str, str],
+        registry: Any,
+        path: str,
+        current_step: str,
+        errors: List[ValidationError],
+        warnings: List[ValidationError],
+    ) -> None:
+        """Recursively check for output field references in a value tree."""
+        if isinstance(value, str) and "{{" in value:
+            for match in self.OUTPUT_FIELD_REF_PATTERN.finditer(value):
+                step_ref = match.group(1)
+                field_ref = match.group(2)
+                self._check_single_output_field_ref(
+                    step_ref, field_ref, f"steps.{step_ref}.{field_ref}",
+                    step_func_map, registry, path, current_step, errors, warnings,
+                )
+        elif isinstance(value, dict):
+            for key, val in value.items():
+                self._check_output_field_refs_in_value(
+                    val, step_func_map, registry,
+                    f"{path}.{key}", current_step, errors, warnings,
+                )
+        elif isinstance(value, list):
+            for i, item in enumerate(value):
+                self._check_output_field_refs_in_value(
+                    item, step_func_map, registry,
+                    f"{path}[{i}]", current_step, errors, warnings,
+                )
+
+    def _check_single_output_field_ref(
+        self,
+        step_name: str,
+        field_name: str,
+        ref_str: str,
+        step_func_map: Dict[str, str],
+        registry: Any,
+        path: str,
+        current_step: str,
+        errors: List[ValidationError],
+        warnings: List[ValidationError],
+    ) -> None:
+        """Check a single steps.X.field reference against the function's output_schema."""
+        func_name = step_func_map.get(step_name)
+        if not func_name:
+            return  # Step not found at this level; skip
+
+        contract = registry.get_contract(func_name)
+        if not contract:
+            return  # Function not found; function validation handles this
+
+        schema_type, output_fields = resolve_output_fields(contract.output_schema)
+        if schema_type is None:
+            return  # Generic schema, can't validate
+
+        if schema_type == "string":
+            errors.append(ValidationError(
+                code=ValidationErrorCode.INVALID_OUTPUT_FIELD_REFERENCE,
+                message=f"Step '{current_step}' references field '{field_name}' on step '{step_name}' "
+                        f"(function '{func_name}'), but it returns a string. "
+                        f"Use the step result directly: {{{{ steps.{step_name} }}}}",
+                path=path,
+                details={
+                    "step": current_step,
+                    "referenced_step": step_name,
+                    "function": func_name,
+                    "field": field_name,
+                    "output_type": "string",
+                    "ref": ref_str,
+                },
+            ))
+        elif schema_type == "array":
+            available = sorted(output_fields) if output_fields else []
+            msg = (
+                f"Step '{current_step}' references field '{field_name}' on step '{step_name}' "
+                f"(function '{func_name}'), but it returns an array. Use foreach to iterate, "
+                f"then access item.{field_name}."
+            )
+            if available:
+                msg += f" Available item fields: {available}"
+            warnings.append(ValidationError(
+                code=ValidationErrorCode.INVALID_OUTPUT_FIELD_REFERENCE,
+                message=msg,
+                path=path,
+                details={
+                    "step": current_step,
+                    "referenced_step": step_name,
+                    "function": func_name,
+                    "field": field_name,
+                    "output_type": "array",
+                    "available_fields": available,
+                    "ref": ref_str,
+                },
+            ))
+        elif schema_type == "object" and output_fields is not None and field_name not in output_fields:
+            warnings.append(ValidationError(
+                code=ValidationErrorCode.INVALID_OUTPUT_FIELD_REFERENCE,
+                message=f"Step '{current_step}' references field '{field_name}' on step '{step_name}' "
+                        f"(function '{func_name}'), but that field is not in the output schema. "
+                        f"Available fields: {sorted(output_fields)}",
+                path=path,
+                details={
+                    "step": current_step,
+                    "referenced_step": step_name,
+                    "function": func_name,
+                    "field": field_name,
+                    "output_type": "object",
+                    "available_fields": sorted(output_fields),
+                    "ref": ref_str,
+                },
+            ))
 
 
 # Global validator instance

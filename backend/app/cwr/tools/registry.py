@@ -14,7 +14,7 @@ from typing import Dict, List, Optional, Type, Any, TYPE_CHECKING
 from .base import BaseFunction, FunctionCategory, FunctionMeta
 
 if TYPE_CHECKING:
-    from ..contracts.tool_contracts import ToolContract
+    from .schema_utils import ContractView
 
 logger = logging.getLogger("curatore.functions.registry")
 
@@ -43,7 +43,7 @@ class FunctionRegistry:
     def __init__(self):
         self._functions: Dict[str, Type[BaseFunction]] = {}
         self._instances: Dict[str, BaseFunction] = {}
-        self._contracts: Dict[str, "ToolContract"] = {}
+        self._contracts: Dict[str, "ContractView"] = {}
         self._initialized = False
 
     def register(self, func_class: Type[BaseFunction]) -> None:
@@ -268,15 +268,15 @@ class FunctionRegistry:
         except ImportError as e:
             logger.warning(f"Failed to import SharePoint functions: {e}")
 
-    def get_contract(self, name: str) -> Optional["ToolContract"]:
+    def get_contract(self, name: str) -> Optional["ContractView"]:
         """
-        Get a ToolContract for a function by name, with caching.
+        Get a ContractView for a function by name, with caching.
 
         Args:
             name: Function name
 
         Returns:
-            ToolContract or None if function not found
+            ContractView or None if function not found
         """
         if name in self._contracts:
             return self._contracts[name]
@@ -285,12 +285,11 @@ class FunctionRegistry:
         if not meta:
             return None
 
-        from ..contracts.tool_contracts import ContractGenerator
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
         self._contracts[name] = contract
         return contract
 
-    def list_contracts(self) -> List["ToolContract"]:
+    def list_contracts(self) -> List["ContractView"]:
         """List contracts for all registered functions."""
         contracts = []
         for name in self._functions:

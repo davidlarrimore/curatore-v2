@@ -36,9 +36,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FlowResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -67,44 +64,47 @@ class ForeachFunction(BaseFunction):
         name="foreach",
         category=FunctionCategory.FLOW,
         description="Iterate over a list and execute steps for each item. REQUIRES 'branches.each' containing the steps to run per item. Supports concurrency control and per-item filtering. Inside branch steps, {{ item }} and {{ item_index }} are available.",
-        parameters=[
-            ParameterDoc(
-                name="items",
-                type="list",
-                description="List to iterate over. Can be a Jinja2 expression that evaluates to a list.",
-                required=True,
-                example="{{ steps.search_results.results }}",
-            ),
-            ParameterDoc(
-                name="concurrency",
-                type="int",
-                description="Max items to process in parallel. 1 = sequential (default). 0 = unlimited. N = up to N at a time.",
-                required=False,
-                default=1,
-                example=3,
-            ),
-            ParameterDoc(
-                name="condition",
-                type="str",
-                description="Per-item filter. Evaluated with {{ item }} and {{ item_index }} in scope. Items where this is falsy are skipped.",
-                required=False,
-                default=None,
-                example="{{ item.estimated_value > 100000 }}",
-            ),
-        ],
-        returns="FlowResult with items_to_iterate and skipped_indices",
-        output_schema=OutputSchema(
-            type="FlowResult",
-            description="Flow control result with items to iterate over",
-            fields=[
-                OutputFieldDoc(name="item_count", type="int",
-                              description="Number of items to iterate over"),
-                OutputFieldDoc(name="concurrency", type="int",
-                              description="Maximum concurrent executions"),
-                OutputFieldDoc(name="has_condition", type="bool",
-                              description="Whether a per-item filter condition is set"),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "items": {
+                    "type": "array",
+                    "description": "List to iterate over. Can be a Jinja2 expression that evaluates to a list.",
+                    "examples": ["{{ steps.search_results.results }}"],
+                },
+                "concurrency": {
+                    "type": "integer",
+                    "description": "Max items to process in parallel. 1 = sequential (default). 0 = unlimited. N = up to N at a time.",
+                    "default": 1,
+                    "examples": [3],
+                },
+                "condition": {
+                    "type": "string",
+                    "description": "Per-item filter. Evaluated with {{ item }} and {{ item_index }} in scope. Items where this is falsy are skipped.",
+                    "default": None,
+                    "examples": ["{{ item.estimated_value > 100000 }}"],
+                },
+            },
+            "required": ["items"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Flow control result with items to iterate over",
+            "properties": {
+                "item_count": {
+                    "type": "integer",
+                    "description": "Number of items to iterate over",
+                },
+                "concurrency": {
+                    "type": "integer",
+                    "description": "Maximum concurrent executions",
+                },
+                "has_condition": {
+                    "type": "boolean",
+                    "description": "Whether a per-item filter condition is set",
+                },
+            },
+        },
         tags=["flow", "iteration", "loop", "foreach", "batch"],
         requires_llm=False,
         side_effects=False,

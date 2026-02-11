@@ -9,6 +9,7 @@ from typing import Any, Dict, Optional
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.routing import Route
 
 from app.config import settings
 from app.middleware.auth import AuthMiddleware
@@ -74,22 +75,22 @@ app.add_middleware(AuthMiddleware)
 
 
 # =============================================================================
-# ASGI Middleware: propagate auth context into mounted MCP sub-app
+# MCP SDK Streamable HTTP Transport at /mcp
 # =============================================================================
 
 
-class MCPContextMiddleware:
+class MCPTransport:
     """
-    ASGI middleware that propagates auth headers into contextvars
-    for the MCP SDK handlers, then delegates to the session manager.
-    """
+    ASGI app that propagates auth headers into contextvars, then delegates
+    to the MCP SDK session manager. Used as both a Route endpoint (bare
+    /mcp) and a Mount sub-app (/mcp/*).
 
-    def __init__(self, sm):
-        self.session_manager = sm
+    Starlette's Route treats class instances (non-function callables) as
+    raw ASGI apps, passing (scope, receive, send) directly.
+    """
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
-            # Extract headers from ASGI scope (bytes tuples)
             headers = dict(scope.get("headers", []))
             auth = headers.get(b"authorization", b"").decode()
             if auth.lower().startswith("bearer "):
@@ -98,11 +99,18 @@ class MCPContextMiddleware:
             ctx_correlation_id.set(
                 headers.get(b"x-correlation-id", b"").decode() or None
             )
-        await self.session_manager.handle_request(scope, receive, send)
+        await session_manager.handle_request(scope, receive, send)
 
 
-# Mount SDK Streamable HTTP transport at /mcp
-app.mount("/mcp", MCPContextMiddleware(session_manager))
+_mcp_transport = MCPTransport()
+
+# Register as a Starlette Route for the bare /mcp path (POST for JSON-RPC,
+# GET for SSE streaming, DELETE for session termination).
+# Inserted at position 0 so it takes precedence over the catch-all
+# /{tool_name} route which would otherwise intercept POST /mcp.
+# Note: Starlette's Mount only matches /mcp/ (with trailing slash) and
+# /mcp/*, not the bare /mcp path that MCP clients POST to.
+app.router.routes.insert(0, Route("/mcp", _mcp_transport, methods=["GET", "POST", "DELETE"]))
 
 
 # =============================================================================

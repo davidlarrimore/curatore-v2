@@ -37,9 +37,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -171,58 +168,62 @@ class LogFunction(BaseFunction):
         name="log",
         category=FunctionCategory.OUTPUT,
         description="Print a debug message to the job activity log",
-        parameters=[
-            ParameterDoc(
-                name="message",
-                type="str",
-                description="The message to log. Supports Jinja2 templates like {{ steps.xxx }}",
-                required=True,
-                example="Processed {{ steps.fetch.count }} items",
-            ),
-            ParameterDoc(
-                name="data",
-                type="any",
-                description="Optional data to include in the log. Can be a step result ({{ steps.xxx }}), a variable, or any value to inspect",
-                required=False,
-                default=None,
-                example="{{ steps.fetch_notices }}",
-            ),
-            ParameterDoc(
-                name="level",
-                type="str",
-                description="Log level: INFO, WARN, or ERROR",
-                required=False,
-                default="INFO",
-                enum_values=["INFO", "WARN", "ERROR"],
-            ),
-            ParameterDoc(
-                name="label",
-                type="str",
-                description="Optional label/tag for the log entry (appears in event_type as 'debug:{label}')",
-                required=False,
-                default=None,
-                example="fetch_result",
-            ),
-        ],
-        returns="dict: {message: str, level: str, logged: bool}",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Log operation result with status information",
-            fields=[
-                OutputFieldDoc(name="message", type="str",
-                              description="The message that was logged"),
-                OutputFieldDoc(name="level", type="str",
-                              description="Log level (INFO, WARN, ERROR)",
-                              example="INFO"),
-                OutputFieldDoc(name="label", type="str",
-                              description="Custom label/tag for the log entry",
-                              nullable=True),
-                OutputFieldDoc(name="logged_to_run", type="bool",
-                              description="Whether the message was logged to the run activity log"),
-                OutputFieldDoc(name="has_data", type="bool",
-                              description="Whether data was included in the log entry"),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "The message to log. Supports Jinja2 templates like {{ steps.xxx }}",
+                    "examples": ["Processed {{ steps.fetch.count }} items"],
+                },
+                "data": {
+                    "description": "Optional data to include in the log. Can be a step result ({{ steps.xxx }}), a variable, or any value to inspect",
+                    "default": None,
+                    "examples": ["{{ steps.fetch_notices }}"],
+                },
+                "level": {
+                    "type": "string",
+                    "description": "Log level: INFO, WARN, or ERROR",
+                    "default": "INFO",
+                    "enum": ["INFO", "WARN", "ERROR"],
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Optional label/tag for the log entry (appears in event_type as 'debug:{label}')",
+                    "default": None,
+                    "examples": ["fetch_result"],
+                },
+            },
+            "required": ["message"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Log operation result with status information",
+            "properties": {
+                "message": {
+                    "type": "string",
+                    "description": "The message that was logged",
+                },
+                "level": {
+                    "type": "string",
+                    "description": "Log level (INFO, WARN, ERROR)",
+                    "examples": ["INFO"],
+                },
+                "label": {
+                    "type": "string",
+                    "description": "Custom label/tag for the log entry",
+                    "nullable": True,
+                },
+                "logged_to_run": {
+                    "type": "boolean",
+                    "description": "Whether the message was logged to the run activity log",
+                },
+                "has_data": {
+                    "type": "boolean",
+                    "description": "Whether data was included in the log entry",
+                },
+            },
+        },
         tags=["output", "debug", "logging", "inspect"],
         requires_llm=False,
         side_effects=False,

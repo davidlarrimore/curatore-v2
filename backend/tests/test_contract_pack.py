@@ -19,25 +19,8 @@ from app.cwr.contracts.contract_pack import ToolContractPack, get_tool_contract_
 # ---------------------------------------------------------------------------
 
 @dataclass
-class MockFunctionMeta:
-    name: str
-    description: str = ""
-    category: MagicMock = dc_field(default_factory=lambda: MagicMock(value="search"))
-    side_effects: bool = False
-    exposure_profile: Optional[Dict[str, bool]] = None
-    parameters: List = dc_field(default_factory=list)
-    output_schema: Optional[Dict] = None
-    output_variants: Optional[Dict] = None
-    payload_profile: str = "full"
-    requires_llm: bool = False
-    requires_session: bool = False
-    tags: List[str] = dc_field(default_factory=list)
-    version: str = "1.0"
-    is_primitive: bool = True
-
-
-@dataclass
-class MockToolContract:
+class MockContractView:
+    """Mock for ContractView (replacement for ToolContract)."""
     name: str
     description: str = ""
     category: str = "search"
@@ -54,6 +37,41 @@ class MockToolContract:
 
     def to_dict(self):
         return {"name": self.name, "category": self.category}
+
+
+@dataclass
+class MockFunctionMeta:
+    name: str
+    description: str = ""
+    category: MagicMock = dc_field(default_factory=lambda: MagicMock(value="search"))
+    side_effects: bool = False
+    exposure_profile: Optional[Dict[str, bool]] = None
+    input_schema: Dict[str, Any] = dc_field(default_factory=dict)
+    output_schema: Optional[Dict] = None
+    payload_profile: str = "full"
+    requires_llm: bool = False
+    requires_session: bool = False
+    tags: List[str] = dc_field(default_factory=list)
+    version: str = "1.0"
+    is_primitive: bool = True
+
+    def as_contract(self):
+        """Produce a MockContractView, same as FunctionMeta.as_contract()."""
+        return MockContractView(
+            name=self.name,
+            description=self.description,
+            category=self.category.value,
+            side_effects=self.side_effects,
+            payload_profile=self.payload_profile,
+            requires_llm=self.requires_llm,
+            input_schema=self.input_schema or {},
+            output_schema=self.output_schema or {},
+            tags=self.tags,
+            is_primitive=self.is_primitive,
+            exposure_profile=self.exposure_profile,
+            requires_session=self.requires_session,
+            version=self.version,
+        )
 
 
 def _make_mock_registry(metas):
@@ -122,8 +140,8 @@ def _make_mock_metas():
 class TestToolContractPack:
     def test_get_tool_names(self):
         contracts = [
-            MockToolContract(name="search_notices"),
-            MockToolContract(name="generate"),
+            MockContractView(name="search_notices"),
+            MockContractView(name="generate"),
         ]
         profile = get_profile("workflow_standard")
         pack = ToolContractPack(profile=profile, contracts=contracts)
@@ -132,8 +150,8 @@ class TestToolContractPack:
 
     def test_get_contract(self):
         contracts = [
-            MockToolContract(name="search_notices"),
-            MockToolContract(name="generate"),
+            MockContractView(name="search_notices"),
+            MockContractView(name="generate"),
         ]
         profile = get_profile("workflow_standard")
         pack = ToolContractPack(profile=profile, contracts=contracts)
@@ -142,11 +160,21 @@ class TestToolContractPack:
 
     def test_to_prompt_json_valid(self):
         contracts = [
-            MockToolContract(
+            MockContractView(
                 name="search_notices",
                 description="Search notices",
                 category="search",
                 input_schema={"type": "object"},
+                output_schema={
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "id": {"type": "string"},
+                            "title": {"type": "string"},
+                        },
+                    },
+                },
                 payload_profile="full",
             ),
         ]
@@ -158,9 +186,13 @@ class TestToolContractPack:
         assert len(parsed) == 1
         assert parsed[0]["name"] == "search_notices"
         assert "input_schema" in parsed[0]
+        assert "output_schema" in parsed[0]
+        assert parsed[0]["output_schema"]["type"] == "array"
+        assert "item_fields" in parsed[0]["output_schema"]
+        assert parsed[0]["output_schema"]["item_fields"]["id"] == "string"
 
     def test_to_dict(self):
-        contracts = [MockToolContract(name="search_notices")]
+        contracts = [MockContractView(name="search_notices")]
         profile = get_profile("workflow_standard")
         pack = ToolContractPack(profile=profile, contracts=contracts)
         d = pack.to_dict()
@@ -171,17 +203,11 @@ class TestToolContractPack:
 class TestGetToolContractPack:
     @patch("app.cwr.contracts.contract_pack.function_registry")
     @patch("app.cwr.contracts.contract_pack.check_exposure")
-    @patch("app.cwr.contracts.contract_pack.ContractGenerator")
-    def test_safe_readonly_excludes_side_effects(self, mock_gen, mock_exposure, mock_registry):
+    def test_safe_readonly_excludes_side_effects(self, mock_exposure, mock_registry):
         metas = _make_mock_metas()
         mock_registry.list_all.return_value = metas
         mock_registry.initialize.return_value = None
         mock_exposure.side_effect = lambda meta, ctx: meta.exposure_profile.get(ctx, False)
-        mock_gen.generate.side_effect = lambda meta: MockToolContract(
-            name=meta.name,
-            category=meta.category.value,
-            side_effects=meta.side_effects,
-        )
 
         profile = get_profile("safe_readonly")
         pack = get_tool_contract_pack(profile=profile)
@@ -194,17 +220,11 @@ class TestGetToolContractPack:
 
     @patch("app.cwr.contracts.contract_pack.function_registry")
     @patch("app.cwr.contracts.contract_pack.check_exposure")
-    @patch("app.cwr.contracts.contract_pack.ContractGenerator")
-    def test_workflow_standard_excludes_blocked(self, mock_gen, mock_exposure, mock_registry):
+    def test_workflow_standard_excludes_blocked(self, mock_exposure, mock_registry):
         metas = _make_mock_metas()
         mock_registry.list_all.return_value = metas
         mock_registry.initialize.return_value = None
         mock_exposure.side_effect = lambda meta, ctx: meta.exposure_profile.get(ctx, False)
-        mock_gen.generate.side_effect = lambda meta: MockToolContract(
-            name=meta.name,
-            category=meta.category.value,
-            side_effects=meta.side_effects,
-        )
 
         profile = get_profile("workflow_standard")
         pack = get_tool_contract_pack(profile=profile)
@@ -217,17 +237,11 @@ class TestGetToolContractPack:
 
     @patch("app.cwr.contracts.contract_pack.function_registry")
     @patch("app.cwr.contracts.contract_pack.check_exposure")
-    @patch("app.cwr.contracts.contract_pack.ContractGenerator")
-    def test_admin_full_includes_all_exposed(self, mock_gen, mock_exposure, mock_registry):
+    def test_admin_full_includes_all_exposed(self, mock_exposure, mock_registry):
         metas = _make_mock_metas()
         mock_registry.list_all.return_value = metas
         mock_registry.initialize.return_value = None
         mock_exposure.side_effect = lambda meta, ctx: meta.exposure_profile.get(ctx, False)
-        mock_gen.generate.side_effect = lambda meta: MockToolContract(
-            name=meta.name,
-            category=meta.category.value,
-            side_effects=meta.side_effects,
-        )
 
         profile = get_profile("admin_full")
         pack = get_tool_contract_pack(profile=profile)
@@ -241,19 +255,85 @@ class TestGetToolContractPack:
 
     @patch("app.cwr.contracts.contract_pack.function_registry")
     @patch("app.cwr.contracts.contract_pack.check_exposure")
-    @patch("app.cwr.contracts.contract_pack.ContractGenerator")
-    def test_exposure_profile_filters(self, mock_gen, mock_exposure, mock_registry):
+    def test_exposure_profile_filters(self, mock_exposure, mock_registry):
         metas = _make_mock_metas()
         mock_registry.list_all.return_value = metas
         mock_registry.initialize.return_value = None
         mock_exposure.side_effect = lambda meta, ctx: meta.exposure_profile.get(ctx, False)
-        mock_gen.generate.side_effect = lambda meta: MockToolContract(
-            name=meta.name,
-            category=meta.category.value,
-        )
 
         profile = get_profile("admin_full")
         pack = get_tool_contract_pack(profile=profile)
 
         # agent_only_tool has procedure: False, so it should be excluded
         assert "agent_only_tool" not in pack.get_tool_names()
+
+
+class TestCompactOutputSchema:
+    """Tests for ToolContractPack._compact_output_schema()."""
+
+    def test_string_schema(self):
+        result = ToolContractPack._compact_output_schema({"type": "string"})
+        assert result == {"type": "string"}
+
+    def test_object_with_properties(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string", "description": "The ID"},
+                "title": {"type": "string", "description": "The title"},
+                "count": {"type": "integer"},
+            },
+        }
+        result = ToolContractPack._compact_output_schema(schema)
+        assert result == {
+            "type": "object",
+            "fields": {"id": "string", "title": "string", "count": "integer"},
+        }
+
+    def test_object_without_properties(self):
+        result = ToolContractPack._compact_output_schema({"type": "object"})
+        assert result == {"type": "object"}
+
+    def test_array_of_objects(self):
+        schema = {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string"},
+                    "score": {"type": "number"},
+                },
+            },
+        }
+        result = ToolContractPack._compact_output_schema(schema)
+        assert result == {
+            "type": "array",
+            "item_fields": {"id": "string", "score": "number"},
+        }
+
+    def test_array_of_strings(self):
+        schema = {"type": "array", "items": {"type": "string"}}
+        result = ToolContractPack._compact_output_schema(schema)
+        assert result == {"type": "array", "items": "string"}
+
+    def test_empty_schema(self):
+        assert ToolContractPack._compact_output_schema({}) == {}
+
+    def test_no_type(self):
+        assert ToolContractPack._compact_output_schema({"description": "foo"}) == {}
+
+    def test_variants_stripped(self):
+        schema = {
+            "type": "object",
+            "properties": {
+                "id": {"type": "string"},
+                "variants": {"type": "object", "description": "Variant data"},
+            },
+        }
+        result = ToolContractPack._compact_output_schema(schema)
+        assert result == {"type": "object", "fields": {"id": "string"}}
+        assert "variants" not in result.get("fields", {})
+
+    def test_generic_array(self):
+        result = ToolContractPack._compact_output_schema({"type": "array"})
+        assert result == {"type": "array"}

@@ -30,9 +30,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FlowResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -61,25 +58,28 @@ class ParallelFunction(BaseFunction):
         name="parallel",
         category=FunctionCategory.FLOW,
         description="Execute multiple named branches simultaneously. REQUIRES 'branches' with at least 2 named branches (e.g., 'branches.task_a', 'branches.task_b'). Use when steps have no dependencies on each other. All branches must complete before continuing.",
-        parameters=[
-            ParameterDoc(
-                name="max_concurrency",
-                type="int",
-                description="Maximum number of branches to run simultaneously. 0 or omitted = no limit.",
-                required=False,
-                default=0,
-                example=2,
-            ),
-        ],
-        returns="FlowResult with branches_to_run listing all branch names",
-        output_schema=OutputSchema(
-            type="FlowResult",
-            description="Flow control result for parallel branch execution",
-            fields=[
-                OutputFieldDoc(name="max_concurrency", type="int",
-                              description="Maximum number of branches to run simultaneously (0 = unlimited)"),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "max_concurrency": {
+                    "type": "integer",
+                    "description": "Maximum number of branches to run simultaneously. 0 or omitted = no limit.",
+                    "default": 0,
+                    "examples": [2],
+                },
+            },
+            "required": [],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Flow control result for parallel branch execution",
+            "properties": {
+                "max_concurrency": {
+                    "type": "integer",
+                    "description": "Maximum number of branches to run simultaneously (0 = unlimited)",
+                },
+            },
+        },
         tags=["flow", "parallel", "concurrent", "branching"],
         requires_llm=False,
         side_effects=False,

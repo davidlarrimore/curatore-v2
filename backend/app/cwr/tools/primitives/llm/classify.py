@@ -19,10 +19,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
-    OutputVariant,
 )
 from ...context import FunctionContext
 from app.core.models.llm_models import LLMTaskType
@@ -55,108 +51,81 @@ class ClassifyFunction(BaseFunction):
         name="llm_classify",
         category=FunctionCategory.LLM,
         description="Classify text into categories using an LLM",
-        parameters=[
-            ParameterDoc(
-                name="text",
-                type="str",
-                description="The text to classify",
-                required=True,
-            ),
-            ParameterDoc(
-                name="categories",
-                type="list[str]",
-                description="List of possible categories",
-                required=True,
-                example=["positive", "negative", "neutral"],
-            ),
-            ParameterDoc(
-                name="category_descriptions",
-                type="dict[str, str]",
-                description="Optional descriptions for each category",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="multi_label",
-                type="bool",
-                description="Allow multiple categories (default: single category)",
-                required=False,
-                default=False,
-            ),
-            ParameterDoc(
-                name="include_reasoning",
-                type="bool",
-                description="Include reasoning for the classification",
-                required=False,
-                default=True,
-            ),
-            ParameterDoc(
-                name="model",
-                type="str",
-                description="Model to use",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="items",
-                type="list",
-                description="Collection of items to iterate over. When provided, the text is rendered for each item with {{ item.xxx }} placeholders replaced by item data.",
-                required=False,
-                default=None,
-                example=[{"content": "Text 1"}, {"content": "Text 2"}],
-            ),
-        ],
-        returns="dict or list: Classification result (single) or list of classifications (collection)",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Classification result with category, confidence, and optional reasoning",
-            fields=[
-                OutputFieldDoc(name="category", type="str",
-                              description="The assigned category name",
-                              example="technology"),
-                OutputFieldDoc(name="confidence", type="float",
-                              description="Confidence score (0.0-1.0)",
-                              example=0.92),
-                OutputFieldDoc(name="reasoning", type="str",
-                              description="Explanation for the classification",
-                              nullable=True),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "text": {
+                    "type": "string",
+                    "description": "The text to classify",
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of possible categories",
+                    "examples": [["positive", "negative", "neutral"]],
+                },
+                "category_descriptions": {
+                    "type": "object",
+                    "description": "Optional descriptions for each category",
+                    "default": None,
+                },
+                "multi_label": {
+                    "type": "boolean",
+                    "description": "Allow multiple categories (default: single category)",
+                    "default": False,
+                },
+                "include_reasoning": {
+                    "type": "boolean",
+                    "description": "Include reasoning for the classification",
+                    "default": True,
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Model to use",
+                    "default": None,
+                },
+                "items": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Collection of items to iterate over. When provided, the text is rendered for each item with {{ item.xxx }} placeholders replaced by item data.",
+                    "default": None,
+                    "examples": [[{"content": "Text 1"}, {"content": "Text 2"}]],
+                },
+            },
+            "required": ["text", "categories"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Classification result with category, confidence, and optional reasoning",
+            "properties": {
+                "category": {"type": "string", "description": "The assigned category name", "examples": ["technology"]},
+                "confidence": {"type": "number", "description": "Confidence score (0.0-1.0)", "examples": [0.92]},
+                "reasoning": {"type": "string", "description": "Explanation for the classification", "nullable": True},
+            },
+            "variants": [
+                {
+                    "type": "object",
+                    "description": "multi_label: when `multi_label` parameter is true",
+                    "properties": {
+                        "categories": {"type": "array", "items": {"type": "object"}, "description": "List of {name, confidence} for each matching category"},
+                        "reasoning": {"type": "string", "description": "Explanation for the classifications", "nullable": True},
+                    },
+                },
+                {
+                    "type": "array",
+                    "description": "collection: when `items` parameter is provided",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "item_id": {"type": "string", "description": "ID of the processed item"},
+                            "result": {"type": "object", "description": "Classification result (category, confidence, reasoning)"},
+                            "success": {"type": "boolean", "description": "Whether classification succeeded"},
+                            "error": {"type": "string", "description": "Error message if failed", "nullable": True},
+                        },
+                    },
+                },
             ],
-        ),
-        output_variants=[
-            OutputVariant(
-                mode="multi_label",
-                condition="when `multi_label` parameter is true",
-                schema=OutputSchema(
-                    type="dict",
-                    description="Multi-label classification with multiple categories",
-                    fields=[
-                        OutputFieldDoc(name="categories", type="list[dict]",
-                                      description="List of {name, confidence} for each matching category"),
-                        OutputFieldDoc(name="reasoning", type="str",
-                                      description="Explanation for the classifications",
-                                      nullable=True),
-                    ],
-                ),
-            ),
-            OutputVariant(
-                mode="collection",
-                condition="when `items` parameter is provided",
-                schema=OutputSchema(
-                    type="list[dict]",
-                    description="List of classification results for each item",
-                    fields=[
-                        OutputFieldDoc(name="item_id", type="str",
-                                      description="ID of the processed item"),
-                        OutputFieldDoc(name="result", type="dict",
-                                      description="Classification result (category, confidence, reasoning)"),
-                        OutputFieldDoc(name="success", type="bool",
-                                      description="Whether classification succeeded"),
-                        OutputFieldDoc(name="error", type="str",
-                                      description="Error message if failed", nullable=True),
-                    ],
-                ),
-            ),
-        ],
+        },
         tags=["llm", "classification", "categorization"],
         requires_llm=True,
         side_effects=False,

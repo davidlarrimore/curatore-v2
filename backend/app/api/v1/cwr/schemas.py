@@ -14,56 +14,19 @@ from pydantic import BaseModel, Field
 # =============================================================================
 
 
-class ParameterSchema(BaseModel):
-    """Parameter documentation schema."""
-    name: str
-    type: str
-    description: str
-    required: bool = True
-    default: Any = None
-    enum_values: Optional[List[str]] = None
-    example: Any = None
-
-
-class OutputFieldSchema(BaseModel):
-    """Output field documentation schema."""
-    name: str
-    type: str
-    description: str
-    example: Any = None
-    nullable: bool = False
-
-
-class OutputSchemaResponse(BaseModel):
-    """Output schema documentation."""
-    type: str
-    description: str
-    fields: List[OutputFieldSchema] = []
-    example: Any = None
-
-
-class OutputVariantResponse(BaseModel):
-    """Output variant for dual-mode functions."""
-    mode: str
-    condition: str
-    schema: OutputSchemaResponse
-
-
 class FunctionSchema(BaseModel):
     """Function metadata schema."""
     name: str
     category: str
     description: str
-    parameters: List[ParameterSchema]
-    returns: str
+    input_schema: Dict[str, Any] = {}
+    output_schema: Dict[str, Any] = {}
     examples: List[Dict[str, Any]] = []
     tags: List[str] = []
     requires_llm: bool = False
     requires_session: bool = True
     is_async: bool = True
     version: str = "1.0.0"
-    output_schema: Optional[OutputSchemaResponse] = None
-    output_variants: List[OutputVariantResponse] = []
     # Governance fields
     side_effects: bool = False
     is_primitive: bool = True
@@ -173,63 +136,6 @@ class ProcedureVersionDiff(BaseModel):
 # =============================================================================
 
 
-def convert_output_schema(meta) -> tuple:
-    """
-    Convert FunctionMeta output_schema and output_variants to API response models.
-
-    Args:
-        meta: FunctionMeta instance
-
-    Returns:
-        Tuple of (output_schema, output_variants) in API response format
-    """
-    output_schema = None
-    output_variants = []
-
-    if meta.output_schema:
-        output_schema = OutputSchemaResponse(
-            type=meta.output_schema.type,
-            description=meta.output_schema.description,
-            fields=[
-                OutputFieldSchema(
-                    name=f.name,
-                    type=f.type,
-                    description=f.description,
-                    example=f.example,
-                    nullable=f.nullable,
-                )
-                for f in meta.output_schema.fields
-            ],
-            example=meta.output_schema.example,
-        )
-
-    if meta.output_variants:
-        output_variants = [
-            OutputVariantResponse(
-                mode=v.mode,
-                condition=v.condition,
-                schema=OutputSchemaResponse(
-                    type=v.schema.type,
-                    description=v.schema.description,
-                    fields=[
-                        OutputFieldSchema(
-                            name=f.name,
-                            type=f.type,
-                            description=f.description,
-                            example=f.example,
-                            nullable=f.nullable,
-                        )
-                        for f in v.schema.fields
-                    ],
-                    example=v.schema.example,
-                ),
-            )
-            for v in meta.output_variants
-        ]
-
-    return output_schema, output_variants
-
-
 def meta_to_function_schema(m) -> FunctionSchema:
     """
     Convert a FunctionMeta instance to a FunctionSchema response.
@@ -240,32 +146,18 @@ def meta_to_function_schema(m) -> FunctionSchema:
     Returns:
         FunctionSchema for API response
     """
-    output_schema, output_variants = convert_output_schema(m)
     return FunctionSchema(
         name=m.name,
         category=m.category.value,
         description=m.description,
-        parameters=[
-            ParameterSchema(
-                name=p.name,
-                type=p.type,
-                description=p.description,
-                required=p.required,
-                default=p.default,
-                enum_values=p.enum_values,
-                example=p.example,
-            )
-            for p in m.parameters
-        ],
-        returns=m.returns,
+        input_schema=m.input_schema,
+        output_schema=m.output_schema,
         examples=m.examples,
         tags=m.tags,
         requires_llm=m.requires_llm,
         requires_session=m.requires_session,
         is_async=m.is_async,
         version=m.version,
-        output_schema=output_schema,
-        output_variants=output_variants,
         side_effects=m.side_effects,
         is_primitive=m.is_primitive,
         payload_profile=m.payload_profile,

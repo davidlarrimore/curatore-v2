@@ -475,6 +475,7 @@ Fix these errors and return the corrected Typed Plan JSON. Key reminders:
 - INVALID_PARAM_REFERENCE: Refs must point to defined parameters
 - TOOL_BLOCKED_BY_PROFILE: That tool is not allowed under the current profile
 - MISSING_SIDE_EFFECT_CONFIRMATION: Admin profile requires confirm_side_effects: true on side-effect steps
+- INVALID_OUTPUT_FIELD_REFERENCE: Check the tool's output_schema for valid fields. String outputs have no fields; array outputs need foreach to access item fields.
 
 Return ONLY the corrected JSON."""
 

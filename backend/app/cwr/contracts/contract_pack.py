@@ -21,7 +21,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from app.cwr.contracts.tool_contracts import ToolContract, ContractGenerator
+from app.cwr.tools.schema_utils import ContractView
 from app.cwr.governance.generation_profiles import GenerationProfile, get_profile
 from app.cwr.governance.capability_profiles import check_exposure
 from app.cwr.tools.registry import function_registry
@@ -36,28 +36,84 @@ class ToolContractPack:
 
     Attributes:
         profile: The generation profile used to filter tools
-        contracts: List of ToolContract instances that passed filtering
+        contracts: List of ContractView instances that passed filtering
     """
     profile: GenerationProfile
-    contracts: List[ToolContract] = field(default_factory=list)
+    contracts: List[ContractView] = field(default_factory=list)
 
     def get_tool_names(self) -> List[str]:
         """Get sorted list of available tool names."""
         return sorted(c.name for c in self.contracts)
 
-    def get_contract(self, name: str) -> Optional[ToolContract]:
+    def get_contract(self, name: str) -> Optional[ContractView]:
         """Get a specific contract by tool name."""
         for c in self.contracts:
             if c.name == name:
                 return c
         return None
 
+    @staticmethod
+    def _compact_output_schema(schema: Dict[str, Any]) -> Dict[str, Any]:
+        """
+        Reduce a full output JSON Schema to a slim field map for the LLM prompt.
+
+        Strips descriptions, examples, nullable flags, and variant keys.
+        Keeps only field names and types.
+
+        Compact forms:
+            {"type": "string"}                               -> {"type": "string"}
+            {"type": "object", "properties": {"id": ...}}    -> {"type": "object", "fields": {"id": "string"}}
+            {"type": "array", "items": {"type": "object", "properties": ...}}
+                                                             -> {"type": "array", "item_fields": {"id": "string"}}
+            {"type": "array", "items": {"type": "string"}}   -> {"type": "array", "items": "string"}
+            {"type": "object"} (no properties)               -> {"type": "object"}
+        """
+        if not schema:
+            return {}
+
+        schema_type = schema.get("type")
+        if not schema_type:
+            return {}
+
+        if schema_type == "string":
+            return {"type": "string"}
+
+        if schema_type == "object":
+            props = schema.get("properties")
+            if not props:
+                return {"type": "object"}
+            fields_map = {}
+            for fname, fschema in props.items():
+                if fname == "variants":
+                    continue
+                fields_map[fname] = fschema.get("type", "any")
+            return {"type": "object", "fields": fields_map}
+
+        if schema_type == "array":
+            items = schema.get("items", {})
+            items_type = items.get("type")
+            if items_type == "object":
+                item_props = items.get("properties")
+                if item_props:
+                    fields_map = {}
+                    for fname, fschema in item_props.items():
+                        if fname == "variants":
+                            continue
+                        fields_map[fname] = fschema.get("type", "any")
+                    return {"type": "array", "item_fields": fields_map}
+                return {"type": "array", "items": "object"}
+            elif items_type:
+                return {"type": "array", "items": items_type}
+            return {"type": "array"}
+
+        return {"type": schema_type}
+
     def to_prompt_json(self) -> str:
         """
         Produce compact JSON for embedding in the LLM system prompt.
 
         Each tool is represented with: name, description, category,
-        input_schema, side_effects, and payload_profile.
+        input_schema, output_schema, side_effects, and payload_profile.
         """
         tools = []
         for c in self.contracts:
@@ -66,6 +122,7 @@ class ToolContractPack:
                 "description": c.description,
                 "category": c.category,
                 "input_schema": c.input_schema,
+                "output_schema": self._compact_output_schema(c.output_schema),
                 "side_effects": c.side_effects,
                 "payload_profile": c.payload_profile,
             }
@@ -112,7 +169,7 @@ def get_tool_contract_pack(
     function_registry.initialize()
     all_meta = function_registry.list_all()
 
-    contracts: List[ToolContract] = []
+    contracts: List[ContractView] = []
 
     for meta in all_meta:
         # Layer 1: exposure profile check
@@ -133,7 +190,7 @@ def get_tool_contract_pack(
             continue
 
         # Generate contract
-        contract = ContractGenerator.generate(meta)
+        contract = meta.as_contract()
         contracts.append(contract)
 
     logger.info(

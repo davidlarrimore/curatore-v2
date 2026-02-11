@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Set
 import jsonschema
 
 from app.cwr.contracts.contract_pack import ToolContractPack
-from app.cwr.contracts.validation import ValidationError, ValidationErrorCode, ValidationResult
+from app.cwr.contracts.validation import ValidationError, ValidationErrorCode, ValidationResult, resolve_output_fields
 from app.cwr.procedures.compiler.plan_models import (
     TYPED_PLAN_JSON_SCHEMA,
     is_ref,
@@ -74,6 +74,11 @@ class PlanValidator:
         param_names = {p["name"] for p in parameters}
         ref_errors = self._validate_references(steps, param_names)
         errors.extend(ref_errors)
+
+        # Layer 3b: Output field reference validation
+        output_errors, output_warnings = self._validate_output_field_refs(steps, param_names)
+        errors.extend(output_errors)
+        warnings.extend(output_warnings)
 
         # Layer 4: Side-effect policy
         policy_errors, policy_warnings = self._validate_side_effect_policy(steps)
@@ -414,6 +419,200 @@ class PlanValidator:
                     item, seen_steps, param_names,
                     f"{path}[{i}]", current_step, errors, extra_context,
                 )
+
+    # ------------------------------------------------------------------
+    # Layer 3b: Output field reference validation (warnings)
+    # ------------------------------------------------------------------
+
+    def _validate_output_field_refs(
+        self,
+        steps: List[Dict],
+        param_names: Set[str],
+        base_path: str = "steps",
+    ) -> tuple:
+        """
+        Check that field references on step outputs match the tool's output_schema.
+
+        Returns:
+            (errors, warnings) — string-output field refs are errors,
+            array-output and unknown-object-field refs are warnings.
+        """
+        errors: List[ValidationError] = []
+        warnings: List[ValidationError] = []
+
+        # Build step_name -> tool_name map for this level
+        step_tool_map: Dict[str, str] = {}
+        for step in steps:
+            sname = step.get("name", "")
+            stool = step.get("tool", "")
+            if sname and stool:
+                step_tool_map[sname] = stool
+
+        # Collect all refs/templates from all steps and check field components
+        for idx, step in enumerate(steps):
+            step_path = f"{base_path}[{idx}]"
+            step_name = step.get("name", "")
+
+            # Check refs in args, condition, foreach
+            for section_key in ("args", "condition", "foreach"):
+                value = step.get(section_key)
+                if value is not None:
+                    section_path = f"{step_path}.{section_key}" if section_key != "args" else f"{step_path}.args"
+                    self._check_output_field_refs_in_value(
+                        value, step_tool_map, section_path, step_name, errors, warnings,
+                    )
+
+            # Recurse into branches
+            branches = step.get("branches")
+            if branches and isinstance(branches, dict):
+                for branch_name, branch_steps in branches.items():
+                    if isinstance(branch_steps, list):
+                        branch_errors, branch_warnings = self._validate_output_field_refs(
+                            branch_steps, param_names,
+                            base_path=f"{step_path}.branches.{branch_name}",
+                        )
+                        errors.extend(branch_errors)
+                        warnings.extend(branch_warnings)
+
+        return errors, warnings
+
+    def _check_output_field_refs_in_value(
+        self,
+        value: Any,
+        step_tool_map: Dict[str, str],
+        path: str,
+        current_step: str,
+        errors: List[ValidationError],
+        warnings: List[ValidationError],
+    ) -> None:
+        """Recursively check for output field references in a value tree."""
+        if is_ref(value):
+            ref_str = value["ref"]
+            namespace, name, field_name = parse_ref(ref_str)
+
+            if namespace == "steps" and name and field_name:
+                self._check_single_output_field_ref(
+                    name, field_name, ref_str, step_tool_map, path, current_step, errors, warnings,
+                )
+
+        elif is_template(value):
+            # Check template strings for steps.X.field patterns
+            import re
+            template_str = value["template"]
+            for match in re.finditer(r"steps\.([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)", template_str):
+                step_ref = match.group(1)
+                field_ref = match.group(2)
+                self._check_single_output_field_ref(
+                    step_ref, field_ref, f"steps.{step_ref}.{field_ref}",
+                    step_tool_map, path, current_step, errors, warnings,
+                )
+
+        elif isinstance(value, str) and "{{" in value:
+            # Legacy inline template
+            import re
+            for match in re.finditer(r"steps\.([a-zA-Z_][a-zA-Z0-9_]*)\.([a-zA-Z_][a-zA-Z0-9_]*)", value):
+                step_ref = match.group(1)
+                field_ref = match.group(2)
+                self._check_single_output_field_ref(
+                    step_ref, field_ref, f"steps.{step_ref}.{field_ref}",
+                    step_tool_map, path, current_step, errors, warnings,
+                )
+
+        elif isinstance(value, dict):
+            for key, val in value.items():
+                self._check_output_field_refs_in_value(
+                    val, step_tool_map, f"{path}.{key}", current_step, errors, warnings,
+                )
+
+        elif isinstance(value, list):
+            for i, item in enumerate(value):
+                self._check_output_field_refs_in_value(
+                    item, step_tool_map, f"{path}[{i}]", current_step, errors, warnings,
+                )
+
+    def _check_single_output_field_ref(
+        self,
+        step_name: str,
+        field_name: str,
+        ref_str: str,
+        step_tool_map: Dict[str, str],
+        path: str,
+        current_step: str,
+        errors: List[ValidationError],
+        warnings: List[ValidationError],
+    ) -> None:
+        """Check a single steps.X.field reference against the tool's output_schema."""
+        tool_name = step_tool_map.get(step_name)
+        if not tool_name:
+            return  # Step not found at this level; skip (reference validation handles this)
+
+        contract = self._pack.get_contract(tool_name)
+        if not contract:
+            return  # Tool not found; tool validation handles this
+
+        schema_type, output_fields = resolve_output_fields(contract.output_schema)
+        if schema_type is None:
+            return  # Generic schema, can't validate
+
+        if schema_type == "string":
+            # String output — no fields to access (this is an error, not a warning)
+            errors.append(ValidationError(
+                code=ValidationErrorCode.INVALID_OUTPUT_FIELD_REFERENCE,
+                message=f"Step '{current_step}' references field '{field_name}' on step '{step_name}' "
+                        f"(tool '{tool_name}'), but it returns a string. Use the step result directly: "
+                        f'{{"ref": "steps.{step_name}"}}',
+                path=path,
+                details={
+                    "step": current_step,
+                    "referenced_step": step_name,
+                    "tool": tool_name,
+                    "field": field_name,
+                    "output_type": "string",
+                    "ref": ref_str,
+                },
+            ))
+        elif schema_type == "array":
+            # Array output — can't access fields directly, need foreach
+            available = sorted(output_fields) if output_fields else []
+            msg = (
+                f"Step '{current_step}' references field '{field_name}' on step '{step_name}' "
+                f"(tool '{tool_name}'), but it returns an array. Use foreach to iterate, "
+                f"then access item.{field_name}."
+            )
+            if available:
+                msg += f" Available item fields: {available}"
+            warnings.append(ValidationError(
+                code=ValidationErrorCode.INVALID_OUTPUT_FIELD_REFERENCE,
+                message=msg,
+                path=path,
+                details={
+                    "step": current_step,
+                    "referenced_step": step_name,
+                    "tool": tool_name,
+                    "field": field_name,
+                    "output_type": "array",
+                    "available_fields": available,
+                    "ref": ref_str,
+                },
+            ))
+        elif schema_type == "object" and output_fields is not None and field_name not in output_fields:
+            # Object output but field not found
+            warnings.append(ValidationError(
+                code=ValidationErrorCode.INVALID_OUTPUT_FIELD_REFERENCE,
+                message=f"Step '{current_step}' references field '{field_name}' on step '{step_name}' "
+                        f"(tool '{tool_name}'), but that field is not in the output schema. "
+                        f"Available fields: {sorted(output_fields)}",
+                path=path,
+                details={
+                    "step": current_step,
+                    "referenced_step": step_name,
+                    "tool": tool_name,
+                    "field": field_name,
+                    "output_type": "object",
+                    "available_fields": sorted(output_fields),
+                    "ref": ref_str,
+                },
+            ))
 
     # ------------------------------------------------------------------
     # Layer 4: Side-effect policy

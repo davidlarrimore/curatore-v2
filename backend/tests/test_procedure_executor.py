@@ -21,7 +21,6 @@ from app.cwr.tools.base import (
     FunctionResult,
     FunctionStatus,
     FlowResult,
-    ParameterDoc,
 )
 from app.cwr.tools.registry import FunctionRegistry
 from app.cwr.tools.context import FunctionContext
@@ -38,11 +37,14 @@ class DummySearchFunction(BaseFunction):
         name="test_search",
         category=FunctionCategory.SEARCH,
         description="Test search function",
-        parameters=[
-            ParameterDoc(name="query", type="str", description="Search query", required=True),
-            ParameterDoc(name="limit", type="int", description="Max results", required=False, default=10),
-        ],
-        returns="list",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query"},
+                "limit": {"type": "integer", "description": "Max results", "default": 10},
+            },
+            "required": ["query"],
+        },
         tags=["test"],
     )
 
@@ -60,10 +62,13 @@ class DummyLogFunction(BaseFunction):
         name="test_log",
         category=FunctionCategory.OUTPUT,
         description="Test log function",
-        parameters=[
-            ParameterDoc(name="message", type="str", description="Message to log", required=True),
-        ],
-        returns="dict",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "Message to log"},
+            },
+            "required": ["message"],
+        },
         tags=["test"],
     )
 
@@ -80,10 +85,13 @@ class DummyFailFunction(BaseFunction):
         name="test_fail",
         category=FunctionCategory.OUTPUT,
         description="Test failing function",
-        parameters=[
-            ParameterDoc(name="reason", type="str", description="Failure reason", required=False, default="test failure"),
-        ],
-        returns="dict",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "reason": {"type": "string", "description": "Failure reason", "default": "test failure"},
+            },
+            "required": [],
+        },
         tags=["test"],
     )
 
@@ -387,10 +395,13 @@ class TestFlowControl:
                 name="if_branch",
                 category=FunctionCategory.FLOW,
                 description="If branch",
-                parameters=[
-                    ParameterDoc(name="condition", type="str", description="Condition", required=True),
-                ],
-                returns="dict",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "condition": {"type": "string", "description": "Condition"},
+                    },
+                    "required": ["condition"],
+                },
             )
 
             async def execute(self, ctx, **params):
@@ -441,10 +452,13 @@ class TestFlowControl:
                 name="if_branch",
                 category=FunctionCategory.FLOW,
                 description="If branch",
-                parameters=[
-                    ParameterDoc(name="condition", type="str", description="Condition", required=True),
-                ],
-                returns="dict",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "condition": {"type": "string", "description": "Condition"},
+                    },
+                    "required": ["condition"],
+                },
             )
 
             async def execute(self, ctx, **params):
@@ -496,10 +510,13 @@ class TestFlowControl:
                 name="foreach",
                 category=FunctionCategory.FLOW,
                 description="Foreach",
-                parameters=[
-                    ParameterDoc(name="items", type="list", description="Items", required=True),
-                ],
-                returns="dict",
+                input_schema={
+                    "type": "object",
+                    "properties": {
+                        "items": {"type": "array", "description": "Items"},
+                    },
+                    "required": ["items"],
+                },
             )
 
             async def execute(self, ctx, **params):
@@ -676,10 +693,13 @@ class DummySideEffectFunction(BaseFunction):
         name="test_side_effect",
         category=FunctionCategory.NOTIFY,
         description="Test function with side effects",
-        parameters=[
-            ParameterDoc(name="message", type="str", description="Message", required=True),
-        ],
-        returns="dict",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "message": {"type": "string", "description": "Message"},
+            },
+            "required": ["message"],
+        },
         tags=["test"],
         side_effects=True,
     )
@@ -697,10 +717,13 @@ class DummyBlockedFunction(BaseFunction):
         name="test_blocked",
         category=FunctionCategory.OUTPUT,
         description="Test function blocked from procedures",
-        parameters=[
-            ParameterDoc(name="data", type="str", description="Data", required=True),
-        ],
-        returns="dict",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "data": {"type": "string", "description": "Data"},
+            },
+            "required": ["data"],
+        },
         tags=["test"],
         exposure_profile={"procedure": False, "agent": True},
     )
@@ -821,6 +844,100 @@ class TestGovernance:
 
                 assert len(governance_calls) == 0
                 assert result["status"] == "completed"
+
+
+# =============================================================================
+# PROCEDURE VALIDATOR OUTPUT FIELD TESTS
+# =============================================================================
+
+
+class TestProcedureValidatorOutputFields:
+    """Tests for ProcedureValidator output field reference validation."""
+
+    def setup_method(self):
+        from app.cwr.contracts.validation import ProcedureValidator
+        self.validator = ProcedureValidator()
+
+    def _make_definition(self, steps, parameters=None):
+        return {
+            "name": "Test Procedure",
+            "slug": "test-procedure",
+            "steps": steps,
+            "parameters": parameters or [],
+        }
+
+    def test_field_ref_on_string_output_is_error(self):
+        """Accessing a field on a string-output function (llm_generate) is an error."""
+        definition = self._make_definition([
+            {"name": "gen", "function": "llm_generate", "params": {"prompt": "test"}},
+            {"name": "log_it", "function": "log", "params": {
+                "message": "Title: {{ steps.gen.title }}",
+            }},
+        ])
+        result = self.validator.validate(definition)
+        output_errors = [e for e in result.errors if e.code.value == "INVALID_OUTPUT_FIELD_REFERENCE"]
+        assert len(output_errors) == 1
+        assert "string" in output_errors[0].message
+
+    def test_field_ref_on_array_output_is_warning(self):
+        """Accessing a field on an array-output function (search_assets) is a warning."""
+        definition = self._make_definition([
+            {"name": "search", "function": "search_assets", "params": {"query": "test"}},
+            {"name": "log_it", "function": "log", "params": {
+                "message": "Title: {{ steps.search.title }}",
+            }},
+        ])
+        result = self.validator.validate(definition)
+        output_warnings = [w for w in result.warnings if w.code.value == "INVALID_OUTPUT_FIELD_REFERENCE"]
+        assert len(output_warnings) == 1
+        assert "array" in output_warnings[0].message
+
+    def test_valid_field_ref_on_object_no_warning(self):
+        """Accessing a known field on an object-output function produces no warning."""
+        definition = self._make_definition([
+            {"name": "artifact", "function": "create_artifact", "params": {
+                "name": "test", "content": "data", "format": "text",
+            }},
+            {"name": "log_it", "function": "log", "params": {
+                "message": "Key: {{ steps.artifact.object_key }}",
+            }},
+        ])
+        result = self.validator.validate(definition)
+        output_issues = [
+            e for e in result.errors + result.warnings
+            if e.code.value == "INVALID_OUTPUT_FIELD_REFERENCE"
+        ]
+        assert len(output_issues) == 0
+
+    def test_unknown_field_on_object_is_warning(self):
+        """Accessing an unknown field on an object-output function is a warning."""
+        definition = self._make_definition([
+            {"name": "artifact", "function": "create_artifact", "params": {
+                "name": "test", "content": "data", "format": "text",
+            }},
+            {"name": "log_it", "function": "log", "params": {
+                "message": "Bad: {{ steps.artifact.bad_field }}",
+            }},
+        ])
+        result = self.validator.validate(definition)
+        output_warnings = [w for w in result.warnings if w.code.value == "INVALID_OUTPUT_FIELD_REFERENCE"]
+        assert len(output_warnings) == 1
+        assert "bad_field" in output_warnings[0].message
+
+    def test_no_field_ref_no_issue(self):
+        """Referencing a step without field access produces no output field issue."""
+        definition = self._make_definition([
+            {"name": "search", "function": "search_assets", "params": {"query": "test"}},
+            {"name": "log_it", "function": "log", "params": {
+                "message": "Results: {{ steps.search }}",
+            }},
+        ])
+        result = self.validator.validate(definition)
+        output_issues = [
+            e for e in result.errors + result.warnings
+            if e.code.value == "INVALID_OUTPUT_FIELD_REFERENCE"
+        ]
+        assert len(output_issues) == 0
 
 
 # =============================================================================

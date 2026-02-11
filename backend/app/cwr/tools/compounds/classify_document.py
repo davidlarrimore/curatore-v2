@@ -17,9 +17,6 @@ from ..base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -79,55 +76,61 @@ class ClassifyDocumentFunction(BaseFunction):
         name="classify_document",
         category=FunctionCategory.COMPOUND,
         description="Classify a document using rules and optionally LLM",
-        parameters=[
-            ParameterDoc(
-                name="asset_id",
-                type="str",
-                description="Asset ID to classify",
-                required=True,
-            ),
-            ParameterDoc(
-                name="categories",
-                type="list[str]",
-                description="Categories to classify into",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="use_llm",
-                type="bool",
-                description="Use LLM for uncertain cases",
-                required=False,
-                default=True,
-            ),
-            ParameterDoc(
-                name="confidence_threshold",
-                type="float",
-                description="Minimum confidence for rule-based classification",
-                required=False,
-                default=0.7,
-            ),
-        ],
-        returns="dict: Classification result with category and confidence",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Document classification result with confidence scores",
-            fields=[
-                OutputFieldDoc(name="asset_id", type="str",
-                              description="UUID of the classified asset"),
-                OutputFieldDoc(name="category", type="str",
-                              description="Assigned category name",
-                              example="contract"),
-                OutputFieldDoc(name="confidence", type="float",
-                              description="Confidence score (0.0-1.0)",
-                              example=0.85),
-                OutputFieldDoc(name="all_scores", type="dict",
-                              description="Confidence scores for all categories"),
-                OutputFieldDoc(name="method", type="str",
-                              description="Classification method used (rules or llm)",
-                              example="rules"),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string",
+                    "description": "Asset ID to classify",
+                },
+                "categories": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Categories to classify into",
+                    "default": None,
+                },
+                "use_llm": {
+                    "type": "boolean",
+                    "description": "Use LLM for uncertain cases",
+                    "default": True,
+                },
+                "confidence_threshold": {
+                    "type": "number",
+                    "description": "Minimum confidence for rule-based classification",
+                    "default": 0.7,
+                },
+            },
+            "required": ["asset_id"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Document classification result with confidence scores",
+            "properties": {
+                "asset_id": {
+                    "type": "string",
+                    "description": "UUID of the classified asset",
+                },
+                "category": {
+                    "type": "string",
+                    "description": "Assigned category name",
+                    "examples": ["contract"],
+                },
+                "confidence": {
+                    "type": "number",
+                    "description": "Confidence score (0.0-1.0)",
+                    "examples": [0.85],
+                },
+                "all_scores": {
+                    "type": "object",
+                    "description": "Confidence scores for all categories",
+                },
+                "method": {
+                    "type": "string",
+                    "description": "Classification method used (rules or llm)",
+                    "examples": ["rules"],
+                },
+            },
+        },
         tags=["compound", "classification", "document"],
         requires_llm=False,  # LLM is optional
         side_effects=False,

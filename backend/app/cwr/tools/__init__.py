@@ -30,7 +30,6 @@ from .base import (
     FunctionMeta,
     FunctionCategory,
     FunctionStatus,
-    ParameterDoc,
 )
 from .context import FunctionContext
 from .registry import (
@@ -39,7 +38,7 @@ from .registry import (
     list_functions,
     initialize_functions,
 )
-from ..contracts.tool_contracts import ToolContract, ContractGenerator
+from .schema_utils import ContractView
 from .content import (
     ContentItem,
     ContentService,
@@ -109,7 +108,6 @@ __all__ = [
     "FunctionMeta",
     "FunctionCategory",
     "FunctionStatus",
-    "ParameterDoc",
     "FunctionContext",
     # Registry
     "function_registry",
@@ -117,8 +115,7 @@ __all__ = [
     "list_functions",
     "initialize_functions",
     # Contracts
-    "ToolContract",
-    "ContractGenerator",
+    "ContractView",
     # Content
     "ContentItem",
     "ContentService",

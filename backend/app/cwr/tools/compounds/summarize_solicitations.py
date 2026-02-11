@@ -16,9 +16,6 @@ from ..base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ..context import FunctionContext
 
@@ -42,43 +39,47 @@ class SummarizeSolicitationsFunction(BaseFunction):
         name="summarize_solicitations",
         category=FunctionCategory.COMPOUND,
         description="Batch summarize SAM.gov solicitations",
-        parameters=[
-            ParameterDoc(
-                name="search_id",
-                type="str",
-                description="Filter by SAM search ID",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="only_missing",
-                type="bool",
-                description="Only summarize solicitations without summaries",
-                required=False,
-                default=True,
-            ),
-            ParameterDoc(
-                name="limit",
-                type="int",
-                description="Maximum solicitations to summarize",
-                required=False,
-                default=20,
-            ),
-        ],
-        returns="dict: Summary of summarization results",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Batch summarization results with individual summaries",
-            fields=[
-                OutputFieldDoc(name="processed", type="int",
-                              description="Number of solicitations successfully summarized"),
-                OutputFieldDoc(name="failed", type="int",
-                              description="Number of solicitations that failed to summarize",
-                              nullable=True),
-                OutputFieldDoc(name="summaries", type="list[dict]",
-                              description="List of generated summaries with id, notice_id, and summary text"),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "search_id": {
+                    "type": "string",
+                    "description": "Filter by SAM search ID",
+                    "default": None,
+                },
+                "only_missing": {
+                    "type": "boolean",
+                    "description": "Only summarize solicitations without summaries",
+                    "default": True,
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum solicitations to summarize",
+                    "default": 20,
+                },
+            },
+            "required": [],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Batch summarization results with individual summaries",
+            "properties": {
+                "processed": {
+                    "type": "integer",
+                    "description": "Number of solicitations successfully summarized",
+                },
+                "failed": {
+                    "type": "integer",
+                    "description": "Number of solicitations that failed to summarize",
+                    "nullable": True,
+                },
+                "summaries": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "List of generated summaries with id, notice_id, and summary text",
+                },
+            },
+        },
         tags=["compound", "sam", "batch", "summarization"],
         requires_llm=True,
         side_effects=True,

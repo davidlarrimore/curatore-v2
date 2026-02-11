@@ -98,15 +98,10 @@ class TestRESTEndpoints:
                 assert data["isError"] is False
 
     def test_old_mcp_tools_path_not_rest(self, client, auth_headers):
-        """Test that old /mcp/tools path is no longer a REST endpoint.
-
-        The /mcp path is now mounted as SDK Streamable HTTP transport.
-        In tests, the session manager isn't started (no lifespan), so
-        requests to /mcp/* raise RuntimeError — confirming the old REST
-        endpoint no longer exists at that path.
-        """
-        with pytest.raises(RuntimeError, match="Task group is not initialized"):
-            client.get("/mcp/tools", headers=auth_headers)
+        """Test that old /mcp/tools path is no longer a REST endpoint."""
+        response = client.get("/mcp/tools", headers=auth_headers)
+        # The old /mcp/tools REST endpoint no longer exists — returns 404
+        assert response.status_code == 404
 
 
 class TestPolicyEndpoints:

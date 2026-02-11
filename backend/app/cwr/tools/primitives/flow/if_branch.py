@@ -32,9 +32,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FlowResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -63,29 +60,35 @@ class IfBranchFunction(BaseFunction):
         name="if_branch",
         category=FunctionCategory.FLOW,
         description="Evaluate a condition and execute one of two branches. REQUIRES 'branches.then' containing steps to run when truthy. Optional 'branches.else' runs when falsy.",
-        parameters=[
-            ParameterDoc(
-                name="condition",
-                type="str",
-                description="Jinja2 expression that evaluates to truthy/falsy. Truthy → then branch. Falsy → else branch. Follows Python truthiness rules.",
-                required=True,
-                example="{{ steps.search_results.total > 0 }}",
-            ),
-        ],
-        returns="FlowResult with branch_key='then' or 'else'",
-        output_schema=OutputSchema(
-            type="FlowResult",
-            description="Flow control result indicating which branch to execute",
-            fields=[
-                OutputFieldDoc(name="condition_value", type="any",
-                              description="The rendered condition value that was evaluated"),
-                OutputFieldDoc(name="evaluated", type="bool",
-                              description="True if condition was truthy, False if falsy"),
-                OutputFieldDoc(name="branch", type="str",
-                              description="Branch to execute: 'then' or 'else'",
-                              example="then"),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "condition": {
+                    "type": "string",
+                    "description": "Jinja2 expression that evaluates to truthy/falsy. Truthy → then branch. Falsy → else branch. Follows Python truthiness rules.",
+                    "examples": ["{{ steps.search_results.total > 0 }}"],
+                },
+            },
+            "required": ["condition"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Flow control result indicating which branch to execute",
+            "properties": {
+                "condition_value": {
+                    "description": "The rendered condition value that was evaluated",
+                },
+                "evaluated": {
+                    "type": "boolean",
+                    "description": "True if condition was truthy, False if falsy",
+                },
+                "branch": {
+                    "type": "string",
+                    "description": "Branch to execute: 'then' or 'else'",
+                    "examples": ["then"],
+                },
+            },
+        },
         tags=["flow", "branching", "conditional", "if", "else"],
         requires_llm=False,
         side_effects=False,

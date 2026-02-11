@@ -257,9 +257,9 @@ all_functions = fn.list_all()
 llm_functions = fn.list_by_category(FunctionCategory.LLM)
 ```
 
-### Output Schemas
+### Output Schemas (JSON Schema)
 
-Functions document their return types using structured `OutputSchema` objects. This provides machine-readable documentation that:
+Functions document their return types using JSON Schema `output_schema` dicts on `FunctionMeta`. This provides machine-readable documentation that:
 - Helps engineers know exact field names when writing procedures
 - Enables AI procedure generation to reliably use correct template references
 - Allows API consumers to understand output structure programmatically
@@ -267,44 +267,52 @@ Functions document their return types using structured `OutputSchema` objects. T
 **Location**: `backend/app/cwr/tools/base.py`
 
 ```python
-from app.cwr.tools.base import OutputFieldDoc, OutputSchema, OutputVariant
-
 # Simple output (e.g., llm_generate returns a string)
-output_schema = OutputSchema(
-    type="str",
-    description="The generated text content",
-)
+output_schema={
+    "type": "string",
+    "description": "The generated text content",
+}
 
 # Structured output (e.g., search_assets returns a list of ContentItems)
-output_schema = OutputSchema(
-    type="list[ContentItem]",
-    description="List of matching documents",
-    fields=[
-        OutputFieldDoc(name="id", type="str", description="Asset UUID"),
-        OutputFieldDoc(name="title", type="str", description="Full document path/title"),
-        OutputFieldDoc(name="original_filename", type="str", description="File name only"),
-        OutputFieldDoc(name="score", type="float", description="Relevance score"),
-        OutputFieldDoc(name="snippet", type="str", description="Highlighted excerpt", nullable=True),
-    ],
-)
+output_schema={
+    "type": "array",
+    "description": "List of matching documents",
+    "items": {
+        "type": "object",
+        "properties": {
+            "id": {"type": "string", "description": "Asset UUID"},
+            "title": {"type": "string", "description": "Full document path/title"},
+            "original_filename": {"type": "string", "description": "File name only"},
+            "score": {"type": "number", "description": "Relevance score"},
+            "snippet": {"type": "string", "description": "Highlighted excerpt", "nullable": True},
+        },
+    },
+}
 
-# Dual-mode output (e.g., LLM functions in single vs collection mode)
-output_variants = [
-    OutputVariant(
-        mode="collection",
-        condition="when `items` parameter is provided",
-        schema=OutputSchema(
-            type="list[dict]",
-            description="List of results for each item",
-            fields=[
-                OutputFieldDoc(name="item_id", type="str", description="ID of processed item"),
-                OutputFieldDoc(name="result", type="str", description="Generated text"),
-                OutputFieldDoc(name="success", type="bool", description="Whether generation succeeded"),
-                OutputFieldDoc(name="error", type="str", description="Error message if failed", nullable=True),
-            ],
-        ),
-    ),
-]
+# Dual-mode output (variants embedded in output_schema)
+output_schema={
+    "type": "object",
+    "description": "Classification result",
+    "properties": {
+        "category": {"type": "string", "description": "Assigned category"},
+        "confidence": {"type": "number", "description": "Confidence score"},
+    },
+    "variants": [
+        {
+            "mode": "collection",
+            "description": "when `items` parameter is provided",
+            "schema": {
+                "type": "array",
+                "items": {"type": "object", "properties": {
+                    "item_id": {"type": "string", "description": "ID of processed item"},
+                    "result": {"type": "string", "description": "Generated text"},
+                    "success": {"type": "boolean", "description": "Whether generation succeeded"},
+                    "error": {"type": "string", "description": "Error message if failed", "nullable": True},
+                }},
+            },
+        },
+    ],
+}
 ```
 
 **API Response**: Output schemas are included in the `/api/v1/functions/{name}` response:
@@ -313,14 +321,16 @@ output_variants = [
 {
   "name": "search_assets",
   "output_schema": {
-    "type": "list[ContentItem]",
+    "type": "array",
     "description": "List of matching documents",
-    "fields": [
-      {"name": "id", "type": "str", "description": "Asset UUID", "nullable": false},
-      {"name": "title", "type": "str", "description": "Full document path/title", "nullable": false}
-    ]
-  },
-  "output_variants": []
+    "items": {
+      "type": "object",
+      "properties": {
+        "id": {"type": "string", "description": "Asset UUID"},
+        "title": {"type": "string", "description": "Full document path/title"}
+      }
+    }
+  }
 }
 ```
 
@@ -515,7 +525,7 @@ backend/app/
 │   │   ├── primitives/             # llm/, search/, output/, notify/, flow/
 │   │   └── compounds/              # Multi-step compound functions
 │   ├── contracts/
-│   │   ├── tool_contracts.py       # ToolContract + ContractGenerator
+│   │   ├── __init__.py             # Exports ContractView
 │   │   └── validation.py           # Procedure validator
 │   ├── procedures/
 │   │   ├── compiler/
@@ -598,22 +608,27 @@ POST   /api/v1/data/webhooks/pipelines/{slug}  # Trigger pipeline
 1. Create function file in appropriate category folder:
 ```python
 # backend/app/cwr/tools/primitives/llm/my_function.py
-from ...base import BaseFunction, FunctionResult, FunctionMeta
+from ...base import BaseFunction, FunctionResult, FunctionMeta, FunctionCategory
 
 class MyFunction(BaseFunction):
     meta = FunctionMeta(
         name="my_function",
+        category=FunctionCategory.LLM,
         description="What this function does",
-        category="llm",
-        params={
-            "input_text": {"type": "string", "required": True},
-            "options": {"type": "object", "default": {}},
-        }
+        input_schema={
+            "type": "object",
+            "properties": {
+                "input_text": {"type": "string", "description": "Text to process"},
+                "options": {"type": "object", "description": "Additional options", "default": {}},
+            },
+            "required": ["input_text"],
+        },
+        requires_llm=True,
     )
 
     async def execute(self, ctx, **params) -> FunctionResult:
         # Implementation
-        return FunctionResult.success(data=result)
+        return FunctionResult.success_result(data=result)
 ```
 
 2. Function is auto-discovered via the registry.
@@ -659,12 +674,12 @@ Functions declare governance metadata through their `FunctionMeta`:
 
 ### Side Effects Logging
 
-Functions that modify state declare `side_effects` to enable audit logging:
+Functions that modify state declare `side_effects=True` to enable audit logging:
 
 ```python
 meta = FunctionMeta(
     name="update_metadata",
-    side_effects=["write_metadata"],  # Logged in RunLogEvent
+    side_effects=True,  # Logged in RunLogEvent
 )
 ```
 
@@ -677,7 +692,7 @@ Functions that send data externally declare an `exposure_profile`:
 ```python
 meta = FunctionMeta(
     name="send_email",
-    exposure_profile="external",  # Can be blocked by org settings
+    exposure_profile={"procedure": True, "agent": False},  # Can be blocked by org settings
 )
 ```
 
@@ -727,8 +742,9 @@ GET /api/v1/cwr/contracts/{function_name}
 
 This returns:
 - **input_schema**: JSON Schema describing parameters
-- **output_schema**: Structured description of return type and fields
-- **output_variants**: Different output shapes based on mode (single vs collection)
+- **output_schema**: JSON Schema describing return type and fields
+
+Variants are embedded in `output_schema` under a `variants` key when functions have dual-mode output.
 
 Tool contracts enable the AI procedure generator to create valid procedure YAML automatically.
 

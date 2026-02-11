@@ -171,6 +171,19 @@ For complex expressions with filters or loops, use template objects:
 - `{"template": "{{ steps.foreach_step | compact }}"}` — Filter nulls from foreach results
 - `{"template": "{% for item in steps.results if item %}{{ item }}{% endfor %}"}` — Loop with null filtering
 
+## Output Schema and Field References
+
+Each tool's `output_schema` in the TOOL CATALOG tells you what the step result contains:
+
+- **Array output** (`"type": "array"`, `"item_fields": {...}`): The step result is a list.
+  Use foreach to iterate, then access `item.field_name` where field_name is from item_fields.
+
+- **Object output** (`"type": "object"`, `"fields": {...}`): The step result is a dict.
+  Access fields directly: `{"ref": "steps.create_artifact.object_key"}`.
+
+- **String output** (`"type": "string"`): The step result is a plain string.
+  Use `{"ref": "steps.summarize"}` directly. Do NOT reference sub-fields.
+
 ## Parameter Types
 
 Valid types: `string`, `integer`, `boolean`, `array`, `object`, `number`
@@ -317,7 +330,14 @@ Place side-effect tools (send_email, webhook, update_metadata, etc.) at the end 
 ## Null-Safe Foreach
 
 When using foreach with `on_error: continue`, failed items return null. Use the compact filter:
-`{"template": "{{ steps.foreach_step | compact }}"}`"""
+`{"template": "{{ steps.foreach_step | compact }}"}`
+
+## Output Schema Awareness
+
+The TOOL CATALOG includes each tool's output_schema. Use it to:
+1. Know if a step returns a list (iterate), object (access fields), or string (use directly)
+2. Construct correct field references in templates (e.g., `{{ item.title }}` in foreach)
+3. Understand what data is available before writing LLM prompts that reference step results"""
 
     # ------------------------------------------------------------------
     # Section 6: Profile Constraints

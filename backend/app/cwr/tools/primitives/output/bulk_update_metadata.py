@@ -16,9 +16,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -45,49 +42,52 @@ class BulkUpdateMetadataFunction(BaseFunction):
         name="bulk_update_metadata",
         category=FunctionCategory.OUTPUT,
         description="Update metadata for multiple assets in batch",
-        parameters=[
-            ParameterDoc(
-                name="updates",
-                type="list[dict]",
-                description="List of updates: [{asset_id, content}, ...]",
-                required=True,
-            ),
-            ParameterDoc(
-                name="metadata_type",
-                type="str",
-                description="Type of metadata to update",
-                required=True,
-            ),
-            ParameterDoc(
-                name="is_canonical",
-                type="bool",
-                description="Set as canonical metadata",
-                required=False,
-                default=True,
-            ),
-            ParameterDoc(
-                name="batch_size",
-                type="int",
-                description="Number of updates per batch",
-                required=False,
-                default=50,
-            ),
-        ],
-        returns="dict: Summary of updates",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Summary of bulk metadata update operation",
-            fields=[
-                OutputFieldDoc(name="processed", type="int",
-                              description="Number of assets successfully updated"),
-                OutputFieldDoc(name="failed", type="int",
-                              description="Number of assets that failed to update",
-                              nullable=True),
-                OutputFieldDoc(name="errors", type="list[str]",
-                              description="List of error messages (limited to first 10)",
-                              nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "updates": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "List of updates: [{asset_id, content}, ...]",
+                },
+                "metadata_type": {
+                    "type": "string",
+                    "description": "Type of metadata to update",
+                },
+                "is_canonical": {
+                    "type": "boolean",
+                    "description": "Set as canonical metadata",
+                    "default": True,
+                },
+                "batch_size": {
+                    "type": "integer",
+                    "description": "Number of updates per batch",
+                    "default": 50,
+                },
+            },
+            "required": ["updates", "metadata_type"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Summary of bulk metadata update operation",
+            "properties": {
+                "processed": {
+                    "type": "integer",
+                    "description": "Number of assets successfully updated",
+                },
+                "failed": {
+                    "type": "integer",
+                    "description": "Number of assets that failed to update",
+                    "nullable": True,
+                },
+                "errors": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of error messages (limited to first 10)",
+                    "nullable": True,
+                },
+            },
+        },
         tags=["output", "metadata", "bulk"],
         requires_llm=False,
         side_effects=True,

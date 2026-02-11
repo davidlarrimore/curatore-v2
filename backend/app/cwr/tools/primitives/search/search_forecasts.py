@@ -15,9 +15,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -51,107 +48,89 @@ class SearchForecastsFunction(BaseFunction):
             "(AgForecast, ApfsForecast, or StateForecast). "
             "Use discover_data_sources to see available forecast sources and their details."
         ),
-        parameters=[
-            ParameterDoc(
-                name="query",
-                type="str",
-                description=(
-                    "Short keyword query (2-4 key terms work best). "
-                    "Use specific names or acronyms, not full descriptions. "
-                    "Good: 'DISCOVER II', 'cybersecurity endpoint'. "
-                    "Bad: 'Dynamic Integrated Secure Connectivity for Operational Value and End-Point Resiliency'. "
-                    "Use filters (agency_name, fiscal_year, naics_code, source_types) to narrow results instead of adding more query terms."
-                ),
-                required=True,
-                example="cybersecurity endpoint",
-            ),
-            ParameterDoc(
-                name="search_mode",
-                type="str",
-                description="Search mode: 'keyword' for exact term matches, 'semantic' for conceptual similarity, 'hybrid' combines both for best results.",
-                required=False,
-                default="hybrid",
-                enum_values=["keyword", "semantic", "hybrid"],
-            ),
-            ParameterDoc(
-                name="semantic_weight",
-                type="float",
-                description="Balance between keyword and semantic search in hybrid mode. 0.0 = keyword only, 1.0 = semantic only, 0.5 = equal weight.",
-                required=False,
-                default=0.5,
-            ),
-            ParameterDoc(
-                name="source_types",
-                type="list[str]",
-                description="Filter by forecast source: 'ag' (GSA Acquisition Gateway), 'apfs' (DHS), 'state' (State Department). Works with query to narrow results.",
-                required=False,
-                default=None,
-                enum_values=["ag", "apfs", "state"],
-                example=["ag", "apfs"],
-            ),
-            ParameterDoc(
-                name="fiscal_year",
-                type="int",
-                description="Filter by fiscal year (e.g., 2026). Combines with query and source_types to find forecasts for a specific year.",
-                required=False,
-                default=None,
-                example=2026,
-            ),
-            ParameterDoc(
-                name="agency_name",
-                type="str",
-                description="Filter by agency name using partial match (e.g., 'Defense', 'Veterans'). Works with query for agency-specific searches.",
-                required=False,
-                default=None,
-                example="Department of Defense",
-            ),
-            ParameterDoc(
-                name="naics_code",
-                type="str",
-                description="Filter by NAICS industry code (e.g., '541512' for IT Services). Combines with query to find industry-specific forecasts.",
-                required=False,
-                default=None,
-                example="541512",
-            ),
-            ParameterDoc(
-                name="limit",
-                type="int",
-                description="Maximum number of results (default: 50, max: 500)",
-                required=False,
-                default=50,
-            ),
-            ParameterDoc(
-                name="offset",
-                type="int",
-                description="Number of results to skip for pagination",
-                required=False,
-                default=0,
-            ),
-        ],
-        returns="list[dict]: List of forecast records with search scores and highlights",
-        output_schema=OutputSchema(
-            type="list[dict]",
-            description="List of matching acquisition forecasts",
-            fields=[
-                OutputFieldDoc(name="id", type="str", description="Forecast UUID (NOT an asset ID — do not pass to get() or get_content())"),
-                OutputFieldDoc(name="title", type="str", description="Forecast title/description"),
-                OutputFieldDoc(name="source_type", type="str", description="Source type",
-                              example="ag"),
-                OutputFieldDoc(name="agency", type="str", description="Agency name", nullable=True),
-                OutputFieldDoc(name="fiscal_year", type="int", description="Fiscal year",
-                              example=2026, nullable=True),
-                OutputFieldDoc(name="naics_code", type="str", description="NAICS industry code",
-                              nullable=True),
-                OutputFieldDoc(name="estimated_value", type="float",
-                              description="Estimated contract value", nullable=True),
-                OutputFieldDoc(name="url", type="str", description="Source URL", nullable=True),
-                OutputFieldDoc(name="score", type="float", description="Relevance score"),
-                OutputFieldDoc(name="highlights", type="dict",
-                              description="Highlighted search matches", nullable=True),
-                OutputFieldDoc(name="detail_url", type="str",
-                              description="Link to Curatore detail page"),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": (
+                        "Short keyword query (2-4 key terms work best). "
+                        "Use specific names or acronyms, not full descriptions. "
+                        "Good: 'DISCOVER II', 'cybersecurity endpoint'. "
+                        "Bad: 'Dynamic Integrated Secure Connectivity for Operational Value and End-Point Resiliency'. "
+                        "Use filters (agency_name, fiscal_year, naics_code, source_types) to narrow results instead of adding more query terms."
+                    ),
+                    "examples": ["cybersecurity endpoint"],
+                },
+                "search_mode": {
+                    "type": "string",
+                    "description": "Search mode: 'keyword' for exact term matches, 'semantic' for conceptual similarity, 'hybrid' combines both for best results.",
+                    "default": "hybrid",
+                    "enum": ["keyword", "semantic", "hybrid"],
+                },
+                "semantic_weight": {
+                    "type": "number",
+                    "description": "Balance between keyword and semantic search in hybrid mode. 0.0 = keyword only, 1.0 = semantic only, 0.5 = equal weight.",
+                    "default": 0.5,
+                },
+                "source_types": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["ag", "apfs", "state"]},
+                    "description": "Filter by forecast source: 'ag' (GSA Acquisition Gateway), 'apfs' (DHS), 'state' (State Department). Works with query to narrow results.",
+                    "default": None,
+                    "examples": [["ag", "apfs"]],
+                },
+                "fiscal_year": {
+                    "type": "integer",
+                    "description": "Filter by fiscal year (e.g., 2026). Combines with query and source_types to find forecasts for a specific year.",
+                    "default": None,
+                    "examples": [2026],
+                },
+                "agency_name": {
+                    "type": "string",
+                    "description": "Filter by agency name using partial match (e.g., 'Defense', 'Veterans'). Works with query for agency-specific searches.",
+                    "default": None,
+                    "examples": ["Department of Defense"],
+                },
+                "naics_code": {
+                    "type": "string",
+                    "description": "Filter by NAICS industry code (e.g., '541512' for IT Services). Combines with query to find industry-specific forecasts.",
+                    "default": None,
+                    "examples": ["541512"],
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results (default: 50, max: 500)",
+                    "default": 50,
+                },
+                "offset": {
+                    "type": "integer",
+                    "description": "Number of results to skip for pagination",
+                    "default": 0,
+                },
+            },
+            "required": ["query"],
+        },
+        output_schema={
+            "type": "array",
+            "description": "List of matching acquisition forecasts",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "id": {"type": "string", "description": "Forecast UUID (NOT an asset ID -- do not pass to get() or get_content())"},
+                    "title": {"type": "string", "description": "Forecast title/description"},
+                    "source_type": {"type": "string", "description": "Source type", "examples": ["ag"]},
+                    "agency": {"type": "string", "description": "Agency name", "nullable": True},
+                    "fiscal_year": {"type": "integer", "description": "Fiscal year", "examples": [2026], "nullable": True},
+                    "naics_code": {"type": "string", "description": "NAICS industry code", "nullable": True},
+                    "estimated_value": {"type": "number", "description": "Estimated contract value", "nullable": True},
+                    "url": {"type": "string", "description": "Source URL", "nullable": True},
+                    "score": {"type": "number", "description": "Relevance score"},
+                    "highlights": {"type": "object", "description": "Highlighted search matches", "nullable": True},
+                    "detail_url": {"type": "string", "description": "Link to Curatore detail page"},
+                },
+            },
+        },
         tags=["search", "forecasts", "acquisition", "hybrid"],
         requires_llm=False,
         side_effects=False,

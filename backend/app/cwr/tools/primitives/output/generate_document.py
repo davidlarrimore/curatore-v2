@@ -20,9 +20,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -67,95 +64,92 @@ class GenerateDocumentFunction(BaseFunction):
         name="generate_document",
         category=FunctionCategory.OUTPUT,
         description="Generate a document (PDF, DOCX, or CSV) from content or data",
-        parameters=[
-            ParameterDoc(
-                name="format",
-                type="str",
-                description="Output format: pdf, docx, or csv",
-                required=True,
-                enum_values=["pdf", "docx", "csv"],
-            ),
-            ParameterDoc(
-                name="content",
-                type="str",
-                description="Markdown content (required for pdf/docx)",
-                required=False,
-            ),
-            ParameterDoc(
-                name="data",
-                type="list[dict]",
-                description="List of dictionaries for CSV generation",
-                required=False,
-            ),
-            ParameterDoc(
-                name="title",
-                type="str",
-                description="Document title (used in PDF header and DOCX properties)",
-                required=False,
-            ),
-            ParameterDoc(
-                name="filename",
-                type="str",
-                description="Output filename (auto-generated if not provided)",
-                required=False,
-            ),
-            ParameterDoc(
-                name="columns",
-                type="list[str]",
-                description="Column order for CSV (auto-detected if not provided)",
-                required=False,
-            ),
-            ParameterDoc(
-                name="include_title_page",
-                type="bool",
-                description="Include a title page in PDF (default: false)",
-                required=False,
-                default=False,
-            ),
-            ParameterDoc(
-                name="css",
-                type="str",
-                description="Custom CSS for PDF styling",
-                required=False,
-            ),
-            ParameterDoc(
-                name="save_to_storage",
-                type="bool",
-                description="If true, saves to object storage and returns URL",
-                required=False,
-                default=False,
-            ),
-            ParameterDoc(
-                name="folder",
-                type="str",
-                description="Storage folder (when save_to_storage=true)",
-                required=False,
-                default="generated_documents",
-            ),
-        ],
-        returns="dict: Document bytes (base64), filename, format, and optionally storage URL",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Generated document with content and optional storage info",
-            fields=[
-                OutputFieldDoc(name="format", type="str",
-                              description="Document format (pdf, docx, csv)",
-                              example="pdf"),
-                OutputFieldDoc(name="filename", type="str",
-                              description="Generated filename",
-                              example="report_20240115_123456.pdf"),
-                OutputFieldDoc(name="content_type", type="str",
-                              description="MIME type of the document",
-                              example="application/pdf"),
-                OutputFieldDoc(name="size", type="int",
-                              description="Size of the document in bytes"),
-                OutputFieldDoc(name="document_base64", type="str",
-                              description="Base64-encoded document content"),
-                OutputFieldDoc(name="storage", type="dict",
-                              description="Storage info if save_to_storage=true (bucket, object_key, download_url)",
-                              nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "format": {
+                    "type": "string",
+                    "description": "Output format: pdf, docx, or csv",
+                    "enum": ["pdf", "docx", "csv"],
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Markdown content (required for pdf/docx)",
+                },
+                "data": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "List of dictionaries for CSV generation",
+                },
+                "title": {
+                    "type": "string",
+                    "description": "Document title (used in PDF header and DOCX properties)",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Output filename (auto-generated if not provided)",
+                },
+                "columns": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Column order for CSV (auto-detected if not provided)",
+                },
+                "include_title_page": {
+                    "type": "boolean",
+                    "description": "Include a title page in PDF (default: false)",
+                    "default": False,
+                },
+                "css": {
+                    "type": "string",
+                    "description": "Custom CSS for PDF styling",
+                },
+                "save_to_storage": {
+                    "type": "boolean",
+                    "description": "If true, saves to object storage and returns URL",
+                    "default": False,
+                },
+                "folder": {
+                    "type": "string",
+                    "description": "Storage folder (when save_to_storage=true)",
+                    "default": "generated_documents",
+                },
+            },
+            "required": ["format"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Generated document with content and optional storage info",
+            "properties": {
+                "format": {
+                    "type": "string",
+                    "description": "Document format (pdf, docx, csv)",
+                    "examples": ["pdf"],
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Generated filename",
+                    "examples": ["report_20240115_123456.pdf"],
+                },
+                "content_type": {
+                    "type": "string",
+                    "description": "MIME type of the document",
+                    "examples": ["application/pdf"],
+                },
+                "size": {
+                    "type": "integer",
+                    "description": "Size of the document in bytes",
+                },
+                "document_base64": {
+                    "type": "string",
+                    "description": "Base64-encoded document content",
+                },
+                "storage": {
+                    "type": "object",
+                    "description": "Storage info if save_to_storage=true (bucket, object_key, download_url)",
+                    "nullable": True,
+                },
+            },
+        },
         tags=["output", "document", "pdf", "docx", "csv", "generation"],
         requires_llm=False,
         side_effects=True,

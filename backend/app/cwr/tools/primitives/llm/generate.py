@@ -19,10 +19,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
-    OutputVariant,
 )
 from ...context import FunctionContext
 from app.core.models.llm_models import LLMTaskType
@@ -81,78 +77,65 @@ class GenerateFunction(BaseFunction):
         name="llm_generate",
         category=FunctionCategory.LLM,
         description="Generate text using an LLM",
-        parameters=[
-            ParameterDoc(
-                name="prompt",
-                type="str",
-                description="The prompt to generate from",
-                required=True,
-                example="Summarize the following document in 3 bullet points...",
-            ),
-            ParameterDoc(
-                name="system_prompt",
-                type="str",
-                description="System prompt to set context",
-                required=False,
-                default=None,
-                example="You are a helpful assistant.",
-            ),
-            ParameterDoc(
-                name="model",
-                type="str",
-                description="Model to use (uses default if not specified)",
-                required=False,
-                default=None,
-            ),
-            ParameterDoc(
-                name="temperature",
-                type="float",
-                description="Temperature for generation (0-2)",
-                required=False,
-                default=0.7,
-            ),
-            ParameterDoc(
-                name="max_tokens",
-                type="int",
-                description="Maximum tokens to generate",
-                required=False,
-                default=1000,
-            ),
-            ParameterDoc(
-                name="items",
-                type="list",
-                description="Collection of items to iterate over. When provided, the prompt is rendered for each item with {{ item.xxx }} placeholders replaced by item data.",
-                required=False,
-                default=None,
-                example=[{"title": "Item 1"}, {"title": "Item 2"}],
-            ),
-        ],
-        returns="str: The generated text (single mode) or list[dict] (collection mode)",
-        output_schema=OutputSchema(
-            type="str",
-            description="The generated text content",
-            example="Based on the analysis, the key findings are...",
-        ),
-        output_variants=[
-            OutputVariant(
-                mode="collection",
-                condition="when `items` parameter is provided",
-                schema=OutputSchema(
-                    type="list[dict]",
-                    description="List of generation results for each item",
-                    fields=[
-                        OutputFieldDoc(name="item_id", type="str",
-                                      description="ID of the processed item"),
-                        OutputFieldDoc(name="result", type="str",
-                                      description="Generated text for this item"),
-                        OutputFieldDoc(name="success", type="bool",
-                                      description="Whether generation succeeded"),
-                        OutputFieldDoc(name="error", type="str",
-                                      description="Error message if failed", nullable=True),
-                    ],
-                ),
-            ),
-        ],
+        input_schema={
+            "type": "object",
+            "properties": {
+                "prompt": {
+                    "type": "string",
+                    "description": "The prompt to generate from",
+                    "examples": ["Summarize the following document in 3 bullet points..."],
+                },
+                "system_prompt": {
+                    "type": "string",
+                    "description": "System prompt to set context",
+                    "default": None,
+                    "examples": ["You are a helpful assistant."],
+                },
+                "model": {
+                    "type": "string",
+                    "description": "Model to use (uses default if not specified)",
+                    "default": None,
+                },
+                "temperature": {
+                    "type": "number",
+                    "description": "Temperature for generation (0-2)",
+                    "default": 0.7,
+                },
+                "max_tokens": {
+                    "type": "integer",
+                    "description": "Maximum tokens to generate",
+                    "default": 1000,
+                },
+                "items": {
+                    "type": "array",
+                    "items": {"type": "object"},
+                    "description": "Collection of items to iterate over. When provided, the prompt is rendered for each item with {{ item.xxx }} placeholders replaced by item data.",
+                    "default": None,
+                    "examples": [[{"title": "Item 1"}, {"title": "Item 2"}]],
+                },
+            },
+            "required": ["prompt"],
+        },
+        output_schema={
+            "type": "string",
+            "description": "The generated text content",
+            "examples": ["Based on the analysis, the key findings are..."],
+            "variants": [
+                {
+                    "type": "array",
+                    "description": "collection: when `items` parameter is provided",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "item_id": {"type": "string", "description": "ID of the processed item"},
+                            "result": {"type": "string", "description": "Generated text for this item"},
+                            "success": {"type": "boolean", "description": "Whether generation succeeded"},
+                            "error": {"type": "string", "description": "Error message if failed", "nullable": True},
+                        },
+                    },
+                },
+            ],
+        },
         tags=["llm", "text", "generation"],
         requires_llm=True,
         side_effects=False,

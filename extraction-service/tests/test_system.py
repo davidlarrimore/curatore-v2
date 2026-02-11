@@ -18,7 +18,7 @@ def test_health_ok():
     assert body.get("service") == "extraction-service"
 
 
-def test_supported_formats_nonempty_contains_pdf():
+def test_supported_formats_nonempty():
     client = get_client()
     r = client.get("/api/v1/system/supported-formats")
     assert r.status_code == 200
@@ -26,5 +26,6 @@ def test_supported_formats_nonempty_contains_pdf():
     exts = body.get("extensions") or []
     assert isinstance(exts, list)
     assert len(exts) > 0
-    assert ".pdf" in exts
+    # PDFs are handled by fast_pdf/Docling, not this service
+    assert ".docx" in exts
 

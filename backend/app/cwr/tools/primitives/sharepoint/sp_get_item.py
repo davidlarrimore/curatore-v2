@@ -17,9 +17,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 from ...content import ContentItem
@@ -41,46 +38,90 @@ class SpGetItemFunction(BaseFunction):
         name="sp_get_item",
         category=FunctionCategory.DATA,
         description="Get metadata for a single SharePoint drive item from Microsoft Graph API. Supports lookup by Graph IDs or Curatore asset_id.",
-        parameters=[
-            ParameterDoc(
-                name="drive_id",
-                type="str",
-                description="Microsoft Graph drive ID",
-                required=False,
-            ),
-            ParameterDoc(
-                name="item_id",
-                type="str",
-                description="Microsoft Graph item ID",
-                required=False,
-            ),
-            ParameterDoc(
-                name="asset_id",
-                type="str",
-                description="Curatore asset UUID — looks up drive_id/item_id from source_metadata.sharepoint",
-                required=False,
-            ),
-        ],
-        returns="ContentItem: SharePoint item metadata",
-        output_schema=OutputSchema(
-            type="ContentItem",
-            description="SharePoint item metadata as a ContentItem",
-            fields=[
-                OutputFieldDoc(name="name", type="str", description="File or folder name"),
-                OutputFieldDoc(name="item_type", type="str", description="'file' or 'folder'"),
-                OutputFieldDoc(name="size", type="int", description="File size in bytes", nullable=True),
-                OutputFieldDoc(name="extension", type="str", description="File extension", nullable=True),
-                OutputFieldDoc(name="folder", type="str", description="Parent folder path"),
-                OutputFieldDoc(name="web_url", type="str", description="Direct SharePoint link"),
-                OutputFieldDoc(name="drive_id", type="str", description="Graph drive ID"),
-                OutputFieldDoc(name="mime", type="str", description="MIME type", nullable=True),
-                OutputFieldDoc(name="created", type="str", description="Created timestamp", nullable=True),
-                OutputFieldDoc(name="modified", type="str", description="Modified timestamp", nullable=True),
-                OutputFieldDoc(name="created_by", type="str", description="Creator display name", nullable=True),
-                OutputFieldDoc(name="last_modified_by", type="str", description="Modifier display name", nullable=True),
-                OutputFieldDoc(name="etag", type="str", description="Change detection tag", nullable=True),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "drive_id": {
+                    "type": "string",
+                    "description": "Microsoft Graph drive ID",
+                },
+                "item_id": {
+                    "type": "string",
+                    "description": "Microsoft Graph item ID",
+                },
+                "asset_id": {
+                    "type": "string",
+                    "description": "Curatore asset UUID — looks up drive_id/item_id from source_metadata.sharepoint",
+                },
+            },
+            "required": [],
+        },
+        output_schema={
+            "type": "object",
+            "description": "SharePoint item metadata as a ContentItem",
+            "properties": {
+                "name": {
+                    "type": "string",
+                    "description": "File or folder name",
+                },
+                "item_type": {
+                    "type": "string",
+                    "description": "'file' or 'folder'",
+                },
+                "size": {
+                    "type": "integer",
+                    "description": "File size in bytes",
+                    "nullable": True,
+                },
+                "extension": {
+                    "type": "string",
+                    "description": "File extension",
+                    "nullable": True,
+                },
+                "folder": {
+                    "type": "string",
+                    "description": "Parent folder path",
+                },
+                "web_url": {
+                    "type": "string",
+                    "description": "Direct SharePoint link",
+                },
+                "drive_id": {
+                    "type": "string",
+                    "description": "Graph drive ID",
+                },
+                "mime": {
+                    "type": "string",
+                    "description": "MIME type",
+                    "nullable": True,
+                },
+                "created": {
+                    "type": "string",
+                    "description": "Created timestamp",
+                    "nullable": True,
+                },
+                "modified": {
+                    "type": "string",
+                    "description": "Modified timestamp",
+                    "nullable": True,
+                },
+                "created_by": {
+                    "type": "string",
+                    "description": "Creator display name",
+                    "nullable": True,
+                },
+                "last_modified_by": {
+                    "type": "string",
+                    "description": "Modifier display name",
+                    "nullable": True,
+                },
+                "etag": {
+                    "type": "string",
+                    "description": "Change detection tag",
+                    "nullable": True,
+                },
+            },
+        },
         tags=["data", "sharepoint", "graph-api", "item"],
         requires_llm=False,
         side_effects=False,

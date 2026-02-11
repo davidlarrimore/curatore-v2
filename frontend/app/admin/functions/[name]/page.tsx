@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { functionsApi, contractsApi, systemApi, type FunctionMeta, type FunctionExecuteResult, type ToolContract } from '@/lib/api'
+import { functionsApi, contractsApi, systemApi, type FunctionMeta, type FunctionExecuteResult, type ToolContract, getParametersFromSchema } from '@/lib/api'
 import type { LLMConnectionStatus } from '@/types'
 import { generateFunctionJson } from '@/lib/yaml-generator'
 import { FunctionInput } from '@/components/functions/inputs'
@@ -472,7 +472,7 @@ function FunctionLabContent() {
       setContract(contractData)
 
       const defaults: Record<string, any> = {}
-      for (const param of data.parameters || []) {
+      for (const param of getParametersFromSchema(data)) {
         if (param.default !== undefined) {
           defaults[param.name] = param.default
         }
@@ -542,7 +542,7 @@ function FunctionLabContent() {
     if (func.requires_llm && (!llmStatus || !llmStatus.connected)) {
       return false
     }
-    const requiredParams = func.parameters?.filter((p) => p.required) || []
+    const requiredParams = getParametersFromSchema(func).filter((p) => p.required)
     return requiredParams.every((p) => {
       const val = paramValues[p.name]
       if (val === undefined || val === null) return false
@@ -787,13 +787,13 @@ function FunctionLabContent() {
                 </div>
 
                 {/* Parameters Documentation */}
-                {func.parameters && func.parameters.length > 0 && (
+                {(() => { const params = getParametersFromSchema(func); return params.length > 0 && (
                   <div>
                     <h3 className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-3">
                       Parameters
                     </h3>
                     <div className="space-y-3">
-                      {func.parameters.map((param) => (
+                      {params.map((param) => (
                         <div key={param.name} className="text-sm">
                           <div className="flex items-center gap-2 mb-1">
                             <code className="text-xs font-mono font-medium text-indigo-600 dark:text-indigo-400">
@@ -828,7 +828,7 @@ function FunctionLabContent() {
                       ))}
                     </div>
                   </div>
-                )}
+                ); })()}
 
                 {/* Output Schema */}
                 {func.output_schema && (
@@ -945,13 +945,13 @@ function FunctionLabContent() {
                   </div>
                   {/* Parameters Content */}
                   <div className="flex-1 overflow-y-auto p-4">
-                    {!func.parameters || func.parameters.length === 0 ? (
+                    {(() => { const params = getParametersFromSchema(func); return params.length === 0 ? (
                       <p className="text-sm text-gray-500 dark:text-gray-400 text-center py-8">
                         This function has no parameters.
                       </p>
                     ) : (
                       <div className="space-y-4">
-                        {func.parameters.map((param) => {
+                        {params.map((param) => {
                           const isLlmModelParam = param.name === 'model' && func.requires_llm
                           const isDisabled = isExecuting || isLlmModelParam
 
@@ -986,7 +986,7 @@ function FunctionLabContent() {
                           )
                         })}
                       </div>
-                    )}
+                    ); })()}
                   </div>
 
                   {/* JSON Output Section */}

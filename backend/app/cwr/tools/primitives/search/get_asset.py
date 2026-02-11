@@ -16,7 +16,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
 )
 from ...context import FunctionContext
 
@@ -45,34 +44,49 @@ class GetAssetFunction(BaseFunction):
         name="get_asset",
         category=FunctionCategory.SEARCH,
         description="Get a single asset by UUID with optional content retrieval",
-        parameters=[
-            ParameterDoc(
-                name="asset_id",
-                type="str",
-                description="Asset UUID to retrieve",
-                required=True,
-            ),
-            ParameterDoc(
-                name="content_type",
-                type="str",
-                description="Type of content to retrieve",
-                required=False,
-                default="markdown",
-                enum_values=[
-                    "markdown|Extracted Markdown",
-                    "source|Original Source File",
-                    "metadata_only|Metadata Only (no content)",
-                ],
-            ),
-            ParameterDoc(
-                name="max_content_length",
-                type="int",
-                description="Maximum content length (truncate if longer). Only applies to markdown.",
-                required=False,
-                default=None,
-            ),
-        ],
-        returns="dict: Asset metadata and content",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "asset_id": {
+                    "type": "string",
+                    "description": "Asset UUID to retrieve",
+                },
+                "content_type": {
+                    "type": "string",
+                    "description": "Type of content to retrieve",
+                    "default": "markdown",
+                    "enum": [
+                        "markdown|Extracted Markdown",
+                        "source|Original Source File",
+                        "metadata_only|Metadata Only (no content)",
+                    ],
+                },
+                "max_content_length": {
+                    "type": "integer",
+                    "description": "Maximum content length (truncate if longer). Only applies to markdown.",
+                    "default": None,
+                },
+            },
+            "required": ["asset_id"],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Asset metadata and content",
+            "properties": {
+                "asset_id": {"type": "string"},
+                "filename": {"type": "string"},
+                "status": {"type": "string"},
+                "source_type": {"type": "string"},
+                "content_type": {"type": "string"},
+                "file_size": {"type": "integer"},
+                "created_at": {"type": "string"},
+                "updated_at": {"type": "string"},
+                "source_metadata": {"type": "object"},
+                "content": {"type": "string", "nullable": True},
+                "content_length": {"type": "integer"},
+                "content_source": {"type": "string"},
+            },
+        },
         tags=["search", "assets", "content"],
         requires_llm=False,
         side_effects=False,

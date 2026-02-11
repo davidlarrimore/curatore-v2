@@ -16,7 +16,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
 )
 from ...context import FunctionContext
 
@@ -45,29 +44,46 @@ class GetContentFunction(BaseFunction):
             "or scraped from the web). Only accepts asset IDs from search_assets results. "
             "Do NOT pass solicitation IDs, forecast IDs, or Salesforce record IDs — those are not assets."
         ),
-        parameters=[
-            ParameterDoc(
-                name="asset_ids",
-                type="list[str]",
-                description="Asset IDs (from search_assets results) to get content for. Must be document asset UUIDs — solicitation, forecast, and Salesforce IDs will not work.",
-                required=True,
-            ),
-            ParameterDoc(
-                name="include_metadata",
-                type="bool",
-                description="Include asset metadata in response",
-                required=False,
-                default=True,
-            ),
-            ParameterDoc(
-                name="max_content_length",
-                type="int",
-                description="Maximum content length per asset (truncate if longer)",
-                required=False,
-                default=None,
-            ),
-        ],
-        returns="list[dict]: Content and metadata for each asset",
+        input_schema={
+            "type": "object",
+            "properties": {
+                "asset_ids": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "Asset IDs (from search_assets results) to get content for. Must be document asset UUIDs -- solicitation, forecast, and Salesforce IDs will not work.",
+                },
+                "include_metadata": {
+                    "type": "boolean",
+                    "description": "Include asset metadata in response",
+                    "default": True,
+                },
+                "max_content_length": {
+                    "type": "integer",
+                    "description": "Maximum content length per asset (truncate if longer)",
+                    "default": None,
+                },
+            },
+            "required": ["asset_ids"],
+        },
+        output_schema={
+            "type": "array",
+            "description": "List of asset content objects",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "asset_id": {"type": "string"},
+                    "filename": {"type": "string"},
+                    "status": {"type": "string"},
+                    "content": {"type": "string", "nullable": True},
+                    "content_length": {"type": "integer"},
+                    "content_error": {"type": "string", "nullable": True},
+                    "source_type": {"type": "string"},
+                    "content_type": {"type": "string"},
+                    "file_size": {"type": "integer"},
+                    "created_at": {"type": "string"},
+                },
+            },
+        },
         tags=["search", "content", "assets"],
         requires_llm=False,
         side_effects=False,

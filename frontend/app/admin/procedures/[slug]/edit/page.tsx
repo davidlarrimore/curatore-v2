@@ -12,6 +12,7 @@ import {
   type ValidationError,
   type FunctionMeta,
   type Procedure,
+  getParametersFromSchema,
 } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
@@ -332,7 +333,7 @@ function ProcedureEditor() {
   // Copy function snippet
   const copyFunctionSnippet = (func: FunctionMeta) => {
     const params: Record<string, any> = {}
-    func.parameters.forEach(p => {
+    getParametersFromSchema(func).forEach(p => {
       if (p.required) {
         params[p.name] = p.example || p.default || `<${p.type}>`
       }
@@ -902,13 +903,13 @@ function ProcedureEditor() {
 
                                   {expandedFunctions.has(func.name) && (
                                     <div className="mt-2 ml-5 space-y-2">
-                                      {func.parameters.length > 0 && (
+                                      {(() => { const params = getParametersFromSchema(func); return params.length > 0 && (
                                         <div>
                                           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
                                             Parameters
                                           </p>
                                           <div className="space-y-1">
-                                            {func.parameters.map((param) => (
+                                            {params.map((param) => (
                                               <div key={param.name} className="flex items-start gap-2 text-xs">
                                                 <span className="font-mono text-gray-700 dark:text-gray-300">
                                                   {param.name}
@@ -924,14 +925,14 @@ function ProcedureEditor() {
                                             ))}
                                           </div>
                                         </div>
-                                      )}
-                                      {func.returns && (
+                                      ); })()}
+                                      {func.output_schema && func.output_schema.type && (
                                         <div>
                                           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
                                             Returns
                                           </p>
                                           <p className="text-xs font-mono text-gray-600 dark:text-gray-400">
-                                            {func.returns}
+                                            {func.output_schema.type}{func.output_schema.description ? ` — ${func.output_schema.description}` : ''}
                                           </p>
                                         </div>
                                       )}

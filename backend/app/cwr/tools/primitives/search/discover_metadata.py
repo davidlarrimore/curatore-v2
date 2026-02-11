@@ -12,9 +12,6 @@ from ...base import (
     FunctionMeta,
     FunctionCategory,
     FunctionResult,
-    ParameterDoc,
-    OutputFieldDoc,
-    OutputSchema,
 )
 from ...context import FunctionContext
 
@@ -41,45 +38,31 @@ class DiscoverMetadataFunction(BaseFunction):
             "Discover available metadata facets and fields for filtering search results. "
             "Returns cross-domain facet definitions and optionally namespace/field details."
         ),
-        parameters=[
-            ParameterDoc(
-                name="include_fields",
-                type="bool",
-                description="Include detailed field definitions per namespace (more verbose)",
-                required=False,
-                default=False,
-            ),
-            ParameterDoc(
-                name="namespace",
-                type="str",
-                description="Filter to a specific namespace (e.g., 'sam', 'sharepoint', 'forecast')",
-                required=False,
-                default=None,
-            ),
-        ],
-        returns="dict: Available facets and optionally field definitions",
-        output_schema=OutputSchema(
-            type="dict",
-            description="Metadata catalog with facets and optional field details",
-            fields=[
-                OutputFieldDoc(
-                    name="facets",
-                    type="list[dict]",
-                    description="Cross-domain facet definitions with operators and content type mappings",
-                ),
-                OutputFieldDoc(
-                    name="namespaces",
-                    type="list[dict]",
-                    description="Namespace definitions (only if include_fields=True)",
-                    nullable=True,
-                ),
-                OutputFieldDoc(
-                    name="usage_hint",
-                    type="str",
-                    description="How to use facets in search queries",
-                ),
-            ],
-        ),
+        input_schema={
+            "type": "object",
+            "properties": {
+                "include_fields": {
+                    "type": "boolean",
+                    "description": "Include detailed field definitions per namespace (more verbose)",
+                    "default": False,
+                },
+                "namespace": {
+                    "type": "string",
+                    "description": "Filter to a specific namespace (e.g., 'sam', 'sharepoint', 'forecast')",
+                    "default": None,
+                },
+            },
+            "required": [],
+        },
+        output_schema={
+            "type": "object",
+            "description": "Metadata catalog with facets and optional field details",
+            "properties": {
+                "facets": {"type": "array", "items": {"type": "object"}, "description": "Cross-domain facet definitions with operators and content type mappings"},
+                "namespaces": {"type": "array", "items": {"type": "object"}, "description": "Namespace definitions (only if include_fields=True)", "nullable": True},
+                "usage_hint": {"type": "string", "description": "How to use facets in search queries"},
+            },
+        },
         tags=["search", "discovery", "metadata", "facets"],
         requires_llm=False,
         side_effects=False,

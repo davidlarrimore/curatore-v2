@@ -11,7 +11,6 @@ MARKERS = {
     "md": "MD_MARKER_Epsilon 131415 and [link](https://example.com)",
     "docx": "DOCX_MARKER_Alpha 123",
     "xlsx": "XLSX_MARKER_Beta 456",
-    "pdf": "PDF_MARKER_Gamma 789",
 }
 
 
@@ -189,13 +188,6 @@ def create_all_docs(base_dir: Path) -> Dict[str, Path]:
     paths["sample.xlsx"] = base_dir / "sample.xlsx"
     paths["sample_corrupt.xlsx"] = base_dir / "sample_corrupt.xlsx"
 
-    # PDF
-    pdf_bytes = build_pdf_bytes(MARKERS["pdf"])
-    _write(base_dir / "sample.pdf", pdf_bytes)
-    _write(base_dir / "sample_corrupt.pdf", make_corrupt_bytes(pdf_bytes))
-    paths["sample.pdf"] = base_dir / "sample.pdf"
-    paths["sample_corrupt.pdf"] = base_dir / "sample_corrupt.pdf"
-
     return paths
 
 
@@ -224,13 +216,7 @@ def write_manifest(manifest_path: Path, doc_dir: Path) -> None:
             "filename": "sample.xlsx",
             "should_parse": True,
             "expected_markers": [MARKERS["xlsx"]],
-            "expect_method_any_of": ["markitdown", "pdfminer", "ocr"],
-        },
-        {
-            "filename": "sample.pdf",
-            "should_parse": True,
-            "expected_markers": [MARKERS["pdf"]],
-            "expect_method_any_of": ["pdfminer", "ocr", "pdfminer+ocr"],
+            "expect_method_any_of": ["markitdown"],
         },
         {
             "filename": "sample_corrupt.docx",
@@ -243,12 +229,6 @@ def write_manifest(manifest_path: Path, doc_dir: Path) -> None:
             "should_parse": False,
             "expected_markers": [],
             "expect_method_any_of": ["markitdown", "error"],
-        },
-        {
-            "filename": "sample_corrupt.pdf",
-            "should_parse": False,
-            "expected_markers": [],
-            "expect_method_any_of": ["pdfminer", "ocr", "pdfminer+ocr", "error"],
         },
     ]
     manifest = {"documents": docs, "doc_dir": str(doc_dir)}
