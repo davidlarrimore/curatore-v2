@@ -2,41 +2,16 @@
 Unit tests for DatabaseService.
 
 Tests async session management, database initialization, health checks,
-and connection pooling for SQLite and PostgreSQL databases.
+and connection pooling for PostgreSQL databases.
 """
 
 import pytest
 import os
-import tempfile
 from contextlib import asynccontextmanager
-from unittest.mock import patch, AsyncMock, MagicMock, PropertyMock
-from pathlib import Path
+from unittest.mock import patch, AsyncMock, MagicMock
 
 from app.core.shared.database_service import DatabaseService, database_service
 from sqlalchemy.ext.asyncio import AsyncSession
-
-
-@pytest.fixture
-def temp_db_path():
-    """Create temporary database path for testing."""
-    temp_dir = tempfile.mkdtemp()
-    db_path = os.path.join(temp_dir, "test.db")
-    yield db_path
-    # Cleanup
-    import shutil
-    shutil.rmtree(temp_dir, ignore_errors=True)
-
-
-@pytest.fixture
-def mock_sqlite_url(temp_db_path):
-    """Mock SQLite database URL."""
-    return f"sqlite+aiosqlite:///{temp_db_path}"
-
-
-@pytest.fixture
-def mock_postgres_url():
-    """Mock PostgreSQL database URL."""
-    return "postgresql+asyncpg://user:pass@localhost:5432/testdb"
 
 
 class TestDatabaseServiceInitialization:
@@ -52,14 +27,6 @@ class TestDatabaseServiceInitialization:
         """Test that database_service is a singleton."""
         assert database_service is not None
         assert isinstance(database_service, DatabaseService)
-
-    @pytest.mark.skip(reason="PostgreSQL is now required; SQLite is explicitly rejected")
-    @patch.dict(os.environ, {"DATABASE_URL": "sqlite+aiosqlite:///./test.db"})
-    def test_initialization_with_sqlite(self):
-        """Test initialization with SQLite URL."""
-        db_service = DatabaseService()
-        assert db_service._engine is not None
-        assert db_service._session_factory is not None
 
     @patch.dict(os.environ, {"DATABASE_URL": "postgresql+asyncpg://user:pass@localhost/db"})
     def test_initialization_with_postgresql(self):
@@ -79,19 +46,6 @@ class TestDatabaseServiceInitialization:
         db_service = DatabaseService()
         # Pool settings are applied during engine creation
         assert db_service._engine is not None
-
-    @pytest.mark.skip(reason="PostgreSQL is now required; SQLite is explicitly rejected")
-    def test_creates_data_directory_for_sqlite(self, temp_db_path):
-        """Test that SQLite initialization creates data directory."""
-        db_dir = os.path.dirname(temp_db_path)
-        db_url = f"sqlite+aiosqlite:///{temp_db_path}"
-
-        with patch.dict(os.environ, {"DATABASE_URL": db_url}):
-            db_service = DatabaseService()
-
-        # Directory should be created (or already exist)
-        assert os.path.exists(db_dir)
-
 
 class TestSessionManagement:
     """Test database session management."""
@@ -298,27 +252,6 @@ class TestHealthCheck:
         assert health["status"] == "healthy"
         assert health["connected"] is True
 
-    @pytest.mark.skip(reason="PostgreSQL is now required; SQLite is explicitly rejected")
-    @pytest.mark.asyncio
-    @patch.dict(os.environ, {"DATABASE_URL": "sqlite+aiosqlite:///./test.db"})
-    async def test_health_check_includes_database_size_for_sqlite(self):
-        """Test health check includes file size for SQLite."""
-        mock_session = AsyncMock()
-        mock_result = AsyncMock()
-        mock_result.scalar.return_value = 1
-        mock_session.execute.return_value = mock_result
-
-        with patch.object(database_service, 'get_session') as mock_get_session:
-            mock_get_session.return_value.__aenter__.return_value = mock_session
-
-            with patch('os.path.exists', return_value=True):
-                with patch('os.path.getsize', return_value=1024 * 1024):  # 1 MB
-                    health = await database_service.health_check()
-
-        # SQLite should include database_size_mb
-        if health.get("database_type") == "sqlite":
-            assert "database_size_mb" in health
-
     @pytest.mark.asyncio
     async def test_health_check_includes_migration_version(self):
         """Test health check includes Alembic migration version."""
@@ -380,14 +313,6 @@ class TestConnectionClosure:
 class TestDatabaseTypeDetection:
     """Test database type detection."""
 
-    @pytest.mark.skip(reason="PostgreSQL is now required; SQLite is explicitly rejected")
-    @patch.dict(os.environ, {"DATABASE_URL": "sqlite+aiosqlite:///./test.db"})
-    def test_detects_sqlite(self):
-        """Test SQLite detection from URL."""
-        db_service = DatabaseService()
-        # Verify it's using SQLite (logged during init)
-        assert db_service._engine is not None
-
     @patch.dict(os.environ, {"DATABASE_URL": "postgresql+asyncpg://user:pass@localhost/db"})
     def test_detects_postgresql(self):
         """Test PostgreSQL detection from URL."""
@@ -406,15 +331,6 @@ class TestStringRepresentation:
         assert repr_str.startswith("<DatabaseService(")
         assert "type=" in repr_str
         assert repr_str.endswith(")>")
-
-    @pytest.mark.skip(reason="PostgreSQL is now required; SQLite is explicitly rejected")
-    @patch.dict(os.environ, {"DATABASE_URL": "sqlite+aiosqlite:///./test.db"})
-    def test_repr_shows_sqlite(self):
-        """Test repr shows SQLite for SQLite database."""
-        db_service = DatabaseService()
-        repr_str = repr(db_service)
-
-        assert "SQLite" in repr_str
 
     @patch.dict(os.environ, {"DATABASE_URL": "postgresql+asyncpg://user:pass@localhost/db"})
     def test_repr_shows_postgresql(self):
@@ -451,15 +367,6 @@ class TestErrorHandling:
 
 class TestConfigurationHandling:
     """Test configuration handling."""
-
-    @pytest.mark.skip(reason="PostgreSQL is now required; default SQLite URL no longer supported")
-    @patch.dict(os.environ, {}, clear=True)
-    def test_uses_default_sqlite_url(self):
-        """Test uses default SQLite URL when none configured."""
-        db_service = DatabaseService()
-
-        # Should use default SQLite URL
-        assert db_service._engine is not None
 
     @patch.dict(os.environ, {
         "DATABASE_URL": "postgresql+asyncpg://user:pass@localhost/db",

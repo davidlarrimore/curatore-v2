@@ -5,7 +5,7 @@
 # - Creates a timestamped report directory under logs/test_reports
 # - Pre-flight: verify app is not already running (ports 8000/3000)
 # - Sets up per-service test environments (Python venvs, Node deps) as needed
-# - Runs backend pytest, extraction-service pytest (if present), and frontend npm test (if defined)
+# - Runs backend pytest, extraction-service pytest, mcp pytest, and frontend npm test
 # - Summarizes PASS/WARN/FAIL per service and exits nonzero on failures
 
 set -uo pipefail
@@ -243,6 +243,52 @@ run_extraction_service_tests() {
   fi
 }
 
+run_mcp_tests() {
+  local svc="mcp"
+  local svc_dir="$ROOT_DIR/mcp"
+  local subdir="$REPORT_DIR/$svc"
+  mkdir -p "$subdir"
+  local log="$subdir/${svc}.log"
+
+  if [[ ! -d "$svc_dir" ]]; then
+    log_note "[WARN] $svc: directory not found"
+    record_result "$svc" "WARN" "directory not found"
+    return 0
+  fi
+
+  # ensure_python_venv mixes log output with the venv path on stdout,
+  # so use the known path directly instead of capturing output.
+  ensure_python_venv "$svc" "$svc_dir" "$svc_dir/requirements.txt" "3.12" >/dev/null || {
+    record_result "$svc" "WARN" "venv setup failed"
+    return 0
+  }
+  local venv="$svc_dir/.venv"
+
+  log_note "Running $svc tests (pytest) …"
+  local code=0
+  (
+    cd "$svc_dir" && \
+    MCP_API_KEY="test-key" BACKEND_URL="http://localhost:8000" \
+    PYTHONPATH="${svc_dir}${PYTHONPATH:+:$PYTHONPATH}" \
+    "$venv/bin/python" -m pytest tests -q
+  ) >"$log" 2>&1 || code=$?
+
+  # Surface results
+  if [[ -f "$log" ]]; then
+    res_line=$(grep -E "[0-9]+ passed" "$log" | tail -n 1 || true)
+    [[ -n "$res_line" ]] && log_note "$res_line"
+  fi
+
+  if [[ $code -eq 0 ]]; then
+    log_note "[PASS] $svc"
+    record_result "$svc" "PASS"
+  else
+    log_note "[FAIL] $svc (exit $code) — see $(basename "$log")"
+    show_log_tail "$log" "$svc test failure"
+    record_result "$svc" "FAIL" "exit $code"
+  fi
+}
+
 run_frontend_tests() {
   local svc="frontend"
   local svc_dir="$ROOT_DIR/frontend"
@@ -319,6 +365,7 @@ echo "Recreate venvs (RECREATE_VENV): ${RECREATE_VENV}" | tee -a "$SUMMARY_FILE"
 # Execute suites sequentially
 run_backend_tests
 run_extraction_service_tests
+run_mcp_tests
 run_frontend_tests
 
 echo "" | tee -a "$SUMMARY_FILE"
