@@ -2,6 +2,7 @@
 """Tests for ToolContract to MCP Tool conversion."""
 
 import pytest
+import mcp.types as types
 from app.services.contract_converter import ContractConverter
 from app.models.mcp import MCPTool
 
@@ -96,3 +97,72 @@ class TestContractConverter:
         assert tool.inputSchema["type"] == "object"
         assert "query" in tool.inputSchema["properties"]
         assert tool.inputSchema["required"] == ["query"]
+
+
+class TestSDKToolConversion:
+    """Test conversion to MCP SDK types.Tool."""
+
+    def test_to_sdk_tool_basic(self, sample_contract):
+        """Test converting MCPTool to SDK types.Tool."""
+        mcp_tool = ContractConverter.to_mcp_tool(sample_contract)
+        sdk_tool = ContractConverter.to_sdk_tool(mcp_tool)
+
+        assert isinstance(sdk_tool, types.Tool)
+        assert sdk_tool.name == "search_assets"
+        assert "Search organization assets" in sdk_tool.description
+        assert sdk_tool.inputSchema == sample_contract["input_schema"]
+
+    def test_to_sdk_tool_annotations_read_only(self, sample_contract):
+        """Test that non-side-effect tools get readOnlyHint=True."""
+        mcp_tool = ContractConverter.to_mcp_tool(sample_contract)
+        sdk_tool = ContractConverter.to_sdk_tool(mcp_tool)
+
+        assert sdk_tool.annotations is not None
+        assert sdk_tool.annotations.readOnlyHint is True
+        assert sdk_tool.annotations.destructiveHint is False
+        assert sdk_tool.annotations.idempotentHint is True
+        assert sdk_tool.annotations.openWorldHint is True
+
+    def test_to_sdk_tools_multiple(self, sample_contracts):
+        """Test converting multiple MCPTools to SDK types."""
+        mcp_tools = ContractConverter.to_mcp_tools(sample_contracts)
+        sdk_tools = ContractConverter.to_sdk_tools(mcp_tools)
+
+        assert len(sdk_tools) == 3
+        assert all(isinstance(t, types.Tool) for t in sdk_tools)
+
+    def test_contract_to_sdk_tool_direct(self, sample_contract):
+        """Test converting raw contract dict directly to SDK types.Tool."""
+        sdk_tool = ContractConverter.contract_to_sdk_tool(sample_contract)
+
+        assert isinstance(sdk_tool, types.Tool)
+        assert sdk_tool.name == "search_assets"
+        assert sdk_tool.annotations is not None
+        assert sdk_tool.annotations.readOnlyHint is True
+
+    def test_contract_to_sdk_tool_with_side_effects(self):
+        """Test that side-effect contracts get readOnlyHint=False."""
+        contract = {
+            "name": "confirm_email",
+            "description": "Send confirmation email",
+            "input_schema": {"type": "object", "properties": {}},
+            "side_effects": True,
+        }
+        sdk_tool = ContractConverter.contract_to_sdk_tool(contract)
+
+        assert sdk_tool.annotations.readOnlyHint is False
+        assert sdk_tool.annotations.idempotentHint is False
+
+    def test_contract_to_sdk_tool_payload_hints(self, sample_contract):
+        """Test that payload_profile hints are added to description."""
+        sample_contract["payload_profile"] = "thin"
+        sdk_tool = ContractConverter.contract_to_sdk_tool(sample_contract)
+
+        assert "thin payloads" in sdk_tool.description.lower()
+
+    def test_contract_to_sdk_tool_llm_hint(self, sample_contract):
+        """Test that requires_llm hint is added to description."""
+        sample_contract["requires_llm"] = True
+        sdk_tool = ContractConverter.contract_to_sdk_tool(sample_contract)
+
+        assert "Requires LLM" in sdk_tool.description

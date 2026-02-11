@@ -53,7 +53,7 @@ class Settings(BaseSettings):
 
     # MCP protocol settings
     mcp_protocol_version: str = Field(
-        default="2024-11-05",
+        default="2025-06-18",
         description="MCP protocol version",
     )
     mcp_server_name: str = Field(

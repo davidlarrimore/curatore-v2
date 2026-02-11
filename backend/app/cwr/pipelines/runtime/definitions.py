@@ -89,7 +89,7 @@ class PipelineDefinition:
 
     tags: List[str] = field(default_factory=list)
     is_system: bool = False
-    source_type: str = "yaml"
+    source_type: str = "system"
     source_path: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -136,7 +136,7 @@ class PipelineDefinition:
         }
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], source_type: str = "yaml", source_path: str = None) -> "PipelineDefinition":
+    def from_dict(cls, data: Dict[str, Any], source_type: str = "system", source_path: str = None) -> "PipelineDefinition":
         """Create from dictionary."""
         parameters = [
             ParameterDefinition(

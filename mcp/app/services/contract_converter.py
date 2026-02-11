@@ -11,6 +11,8 @@ what MCP expects. The only conversion needed is:
 import logging
 from typing import Any, Dict, List
 
+import mcp.types as types
+
 from app.models.mcp import MCPTool
 
 logger = logging.getLogger("mcp.services.contract_converter")
@@ -79,6 +81,75 @@ class ContractConverter:
             except Exception as e:
                 logger.warning(f"Failed to convert contract {contract.get('name', 'unknown')}: {e}")
         return tools
+
+    @staticmethod
+    def to_sdk_tool(tool: MCPTool) -> types.Tool:
+        """
+        Convert an MCPTool to an MCP SDK types.Tool with annotations.
+
+        Args:
+            tool: MCPTool instance (internal model)
+
+        Returns:
+            MCP SDK types.Tool with ToolAnnotations
+        """
+        # Derive annotations from the internal _side_effects marker if present,
+        # otherwise default to read-only (safe default).
+        side_effects = getattr(tool, "_side_effects", False)
+        return types.Tool(
+            name=tool.name,
+            description=tool.description,
+            inputSchema=tool.inputSchema,
+            annotations=types.ToolAnnotations(
+                readOnlyHint=not side_effects,
+                destructiveHint=False,
+                idempotentHint=not side_effects,
+                openWorldHint=True,
+            ),
+        )
+
+    @staticmethod
+    def to_sdk_tools(tools: List[MCPTool]) -> List[types.Tool]:
+        """Convert a list of MCPTools to MCP SDK types.Tool list."""
+        return [ContractConverter.to_sdk_tool(t) for t in tools]
+
+    @staticmethod
+    def contract_to_sdk_tool(contract: Dict[str, Any]) -> types.Tool:
+        """
+        Convert a raw contract dict directly to an MCP SDK types.Tool.
+
+        Args:
+            contract: ToolContract dictionary from backend
+
+        Returns:
+            MCP SDK types.Tool with ToolAnnotations
+        """
+        has_side_effects = contract.get("side_effects", False)
+        description = contract.get("description", "")
+
+        # Add payload_profile hints
+        payload_profile = contract.get("payload_profile", "full")
+        if payload_profile == "thin":
+            description += (
+                "\n\nNote: Returns thin payloads (IDs, titles, scores). "
+                "Use get_content for full document content."
+            )
+        elif payload_profile == "summary":
+            description += "\n\nNote: Returns summarized content."
+        if contract.get("requires_llm", False):
+            description += "\n\nRequires LLM connection."
+
+        return types.Tool(
+            name=contract.get("name", "unknown"),
+            description=description,
+            inputSchema=contract.get("input_schema", {"type": "object", "properties": {}}),
+            annotations=types.ToolAnnotations(
+                readOnlyHint=not has_side_effects,
+                destructiveHint=False,
+                idempotentHint=not has_side_effects,
+                openWorldHint=True,
+            ),
+        )
 
     @staticmethod
     def filter_safe(

@@ -87,7 +87,7 @@ async def handle_tools_call(
         progress_service.update(progress_token, progress=0, message="Validating request...")
 
     try:
-        # 1. Check if tool is allowed
+        # 1. Quick denylist check (v2.0) or allowlist check (v1.0)
         if not policy_service.is_allowed(name):
             logger.warning(f"Tool not allowed: {name}")
             if progress_state:
@@ -100,7 +100,7 @@ async def handle_tools_call(
         if progress_state:
             progress_service.update(progress_token, progress=10, message="Fetching tool contract...")
 
-        # 2. Get contract for schema validation
+        # 2. Get contract for schema validation and exposure check
         contract = await backend_client.get_contract(name, api_key, correlation_id)
         if not contract:
             if progress_state:
@@ -109,6 +109,18 @@ async def handle_tools_call(
                 MCPErrorCode.TOOL_NOT_FOUND,
                 f"Tool '{name}' not found",
             )
+
+        # 2b. In v2.0 mode, verify exposure_profile allows agent access
+        if policy_service.policy.is_v2:
+            exposure = contract.get("exposure_profile", {})
+            if not exposure.get("agent", False):
+                logger.warning(f"Tool {name}: exposure_profile.agent is false")
+                if progress_state:
+                    progress_service.fail(progress_token, f"Tool '{name}' is not available")
+                return _error_response(
+                    MCPErrorCode.TOOL_NOT_FOUND,
+                    f"Tool '{name}' is not available",
+                )
 
         # Check side_effects (respects side_effects_allowlist)
         if contract.get("side_effects", False) and policy_service.block_side_effects:

@@ -88,7 +88,7 @@ class ProcedureDefinition:
     """
     Complete definition of a procedure.
 
-    Procedures are loaded from YAML files or defined in Python code.
+    Procedures are loaded from JSON definition files or defined in Python code.
     """
     name: str
     slug: str
@@ -113,7 +113,7 @@ class ProcedureDefinition:
     # Metadata
     tags: List[str] = field(default_factory=list)
     is_system: bool = False
-    source_type: str = "yaml"
+    source_type: str = "system"
     source_path: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
@@ -192,8 +192,8 @@ class ProcedureDefinition:
         )
 
     @classmethod
-    def from_dict(cls, data: Dict[str, Any], source_type: str = "yaml", source_path: str = None) -> "ProcedureDefinition":
-        """Create from dictionary (loaded from YAML/JSON)."""
+    def from_dict(cls, data: Dict[str, Any], source_type: str = "system", source_path: str = None) -> "ProcedureDefinition":
+        """Create from dictionary (loaded from JSON definition file or user input)."""
         parameters = [
             ParameterDefinition(
                 name=p["name"],
@@ -249,7 +249,7 @@ class BaseProcedure:
     Base class for Python-defined procedures.
 
     For complex procedures that need Python logic, extend this class.
-    Simple procedures should use YAML definitions instead.
+    Simple procedures should use JSON definitions instead.
 
     Example:
         class MyProcedure(BaseProcedure):

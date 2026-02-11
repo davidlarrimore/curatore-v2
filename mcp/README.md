@@ -2,41 +2,36 @@
 
 A unified tool server that exposes Curatore CWR (Curatore Workflow Runtime) functions to AI assistants via two protocols:
 
-- **MCP (Model Context Protocol)** - For Claude Desktop, Claude Code, and MCP-compatible clients
+- **MCP (Model Context Protocol)** - For Claude Desktop, Claude Code, and MCP-compatible clients (SDK Streamable HTTP transport)
 - **OpenAI Function Calling** - For Open WebUI, ChatGPT, and OpenAI-compatible clients
 
 ## Architecture
 
 ```
-Claude Desktop                    Open WebUI / ChatGPT / Claude Code
+Claude Desktop / Claude Code          Open WebUI / ChatGPT
       │                                      │
-      ▼ (STDIO)                             ▼ (REST/OpenAPI)
-┌─────────────────────┐         ┌──────────────────────────────────────┐
-│  MCP STDIO Server   │         │         MCP HTTP Gateway             │
-│  (Docker container) │         │           (port 8020)                │
-│                     │         │  ┌────────────────────────────────┐  │
-│  • stdin/stdout     │         │  │  /mcp         JSON-RPC         │  │
-│  • JSON-RPC         │         │  │  /openapi.json OpenAPI spec    │  │
-│  • No auth needed   │         │  │  /{tool}      Execute tool     │  │
-│    (local process)  │         │  └────────────────────────────────┘  │
-└──────────┬──────────┘         │  Policy: allowlist, clamping,        │
-           │                    │          side-effect blocking        │
-           │ (HTTP)             └──────────────────┬───────────────────┘
-           │                                       │ (HTTP)
-           ▼                                       ▼
-┌──────────────────────────────────────────────────────────────────────┐
-│                         Curatore Backend                             │
-│                           (port 8000)                                │
-│                   CWR Functions + Tool Contracts                     │
-└──────────────────────────────────────────────────────────────────────┘
+      ▼ (Streamable HTTP)                    ▼ (REST/OpenAPI)
+┌──────────────────────────────────────────────────────────────┐
+│                    MCP HTTP Gateway                           │
+│                      (port 8020)                              │
+│  ┌────────────────────────────────────────────────────────┐  │
+│  │  /mcp         MCP SDK Streamable HTTP transport        │  │
+│  │  /rest/tools  REST convenience endpoints               │  │
+│  │  /openai/*    OpenAI-compatible endpoints              │  │
+│  │  /openapi.json OpenAPI spec for tool discovery         │  │
+│  │  /{tool}      Execute tool (flat path, Open WebUI)     │  │
+│  └────────────────────────────────────────────────────────┘  │
+│  Policy: auto-derive from exposure_profile,                   │
+│          denylist override, clamping, side-effect blocking     │
+└──────────────────────────┬───────────────────────────────────┘
+                           │ (HTTP)
+                           ▼
+┌──────────────────────────────────────────────────────────────┐
+│                      Curatore Backend                         │
+│                        (port 8000)                            │
+│                CWR Functions + Tool Contracts                 │
+└──────────────────────────────────────────────────────────────┘
 ```
-
-**Two server modes:**
-
-| Mode | Transport | Use Case | Auth |
-|------|-----------|----------|------|
-| STDIO | stdin/stdout | Claude Desktop | None (local process) |
-| HTTP | REST/JSON-RPC | Open WebUI, Claude Code, APIs | Bearer token |
 
 ## Quick Start
 
@@ -68,9 +63,9 @@ curl http://localhost:8020/
 ### 3. List Available Tools
 
 ```bash
-# MCP format
+# REST format (convenience)
 curl -H "Authorization: Bearer mcp_dev_key" \
-  http://localhost:8020/mcp/tools
+  http://localhost:8020/rest/tools
 
 # OpenAI format
 curl -H "Authorization: Bearer mcp_dev_key" \
@@ -88,19 +83,26 @@ curl -H "Authorization: Bearer mcp_dev_key" \
 | `/health` | GET | No | Health check |
 | `/` | GET | No | Service info and available endpoints |
 
-### MCP Protocol
+### MCP Protocol (SDK Streamable HTTP)
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
-| `/mcp` | POST | Yes | MCP JSON-RPC endpoint (initialize, tools/list, tools/call) |
-| `/mcp/tools` | GET | Yes | List tools in MCP format |
-| `/mcp/tools/{name}/call` | POST | Yes | Execute a tool |
+| `/mcp` | POST | Yes | MCP SDK Streamable HTTP transport (tools/list, tools/call, resources/list) |
+
+### REST Convenience
+
+| Endpoint | Method | Auth | Description |
+|----------|--------|------|-------------|
+| `/rest/tools` | GET | Yes | List tools in MCP format |
+| `/rest/tools/{name}/call` | POST | Yes | Execute a tool |
 
 ### OpenAI Protocol
 
 | Endpoint | Method | Auth | Description |
 |----------|--------|------|-------------|
 | `/openapi.json` | GET | No | OpenAPI specification for tool discovery |
+| `/openai/tools` | GET | Yes | List tools in OpenAI format |
+| `/openai/tools/{name}` | POST | Yes | Execute a tool (OpenAI format) |
 | `/{tool_name}` | POST | Yes | Execute a tool (flat path for Open WebUI) |
 
 ### Progress Streaming (MCP notifications/progress)
@@ -126,7 +128,7 @@ All protected endpoints require a Bearer token in the Authorization header:
 
 ```bash
 curl -H "Authorization: Bearer YOUR_API_KEY" \
-  http://localhost:8020/mcp/tools
+  http://localhost:8020/rest/tools
 ```
 
 ### Environment Variables
@@ -142,62 +144,20 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
 
 ### Claude Desktop
 
-Claude Desktop uses **STDIO transport** - it launches MCP servers as local processes and communicates via stdin/stdout. We provide a Docker image that runs an MCP server in STDIO mode.
-
-**Configuration (`~/.claude/claude_desktop_config.json` on macOS/Linux):**
+Claude Desktop connects via MCP Streamable HTTP transport:
 
 ```json
 {
   "mcpServers": {
     "curatore": {
-      "command": "docker",
-      "args": [
-        "run", "--rm", "-i",
-        "--network", "curatore-v2_default",
-        "-e", "BACKEND_URL=http://backend:8000",
-        "curatore-mcp-stdio"
-      ]
+      "type": "http",
+      "url": "http://localhost:8020/mcp",
+      "headers": {
+        "Authorization": "Bearer mcp_dev_key"
+      }
     }
   }
 }
-```
-
-**Windows (`%APPDATA%\Claude\claude_desktop_config.json`):**
-
-```json
-{
-  "mcpServers": {
-    "curatore": {
-      "command": "docker",
-      "args": [
-        "run", "--rm", "-i",
-        "--network", "curatore-v2_default",
-        "-e", "BACKEND_URL=http://backend:8000",
-        "curatore-mcp-stdio"
-      ]
-    }
-  }
-}
-```
-
-**Build the STDIO image:**
-```bash
-cd curatore-v2/mcp
-docker build -f Dockerfile.stdio -t curatore-mcp-stdio .
-```
-
-**How it works:**
-1. Claude Desktop launches the Docker container
-2. The `-i` flag keeps stdin open for JSON-RPC messages
-3. The container connects to the Curatore backend via Docker network
-4. Responses are written to stdout
-
-**Test the STDIO server:**
-```bash
-echo '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}' | \
-  docker run --rm -i --network curatore-v2_default \
-  -e BACKEND_URL=http://backend:8000 \
-  curatore-mcp-stdio
 ```
 
 ### Claude Code
@@ -301,51 +261,6 @@ Response:
 }
 ```
 
-#### MCP JSON-RPC Protocol
-
-```bash
-# Initialize
-curl -X POST \
-  -H "Authorization: Bearer mcp_dev_key" \
-  -H "Content-Type: application/json" \
-  http://localhost:8020/mcp \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 1,
-    "method": "initialize",
-    "params": {
-      "protocolVersion": "2024-11-05",
-      "clientInfo": {"name": "my-client"}
-    }
-  }'
-
-# List tools
-curl -X POST \
-  -H "Authorization: Bearer mcp_dev_key" \
-  -H "Content-Type: application/json" \
-  http://localhost:8020/mcp \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 2,
-    "method": "tools/list"
-  }'
-
-# Call tool
-curl -X POST \
-  -H "Authorization: Bearer mcp_dev_key" \
-  -H "Content-Type: application/json" \
-  http://localhost:8020/mcp \
-  -d '{
-    "jsonrpc": "2.0",
-    "id": 3,
-    "method": "tools/call",
-    "params": {
-      "name": "search_assets",
-      "arguments": {"query": "test", "limit": 5}
-    }
-  }'
-```
-
 #### Progress Streaming (MCP notifications/progress)
 
 For long-running tool calls, clients can request progress updates using the MCP `_meta.progressToken` pattern:
@@ -375,51 +290,11 @@ curl -H "Authorization: Bearer YOUR_API_KEY" \
   http://localhost:8020/progress/my-unique-token
 ```
 
-**SSE Event Format:**
-```
-event: progress
-data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"my-unique-token","progress":40,"message":"Executing search_assets..."}}
-
-event: complete
-data: {"jsonrpc":"2.0","method":"notifications/progress","params":{"progressToken":"my-unique-token","progress":100,"status":"completed"}}
-```
-
-**JavaScript Example:**
-```javascript
-// Start SSE listener before calling tool
-const eventSource = new EventSource('/progress/my-token/stream', {
-  headers: { 'Authorization': 'Bearer YOUR_API_KEY' }
-});
-
-eventSource.addEventListener('progress', (e) => {
-  const data = JSON.parse(e.data);
-  console.log(`Progress: ${data.params.progress}% - ${data.params.message}`);
-});
-
-eventSource.addEventListener('complete', (e) => {
-  console.log('Tool execution complete');
-  eventSource.close();
-});
-
-// Then call the tool with the same token
-fetch('/search_assets', {
-  method: 'POST',
-  headers: {
-    'Authorization': 'Bearer YOUR_API_KEY',
-    'Content-Type': 'application/json'
-  },
-  body: JSON.stringify({
-    _meta: { progressToken: 'my-token' },
-    query: 'test'
-  })
-});
-```
-
 ---
 
 ## Available Tools
 
-The following tools are exposed by default (configurable via `policy.yaml`):
+Tools are auto-derived from backend contracts. Any function with `exposure_profile.agent=true` is automatically exposed (no policy.yaml edit needed). Use the denylist to block specific functions.
 
 ### Search Functions
 
@@ -472,17 +347,15 @@ The two-step email workflow prevents AI agents from sending emails without expli
 
 The gateway enforces security policies defined in `policy.yaml`:
 
-### Allowlist
+### Auto-Derive Mode (v2.0)
 
-Only functions in the allowlist are exposed:
+Functions with `exposure_profile.agent=true` in their backend contract are automatically exposed. No allowlist needed — just add the function to the backend and it appears in MCP.
 
 ```yaml
-allowlist:
-  - search_assets
-  - search_notices
-  - get_content
-  - llm_summarize
-  # Add more functions as needed
+version: "2.0"
+
+# Denylist — block specific functions regardless of exposure_profile
+denylist: []
 ```
 
 ### Side-Effect Blocking
@@ -492,12 +365,10 @@ Functions with `side_effects: true` (e.g., `send_email`, `create_artifact`) are 
 ```yaml
 settings:
   block_side_effects: true
-  # Exceptions: allow these side-effect functions (must also be in allowlist)
+  # Exceptions: allow these side-effect functions
   side_effects_allowlist:
     - confirm_email  # Safe because it requires a token from prepare_email
 ```
-
-The `side_effects_allowlist` enables controlled side-effect functions like `confirm_email` that have safety mechanisms (confirmation tokens, expiry).
 
 ### Parameter Clamping
 
@@ -634,7 +505,7 @@ docker logs curatore-mcp
 ```bash
 # Verify your API key
 curl -H "Authorization: Bearer YOUR_KEY" \
-  http://localhost:8020/mcp/tools
+  http://localhost:8020/rest/tools
 
 # Check configured key
 docker exec curatore-mcp env | grep MCP_API_KEY
@@ -647,9 +518,9 @@ docker exec curatore-mcp env | grep MCP_API_KEY
 curl -H "Authorization: Bearer mcp_dev_key" \
   http://localhost:8020/openai/tools | jq '.tools[].function.name'
 
-# Check policy allowlist
+# Check policy (v2.0 shows denylist)
 curl -H "Authorization: Bearer mcp_dev_key" \
-  http://localhost:8020/policy | jq '.allowlist'
+  http://localhost:8020/policy | jq '.'
 ```
 
 ### Backend Connection Issues

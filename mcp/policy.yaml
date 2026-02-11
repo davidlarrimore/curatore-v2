@@ -1,50 +1,20 @@
-# MCP Gateway Policy Configuration
-# This file controls which CWR functions are exposed via MCP and their limits.
+# MCP Gateway Policy Configuration v2.0
+#
+# Auto-derive mode: Functions with exposure_profile.agent=true in their
+# backend contract are automatically exposed. No allowlist needed.
+#
+# Use denylist to block specific functions regardless of exposure_profile.
 
-version: "1.0"
+version: "2.0"
 
-# MVP allowlist - all safe functions (no side effects)
-# Functions with side_effects=true are automatically excluded unless in side_effects_allowlist
-allowlist:
-  # Discovery functions (full payload - describe available data)
-  - discover_data_sources
-  - discover_metadata
-  # Search functions (thin payload - return IDs/scores)
-  - search_assets
-  - search_notices
-  - search_solicitations
-  - search_forecasts
-  - search_scraped_assets
-  - search_salesforce
-  # Content retrieval (full payload)
-  - get_asset
-  - get_content
-  - get
-  - query_model
-  # SharePoint browsing (read-only)
-  - sp_get_site
-  - sp_list_items
-  - sp_get_item
-  # LLM functions
-  - llm_summarize
-  - llm_extract
-  - llm_classify
-  - llm_generate
-  # Compound functions (safe, read-only)
-  - analyze_solicitation
-  - classify_document
-  # Email workflow (two-step confirmation for AI safety)
-  - prepare_email    # No side effects - creates preview
-  - confirm_email    # Has side effects - requires confirmation token
-  # Document Generation
-  - generate_document
-  - create_artifact
+# Denylist — functions blocked regardless of exposure_profile
+# (By default, all functions with exposure_profile.agent=true are exposed)
+denylist: []
 
-
-# Parameter clamps - limit values that users can request
+# Parameter clamps — limit values that users can request
 # These override user input to enforce resource limits
 clamps:
-  # Search functions - limit result count
+  # Search functions — limit result count
   search_assets:
     limit:
       max: 50
@@ -70,19 +40,19 @@ clamps:
       max: 50
       default: 20
 
-  # SharePoint browsing - limit result count
+  # SharePoint browsing — limit result count
   sp_list_items:
     limit:
       max: 200
       default: 50
 
-  # Content functions - limit text size
+  # Content functions — limit text size
   get_content:
     max_total_chars:
       max: 80000
       default: 50000
 
-  # LLM functions - limit token usage
+  # LLM functions — limit token usage
   llm_summarize:
     max_tokens:
       max: 2000
@@ -102,9 +72,9 @@ clamps:
 
 # Global settings
 settings:
-  # Block all functions with side_effects=true (overrides allowlist)
+  # Block all functions with side_effects=true (overrides auto-derive)
   block_side_effects: true
-  # Exceptions: allow these side-effect functions (must also be in allowlist)
+  # Exceptions: allow these side-effect functions
   # These are "safe" because they require a confirmation token from a prepare step
   side_effects_allowlist:
     - confirm_email

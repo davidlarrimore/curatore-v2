@@ -274,9 +274,9 @@ async def reload_procedures(
     organization_id: UUID = Depends(get_current_org_id),
 ):
     """
-    Reload all procedure definitions from YAML files.
+    Reload all procedure definitions from JSON definition files.
 
-    Clears the in-memory cache and re-discovers all procedure YAML files,
+    Clears the in-memory cache and re-discovers all procedure JSON files,
     then syncs them with the database. Use this to pick up changes to
     procedure definitions without restarting the server.
 
@@ -742,9 +742,9 @@ async def update_procedure(
     For user-created procedures (source_type='user'), you can update the
     full definition including name, parameters, steps, and tags.
 
-    For system procedures (YAML-defined), only is_active can be changed.
-    To update a system procedure's definition, edit the YAML file and
-    call POST /procedures/reload.
+    For system procedures, only is_active can be changed.
+    To update a system procedure's definition, edit the JSON definition file
+    and call POST /procedures/reload.
     """
     async with database_service.get_session() as session:
         query = select(Procedure).where(
@@ -764,7 +764,7 @@ async def update_procedure(
         if procedure.source_type != "user" and modifying_definition:
             raise HTTPException(
                 status_code=400,
-                detail="Cannot modify definition of system procedures. Edit the YAML file and call POST /procedures/reload instead.",
+                detail="Cannot modify definition of system procedures. Edit the JSON definition file and call POST /procedures/reload instead.",
             )
 
         if procedure.is_system and request.description is not None:
@@ -843,7 +843,7 @@ async def delete_procedure(
     Delete a user-created procedure.
 
     Only user-created procedures (source_type='user') can be deleted.
-    System procedures (YAML-defined) cannot be deleted via API.
+    System procedures cannot be deleted via API.
     """
     async with database_service.get_session() as session:
         query = select(Procedure).where(
@@ -859,7 +859,7 @@ async def delete_procedure(
         if procedure.source_type != "user":
             raise HTTPException(
                 status_code=400,
-                detail="Cannot delete system procedures. Remove the YAML file and call POST /procedures/reload instead.",
+                detail="Cannot delete system procedures. Remove the JSON definition file and call POST /procedures/reload instead.",
             )
 
         await session.delete(procedure)

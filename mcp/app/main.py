@@ -1,5 +1,5 @@
 # MCP Gateway Main Entry Point
-"""FastAPI application with MCP protocol support."""
+"""FastAPI application with MCP SDK Streamable HTTP transport."""
 
 import logging
 import json
@@ -13,19 +13,13 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.config import settings
 from app.middleware.auth import AuthMiddleware
 from app.middleware.correlation import CorrelationMiddleware
-from app.models.mcp import (
-    JSONRPCRequest,
-    JSONRPCResponse,
-    MCPInitializeResponse,
-    MCPToolsListResponse,
-    MCPToolsCallResponse,
-)
 from app.models.openai import OpenAIToolsResponse
-from app.handlers import handle_initialize, handle_tools_list, handle_tools_call, extract_progress_token, handle_resources_list
+from app.handlers import handle_tools_list, handle_tools_call, extract_progress_token
 from app.services.openai_converter import mcp_tools_to_openai
 from app.services.policy_service import policy_service
 from app.services.backend_client import backend_client
 from app.services.progress_service import progress_service
+from app.server import session_manager, ctx_org_id, ctx_api_key, ctx_correlation_id
 
 # Configure logging
 logging.basicConfig(
@@ -41,8 +35,17 @@ async def lifespan(app: FastAPI):
     # Startup
     logger.info(f"Starting MCP Gateway v{settings.mcp_server_version}")
     policy_service.load()
-    logger.info(f"Loaded policy with {len(policy_service.allowlist)} allowed tools")
-    yield
+
+    policy = policy_service.policy
+    if policy.is_v2:
+        logger.info(f"Policy v{policy.version}: auto-derive mode, {len(policy.denylist)} denied tools")
+    else:
+        logger.info(f"Policy v{policy.version}: legacy mode, {len(policy.allowlist)} allowed tools")
+
+    # Start MCP SDK session manager (manages Streamable HTTP transport lifecycle)
+    async with session_manager.run():
+        yield
+
     # Shutdown
     logger.info("Shutting down MCP Gateway")
     await backend_client.close()
@@ -71,6 +74,38 @@ app.add_middleware(AuthMiddleware)
 
 
 # =============================================================================
+# ASGI Middleware: propagate auth context into mounted MCP sub-app
+# =============================================================================
+
+
+class MCPContextMiddleware:
+    """
+    ASGI middleware that propagates auth headers into contextvars
+    for the MCP SDK handlers, then delegates to the session manager.
+    """
+
+    def __init__(self, sm):
+        self.session_manager = sm
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            # Extract headers from ASGI scope (bytes tuples)
+            headers = dict(scope.get("headers", []))
+            auth = headers.get(b"authorization", b"").decode()
+            if auth.lower().startswith("bearer "):
+                ctx_api_key.set(auth[7:])
+            ctx_org_id.set(headers.get(b"x-org-id", b"").decode() or None)
+            ctx_correlation_id.set(
+                headers.get(b"x-correlation-id", b"").decode() or None
+            )
+        await self.session_manager.handle_request(scope, receive, send)
+
+
+# Mount SDK Streamable HTTP transport at /mcp
+app.mount("/mcp", MCPContextMiddleware(session_manager))
+
+
+# =============================================================================
 # Health Endpoints
 # =============================================================================
 
@@ -96,120 +131,17 @@ async def root():
             "health": "/health",
             "mcp": "/mcp",
             "openai": "/openai/tools",
+            "rest": "/rest/tools",
         },
     }
 
 
 # =============================================================================
-# MCP Protocol Endpoint
+# REST Convenience Endpoints (relocated from /mcp/tools to /rest/tools)
 # =============================================================================
 
 
-@app.post("/mcp")
-async def mcp_endpoint(request: Request):
-    """
-    MCP JSON-RPC endpoint.
-
-    Handles MCP protocol messages:
-    - initialize: Client handshake
-    - tools/list: List available tools
-    - tools/call: Execute a tool
-    """
-    try:
-        body = await request.json()
-    except json.JSONDecodeError:
-        return JSONResponse(
-            status_code=400,
-            content={"error": {"code": -32700, "message": "Parse error"}},
-        )
-
-    # Parse JSON-RPC request
-    try:
-        rpc_request = JSONRPCRequest(**body)
-    except Exception as e:
-        return JSONResponse(
-            status_code=400,
-            content={"error": {"code": -32600, "message": f"Invalid Request: {e}"}},
-        )
-
-    # Get request context
-    org_id = getattr(request.state, "org_id", None)
-    api_key = getattr(request.state, "api_key", None)
-    correlation_id = getattr(request.state, "correlation_id", None)
-
-    # Route to appropriate handler
-    method = rpc_request.method
-    params = rpc_request.params or {}
-
-    try:
-        if method == "initialize":
-            result = await handle_initialize(params)
-            return _json_rpc_response(rpc_request.id, result.model_dump())
-
-        elif method == "tools/list":
-            result = await handle_tools_list(api_key, correlation_id)
-            return _json_rpc_response(rpc_request.id, result.model_dump())
-
-        elif method == "tools/call":
-            tool_name = params.get("name")
-            arguments = params.get("arguments", {})
-
-            if not tool_name:
-                return _json_rpc_error(rpc_request.id, -32602, "Missing tool name")
-
-            # Extract MCP progress token from _meta
-            progress_token, clean_arguments = extract_progress_token(arguments)
-
-            result = await handle_tools_call(
-                name=tool_name,
-                arguments=clean_arguments,
-                org_id=org_id,
-                api_key=api_key,
-                correlation_id=correlation_id,
-                progress_token=progress_token,
-            )
-            return _json_rpc_response(rpc_request.id, result.model_dump())
-
-        elif method == "resources/list":
-            result = await handle_resources_list(api_key, correlation_id)
-            return _json_rpc_response(rpc_request.id, result)
-
-        else:
-            return _json_rpc_error(rpc_request.id, -32601, f"Method not found: {method}")
-
-    except Exception as e:
-        logger.exception(f"Error handling {method}: {e}")
-        return _json_rpc_error(rpc_request.id, -32603, f"Internal error: {str(e)}")
-
-
-def _json_rpc_response(id: Any, result: Dict[str, Any]) -> JSONResponse:
-    """Create JSON-RPC success response."""
-    return JSONResponse(
-        content={
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": result,
-        }
-    )
-
-
-def _json_rpc_error(id: Any, code: int, message: str) -> JSONResponse:
-    """Create JSON-RPC error response."""
-    return JSONResponse(
-        content={
-            "jsonrpc": "2.0",
-            "id": id,
-            "error": {"code": code, "message": message},
-        }
-    )
-
-
-# =============================================================================
-# Direct REST Endpoints (for easier testing)
-# =============================================================================
-
-
-@app.get("/mcp/tools")
+@app.get("/rest/tools")
 async def list_tools(request: Request):
     """List available MCP tools (REST endpoint for testing)."""
     api_key = getattr(request.state, "api_key", None)
@@ -219,7 +151,7 @@ async def list_tools(request: Request):
     return result.model_dump()
 
 
-@app.post("/mcp/tools/{name}/call")
+@app.post("/rest/tools/{name}/call")
 async def call_tool(name: str, request: Request):
     """Execute an MCP tool (REST endpoint for testing)."""
     try:
@@ -250,22 +182,35 @@ async def call_tool(name: str, request: Request):
 async def get_policy():
     """Get current policy configuration."""
     policy = policy_service.policy
-    return {
+    result = {
         "version": policy.version,
-        "allowlist": policy.allowlist,
         "settings": policy.settings.model_dump(),
     }
+    if policy.is_v2:
+        result["denylist"] = policy.denylist
+    else:
+        result["allowlist"] = policy.allowlist
+    return result
 
 
 @app.post("/policy/reload")
 async def reload_policy():
     """Reload policy from file."""
     policy = policy_service.reload()
-    logger.info(f"Reloaded policy with {len(policy.allowlist)} allowed tools")
-    return {
-        "status": "reloaded",
-        "allowlist_count": len(policy.allowlist),
-    }
+    if policy.is_v2:
+        logger.info(f"Reloaded policy v{policy.version}: {len(policy.denylist)} denied tools")
+        return {
+            "status": "reloaded",
+            "version": policy.version,
+            "denylist_count": len(policy.denylist),
+        }
+    else:
+        logger.info(f"Reloaded policy v{policy.version}: {len(policy.allowlist)} allowed tools")
+        return {
+            "status": "reloaded",
+            "version": policy.version,
+            "allowlist_count": len(policy.allowlist),
+        }
 
 
 # =============================================================================
@@ -365,7 +310,7 @@ async def list_openai_tools(request: Request):
 
     This endpoint provides tools in the format expected by OpenAI-compatible
     clients like Open WebUI and ChatGPT. Tools are filtered by the same
-    policy as MCP (allowlist, side-effect blocking).
+    policy as MCP (auto-derive + side-effect blocking).
     """
     api_key = getattr(request.state, "api_key", None)
     correlation_id = getattr(request.state, "correlation_id", None)

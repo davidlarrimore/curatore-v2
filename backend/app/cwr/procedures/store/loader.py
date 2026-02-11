@@ -1,9 +1,9 @@
 # backend/app/procedures/loader.py
 """
-Procedure Loader - Load procedure definitions from YAML files.
+Procedure Loader - Load procedure definitions from JSON files.
 
 Supports:
-- YAML parsing with schema validation
+- JSON parsing with schema validation
 - Jinja2 templating in parameter values
 - Automatic discovery of procedure files
 """
@@ -14,7 +14,6 @@ import logging
 from pathlib import Path
 from typing import Dict, List, Optional, Any
 
-import yaml
 from jinja2 import Environment, BaseLoader
 
 from .definitions import ProcedureDefinition, StepDefinition
@@ -27,7 +26,7 @@ FLOW_FUNCTIONS = {"if_branch", "switch_branch", "parallel", "foreach"}
 
 class ProcedureLoader:
     """
-    Loads procedure definitions from YAML files.
+    Loads procedure definitions from JSON files.
 
     Discovery paths:
     1. backend/app/procedures/definitions/ (built-in procedures)
@@ -56,45 +55,6 @@ class ProcedureLoader:
 
         return paths
 
-    def load_yaml(self, path: Path) -> Optional[ProcedureDefinition]:
-        """Load a single YAML procedure definition."""
-        try:
-            with open(path, "r") as f:
-                data = yaml.safe_load(f)
-
-            if not data:
-                logger.warning(f"Empty procedure file: {path}")
-                return None
-
-            # Validate required fields
-            if "name" not in data or "slug" not in data:
-                logger.warning(f"Procedure missing name/slug: {path}")
-                return None
-
-            definition = ProcedureDefinition.from_dict(
-                data,
-                source_type="yaml",
-                source_path=str(path),
-            )
-
-            # Validate flow function branches
-            errors = self._validate_procedure_steps(definition.steps)
-            if errors:
-                for error in errors:
-                    logger.warning(f"Validation error in {path}: {error}")
-                # Still return the definition but log warnings
-                # Strict validation can be added as a flag if needed
-
-            logger.debug(f"Loaded procedure: {definition.slug} from {path}")
-            return definition
-
-        except yaml.YAMLError as e:
-            logger.error(f"YAML parse error in {path}: {e}")
-            return None
-        except Exception as e:
-            logger.error(f"Failed to load procedure {path}: {e}")
-            return None
-
     def load_json(self, path: Path) -> Optional[ProcedureDefinition]:
         """Load a single JSON procedure definition."""
         try:
@@ -112,7 +72,7 @@ class ProcedureLoader:
 
             definition = ProcedureDefinition.from_dict(
                 data,
-                source_type="json",
+                source_type="system",
                 source_path=str(path),
             )
 
@@ -132,18 +92,11 @@ class ProcedureLoader:
             logger.error(f"Failed to load procedure {path}: {e}")
             return None
 
-    def _load_file(self, path: Path) -> Optional[ProcedureDefinition]:
-        """Load a procedure definition from a YAML or JSON file."""
-        suffix = path.suffix.lower()
-        if suffix == ".json":
-            return self.load_json(path)
-        return self.load_yaml(path)
-
     def discover_all(self) -> Dict[str, ProcedureDefinition]:
         """
         Discover and load all procedure definitions.
 
-        Scans for *.yaml, *.yml, and *.json files in all definition paths.
+        Scans for *.json files in all definition paths.
 
         Returns dict mapping slug -> definition.
         """
@@ -152,13 +105,12 @@ class ProcedureLoader:
         for search_path in self._get_definition_paths():
             logger.info(f"Scanning for procedures in: {search_path}")
 
-            for ext in ("*.yaml", "*.yml", "*.json"):
-                for def_file in search_path.glob(ext):
-                    definition = self._load_file(def_file)
-                    if definition:
-                        if definition.slug in self._definitions:
-                            logger.warning(f"Duplicate procedure slug: {definition.slug}")
-                        self._definitions[definition.slug] = definition
+            for def_file in search_path.glob("*.json"):
+                definition = self.load_json(def_file)
+                if definition:
+                    if definition.slug in self._definitions:
+                        logger.warning(f"Duplicate procedure slug: {definition.slug}")
+                    self._definitions[definition.slug] = definition
 
         logger.info(f"Discovered {len(self._definitions)} procedures")
         return self._definitions
@@ -179,7 +131,7 @@ class ProcedureLoader:
         """
         Clear the cache and reload all procedure definitions from disk.
 
-        Use this to pick up changes to YAML files without restarting the server.
+        Use this to pick up changes to JSON definition files without restarting the server.
 
         Returns:
             Dict mapping slug -> definition

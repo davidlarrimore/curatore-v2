@@ -63,7 +63,7 @@ async def handle_tools_list(
     # Get all contracts (cached)
     contracts = await _get_contracts(api_key, correlation_id)
 
-    # Filter by policy allowlist and side_effects (respects side_effects_allowlist)
+    # Filter by policy (v2.0: exposure_profile + denylist, v1.0: allowlist)
     allowed_contracts = policy_service.filter_allowed(contracts)
 
     # Convert to MCP tool format

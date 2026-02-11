@@ -52,15 +52,23 @@ class PolicyService:
                         clamps[tool_name][param_name] = ClampConfig(max=clamp_config)
 
             self._policy = Policy(
-                version=data.get("version", "1.0"),
+                version=data.get("version", "2.0"),
+                denylist=data.get("denylist", []),
                 allowlist=data.get("allowlist", []),
                 clamps=clamps,
                 settings=data.get("settings", {}),
             )
-            logger.info(
-                f"Loaded policy v{self._policy.version} with "
-                f"{len(self._policy.allowlist)} allowed tools"
-            )
+
+            if self._policy.is_v2:
+                logger.info(
+                    f"Loaded policy v{self._policy.version} (auto-derive mode, "
+                    f"{len(self._policy.denylist)} denied tools)"
+                )
+            else:
+                logger.info(
+                    f"Loaded policy v{self._policy.version} (legacy mode, "
+                    f"{len(self._policy.allowlist)} allowed tools)"
+                )
             return self._policy
 
         except Exception as e:
@@ -81,8 +89,25 @@ class PolicyService:
         return self._policy
 
     def is_allowed(self, tool_name: str) -> bool:
-        """Check if a tool is allowed by policy."""
-        return self.policy.is_allowed(tool_name)
+        """
+        Check if a tool is allowed by policy.
+
+        In v2.0 (auto-derive) mode, this only checks the denylist.
+        The exposure_profile check happens in filter_allowed() and tools_call.py.
+
+        In v1.0 (legacy) mode, this checks the allowlist.
+        """
+        policy = self.policy
+        if policy.is_v2:
+            # Auto-derive: only blocked if explicitly denied
+            return not policy.is_denied(tool_name)
+        else:
+            # Legacy: must be in allowlist
+            return policy.is_allowed(tool_name)
+
+    def is_denied(self, tool_name: str) -> bool:
+        """Check if a tool is in the denylist (v2.0 mode)."""
+        return self.policy.is_denied(tool_name)
 
     def filter_allowed(
         self,
@@ -90,7 +115,10 @@ class PolicyService:
         check_side_effects: bool = True,
     ) -> List[Dict[str, Any]]:
         """
-        Filter contracts by policy allowlist and side_effects.
+        Filter contracts by policy.
+
+        In v2.0 mode: auto-derive from exposure_profile.agent + denylist.
+        In v1.0 mode: filter by allowlist.
 
         Args:
             contracts: List of ToolContract dictionaries
@@ -105,9 +133,19 @@ class PolicyService:
         for contract in contracts:
             name = contract.get("name", "")
 
-            # Check allowlist
-            if not policy.is_allowed(name):
-                continue
+            if policy.is_v2:
+                # Auto-derive: allow if exposure_profile includes agent access
+                exposure = contract.get("exposure_profile", {})
+                if not exposure.get("agent", False):
+                    continue
+                # Check denylist
+                if policy.is_denied(name):
+                    logger.debug(f"Blocking {name}: in denylist")
+                    continue
+            else:
+                # Legacy: check allowlist
+                if not policy.is_allowed(name):
+                    continue
 
             # Check side_effects if enabled
             if check_side_effects and policy.settings.block_side_effects:
@@ -144,8 +182,13 @@ class PolicyService:
         return self.policy.get_clamps(tool_name)
 
     @property
+    def denylist(self) -> List[str]:
+        """Get the current denylist."""
+        return self.policy.denylist
+
+    @property
     def allowlist(self) -> List[str]:
-        """Get the current allowlist."""
+        """Get the current allowlist (legacy v1.0)."""
         return self.policy.allowlist
 
     @property

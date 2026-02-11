@@ -90,24 +90,20 @@ Use this method if you want to connect via the native MCP protocol.
 
 | Endpoint | Method | Description |
 |----------|--------|-------------|
-| `/mcp` | POST | JSON-RPC endpoint for all MCP operations |
-| `/mcp/tools` | GET | REST endpoint to list tools (for debugging) |
-| `/mcp/tools/{name}/call` | POST | REST endpoint to call a tool (for debugging) |
+| `/mcp` | POST | MCP SDK Streamable HTTP transport (tools/list, tools/call, resources/list) |
+| `/rest/tools` | GET | REST endpoint to list tools (for debugging) |
+| `/rest/tools/{name}/call` | POST | REST endpoint to call a tool (for debugging) |
 
 ### Test MCP Connection
 
 ```bash
-# Initialize
-curl -X POST http://localhost:8020/mcp \
-  -H "Authorization: Bearer YOUR_MCP_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}'
+# List tools via REST convenience endpoint
+curl -H "Authorization: Bearer YOUR_MCP_API_KEY" \
+  http://localhost:8020/rest/tools
 
-# List tools
-curl -X POST http://localhost:8020/mcp \
-  -H "Authorization: Bearer YOUR_MCP_API_KEY" \
-  -H "Content-Type: application/json" \
-  -d '{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}'
+# Or use the OpenAI-compatible endpoint
+curl -H "Authorization: Bearer YOUR_MCP_API_KEY" \
+  http://localhost:8020/openai/tools
 ```
 
 ---

@@ -82,7 +82,7 @@ class Procedure(Base):
     - Webhooks (external systems)
     - Manual execution via API
 
-    Procedures are defined in YAML files or programmatically and are
+    Procedures are defined in JSON definition files or programmatically and are
     discovered/registered at application startup.
 
     Attributes:
@@ -95,8 +95,8 @@ class Procedure(Base):
         version: Incremented when definition changes
         is_active: Whether procedure can be triggered
         is_system: System procedures are managed by code, not editable
-        source_type: 'yaml', 'python', or 'user' (created via UI)
-        source_path: Path to source file for yaml/python procedures
+        source_type: 'system' or 'user' (created via UI)
+        source_path: Path to source file for system procedures
         created_at: When procedure was created
         updated_at: When procedure was last modified
         created_by: User who created this procedure
@@ -136,7 +136,7 @@ class Procedure(Base):
     is_system = Column(Boolean, nullable=False, default=False)
 
     # Source tracking
-    source_type = Column(String(50), nullable=False, default="yaml")
+    source_type = Column(String(50), nullable=False, default="system")
     source_path = Column(String(500), nullable=True)
 
     # Timestamps
@@ -239,7 +239,7 @@ class Pipeline(Base):
         version: Incremented when definition changes
         is_active: Whether pipeline can be triggered
         is_system: System pipelines are managed by code
-        source_type: 'yaml', 'python', or 'user'
+        source_type: 'system' or 'user'
         source_path: Path to source file
 
     Relationships:
@@ -282,7 +282,7 @@ class Pipeline(Base):
     is_system = Column(Boolean, nullable=False, default=False)
 
     # Source tracking
-    source_type = Column(String(50), nullable=False, default="yaml")
+    source_type = Column(String(50), nullable=False, default="system")
     source_path = Column(String(500), nullable=True)
 
     # Timestamps

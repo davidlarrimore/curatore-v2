@@ -3,7 +3,7 @@
 Pipeline Discovery Service - Register pipelines in database.
 
 On application startup, discovers pipeline definitions from:
-1. YAML files in definitions/
+1. JSON files in definitions/
 2. Python-defined pipelines
 
 Registers them in the database so they can be:
@@ -11,7 +11,7 @@ Registers them in the database so they can be:
 - Have triggers configured
 - Track execution history
 
-Also cleans up stale pipelines where the source YAML file no longer exists.
+Also cleans up stale system pipelines where the source file no longer exists.
 """
 
 import logging
@@ -41,7 +41,7 @@ class PipelineDiscoveryService:
     ) -> Dict[str, any]:
         """
         Discover all pipelines and register/update them in the database.
-        Also cleans up stale YAML-based pipelines whose source files no longer exist.
+        Also cleans up stale system pipelines whose source files no longer exist.
 
         Args:
             session: Database session
@@ -64,7 +64,7 @@ class PipelineDiscoveryService:
         definitions = pipeline_loader.discover_all()
         logger.info(f"Discovered {len(definitions)} pipeline definitions")
 
-        # Track which slugs we've seen from YAML files
+        # Track which slugs we've seen from definition files
         discovered_slugs = set(definitions.keys())
 
         for slug, definition in definitions.items():
@@ -137,18 +137,18 @@ class PipelineDiscoveryService:
                 logger.error(f"Failed to register pipeline {slug}: {e}")
                 results["errors"].append(f"{slug}: {e}")
 
-        # Clean up stale YAML-based pipelines whose source files no longer exist
+        # Clean up stale system pipelines whose source files no longer exist
         stale_query = select(Pipeline).where(
             Pipeline.organization_id == organization_id,
-            Pipeline.source_type == "yaml",
+            Pipeline.source_type == "system",
         )
         result = await session.execute(stale_query)
-        yaml_pipelines = result.scalars().all()
+        system_pipelines = result.scalars().all()
 
-        for pipe in yaml_pipelines:
-            # Check if this pipeline's YAML file still exists
+        for pipe in system_pipelines:
+            # Check if this pipeline's source file still exists
             if pipe.slug not in discovered_slugs:
-                # YAML file was removed - check if source_path confirms this
+                # Source file was removed - check if source_path confirms this
                 if pipe.source_path and not os.path.exists(pipe.source_path):
                     logger.info(f"Removing stale pipeline: {pipe.slug} (source file deleted: {pipe.source_path})")
                     await session.delete(pipe)

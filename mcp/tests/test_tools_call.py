@@ -2,18 +2,28 @@
 """Tests for MCP tools/call handler."""
 
 import pytest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.handlers.tools_call import handle_tools_call
 from app.models.mcp import MCPToolsCallResponse
+
+
+def _make_v2_policy_mock():
+    """Create a mock policy_service configured for v2.0 mode."""
+    mock = MagicMock()
+    mock.policy.is_v2 = True
+    mock.is_allowed.return_value = True  # Not in denylist
+    mock.block_side_effects = True
+    mock.validate_facets = False
+    return mock
 
 
 class TestToolsCall:
     """Test tools/call handler."""
 
     @pytest.mark.asyncio
-    async def test_tool_not_allowed(self):
-        """Test calling a tool not in allowlist."""
+    async def test_tool_denied(self):
+        """Test calling a tool in the denylist."""
         with patch("app.handlers.tools_call.policy_service") as mock_policy:
             mock_policy.is_allowed.return_value = False
 
@@ -28,12 +38,48 @@ class TestToolsCall:
         with patch("app.handlers.tools_call.policy_service") as mock_policy:
             with patch("app.handlers.tools_call.backend_client") as mock_client:
                 mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = True
                 mock_client.get_contract = AsyncMock(return_value=None)
 
                 result = await handle_tools_call("nonexistent", {})
 
                 assert result.isError is True
                 assert "not found" in result.content[0].text
+
+    @pytest.mark.asyncio
+    async def test_exposure_profile_blocked(self, sample_contract):
+        """Test that tools without exposure_profile.agent=True are blocked in v2.0."""
+        sample_contract["exposure_profile"] = {"procedure": True, "agent": False}
+
+        with patch("app.handlers.tools_call.policy_service") as mock_policy:
+            with patch("app.handlers.tools_call.backend_client") as mock_client:
+                mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = True
+                mock_client.get_contract = AsyncMock(return_value=sample_contract)
+
+                result = await handle_tools_call("internal_tool", {})
+
+                assert result.isError is True
+                assert "not available" in result.content[0].text
+
+    @pytest.mark.asyncio
+    async def test_exposure_profile_allowed(self, sample_contract, sample_execution_result):
+        """Test that tools with exposure_profile.agent=True pass in v2.0."""
+        sample_contract["exposure_profile"] = {"procedure": True, "agent": True}
+
+        with patch("app.handlers.tools_call.policy_service") as mock_policy:
+            with patch("app.handlers.tools_call.backend_client") as mock_client:
+                mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = True
+                mock_policy.block_side_effects = True
+                mock_policy.validate_facets = False
+                mock_policy.apply_clamps.return_value = {"query": "test"}
+                mock_client.get_contract = AsyncMock(return_value=sample_contract)
+                mock_client.execute_function = AsyncMock(return_value=sample_execution_result)
+
+                result = await handle_tools_call("search_assets", {"query": "test"})
+
+                assert result.isError is False
 
     @pytest.mark.asyncio
     async def test_side_effects_blocked(self, sample_contract):
@@ -43,7 +89,9 @@ class TestToolsCall:
         with patch("app.handlers.tools_call.policy_service") as mock_policy:
             with patch("app.handlers.tools_call.backend_client") as mock_client:
                 mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = True
                 mock_policy.block_side_effects = True
+                mock_policy.policy.settings.side_effects_allowlist = []
                 mock_client.get_contract = AsyncMock(return_value=sample_contract)
 
                 result = await handle_tools_call("send_email", {})
@@ -57,6 +105,7 @@ class TestToolsCall:
         with patch("app.handlers.tools_call.policy_service") as mock_policy:
             with patch("app.handlers.tools_call.backend_client") as mock_client:
                 mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = True
                 mock_policy.block_side_effects = True
                 mock_policy.apply_clamps.return_value = {}
                 mock_client.get_contract = AsyncMock(return_value=sample_contract)
@@ -73,6 +122,7 @@ class TestToolsCall:
         with patch("app.handlers.tools_call.policy_service") as mock_policy:
             with patch("app.handlers.tools_call.backend_client") as mock_client:
                 mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = True
                 mock_policy.block_side_effects = True
                 mock_policy.validate_facets = False
                 # Clamp limit from 500 to 50
@@ -98,6 +148,7 @@ class TestToolsCall:
         with patch("app.handlers.tools_call.policy_service") as mock_policy:
             with patch("app.handlers.tools_call.backend_client") as mock_client:
                 mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = True
                 mock_policy.block_side_effects = True
                 mock_policy.validate_facets = False
                 mock_policy.apply_clamps.return_value = {"query": "test"}
@@ -117,6 +168,7 @@ class TestToolsCall:
         with patch("app.handlers.tools_call.policy_service") as mock_policy:
             with patch("app.handlers.tools_call.backend_client") as mock_client:
                 mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = True
                 mock_policy.block_side_effects = True
                 mock_policy.validate_facets = False
                 mock_policy.apply_clamps.return_value = {"query": "test"}
@@ -137,6 +189,7 @@ class TestToolsCall:
             with patch("app.handlers.tools_call.backend_client") as mock_client:
                 with patch("app.handlers.tools_call.facet_validator") as mock_facet:
                     mock_policy.is_allowed.return_value = True
+                    mock_policy.policy.is_v2 = True
                     mock_policy.block_side_effects = True
                     mock_policy.validate_facets = True
                     mock_policy.apply_clamps.return_value = {
@@ -157,3 +210,24 @@ class TestToolsCall:
                     assert result.isError is True
                     assert "Unknown facets" in result.content[0].text
                     assert "invalid_facet" in result.content[0].text
+
+    @pytest.mark.asyncio
+    async def test_v1_legacy_mode_skips_exposure_check(self, sample_contract, sample_execution_result):
+        """Test that v1.0 mode doesn't check exposure_profile."""
+        # Remove exposure_profile to prove it's not checked
+        sample_contract.pop("exposure_profile", None)
+
+        with patch("app.handlers.tools_call.policy_service") as mock_policy:
+            with patch("app.handlers.tools_call.backend_client") as mock_client:
+                mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = False  # Legacy mode
+                mock_policy.block_side_effects = True
+                mock_policy.validate_facets = False
+                mock_policy.apply_clamps.return_value = {"query": "test"}
+                mock_client.get_contract = AsyncMock(return_value=sample_contract)
+                mock_client.execute_function = AsyncMock(return_value=sample_execution_result)
+
+                result = await handle_tools_call("search_assets", {"query": "test"})
+
+                # Should succeed even without exposure_profile
+                assert result.isError is False

@@ -19,25 +19,32 @@ class TestToolsList:
     async def test_list_tools_empty(self):
         """Test listing tools with empty backend response."""
         with patch("app.handlers.tools_list.backend_client") as mock_client:
-            mock_client.get_contracts = AsyncMock(return_value=[])
-
-            result = await handle_tools_list()
-
-            assert result.tools == []
-
-    @pytest.mark.asyncio
-    async def test_list_tools_filtered(self, sample_contracts):
-        """Test that tools are filtered by policy."""
-        with patch("app.handlers.tools_list.backend_client") as mock_client:
             with patch("app.handlers.tools_list.policy_service") as mock_policy:
-                mock_client.get_contracts = AsyncMock(return_value=sample_contracts)
-                mock_policy.allowlist = ["search_assets", "get_content"]
-                mock_policy.block_side_effects = True
+                mock_client.get_contracts = AsyncMock(return_value=[])
                 mock_policy.contract_cache_ttl = 300
+                mock_policy.filter_allowed.return_value = []
 
                 result = await handle_tools_list()
 
-                # send_email should be filtered out (side_effects=True)
+                assert result.tools == []
+
+    @pytest.mark.asyncio
+    async def test_list_tools_filtered(self, sample_contracts):
+        """Test that tools are filtered by policy (v2.0 auto-derive)."""
+        with patch("app.handlers.tools_list.backend_client") as mock_client:
+            with patch("app.handlers.tools_list.policy_service") as mock_policy:
+                mock_client.get_contracts = AsyncMock(return_value=sample_contracts)
+                mock_policy.contract_cache_ttl = 300
+                # Simulate v2.0 filtering: agent=True and no side_effects
+                mock_policy.filter_allowed.return_value = [
+                    c for c in sample_contracts
+                    if c.get("exposure_profile", {}).get("agent", False)
+                    and not c.get("side_effects", False)
+                ]
+
+                result = await handle_tools_list()
+
+                # send_email is excluded (agent=False + side_effects=True)
                 tool_names = [t.name for t in result.tools]
                 assert "search_assets" in tool_names
                 assert "get_content" in tool_names
@@ -49,9 +56,8 @@ class TestToolsList:
         with patch("app.handlers.tools_list.backend_client") as mock_client:
             with patch("app.handlers.tools_list.policy_service") as mock_policy:
                 mock_client.get_contracts = AsyncMock(return_value=sample_contracts)
-                mock_policy.allowlist = ["search_assets"]
-                mock_policy.block_side_effects = True
                 mock_policy.contract_cache_ttl = 300
+                mock_policy.filter_allowed.return_value = [sample_contracts[0]]
 
                 # First call
                 await handle_tools_list()
@@ -67,9 +73,8 @@ class TestToolsList:
         with patch("app.handlers.tools_list.backend_client") as mock_client:
             with patch("app.handlers.tools_list.policy_service") as mock_policy:
                 mock_client.get_contracts = AsyncMock(return_value=[sample_contract])
-                mock_policy.allowlist = ["search_assets"]
-                mock_policy.block_side_effects = True
                 mock_policy.contract_cache_ttl = 300
+                mock_policy.filter_allowed.return_value = [sample_contract]
 
                 result = await handle_tools_list()
 

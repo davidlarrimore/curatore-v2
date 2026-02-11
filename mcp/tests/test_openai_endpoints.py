@@ -17,9 +17,13 @@ class TestOpenAIToolsList:
         with patch("app.handlers.tools_list.backend_client") as mock_client:
             with patch("app.handlers.tools_list.policy_service") as mock_policy:
                 mock_client.get_contracts = AsyncMock(return_value=sample_contracts)
-                mock_policy.allowlist = ["search_assets", "get_content"]
-                mock_policy.block_side_effects = True
                 mock_policy.contract_cache_ttl = 300
+                # v2.0: filter by exposure_profile.agent=True, no side_effects
+                mock_policy.filter_allowed.return_value = [
+                    c for c in sample_contracts
+                    if c.get("exposure_profile", {}).get("agent", False)
+                    and not c.get("side_effects", False)
+                ]
 
                 response = client.get("/openai/tools", headers=auth_headers)
 
@@ -46,9 +50,12 @@ class TestOpenAIToolsList:
         with patch("app.handlers.tools_list.backend_client") as mock_client:
             with patch("app.handlers.tools_list.policy_service") as mock_policy:
                 mock_client.get_contracts = AsyncMock(return_value=sample_contracts)
-                mock_policy.allowlist = ["search_assets", "get_content", "send_email"]
-                mock_policy.block_side_effects = True
                 mock_policy.contract_cache_ttl = 300
+                mock_policy.filter_allowed.return_value = [
+                    c for c in sample_contracts
+                    if c.get("exposure_profile", {}).get("agent", False)
+                    and not c.get("side_effects", False)
+                ]
 
                 response = client.get("/openai/tools", headers=auth_headers)
 
@@ -58,7 +65,7 @@ class TestOpenAIToolsList:
                 tool_names = [t["function"]["name"] for t in data["tools"]]
                 assert "search_assets" in tool_names
                 assert "get_content" in tool_names
-                assert "send_email" not in tool_names  # Has side effects
+                assert "send_email" not in tool_names  # agent=False + side effects
 
     def test_openai_tools_requires_auth(self, client):
         """Test that OpenAI endpoint requires authentication."""
@@ -70,9 +77,8 @@ class TestOpenAIToolsList:
         with patch("app.handlers.tools_list.backend_client") as mock_client:
             with patch("app.handlers.tools_list.policy_service") as mock_policy:
                 mock_client.get_contracts = AsyncMock(return_value=sample_contracts)
-                mock_policy.allowlist = ["search_assets"]
-                mock_policy.block_side_effects = True
                 mock_policy.contract_cache_ttl = 300
+                mock_policy.filter_allowed.return_value = [sample_contracts[0]]
 
                 response = client.get("/openai/tools", headers=auth_headers)
 
@@ -101,6 +107,7 @@ class TestOpenAIToolsCall:
         with patch("app.handlers.tools_call.policy_service") as mock_policy:
             with patch("app.handlers.tools_call.backend_client") as mock_client:
                 mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = True
                 mock_policy.block_side_effects = True
                 mock_policy.validate_facets = False
                 mock_policy.apply_clamps.return_value = {"query": "test"}
@@ -125,6 +132,7 @@ class TestOpenAIToolsCall:
         with patch("app.handlers.tools_call.policy_service") as mock_policy:
             with patch("app.handlers.tools_call.backend_client") as mock_client:
                 mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = True
                 mock_policy.block_side_effects = True
                 mock_policy.validate_facets = False
                 mock_policy.apply_clamps.return_value = {"query": "test"}
@@ -143,7 +151,7 @@ class TestOpenAIToolsCall:
                 assert data["isError"] is False
 
     def test_call_openai_tool_not_allowed(self, client, auth_headers):
-        """Test calling a tool not in allowlist."""
+        """Test calling a tool in denylist."""
         with patch("app.handlers.tools_call.policy_service") as mock_policy:
             mock_policy.is_allowed.return_value = False
 
@@ -169,6 +177,7 @@ class TestOpenAIToolsCall:
         with patch("app.handlers.tools_call.policy_service") as mock_policy:
             with patch("app.handlers.tools_call.backend_client") as mock_client:
                 mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = True
                 mock_policy.block_side_effects = True
                 mock_policy.validate_facets = False
                 mock_policy.apply_clamps.return_value = {}

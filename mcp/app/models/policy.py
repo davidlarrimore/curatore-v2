@@ -47,12 +47,23 @@ class PolicySettings(BaseModel):
 
 
 class Policy(BaseModel):
-    """Complete policy configuration."""
+    """
+    Complete policy configuration.
 
-    version: str = Field(default="1.0", description="Policy version")
+    v2.0: Auto-derive mode. Functions with exposure_profile.agent=true are
+    auto-exposed. The denylist provides an override to block specific functions.
+    Legacy allowlist is still supported for backward compatibility.
+    """
+
+    version: str = Field(default="2.0", description="Policy version")
+    denylist: List[str] = Field(
+        default_factory=list,
+        description="Functions blocked regardless of exposure_profile",
+    )
+    # Legacy field — kept for backward compatibility with v1.0 policy files
     allowlist: List[str] = Field(
         default_factory=list,
-        description="List of allowed tool names",
+        description="(Legacy v1.0) List of allowed tool names",
     )
     clamps: Dict[str, Dict[str, ClampConfig]] = Field(
         default_factory=dict,
@@ -63,8 +74,17 @@ class Policy(BaseModel):
         description="Global policy settings",
     )
 
+    @property
+    def is_v2(self) -> bool:
+        """Check if this is a v2.0+ auto-derive policy."""
+        return self.version.startswith("2")
+
+    def is_denied(self, tool_name: str) -> bool:
+        """Check if a tool is in the denylist."""
+        return tool_name in self.denylist
+
     def is_allowed(self, tool_name: str) -> bool:
-        """Check if a tool is in the allowlist."""
+        """Check if a tool is in the legacy allowlist (v1.0 mode only)."""
         return tool_name in self.allowlist
 
     def get_clamps(self, tool_name: str) -> Dict[str, ClampConfig]:

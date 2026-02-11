@@ -3,7 +3,7 @@
 Procedure Discovery Service - Register procedures in database.
 
 On application startup, discovers procedure definitions from:
-1. YAML files in definitions/
+1. JSON files in definitions/
 2. Python-defined procedures
 
 Registers them in the database so they can be:
@@ -11,7 +11,7 @@ Registers them in the database so they can be:
 - Have triggers configured
 - Track execution history
 
-Also cleans up stale procedures where the source YAML file no longer exists.
+Also cleans up stale system procedures where the source file no longer exists.
 """
 
 import logging
@@ -64,7 +64,7 @@ class ProcedureDiscoveryService:
     ) -> Dict[str, any]:
         """
         Discover all procedures and register/update them in the database.
-        Also cleans up stale YAML-based procedures whose source files no longer exist.
+        Also cleans up stale system procedures whose source files no longer exist.
 
         Args:
             session: Database session
@@ -87,7 +87,7 @@ class ProcedureDiscoveryService:
         definitions = procedure_loader.discover_all()
         logger.info(f"Discovered {len(definitions)} procedure definitions")
 
-        # Track which slugs we've seen from YAML files
+        # Track which slugs we've seen from definition files
         discovered_slugs = set(definitions.keys())
 
         for slug, definition in definitions.items():
@@ -159,10 +159,10 @@ class ProcedureDiscoveryService:
                 logger.error(f"Failed to register procedure {slug}: {e}")
                 results["errors"].append(f"{slug}: {e}")
 
-        # Clean up stale file-based procedures whose source files no longer exist
+        # Clean up stale system procedures whose source files no longer exist
         stale_query = select(Procedure).where(
             Procedure.organization_id == organization_id,
-            Procedure.source_type.in_(["yaml", "json"]),
+            Procedure.source_type == "system",
         )
         result = await session.execute(stale_query)
         file_procedures = result.scalars().all()

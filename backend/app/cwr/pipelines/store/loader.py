@@ -1,13 +1,12 @@
 # backend/app/pipelines/loader.py
 """
-Pipeline Loader - Load pipeline definitions from YAML files.
+Pipeline Loader - Load pipeline definitions from JSON files.
 """
 
+import json
 import logging
 from pathlib import Path
 from typing import Dict, List, Optional
-
-import yaml
 
 from ..runtime.definitions import PipelineDefinition
 
@@ -15,7 +14,7 @@ logger = logging.getLogger("curatore.pipelines.loader")
 
 
 class PipelineLoader:
-    """Loads pipeline definitions from YAML files."""
+    """Loads pipeline definitions from JSON files."""
 
     def __init__(self, additional_paths: List[str] = None):
         self._definitions: Dict[str, PipelineDefinition] = {}
@@ -38,11 +37,11 @@ class PipelineLoader:
 
         return paths
 
-    def load_yaml(self, path: Path) -> Optional[PipelineDefinition]:
-        """Load a single YAML pipeline definition."""
+    def load_json(self, path: Path) -> Optional[PipelineDefinition]:
+        """Load a single JSON pipeline definition."""
         try:
             with open(path, "r") as f:
-                data = yaml.safe_load(f)
+                data = json.load(f)
 
             if not data:
                 return None
@@ -53,15 +52,15 @@ class PipelineLoader:
 
             definition = PipelineDefinition.from_dict(
                 data,
-                source_type="yaml",
+                source_type="system",
                 source_path=str(path),
             )
 
             logger.debug(f"Loaded pipeline: {definition.slug}")
             return definition
 
-        except yaml.YAMLError as e:
-            logger.error(f"YAML parse error in {path}: {e}")
+        except json.JSONDecodeError as e:
+            logger.error(f"JSON parse error in {path}: {e}")
             return None
         except Exception as e:
             logger.error(f"Failed to load pipeline {path}: {e}")
@@ -74,13 +73,8 @@ class PipelineLoader:
         for search_path in self._get_definition_paths():
             logger.info(f"Scanning for pipelines in: {search_path}")
 
-            for yaml_file in search_path.glob("*.yaml"):
-                definition = self.load_yaml(yaml_file)
-                if definition:
-                    self._definitions[definition.slug] = definition
-
-            for yml_file in search_path.glob("*.yml"):
-                definition = self.load_yaml(yml_file)
+            for json_file in search_path.glob("*.json"):
+                definition = self.load_json(json_file)
                 if definition:
                     self._definitions[definition.slug] = definition
 
