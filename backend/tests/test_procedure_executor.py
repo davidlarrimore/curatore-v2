@@ -621,6 +621,49 @@ class TestConditionEvaluation:
             assert result["status"] == "completed"
             assert result["step_summary"]["conditional_step"]["status"] == "skipped"
 
+    def test_evaluate_condition_truthy_values(self, executor):
+        """_evaluate_condition should treat non-falsy rendered strings as true."""
+        # Create a minimal FunctionContext mock with empty params/steps
+        ctx = MagicMock(spec=FunctionContext)
+        ctx.params = {}
+        ctx.variables = {}
+
+        # Jinja2 truthy values (these are Jinja2 expressions, not raw strings)
+        assert executor._evaluate_condition("true", ctx) is True   # {{ true }} → "True"
+        assert executor._evaluate_condition("True", ctx) is True   # {{ True }} → "True"
+        assert executor._evaluate_condition("1", ctx) is True      # {{ 1 }} → "1"
+        assert executor._evaluate_condition("1 + 1", ctx) is True  # {{ 1 + 1 }} → "2"
+        assert executor._evaluate_condition("12", ctx) is True     # {{ 12 }} → "12"
+
+        # Jinja2 falsy values
+        assert executor._evaluate_condition("false", ctx) is False  # {{ false }} → "False"
+        assert executor._evaluate_condition("False", ctx) is False  # {{ False }} → "False"
+        assert executor._evaluate_condition("0", ctx) is False      # {{ 0 }} → "0"
+        assert executor._evaluate_condition("none", ctx) is False   # {{ none }} → "None"
+        assert executor._evaluate_condition("None", ctx) is False   # {{ None }} → "None"
+
+    def test_evaluate_condition_numeric_results(self, executor):
+        """Numbers > 0 (like list lengths) should be truthy."""
+        ctx = MagicMock(spec=FunctionContext)
+        ctx.params = {}
+        ctx.variables = {
+            "steps.search": [{"id": "1"}, {"id": "2"}, {"id": "3"}],
+        }
+
+        # Length of a 3-item list should render as "3" and be truthy
+        assert executor._evaluate_condition("steps.search | length > 0", ctx) is True
+
+    def test_evaluate_condition_empty_list_length(self, executor):
+        """Empty list length should be falsy."""
+        ctx = MagicMock(spec=FunctionContext)
+        ctx.params = {}
+        ctx.variables = {
+            "steps.search": [],
+        }
+
+        # Length of empty list > 0 renders as "False"
+        assert executor._evaluate_condition("steps.search | length > 0", ctx) is False
+
 
 # =============================================================================
 # GOVERNANCE TESTS

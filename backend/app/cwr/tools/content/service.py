@@ -196,15 +196,15 @@ class ContentService:
         # Add eager loading for children
         if include_children:
             if item_type == "solicitation":
-                from app.core.database.models import SamSolicitation
+                from app.core.database.models import SamSolicitation, SamAttachment
                 query = query.options(
                     selectinload(SamSolicitation.notices),
-                    selectinload(SamSolicitation.attachments),
+                    selectinload(SamSolicitation.attachments).selectinload(SamAttachment.asset),
                 )
             elif item_type == "notice":
-                from app.core.database.models import SamNotice
+                from app.core.database.models import SamNotice, SamAttachment
                 query = query.options(
-                    selectinload(SamNotice.attachments),
+                    selectinload(SamNotice.attachments).selectinload(SamAttachment.asset),
                 )
             elif item_type == "scraped_asset":
                 from app.core.database.models import ScrapedAsset

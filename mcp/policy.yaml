@@ -36,6 +36,10 @@ allowlist:
   # Email workflow (two-step confirmation for AI safety)
   - prepare_email    # No side effects - creates preview
   - confirm_email    # Has side effects - requires confirmation token
+  # Document Generation
+  - generate_document
+  - create_artifact
+
 
 # Parameter clamps - limit values that users can request
 # These override user input to enforce resource limits

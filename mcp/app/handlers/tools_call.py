@@ -317,12 +317,15 @@ def _format_content_items(items: List[Dict[str, Any]]) -> str:
                 pass
 
         # Key fields — check both nested fields dict and top-level keys
+        # NOTE: URL fields (source_url, url, detail_url, ui_link, instance_url)
+        # are intentionally excluded. They contain hex strings that LLMs
+        # confuse with item UUIDs, causing hallucinated IDs in follow-up calls.
         _DISPLAY_KEYS = (
             "source_type", "site_name", "content_type", "status",
-            "original_filename", "folder_path", "source_url", "url",
-            "created_at", "solicitation_number", "detail_url",
+            "original_filename", "folder_path",
+            "created_at", "solicitation_number",
             "fiscal_year", "agency_name", "naics_code",
-            "filename", "asset_id", "instance_url",
+            "filename", "asset_id",
             # Salesforce fields
             "stage_name", "amount", "probability", "close_date",
             "opportunity_type", "role", "lead_source", "fiscal_quarter",
@@ -376,6 +379,16 @@ def _format_content_items(items: List[Dict[str, Any]]) -> str:
                 lines.append(text_content)
 
         lines.append("")  # blank line between items
+
+    # Append a clean ID reference table so LLMs can copy exact UUIDs
+    # without risk of confusing them with other hex strings in the output
+    if len(items) > 1:
+        lines.append("---")
+        lines.append("ID Reference:")
+        for i, item in enumerate(items, 1):
+            item_id = item.get("id", "")
+            title = item.get("title") or item.get("name") or "Untitled"
+            lines.append(f"  {i}. {item_id} ({title})")
 
     return "\n".join(lines).rstrip()
 

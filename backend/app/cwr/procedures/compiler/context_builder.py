@@ -138,7 +138,7 @@ Key rules:
       "args": {
         "literal_arg": "static value",
         "ref_arg": {"ref": "steps.previous_step"},
-        "ref_field": {"ref": "steps.previous_step.data"},
+        "ref_field": {"ref": "steps.previous_step.title"},
         "param_ref": {"ref": "params.param_name"},
         "template_arg": {"template": "{{ steps.data | length }} items found"}
       },
@@ -159,9 +159,11 @@ Key rules:
 
 Use ref objects to reference data from other parts of the plan:
 
-- `{"ref": "steps.step_name"}` — Full output of a previous step
-- `{"ref": "steps.step_name.field"}` — Specific field from step output
+- `{"ref": "steps.step_name"}` — Step result data (e.g., a list for search functions, a string for generate functions)
+- `{"ref": "steps.step_name.field"}` — Access a field within the step result (e.g., `steps.search.title` for a field in a dict result)
 - `{"ref": "params.param_name"}` — A procedure parameter value
+
+**IMPORTANT**: Step results contain the function's data output directly — NOT a wrapper object. For search functions, `steps.step_name` IS the list of items. For generate functions, it IS the generated text string. Do NOT append `.results` or `.data` — use `steps.step_name` directly.
 
 For complex expressions with filters or loops, use template objects:
 - `{"template": "{{ steps.data | length }}"}` — Jinja2 expression

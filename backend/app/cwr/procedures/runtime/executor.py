@@ -358,7 +358,7 @@ class ProcedureExecutor:
                 int=int,
                 bool=bool,
             )
-            return result.lower() in ("true", "1", "yes")
+            return result.strip().lower() not in ("", "false", "0", "none", "null", "no", "n")
         except Exception as e:
             logger.warning(f"Failed to evaluate condition '{condition}': {e}")
             return False
@@ -965,7 +965,7 @@ class ProcedureExecutor:
                 int=int,
                 bool=bool,
             )
-            return result.lower() in ("true", "1", "yes")
+            return result.strip().lower() not in ("", "false", "0", "none", "null", "no", "n")
         except Exception as e:
             logger.warning(f"Failed to evaluate condition '{condition}': {e}")
             return False
