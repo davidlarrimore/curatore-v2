@@ -2,25 +2,18 @@
 Maintenance task handlers for Curatore v2.
 
 This module contains the actual implementation of maintenance tasks
-that are scheduled and executed by the scheduled task system (Phase 5).
+that are scheduled and executed by the scheduled task system.
+
+Each handler is decorated with ``@register(...)`` from
+``scheduled_task_registry``, which simultaneously:
+- makes the handler discoverable at dispatch time (replaces ``MAINTENANCE_HANDLERS`` dict)
+- declares the baseline scheduled-task row auto-seeded on startup
 
 Each handler:
 1. Receives a Run context for tracking
 2. Performs its maintenance work
 3. Logs progress via RunLogEvent
 4. Returns a summary dict
-
-Handlers:
-- handle_orphan_detection: Find orphaned objects (assets without extraction, etc.)
-- handle_retention_enforcement: Enforce data retention policies
-- handle_health_report: Generate system health summary
-
-Usage:
-    from app.core.ops.maintenance_handlers import MAINTENANCE_HANDLERS
-
-    handler = MAINTENANCE_HANDLERS.get(task_type)
-    if handler:
-        result = await handler(session, run, config)
 """
 
 import logging
@@ -30,6 +23,8 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.ops.scheduled_task_registry import register
 
 from app.core.database.models import (
     AgForecast,
@@ -83,9 +78,44 @@ async def _log_event(
 
 
 # =============================================================================
+# Helpers
+# =============================================================================
+
+
+def _is_sync_due(last_sync_at: Optional[datetime], frequency: str, now: datetime) -> bool:
+    """Return True when a record's ``last_sync_at`` + frequency interval has elapsed.
+
+    Used by the unified dispatcher handlers (SharePoint, SAM, Forecasts) to
+    decide per-record whether a sync should fire right now.
+    """
+    if frequency == "manual":
+        return False
+    if last_sync_at is None:
+        return True  # never synced — always due
+    intervals = {
+        "hourly": timedelta(hours=1),
+        "daily": timedelta(days=1),
+        "weekly": timedelta(weeks=1),
+    }
+    interval = intervals.get(frequency)
+    if interval is None:
+        return False
+    return (now - last_sync_at) >= interval
+
+
+# =============================================================================
 # Handler: Orphan Detection
 # =============================================================================
 
+
+@register(
+    task_type="assets.detect_orphans",
+    name="detect_orphaned_objects",
+    display_name="Detect Orphaned Assets",
+    description="Find and fix orphaned assets: stuck in pending, missing files, orphaned SharePoint docs. Auto-retries extraction for stuck assets.",
+    schedule_expression="0 4 * * 0",  # Weekly on Sunday at 4 AM UTC
+    config={"auto_fix": True},
+)
 async def handle_orphan_detection(
     session: AsyncSession,
     run: Run,
@@ -535,6 +565,15 @@ async def handle_orphan_detection(
 # Handler: Retention Enforcement
 # =============================================================================
 
+
+@register(
+    task_type="retention.enforce",
+    name="enforce_retention",
+    display_name="Enforce Retention Policies",
+    description="Enforce data retention policies by marking old temp artifacts as deleted.",
+    schedule_expression="0 5 * * *",  # Daily at 5 AM UTC
+    config={"default_retention_days": 90, "dry_run": False},
+)
 async def handle_retention_enforcement(
     session: AsyncSession,
     run: Run,
@@ -631,6 +670,14 @@ async def handle_retention_enforcement(
 # Handler: Health Report
 # =============================================================================
 
+
+@register(
+    task_type="health.report",
+    name="system_health_report",
+    display_name="System Health Report",
+    description="Generate system health summary with asset counts, extraction success rates, and warning detection.",
+    schedule_expression="0 6 * * *",  # Daily at 6 AM UTC
+)
 async def handle_health_report(
     session: AsyncSession,
     run: Run,
@@ -760,9 +807,19 @@ async def handle_health_report(
 
 
 # =============================================================================
-# Handler: Search Reindex (Phase 6)
+# Handler: Search Reindex
 # =============================================================================
 
+
+@register(
+    task_type="search.reindex",
+    name="search_reindex",
+    display_name="Search Index Rebuild",
+    description="Rebuild PostgreSQL search index (full-text + semantic) for all assets. Enable when search is configured or to recover from index issues.",
+    schedule_expression="0 2 * * 0",  # Weekly on Sunday at 2 AM UTC
+    enabled=False,  # Disabled by default
+    config={"batch_size": 100},
+)
 async def handle_search_reindex(
     session: AsyncSession,
     run: Run,
@@ -1631,6 +1688,20 @@ async def _index_item(
 # =============================================================================
 
 
+@register(
+    task_type="runs.cleanup_stale",
+    name="stale_run_cleanup",
+    display_name="Cleanup Stale Runs",
+    description="Reset runs stuck in pending/submitted/running state. Retries up to max_retries before marking as failed.",
+    schedule_expression="0 * * * *",  # Every hour
+    config={
+        "stale_submitted_minutes": 30,
+        "stale_running_hours": 2,
+        "stale_pending_hours": 1,
+        "max_retries": 3,
+        "dry_run": False,
+    },
+)
 async def handle_stale_run_cleanup(
     session: AsyncSession,
     run: Run,
@@ -1833,61 +1904,50 @@ async def handle_stale_run_cleanup(
 
 
 # =============================================================================
-# Handler: SharePoint Scheduled Sync
+# Handler: SharePoint Scheduled Sync (unified)
 # =============================================================================
 
+
+@register(
+    task_type="sharepoint.trigger_sync",
+    name="sharepoint_sync",
+    display_name="SharePoint Sync",
+    description="Trigger SharePoint syncs based on each config's frequency and last_sync_at.",
+    schedule_expression="0 * * * *",  # Every hour at minute 0
+)
 async def handle_sharepoint_scheduled_sync(
     session: AsyncSession,
     run: Run,
     config: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Execute scheduled SharePoint sync for all configs with matching frequency.
+    Unified SharePoint sync dispatcher.
 
-    This handler:
-    1. Finds all SharePointSyncConfigs with the specified frequency
-    2. Skips configs that already have a running sync
-    3. Triggers sharepoint_sync_task for each eligible config
+    Queries ALL non-manual active SharePoint configs and uses ``_is_sync_due``
+    per record to decide which ones should fire now.
 
     Args:
         session: Database session
         run: Run context for tracking
-        config: Task configuration:
-            - frequency: "hourly" or "daily" (required)
+        config: Task configuration (no frequency param needed)
 
     Returns:
-        Dict with sync statistics:
-        {
-            "frequency": str,
-            "configs_found": int,
-            "syncs_triggered": int,
-            "syncs_skipped": int,
-            "errors": list
-        }
+        Dict with sync statistics
     """
     from uuid import uuid4
 
-    frequency = config.get("frequency")
-    if not frequency:
-        await _log_event(
-            session, run.id, "ERROR", "error",
-            "Missing 'frequency' in config (expected 'hourly' or 'daily')"
-        )
-        return {
-            "status": "failed",
-            "error": "Missing frequency configuration",
-        }
+    now = datetime.utcnow()
 
     await _log_event(
         session, run.id, "INFO", "start",
-        f"Starting scheduled SharePoint sync for frequency: {frequency}"
+        "Starting scheduled SharePoint sync check"
     )
 
-    # Find all active sync configs with matching frequency
+    # Find all non-manual active sync configs
     configs_result = await session.execute(
         select(SharePointSyncConfig).where(
             and_(
-                SharePointSyncConfig.sync_frequency == frequency,
+                SharePointSyncConfig.sync_frequency != "manual",
                 SharePointSyncConfig.is_active == True,
                 SharePointSyncConfig.status == "active",
             )
@@ -1898,15 +1958,21 @@ async def handle_sharepoint_scheduled_sync(
     configs_found = len(sync_configs)
     syncs_triggered = 0
     syncs_skipped = 0
+    not_due = 0
     errors: List[str] = []
 
     await _log_event(
         session, run.id, "INFO", "progress",
-        f"Found {configs_found} SharePoint sync configs with frequency '{frequency}'"
+        f"Found {configs_found} active SharePoint sync configs"
     )
 
     for sync_config in sync_configs:
         try:
+            # Check if sync is due based on frequency and last_sync_at
+            if not _is_sync_due(sync_config.last_sync_at, sync_config.sync_frequency, now):
+                not_due += 1
+                continue
+
             # Check if there's already a running sync for this config
             active_run_result = await session.execute(
                 select(Run).where(
@@ -1971,16 +2037,16 @@ async def handle_sharepoint_scheduled_sync(
             )
 
     summary = {
-        "frequency": frequency,
         "configs_found": configs_found,
         "syncs_triggered": syncs_triggered,
         "syncs_skipped": syncs_skipped,
+        "not_due": not_due,
         "errors": errors,
     }
 
     await _log_event(
         session, run.id, "INFO", "summary",
-        f"Scheduled SharePoint sync complete: {syncs_triggered}/{configs_found} syncs triggered, {syncs_skipped} skipped",
+        f"SharePoint sync complete: {syncs_triggered} triggered, {syncs_skipped} skipped, {not_due} not due",
         summary
     )
 
@@ -1988,61 +2054,50 @@ async def handle_sharepoint_scheduled_sync(
 
 
 # =============================================================================
-# Handler: SAM.gov Scheduled Pull
+# Handler: SAM.gov Scheduled Pull (unified)
 # =============================================================================
 
+
+@register(
+    task_type="sam.trigger_pull",
+    name="sam_pull",
+    display_name="SAM.gov Pull",
+    description="Trigger SAM.gov pulls based on each search's frequency and last_pulled_at.",
+    schedule_expression="0 * * * *",  # Every hour at minute 0
+)
 async def handle_sam_scheduled_pull(
     session: AsyncSession,
     run: Run,
     config: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Execute scheduled SAM.gov pulls for all searches with matching frequency.
+    Unified SAM.gov pull dispatcher.
 
-    This handler:
-    1. Finds all SamSearch records with the specified frequency
-    2. Skips searches that already have a running pull
-    3. Triggers sam_pull_task for each eligible search
+    Queries ALL non-manual active SAM searches and uses ``_is_sync_due``
+    per record to decide which ones should fire now.
 
     Args:
         session: Database session
         run: Run context for tracking
-        config: Task configuration:
-            - frequency: "hourly" or "daily" (required)
+        config: Task configuration (no frequency param needed)
 
     Returns:
-        Dict with pull statistics:
-        {
-            "frequency": str,
-            "searches_found": int,
-            "pulls_triggered": int,
-            "pulls_skipped": int,
-            "errors": list
-        }
+        Dict with pull statistics
     """
     from uuid import uuid4
 
-    frequency = config.get("frequency")
-    if not frequency:
-        await _log_event(
-            session, run.id, "ERROR", "error",
-            "Missing 'frequency' in config (expected 'hourly' or 'daily')"
-        )
-        return {
-            "status": "failed",
-            "error": "Missing frequency configuration",
-        }
+    now = datetime.utcnow()
 
     await _log_event(
         session, run.id, "INFO", "start",
-        f"Starting scheduled SAM.gov pull for frequency: {frequency}"
+        "Starting scheduled SAM.gov pull check"
     )
 
-    # Find all active SAM searches with matching frequency
+    # Find all non-manual active SAM searches
     searches_result = await session.execute(
         select(SamSearch).where(
             and_(
-                SamSearch.pull_frequency == frequency,
+                SamSearch.pull_frequency != "manual",
                 SamSearch.is_active == True,
                 SamSearch.status == "active",
             )
@@ -2053,15 +2108,21 @@ async def handle_sam_scheduled_pull(
     searches_found = len(sam_searches)
     pulls_triggered = 0
     pulls_skipped = 0
+    not_due = 0
     errors: List[str] = []
 
     await _log_event(
         session, run.id, "INFO", "progress",
-        f"Found {searches_found} SAM searches with frequency '{frequency}'"
+        f"Found {searches_found} active SAM searches"
     )
 
     for search in sam_searches:
         try:
+            # Check if pull is due based on frequency and last_pull_at
+            if not _is_sync_due(search.last_pull_at, search.pull_frequency, now):
+                not_due += 1
+                continue
+
             # Check if there's already a running pull for this search
             active_run_result = await session.execute(
                 select(Run).where(
@@ -2124,16 +2185,16 @@ async def handle_sam_scheduled_pull(
             )
 
     summary = {
-        "frequency": frequency,
         "searches_found": searches_found,
         "pulls_triggered": pulls_triggered,
         "pulls_skipped": pulls_skipped,
+        "not_due": not_due,
         "errors": errors,
     }
 
     await _log_event(
         session, run.id, "INFO", "summary",
-        f"Scheduled SAM.gov pull complete: {pulls_triggered}/{searches_found} pulls triggered, {pulls_skipped} skipped",
+        f"SAM.gov pull complete: {pulls_triggered} triggered, {pulls_skipped} skipped, {not_due} not due",
         summary
     )
 
@@ -2145,6 +2206,14 @@ async def handle_sam_scheduled_pull(
 # =============================================================================
 
 
+@register(
+    task_type="extraction.queue_orphans",
+    name="queue_pending_assets",
+    display_name="Queue Orphaned Extractions",
+    description="Safety net: Queue extractions for pending assets without active runs. Catches edge cases missed by auto-queueing.",
+    schedule_expression="*/5 * * * *",  # Every 5 minutes
+    config={"limit": 100, "min_age_seconds": 60},
+)
 async def handle_queue_pending_assets(
     session: AsyncSession,
     run: Run,
@@ -2261,9 +2330,14 @@ async def handle_queue_pending_assets(
 
 
 # =============================================================================
-# Handler: Procedure Execute
+# Handler: Procedure Execute (handler-only, no baseline task)
 # =============================================================================
 
+
+@register(
+    task_type="procedure.execute",
+    baseline=False,
+)
 async def handle_procedure_execute(
     session: AsyncSession,
     run: Run,
@@ -2331,10 +2405,18 @@ async def handle_procedure_execute(
 
 
 # =============================================================================
-# Handler: Cleanup Expired Runs (formerly gc.cleanup)
+# Handler: Cleanup Expired Runs
 # =============================================================================
 
 
+@register(
+    task_type="runs.cleanup_expired",
+    name="expired_run_cleanup",
+    display_name="Cleanup Expired Runs",
+    description="Delete old completed/failed runs and their log events after retention period.",
+    schedule_expression="0 3 * * 0",  # Weekly on Sunday at 3 AM UTC
+    config={"retention_days": 30, "batch_size": 1000, "dry_run": False},
+)
 async def handle_cleanup_expired_runs(
     session: AsyncSession,
     run: Run,
@@ -2478,59 +2560,48 @@ async def handle_cleanup_expired_runs(
 
 
 # =============================================================================
-# Handler: Forecast Scheduled Sync
+# Handler: Forecast Scheduled Sync (unified)
 # =============================================================================
 
+
+@register(
+    task_type="forecast.trigger_sync",
+    name="forecast_sync",
+    display_name="Forecast Sync",
+    description="Trigger forecast syncs based on each config's frequency and last_sync_at.",
+    schedule_expression="*/30 * * * *",  # Every 30 minutes
+)
 async def handle_forecast_scheduled_sync(
     session: AsyncSession,
     run: Run,
     config: Dict[str, Any],
 ) -> Dict[str, Any]:
     """
-    Execute scheduled forecast syncs for all syncs with matching frequency.
+    Unified forecast sync dispatcher.
 
-    This handler:
-    1. Finds all ForecastSync records with the specified frequency
-    2. Skips syncs that already have a running job
-    3. Triggers forecast_sync_task for each eligible sync
+    Queries ALL non-manual active ForecastSync configs and uses
+    ``_is_sync_due`` per record to decide which ones should fire now.
 
     Args:
         session: Database session
         run: Run context for tracking
-        config: Task configuration:
-            - frequency: "hourly" or "daily" (required)
+        config: Task configuration (no frequency param needed)
 
     Returns:
-        Dict with sync statistics:
-        {
-            "frequency": str,
-            "syncs_found": int,
-            "syncs_triggered": int,
-            "syncs_skipped": int,
-            "errors": list
-        }
+        Dict with sync statistics
     """
-    frequency = config.get("frequency")
-    if not frequency:
-        await _log_event(
-            session, run.id, "ERROR", "error",
-            "Missing 'frequency' in config (expected 'hourly' or 'daily')"
-        )
-        return {
-            "status": "failed",
-            "error": "Missing frequency configuration",
-        }
+    now = datetime.utcnow()
 
     await _log_event(
         session, run.id, "INFO", "start",
-        f"Starting scheduled forecast sync for frequency: {frequency}"
+        "Starting scheduled forecast sync check"
     )
 
-    # Find all active forecast syncs with matching frequency
+    # Find all non-manual active forecast syncs
     syncs_result = await session.execute(
         select(ForecastSync).where(
             and_(
-                ForecastSync.sync_frequency == frequency,
+                ForecastSync.sync_frequency != "manual",
                 ForecastSync.is_active == True,
                 ForecastSync.status == "active",
             )
@@ -2541,15 +2612,21 @@ async def handle_forecast_scheduled_sync(
     syncs_found = len(forecast_syncs)
     syncs_triggered = 0
     syncs_skipped = 0
+    not_due = 0
     errors: List[str] = []
 
     await _log_event(
         session, run.id, "INFO", "progress",
-        f"Found {syncs_found} forecast syncs with frequency '{frequency}'"
+        f"Found {syncs_found} active forecast syncs"
     )
 
     for sync in forecast_syncs:
         try:
+            # Check if sync is due based on frequency and last_sync_at
+            if not _is_sync_due(sync.last_sync_at, sync.sync_frequency, now):
+                not_due += 1
+                continue
+
             # Check if there's already a running sync for this config
             active_run_result = await session.execute(
                 select(Run).where(
@@ -2612,99 +2689,17 @@ async def handle_forecast_scheduled_sync(
             )
 
     summary = {
-        "frequency": frequency,
         "syncs_found": syncs_found,
         "syncs_triggered": syncs_triggered,
         "syncs_skipped": syncs_skipped,
+        "not_due": not_due,
         "errors": errors,
     }
 
-    status = "completed" if not errors else "partial"
     await _log_event(
         session, run.id, "INFO", "summary",
-        f"Forecast scheduled sync complete: {syncs_triggered} triggered, {syncs_skipped} skipped",
+        f"Forecast sync complete: {syncs_triggered} triggered, {syncs_skipped} skipped, {not_due} not due",
         summary
     )
 
     return summary
-
-
-# =============================================================================
-# Handler Registry
-# =============================================================================
-
-# Canonical handler names follow the pattern: {domain}.{action}
-# where domain is the resource area and action is a verb describing the operation.
-#
-# Domains:
-#   - assets: Asset-related operations (orphan detection, etc.)
-#   - runs: Run lifecycle management (stale cleanup, expired cleanup)
-#   - retention: Data retention policy enforcement
-#   - health: System health monitoring
-#   - search: Search index operations
-#   - sharepoint: SharePoint sync operations
-#   - sam: SAM.gov pull operations
-#   - forecast: Acquisition forecast sync operations
-#   - extraction: Extraction queue operations
-#   - procedure: Procedure execution
-#
-# See CLAUDE.md for full documentation of each handler.
-
-MAINTENANCE_HANDLERS = {
-    # === Canonical Names (use these for new scheduled tasks) ===
-
-    # Assets domain - orphan detection and cleanup
-    "assets.detect_orphans": handle_orphan_detection,
-
-    # Runs domain - run lifecycle management
-    "runs.cleanup_stale": handle_stale_run_cleanup,
-    "runs.cleanup_expired": handle_cleanup_expired_runs,
-
-    # Retention domain - data retention
-    "retention.enforce": handle_retention_enforcement,
-
-    # Health domain - system monitoring
-    "health.report": handle_health_report,
-
-    # Search domain - index management
-    "search.reindex": handle_search_reindex,
-
-    # SharePoint domain - sync triggers
-    "sharepoint.trigger_sync": handle_sharepoint_scheduled_sync,
-
-    # SAM.gov domain - pull triggers
-    "sam.trigger_pull": handle_sam_scheduled_pull,
-
-    # Forecast domain - sync triggers
-    "forecast.trigger_sync": handle_forecast_scheduled_sync,
-
-    # Extraction domain - queue management
-    "extraction.queue_orphans": handle_queue_pending_assets,
-
-    # Procedure domain - procedure execution
-    "procedure.execute": handle_procedure_execute,
-
-    # === Legacy Aliases (for backwards compatibility) ===
-    # These map old names to their canonical handlers.
-    # Existing scheduled tasks using these names will continue to work.
-
-    "orphan.detect": handle_orphan_detection,           # -> assets.detect_orphans
-    "stale_run.cleanup": handle_stale_run_cleanup,      # -> runs.cleanup_stale
-    "gc.cleanup": handle_cleanup_expired_runs,          # -> runs.cleanup_expired
-    "sharepoint.scheduled_sync": handle_sharepoint_scheduled_sync,  # -> sharepoint.trigger_sync
-    "sam.scheduled_pull": handle_sam_scheduled_pull,    # -> sam.trigger_pull
-    "extraction.queue_pending": handle_queue_pending_assets,  # -> extraction.queue_orphans
-}
-
-
-async def get_handler(task_type: str):
-    """
-    Get the handler function for a task type.
-
-    Args:
-        task_type: Type of maintenance task (canonical or legacy alias)
-
-    Returns:
-        Handler function or None if not found
-    """
-    return MAINTENANCE_HANDLERS.get(task_type)

@@ -198,33 +198,50 @@ class ApfsForecastService:
             existing.published_date = published_date
             existing.raw_data = raw_data
 
-            # Check if content changed
-            if existing.change_hash != new_hash:
+            # Build full snapshot of ALL meaningful fields
+            history_data = {
+                "title": title,
+                "description": description,
+                "component": component,
+                "contract_status": contract_status,
+                "dollar_range": dollar_range,
+                "fiscal_year": fiscal_year,
+                "award_quarter": award_quarter,
+                "small_business_set_aside": small_business_set_aside,
+                "anticipated_award_date": anticipated_award_date.isoformat() if anticipated_award_date else None,
+                "estimated_solicitation_date": estimated_solicitation_date.isoformat() if estimated_solicitation_date else None,
+                "naics_code": naics_code,
+                "poc_name": poc_name,
+                "poc_email": poc_email,
+                "contract_type": contract_type,
+                "contract_vehicle": contract_vehicle,
+                "competition_type": competition_type,
+                "small_business_program": small_business_program,
+                "requirements_office": requirements_office,
+                "contracting_office": contracting_office,
+                "poc_phone": poc_phone,
+                "alt_contact_name": alt_contact_name,
+                "alt_contact_email": alt_contact_email,
+                "sbs_phone": sbs_phone,
+                "current_state": current_state,
+                "published_date": published_date.isoformat() if published_date else None,
+                "mission": mission,
+            }
+
+            # History: append if ANY field changed (decoupled from change_hash)
+            prev_snapshot = (existing.history or [])[-1].get("data", {}) if existing.history else {}
+            if history_data != prev_snapshot:
                 now = datetime.utcnow()
                 existing.last_updated_at = now
-                existing.change_hash = new_hash
-                existing.indexed_at = None  # Mark for re-indexing
-
-                # Add new version to history
-                current_history = existing.history or []
+                current_history = list(existing.history or [])
                 new_version = len(current_history) + 1
-                history_data = {
-                    "title": title,
-                    "description": description,
-                    "component": component,
-                    "contract_status": contract_status,
-                    "dollar_range": dollar_range,
-                    "fiscal_year": fiscal_year,
-                    "award_quarter": award_quarter,
-                    "small_business_set_aside": small_business_set_aside,
-                    "anticipated_award_date": anticipated_award_date.isoformat() if anticipated_award_date else None,
-                    "estimated_solicitation_date": estimated_solicitation_date.isoformat() if estimated_solicitation_date else None,
-                    "naics_code": naics_code,
-                    "poc_name": poc_name,
-                    "poc_email": poc_email,
-                }
                 current_history.append(build_history_entry(new_version, history_data, now))
                 existing.history = current_history
+
+            # Re-indexing: keep existing change_hash logic (only key fields)
+            if existing.change_hash != new_hash:
+                existing.change_hash = new_hash
+                existing.indexed_at = None  # Mark for re-indexing
 
             await session.commit()
             await session.refresh(existing)
@@ -248,6 +265,19 @@ class ApfsForecastService:
                 "naics_code": naics_code,
                 "poc_name": poc_name,
                 "poc_email": poc_email,
+                "contract_type": contract_type,
+                "contract_vehicle": contract_vehicle,
+                "competition_type": competition_type,
+                "small_business_program": small_business_program,
+                "requirements_office": requirements_office,
+                "contracting_office": contracting_office,
+                "poc_phone": poc_phone,
+                "alt_contact_name": alt_contact_name,
+                "alt_contact_email": alt_contact_email,
+                "sbs_phone": sbs_phone,
+                "current_state": current_state,
+                "published_date": published_date.isoformat() if published_date else None,
+                "mission": mission,
             }
             initial_history = [build_history_entry(1, history_data, now)]
 

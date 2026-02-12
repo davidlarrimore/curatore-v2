@@ -131,7 +131,7 @@ class ForecastResponse(BaseModel):
 
     id: str
     organization_id: str
-    sync_id: str
+    sync_id: Optional[str] = None
     source_type: str
     source_id: str
     title: str
@@ -161,6 +161,7 @@ class ForecastResponse(BaseModel):
     indexed_at: Optional[datetime]
     created_at: datetime
     updated_at: datetime
+    history: Optional[List[Dict[str, Any]]] = None
 
 
 class ForecastListResponse(BaseModel):
@@ -705,6 +706,7 @@ def _model_to_unified_dict(model: Any, source_type: str) -> Dict[str, Any]:
         "indexed_at": model.indexed_at,
         "created_at": model.created_at,
         "updated_at": model.updated_at,
+        "history": getattr(model, "history", None),
     }
 
 
@@ -722,7 +724,7 @@ def _forecast_to_response(forecast: Dict[str, Any]) -> ForecastResponse:
     return ForecastResponse(
         id=str(forecast["id"]),
         organization_id=str(forecast["organization_id"]),
-        sync_id=str(forecast["sync_id"]),
+        sync_id=str(forecast["sync_id"]) if forecast.get("sync_id") else None,
         source_type=forecast["source_type"],
         source_id=forecast["source_id"],
         title=forecast["title"],
@@ -752,4 +754,5 @@ def _forecast_to_response(forecast: Dict[str, Any]) -> ForecastResponse:
         indexed_at=forecast.get("indexed_at"),
         created_at=forecast["created_at"],
         updated_at=forecast["updated_at"],
+        history=forecast.get("history"),
     )

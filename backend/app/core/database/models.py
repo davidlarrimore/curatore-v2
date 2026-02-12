@@ -3576,7 +3576,7 @@ class AgForecast(Base):
         UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
     )
     sync_id = Column(
-        UUID(), ForeignKey("forecast_syncs.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(), ForeignKey("forecast_syncs.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     # AG identifiers
@@ -3713,7 +3713,7 @@ class ApfsForecast(Base):
         UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
     )
     sync_id = Column(
-        UUID(), ForeignKey("forecast_syncs.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(), ForeignKey("forecast_syncs.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     # APFS identifiers
@@ -3858,7 +3858,7 @@ class StateForecast(Base):
         UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
     )
     sync_id = Column(
-        UUID(), ForeignKey("forecast_syncs.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(), ForeignKey("forecast_syncs.id", ondelete="SET NULL"), nullable=True, index=True
     )
 
     # Identifier (generated from row content hash)

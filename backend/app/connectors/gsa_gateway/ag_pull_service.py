@@ -479,7 +479,9 @@ class AgPullService:
                     return first_item.get("tid", default)
             return default
 
-        nid = str(detail.get("nid", ""))
+        nid = str(detail.get("nid", "")).strip()
+        if not nid:
+            raise ValueError("Record missing required nid field")
 
         # Title - AG API returns as [{"value": "Title"}]
         title = extract_value(detail.get("title"), "Untitled Forecast")

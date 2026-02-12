@@ -5791,10 +5791,16 @@ export interface ForecastSyncUpdateRequest {
   automation_config?: Record<string, any>
 }
 
+export interface ForecastHistoryEntry {
+  version: number
+  sync_date: string
+  data: Record<string, any>
+}
+
 export interface Forecast {
   id: string
   organization_id: string
-  sync_id: string
+  sync_id: string | null
   source_type: 'ag' | 'apfs' | 'state'
   source_id: string
   title: string
@@ -5824,6 +5830,7 @@ export interface Forecast {
   indexed_at: string | null
   created_at: string
   updated_at: string
+  history?: ForecastHistoryEntry[] | null
 }
 
 export interface ForecastListResponse {

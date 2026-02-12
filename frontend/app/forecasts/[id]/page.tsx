@@ -22,6 +22,7 @@ import {
   Clock,
   Tag,
   Code,
+  History,
 } from 'lucide-react'
 
 interface PageProps {
@@ -406,6 +407,54 @@ function ForecastDetailContent({ params }: PageProps) {
                   View Original Source
                   <ExternalLink className="w-4 h-4" />
                 </a>
+              </div>
+            )}
+
+            {/* Change History */}
+            {forecast.history && forecast.history.length >= 1 && (
+              <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 p-6 mb-6">
+                <div className="flex items-center gap-2 mb-4">
+                  <History className="w-5 h-5 text-gray-400" />
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white">Change History</h2>
+                  <span className="px-2 py-0.5 text-xs font-medium rounded-full bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-300">
+                    {forecast.history.length} {forecast.history.length === 1 ? 'version' : 'versions'}
+                  </span>
+                </div>
+                <div className="space-y-2">
+                  {[...forecast.history].reverse().map((entry, idx) => (
+                    <details key={entry.version} open={idx === 0} className="border border-gray-200 dark:border-gray-700 rounded-lg overflow-hidden">
+                      <summary className="flex items-center justify-between p-3 cursor-pointer select-none text-sm font-medium text-gray-700 dark:text-gray-300 hover:text-gray-900 dark:hover:text-white hover:bg-gray-50 dark:hover:bg-gray-700/50">
+                        <span>
+                          Version {entry.version}
+                          {idx === 0 && (
+                            <span className="ml-2 px-1.5 py-0.5 text-xs rounded bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300">
+                              Latest
+                            </span>
+                          )}
+                        </span>
+                        <span className="text-xs text-gray-500 dark:text-gray-400">
+                          {formatDate(entry.sync_date)}
+                        </span>
+                      </summary>
+                      <div className="px-4 pb-4 border-t border-gray-100 dark:border-gray-700 pt-3">
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2 text-sm">
+                          {Object.entries(entry.data)
+                            .filter(([, v]) => v != null && v !== '')
+                            .map(([key, value]) => (
+                              <div key={key} className="flex flex-col py-1">
+                                <span className="text-xs text-gray-500 dark:text-gray-400">
+                                  {key.replace(/_/g, ' ').replace(/\b\w/g, (c: string) => c.toUpperCase())}
+                                </span>
+                                <span className="text-gray-900 dark:text-white break-words">
+                                  {Array.isArray(value) ? JSON.stringify(value) : String(value)}
+                                </span>
+                              </div>
+                            ))}
+                        </div>
+                      </div>
+                    </details>
+                  ))}
+                </div>
               </div>
             )}
 

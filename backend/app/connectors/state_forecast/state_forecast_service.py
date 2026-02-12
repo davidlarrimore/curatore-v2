@@ -188,33 +188,43 @@ class StateForecastService:
             existing.source_row = source_row
             existing.raw_data = raw_data
 
-            # Check if content changed
-            if existing.change_hash != new_hash:
+            # Build full snapshot of ALL meaningful fields
+            history_data = {
+                "title": title,
+                "description": description,
+                "acquisition_phase": acquisition_phase,
+                "set_aside_type": set_aside_type,
+                "estimated_value": estimated_value,
+                "fiscal_year": fiscal_year,
+                "estimated_award_quarter": estimated_award_quarter,
+                "estimated_solicitation_date": estimated_solicitation_date.isoformat() if estimated_solicitation_date else None,
+                "naics_code": naics_code,
+                "pop_city": pop_city,
+                "pop_state": pop_state,
+                "pop_country": pop_country,
+                "incumbent_contractor": incumbent_contractor,
+                "contract_type": contract_type,
+                "anticipated_award_type": anticipated_award_type,
+                "facility_clearance": facility_clearance,
+                "awarded_contract_order": awarded_contract_order,
+                "source_file": source_file,
+                "source_row": source_row,
+            }
+
+            # History: append if ANY field changed (decoupled from change_hash)
+            prev_snapshot = (existing.history or [])[-1].get("data", {}) if existing.history else {}
+            if history_data != prev_snapshot:
                 now = datetime.utcnow()
                 existing.last_updated_at = now
-                existing.change_hash = new_hash
-                existing.indexed_at = None  # Mark for re-indexing
-
-                # Add new version to history
-                current_history = existing.history or []
+                current_history = list(existing.history or [])
                 new_version = len(current_history) + 1
-                history_data = {
-                    "title": title,
-                    "description": description,
-                    "acquisition_phase": acquisition_phase,
-                    "set_aside_type": set_aside_type,
-                    "estimated_value": estimated_value,
-                    "fiscal_year": fiscal_year,
-                    "estimated_award_quarter": estimated_award_quarter,
-                    "estimated_solicitation_date": estimated_solicitation_date.isoformat() if estimated_solicitation_date else None,
-                    "naics_code": naics_code,
-                    "pop_city": pop_city,
-                    "pop_state": pop_state,
-                    "pop_country": pop_country,
-                    "incumbent_contractor": incumbent_contractor,
-                }
                 current_history.append(build_history_entry(new_version, history_data, now))
                 existing.history = current_history
+
+            # Re-indexing: keep existing change_hash logic (only key fields)
+            if existing.change_hash != new_hash:
+                existing.change_hash = new_hash
+                existing.indexed_at = None  # Mark for re-indexing
 
             await session.commit()
             await session.refresh(existing)
@@ -238,6 +248,12 @@ class StateForecastService:
                 "pop_state": pop_state,
                 "pop_country": pop_country,
                 "incumbent_contractor": incumbent_contractor,
+                "contract_type": contract_type,
+                "anticipated_award_type": anticipated_award_type,
+                "facility_clearance": facility_clearance,
+                "awarded_contract_order": awarded_contract_order,
+                "source_file": source_file,
+                "source_row": source_row,
             }
             initial_history = [build_history_entry(1, history_data, now)]
 

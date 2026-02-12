@@ -172,7 +172,7 @@ class ForecastService:
             forecasts.append({
                 "id": str(row.id),
                 "organization_id": str(row.organization_id),
-                "sync_id": str(row.sync_id),
+                "sync_id": str(row.sync_id) if row.sync_id else None,
                 "source_type": row.source_type,
                 "source_id": row.source_id,
                 "title": row.title,
@@ -346,6 +346,103 @@ class ForecastService:
         stats["by_fiscal_year"] = {row.fiscal_year: row.count for row in fy_result.fetchall()}
 
         return stats
+
+    async def get_forecast_history(
+        self,
+        session: AsyncSession,
+        organization_id: UUID,
+        forecast_id: UUID,
+        source_type: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Get change history for a specific forecast.
+
+        Returns forecast metadata, the full history array, and computed
+        field-level diffs between consecutive versions so callers can
+        immediately see what changed without manual comparison.
+
+        Args:
+            session: Database session
+            organization_id: Organization UUID
+            forecast_id: Forecast UUID
+            source_type: Optional source type hint to avoid searching all tables
+
+        Returns:
+            Dict with forecast metadata, history array, and changes array
+        """
+        if source_type:
+            forecast = await self.get_forecast_by_id(session, forecast_id, source_type)
+            src = source_type
+        else:
+            forecast, src = await self.get_forecast_by_uuid(session, organization_id, forecast_id)
+
+        if not forecast:
+            return None
+
+        history = forecast.history or []
+        changes = self._compute_history_changes(history)
+
+        return {
+            "forecast_id": str(forecast.id),
+            "source_type": src,
+            "title": forecast.title,
+            "first_seen_at": forecast.first_seen_at.isoformat() if forecast.first_seen_at else None,
+            "last_updated_at": forecast.last_updated_at.isoformat() if forecast.last_updated_at else None,
+            "total_versions": len(history),
+            "history": history,
+            "changes": changes,
+        }
+
+    @staticmethod
+    def _compute_history_changes(
+        history: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """
+        Compute field-level diffs between consecutive history versions.
+
+        For each pair of consecutive versions, produces a change record
+        showing which fields were added, removed, or modified.
+
+        Returns:
+            List of change dicts, one per version transition. Empty if < 2 versions.
+        """
+        if len(history) < 2:
+            return []
+
+        changes = []
+        for i in range(1, len(history)):
+            prev_data = history[i - 1].get("data", {})
+            curr_data = history[i].get("data", {})
+            all_keys = set(prev_data.keys()) | set(curr_data.keys())
+
+            added = {}
+            removed = {}
+            modified = {}
+
+            for key in all_keys:
+                old_val = prev_data.get(key)
+                new_val = curr_data.get(key)
+
+                if old_val == new_val:
+                    continue
+                if old_val is None or old_val == "":
+                    added[key] = new_val
+                elif new_val is None or new_val == "":
+                    removed[key] = old_val
+                else:
+                    modified[key] = {"from": old_val, "to": new_val}
+
+            changes.append({
+                "from_version": history[i - 1].get("version"),
+                "to_version": history[i].get("version"),
+                "sync_date": history[i].get("sync_date"),
+                "added": added,
+                "removed": removed,
+                "modified": modified,
+                "total_changes": len(added) + len(removed) + len(modified),
+            })
+
+        return changes
 
     async def get_recent_changes(
         self,

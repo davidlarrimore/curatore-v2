@@ -52,6 +52,11 @@ clamps:
       max: 80000
       default: 50000
 
+  # Document generation — always save to storage for MCP agents
+  generate_document:
+    save_to_storage:
+      default: true
+
   # LLM functions — limit token usage
   llm_summarize:
     max_tokens:
@@ -78,6 +83,7 @@ settings:
   # These are "safe" because they require a confirmation token from a prepare step
   side_effects_allowlist:
     - confirm_email
+    - generate_document
   # Validate facet_filters against metadata catalog
   validate_facets: true
   # Cache TTL for contracts (seconds)

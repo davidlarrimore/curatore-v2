@@ -598,6 +598,58 @@ class ScheduledTaskService:
             return expression
 
     # =========================================================================
+    # Baseline Seeding
+    # =========================================================================
+
+    async def load_baseline(
+        self,
+        session: AsyncSession,
+    ) -> Dict[str, int]:
+        """Ensure all baseline scheduled tasks exist in the database.
+
+        Imports handler modules (via ``discover_handlers``) so that
+        ``@register`` decorators fire, then creates any task rows that
+        are missing (matched by *name*).  Existing tasks are left
+        untouched so that operator customisations (schedule, enabled,
+        config) are preserved.
+
+        Returns:
+            ``{"created": int, "existing": int}``
+        """
+        from app.core.ops.scheduled_task_registry import (
+            discover_handlers,
+            get_baseline_tasks,
+        )
+
+        discover_handlers()
+        baseline = get_baseline_tasks()
+
+        created = 0
+        existing = 0
+
+        for task_data in baseline:
+            found = await self.get_task_by_name(session, task_data["name"])
+            if found:
+                existing += 1
+                continue
+
+            await self.create_task(
+                session=session,
+                name=task_data["name"],
+                display_name=task_data["display_name"],
+                description=task_data["description"],
+                task_type=task_data["task_type"],
+                scope_type=task_data["scope_type"],
+                schedule_expression=task_data["schedule_expression"],
+                enabled=task_data["enabled"],
+                config=task_data["config"],
+            )
+            created += 1
+            logger.info("Created baseline scheduled task: %s", task_data["name"])
+
+        return {"created": created, "existing": existing}
+
+    # =========================================================================
     # Task Run History
     # =========================================================================
 

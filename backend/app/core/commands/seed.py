@@ -176,210 +176,39 @@ async def create_admin_user(organization: Organization) -> User:
 
 async def seed_scheduled_tasks() -> list:
     """
-    Seed default scheduled maintenance tasks (Phase 5).
+    Seed default scheduled maintenance tasks.
 
-    Creates global scheduled tasks for system maintenance if they don't exist.
+    Delegates to ``scheduled_task_service.load_baseline()``, which derives
+    task definitions from the ``@register`` decorators in
+    ``maintenance_handlers.py``.
 
     Returns:
         list: List of created task names
     """
+    from app.core.ops.scheduled_task_registry import discover_handlers, get_baseline_tasks
 
     logger.info("Seeding default scheduled tasks...")
-
-    # Scheduled tasks use canonical task_type names following the pattern: {domain}.{action}
-    # See CLAUDE.md "Scheduled Maintenance Tasks" section for full documentation.
-    default_tasks = [
-        # === Assets Domain ===
-        {
-            "name": "detect_orphaned_objects",
-            "display_name": "Detect Orphaned Assets",
-            "description": "Find and fix orphaned assets: stuck in pending, missing files, orphaned SharePoint docs. Auto-retries extraction for stuck assets.",
-            "task_type": "assets.detect_orphans",
-            "scope_type": "global",
-            "schedule_expression": "0 4 * * 0",  # Weekly on Sunday at 4 AM UTC
-            "enabled": True,
-            "config": {"auto_fix": True},
-        },
-
-        # === Runs Domain ===
-        {
-            "name": "stale_run_cleanup",
-            "display_name": "Cleanup Stale Runs",
-            "description": "Reset runs stuck in pending/submitted/running state. Retries up to max_retries before marking as failed.",
-            "task_type": "runs.cleanup_stale",
-            "scope_type": "global",
-            "schedule_expression": "0 * * * *",  # Every hour
-            "enabled": True,
-            "config": {
-                "stale_submitted_minutes": 30,
-                "stale_running_hours": 2,
-                "stale_pending_hours": 1,
-                "max_retries": 3,
-                "dry_run": False,
-            },
-        },
-        {
-            "name": "expired_run_cleanup",
-            "display_name": "Cleanup Expired Runs",
-            "description": "Delete old completed/failed runs and their log events after retention period.",
-            "task_type": "runs.cleanup_expired",
-            "scope_type": "global",
-            "schedule_expression": "0 3 * * 0",  # Weekly on Sunday at 3 AM UTC
-            "enabled": True,
-            "config": {
-                "retention_days": 30,
-                "batch_size": 1000,
-                "dry_run": False,
-            },
-        },
-
-        # === Retention Domain ===
-        {
-            "name": "enforce_retention",
-            "display_name": "Enforce Retention Policies",
-            "description": "Enforce data retention policies by marking old temp artifacts as deleted.",
-            "task_type": "retention.enforce",
-            "scope_type": "global",
-            "schedule_expression": "0 5 * * *",  # Daily at 5 AM UTC
-            "enabled": True,
-            "config": {"default_retention_days": 90, "dry_run": False},
-        },
-
-        # === Health Domain ===
-        {
-            "name": "system_health_report",
-            "display_name": "System Health Report",
-            "description": "Generate system health summary with asset counts, extraction success rates, and warning detection.",
-            "task_type": "health.report",
-            "scope_type": "global",
-            "schedule_expression": "0 6 * * *",  # Daily at 6 AM UTC
-            "enabled": True,
-            "config": {},
-        },
-
-        # === Search Domain ===
-        {
-            "name": "search_reindex",
-            "display_name": "Search Index Rebuild",
-            "description": "Rebuild PostgreSQL search index (full-text + semantic) for all assets. Enable when search is configured or to recover from index issues.",
-            "task_type": "search.reindex",
-            "scope_type": "global",
-            "schedule_expression": "0 2 * * 0",  # Weekly on Sunday at 2 AM UTC
-            "enabled": False,  # Disabled by default
-            "config": {"batch_size": 100},
-        },
-
-        # === SharePoint Domain ===
-        {
-            "name": "sharepoint_sync_hourly",
-            "display_name": "SharePoint Sync (Hourly)",
-            "description": "Trigger SharePoint syncs for all configs with 'hourly' frequency.",
-            "task_type": "sharepoint.trigger_sync",
-            "scope_type": "global",
-            "schedule_expression": "0 * * * *",  # Every hour at minute 0
-            "enabled": True,
-            "config": {"frequency": "hourly"},
-        },
-        {
-            "name": "sharepoint_sync_daily",
-            "display_name": "SharePoint Sync (Daily)",
-            "description": "Trigger SharePoint syncs for all configs with 'daily' frequency.",
-            "task_type": "sharepoint.trigger_sync",
-            "scope_type": "global",
-            "schedule_expression": "0 1 * * *",  # Daily at 1 AM UTC
-            "enabled": True,
-            "config": {"frequency": "daily"},
-        },
-
-        # === SAM.gov Domain ===
-        {
-            "name": "sam_pull_hourly",
-            "display_name": "SAM.gov Pull (Hourly)",
-            "description": "Trigger SAM.gov pulls for all searches with 'hourly' frequency.",
-            "task_type": "sam.trigger_pull",
-            "scope_type": "global",
-            "schedule_expression": "0 * * * *",  # Every hour at minute 0
-            "enabled": True,
-            "config": {"frequency": "hourly"},
-        },
-        {
-            "name": "sam_pull_daily",
-            "display_name": "SAM.gov Pull (Daily)",
-            "description": "Trigger SAM.gov pulls for all searches with 'daily' frequency.",
-            "task_type": "sam.trigger_pull",
-            "scope_type": "global",
-            "schedule_expression": "0 6 * * *",  # Daily at 6 AM UTC (1 AM EST)
-            "enabled": True,
-            "config": {"frequency": "daily"},
-        },
-
-        # === Forecast Domain ===
-        {
-            "name": "forecast_sync_hourly",
-            "display_name": "Forecast Sync (Hourly)",
-            "description": "Trigger acquisition forecast syncs for all syncs with 'hourly' frequency.",
-            "task_type": "forecast.trigger_sync",
-            "scope_type": "global",
-            "schedule_expression": "30 * * * *",  # Every hour at minute 30 (offset from SAM)
-            "enabled": True,
-            "config": {"frequency": "hourly"},
-        },
-        {
-            "name": "forecast_sync_daily",
-            "display_name": "Forecast Sync (Daily)",
-            "description": "Trigger acquisition forecast syncs for all syncs with 'daily' frequency.",
-            "task_type": "forecast.trigger_sync",
-            "scope_type": "global",
-            "schedule_expression": "30 6 * * *",  # Daily at 6:30 AM UTC (offset from SAM at 6 AM)
-            "enabled": True,
-            "config": {"frequency": "daily"},
-        },
-
-        # === Extraction Domain ===
-        {
-            "name": "queue_pending_assets",
-            "display_name": "Queue Orphaned Extractions",
-            "description": "Safety net: Queue extractions for pending assets without active runs. Catches edge cases missed by auto-queueing.",
-            "task_type": "extraction.queue_orphans",
-            "scope_type": "global",
-            "schedule_expression": "*/5 * * * *",  # Every 5 minutes
-            "enabled": True,
-            "config": {"limit": 100, "min_age_seconds": 60},
-        },
-    ]
 
     created_tasks = []
 
     async with database_service.get_session() as session:
         from app.core.ops.scheduled_task_service import scheduled_task_service
 
-        for task_data in default_tasks:
-            # Check if task already exists
-            existing = await scheduled_task_service.get_task_by_name(
-                session, task_data["name"]
-            )
-
-            if existing:
-                logger.info(f"  Scheduled task already exists: {task_data['name']}")
-                continue
-
-            # Create the task
-            task = await scheduled_task_service.create_task(
-                session=session,
-                name=task_data["name"],
-                display_name=task_data["display_name"],
-                description=task_data["description"],
-                task_type=task_data["task_type"],
-                scope_type=task_data["scope_type"],
-                schedule_expression=task_data["schedule_expression"],
-                enabled=task_data["enabled"],
-                config=task_data["config"],
-            )
-
-            created_tasks.append(task.name)
-            logger.info(f"  ✅ Created scheduled task: {task.display_name}")
-
+        counts = await scheduled_task_service.load_baseline(session)
         await session.commit()
+
+        # Build list of names that were created for display purposes
+        if counts["created"] > 0:
+            discover_handlers()
+            baseline = get_baseline_tasks()
+            # We can't know exactly *which* ones were created, so list all baseline names
+            for task_data in baseline:
+                logger.info(f"  ✅ Scheduled task: {task_data['display_name']}")
+            created_tasks = [t["name"] for t in baseline[:counts["created"]]]
+
+        logger.info(
+            f"  Scheduled tasks: {counts['created']} created, {counts['existing']} existing"
+        )
 
     return created_tasks
 

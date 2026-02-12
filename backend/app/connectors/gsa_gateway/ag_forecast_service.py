@@ -179,32 +179,45 @@ class AgForecastService:
             existing.source_url = source_url
             existing.raw_data = raw_data
 
-            # Check if content changed
-            if existing.change_hash != new_hash:
+            # Build full snapshot of ALL meaningful fields
+            history_data = {
+                "title": title,
+                "description": description,
+                "agency_name": agency_name,
+                "award_status": award_status,
+                "acquisition_phase": acquisition_phase,
+                "set_aside_type": set_aside_type,
+                "estimated_award_fy": estimated_award_fy,
+                "estimated_award_quarter": estimated_award_quarter,
+                "estimated_solicitation_date": estimated_solicitation_date.isoformat() if estimated_solicitation_date else None,
+                "naics_codes": naics_codes,
+                "poc_name": poc_name,
+                "poc_email": poc_email,
+                "requirement_type": requirement_type,
+                "procurement_method": procurement_method,
+                "extent_competed": extent_competed,
+                "listing_id": listing_id,
+                "period_of_performance": period_of_performance,
+                "organization_name": organization_name,
+                "sbs_name": sbs_name,
+                "sbs_email": sbs_email,
+                "source_url": source_url,
+            }
+
+            # History: append if ANY field changed (decoupled from change_hash)
+            prev_snapshot = (existing.history or [])[-1].get("data", {}) if existing.history else {}
+            if history_data != prev_snapshot:
                 now = datetime.utcnow()
                 existing.last_updated_at = now
-                existing.change_hash = new_hash
-                existing.indexed_at = None  # Mark for re-indexing
-
-                # Add new version to history
-                current_history = existing.history or []
+                current_history = list(existing.history or [])
                 new_version = len(current_history) + 1
-                history_data = {
-                    "title": title,
-                    "description": description,
-                    "agency_name": agency_name,
-                    "award_status": award_status,
-                    "acquisition_phase": acquisition_phase,
-                    "set_aside_type": set_aside_type,
-                    "estimated_award_fy": estimated_award_fy,
-                    "estimated_award_quarter": estimated_award_quarter,
-                    "estimated_solicitation_date": estimated_solicitation_date.isoformat() if estimated_solicitation_date else None,
-                    "naics_codes": naics_codes,
-                    "poc_name": poc_name,
-                    "poc_email": poc_email,
-                }
                 current_history.append(build_history_entry(new_version, history_data, now))
                 existing.history = current_history
+
+            # Re-indexing: keep existing change_hash logic (only key fields)
+            if existing.change_hash != new_hash:
+                existing.change_hash = new_hash
+                existing.indexed_at = None  # Mark for re-indexing
 
             await session.commit()
             await session.refresh(existing)
@@ -227,6 +240,15 @@ class AgForecastService:
                 "naics_codes": naics_codes,
                 "poc_name": poc_name,
                 "poc_email": poc_email,
+                "requirement_type": requirement_type,
+                "procurement_method": procurement_method,
+                "extent_competed": extent_competed,
+                "listing_id": listing_id,
+                "period_of_performance": period_of_performance,
+                "organization_name": organization_name,
+                "sbs_name": sbs_name,
+                "sbs_email": sbs_email,
+                "source_url": source_url,
             }
             initial_history = [build_history_entry(1, history_data, now)]
 

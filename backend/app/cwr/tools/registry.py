@@ -174,6 +174,7 @@ class FunctionRegistry:
             from .primitives.search.get import GetFunction
             from .primitives.search.get_asset import GetAssetFunction
             from .primitives.search.get_content import GetContentFunction
+            from .primitives.search.get_forecast_history import GetForecastHistoryFunction
             from .primitives.search.query_model import QueryModelFunction
             from .primitives.search.search_assets import SearchAssetsFunction
             from .primitives.search.search_forecasts import SearchForecastsFunction
@@ -191,6 +192,7 @@ class FunctionRegistry:
             self.register(SearchScrapedAssetsFunction)
             self.register(SearchSalesforceFunction)
             self.register(SearchForecastsFunction)
+            self.register(GetForecastHistoryFunction)
             self.register(DiscoverDataSourcesFunction)
             self.register(DiscoverMetadataFunction)
         except ImportError as e:

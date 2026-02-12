@@ -296,7 +296,11 @@ class ApfsPullService:
             Dictionary of forecast fields for upsert
         """
         # Extract values with safe defaults
-        apfs_number = str(record.get("apfs_number", ""))
+        # DHS API prefixes apfs_number with '*' for updated records — strip it
+        # so the upsert matches the original record
+        apfs_number = str(record.get("apfs_number", "")).lstrip("*").strip()
+        if not apfs_number:
+            raise ValueError("Record missing required apfs_number field")
         apfs_id = record.get("id")
 
         # Core fields

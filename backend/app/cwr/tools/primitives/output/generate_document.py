@@ -109,7 +109,7 @@ class GenerateDocumentFunction(BaseFunction):
                 },
                 "folder": {
                     "type": "string",
-                    "description": "Storage folder (when save_to_storage=true)",
+                    "description": "Deprecated. Storage path is now auto-generated.",
                     "default": "generated_documents",
                 },
             },
@@ -144,8 +144,13 @@ class GenerateDocumentFunction(BaseFunction):
                 },
                 "storage": {
                     "type": "object",
-                    "description": "Storage info if save_to_storage=true (bucket, object_key, download_url)",
                     "nullable": True,
+                    "description": "Storage info when save_to_storage=true. Pass object_key, bucket, filename, and content_type to prepare_email attachments.",
+                    "properties": {
+                        "bucket": {"type": "string"},
+                        "object_key": {"type": "string"},
+                        "download_url": {"type": "string", "nullable": True},
+                    },
                 },
             },
         },
@@ -197,7 +202,6 @@ class GenerateDocumentFunction(BaseFunction):
         include_title_page = params.get("include_title_page", False)
         css = params.get("css")
         save_to_storage = params.get("save_to_storage", False)
-        folder = params.get("folder", "generated_documents")
 
         # Validate parameters
         if format_type in ("pdf", "docx") and not content:
@@ -276,16 +280,19 @@ class GenerateDocumentFunction(BaseFunction):
                         message="MinIO service is not configured",
                     )
 
-                from datetime import datetime
+                import hashlib
                 from io import BytesIO
-                from uuid import uuid4
 
                 from app.config import settings
+                from app.core.storage.storage_path_service import temp_path
 
-                bucket = settings.minio_bucket_processed
-                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                artifact_id = uuid4().hex[:8]
-                object_key = f"{ctx.organization_id}/{folder}/{timestamp}_{artifact_id}_{filename}"
+                bucket = settings.minio_bucket_temp
+                content_hash = hashlib.sha256(doc_bytes).hexdigest()
+                object_key = temp_path(
+                    org_id=str(ctx.organization_id),
+                    content_hash=content_hash,
+                    filename=filename,
+                )
 
                 minio.put_object(
                     bucket=bucket,

@@ -48,6 +48,69 @@ def _generate_token() -> str:
     return secrets.token_urlsafe(32)
 
 
+async def _resolve_attachments(
+    attachments: list, ctx: "FunctionContext"
+) -> list:
+    """
+    Resolve attachment references to base64-encoded content.
+
+    Each attachment dict may contain:
+    - object_key + bucket: fetch directly from MinIO (preferred)
+    - url: fetch via HTTP (fallback, e.g., presigned URL)
+
+    Returns list of dicts with {filename, content, content_type, is_base64}.
+    """
+    import base64
+
+    resolved = []
+    for att in attachments:
+        filename = att.get("filename", "attachment")
+        content_type = att.get("content_type", "application/octet-stream")
+        object_key = att.get("object_key")
+        bucket = att.get("bucket")
+        url = att.get("url")
+
+        raw_bytes = None
+
+        # Prefer direct MinIO access (no presigned URL needed)
+        if object_key and bucket:
+            minio = ctx.minio_service
+            if minio and minio.enabled:
+                logger.info(
+                    f"Resolving attachment from storage: {bucket}/{object_key}"
+                )
+                bio = minio.get_object(bucket=bucket, key=object_key)
+                raw_bytes = bio.read()
+            else:
+                raise RuntimeError(
+                    f"MinIO not available to resolve attachment: {filename}"
+                )
+
+        # Fallback: fetch via HTTP URL
+        elif url:
+            import httpx
+
+            logger.info(f"Resolving attachment from URL: {url}")
+            async with httpx.AsyncClient(timeout=60.0) as client:
+                resp = await client.get(url)
+                resp.raise_for_status()
+                raw_bytes = resp.content
+
+        else:
+            raise ValueError(
+                f"Attachment '{filename}' has no object_key/bucket or url"
+            )
+
+        resolved.append({
+            "filename": filename,
+            "content": base64.b64encode(raw_bytes).decode("utf-8"),
+            "content_type": content_type,
+            "is_base64": True,
+        })
+
+    return resolved
+
+
 class PrepareEmailFunction(BaseFunction):
     """
     Prepare an email for sending (requires confirmation).
@@ -107,6 +170,22 @@ class PrepareEmailFunction(BaseFunction):
                     "description": "CC recipients",
                     "default": None,
                 },
+                "attachments": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "filename": {"type": "string", "description": "Attachment filename"},
+                            "content_type": {"type": "string", "description": "MIME type"},
+                            "url": {"type": "string", "description": "URL to download (e.g., presigned URL from generate_document)"},
+                            "object_key": {"type": "string", "description": "Object storage key (preferred over url)"},
+                            "bucket": {"type": "string", "description": "Object storage bucket (used with object_key)"},
+                        },
+                        "required": ["filename", "content_type"],
+                    },
+                    "description": "File attachments. Pass storage references from generate_document output.",
+                    "default": [],
+                },
             },
             "required": ["to", "subject", "body"],
         },
@@ -158,6 +237,7 @@ class PrepareEmailFunction(BaseFunction):
         body = params["body"]
         html = params.get("html", False)
         cc = params.get("cc") or []
+        attachments = params.get("attachments") or []
 
         # Normalize recipients
         if isinstance(to, str):
@@ -181,6 +261,7 @@ class PrepareEmailFunction(BaseFunction):
             "body": body,
             "html": html,
             "cc": cc,
+            "attachments": attachments,
             "organization_id": str(ctx.organization_id) if ctx.organization_id else None,
             "created_at": datetime.utcnow().isoformat(),
             "expires_at": expires_at.isoformat(),
@@ -200,6 +281,8 @@ class PrepareEmailFunction(BaseFunction):
             "body_preview": body_preview,
             "is_html": html,
             "recipient_count": len(to) + len(cc),
+            "attachments_count": len(attachments),
+            "attachment_filenames": [a.get("filename", "unknown") for a in attachments] if attachments else [],
         }
 
         return FunctionResult.success_result(
@@ -311,6 +394,21 @@ class ConfirmEmailFunction(BaseFunction):
                 ),
             )
 
+        # Resolve attachments from storage references
+        resolved_attachments = []
+        pending_attachments = email_data.get("attachments") or []
+        if pending_attachments:
+            try:
+                resolved_attachments = await _resolve_attachments(
+                    pending_attachments, ctx
+                )
+            except Exception as e:
+                logger.exception(f"Failed to resolve attachments: {e}")
+                return FunctionResult.failed_result(
+                    error=f"Failed to resolve attachments: {e}",
+                    message="Could not fetch attachment files. The email was not sent.",
+                )
+
         # Send via the primitive send_email function
         try:
             from ..primitives.notify.send_email import SendEmailFunction
@@ -323,6 +421,7 @@ class ConfirmEmailFunction(BaseFunction):
                 body=email_data["body"],
                 html=email_data.get("html", False),
                 cc=email_data.get("cc"),
+                attachments=resolved_attachments if resolved_attachments else None,
             )
 
             if result.status == "success":
@@ -332,8 +431,10 @@ class ConfirmEmailFunction(BaseFunction):
                         "to": email_data["to"],
                         "subject": email_data["subject"],
                         "message_id": result.data.get("message_id") if result.data else None,
+                        "attachments_count": len(resolved_attachments),
                     },
-                    message=f"Email sent to {len(email_data['to'])} recipients",
+                    message=f"Email sent to {len(email_data['to'])} recipients"
+                    + (f" with {len(resolved_attachments)} attachment(s)" if resolved_attachments else ""),
                     items_processed=len(email_data["to"]),
                 )
             else:

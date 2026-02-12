@@ -345,6 +345,21 @@ async def startup_event() -> None:
             print(f"   ⚠️  Registry validation warning: {e}")
             # Non-fatal - validation is advisory
 
+        # Seed scheduled task baseline (handler registry → DB, idempotent)
+        try:
+            print("📅 Seeding scheduled task baseline...")
+            async with database_service.get_session() as session:
+                from .core.ops.scheduled_task_service import scheduled_task_service
+                counts = await scheduled_task_service.load_baseline(session)
+                await session.commit()
+                if counts["created"] > 0:
+                    print(f"   ✅ Scheduled tasks: {counts['created']} created, {counts['existing']} existing")
+                else:
+                    print(f"   ➡️  Scheduled tasks: {counts['existing']} existing")
+        except Exception as e:
+            print(f"   ⚠️  Scheduled task seeding warning: {e}")
+            # Non-fatal - tasks can be seeded later via seed command
+
         # Discover and register procedures and pipelines
         try:
             print("🔄 Discovering procedures and pipelines...")

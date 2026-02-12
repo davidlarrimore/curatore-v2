@@ -416,7 +416,7 @@ async def _execute_scheduled_task(
     from sqlalchemy import select
 
     from app.core.database.models import Run, RunLogEvent
-    from app.core.ops.maintenance_handlers import MAINTENANCE_HANDLERS
+    from app.core.ops.scheduled_task_registry import discover_handlers, get_handler
     from app.core.ops.scheduled_task_service import scheduled_task_service
     from app.core.shared.lock_service import lock_service
 
@@ -513,7 +513,8 @@ async def _execute_scheduled_task(
             await session.commit()
 
             # 5. Get the handler for this task type
-            handler = MAINTENANCE_HANDLERS.get(task.task_type)
+            discover_handlers()
+            handler = get_handler(task.task_type)
             if not handler:
                 raise ValueError(f"Unknown task type: {task.task_type}")
 
