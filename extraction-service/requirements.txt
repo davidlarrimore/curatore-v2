@@ -1,5 +1,5 @@
 # FastAPI service
-fastapi>=0.110,<0.115
+fastapi>=0.115,<0.116
 uvicorn[standard]>=0.27,<0.31
 python-multipart>=0.0.9
 pydantic>=2.6,<3

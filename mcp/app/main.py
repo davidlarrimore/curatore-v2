@@ -1,26 +1,25 @@
 # MCP Gateway Main Entry Point
 """FastAPI application with MCP SDK Streamable HTTP transport."""
 
-import logging
 import json
+import logging
 from contextlib import asynccontextmanager
-from typing import Any, Dict, Optional
 
-from fastapi import FastAPI, HTTPException, Request, status
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from app.config import settings
+from app.handlers import handle_tools_call, handle_tools_list
 from app.middleware.auth import AuthMiddleware
 from app.middleware.correlation import CorrelationMiddleware
 from app.models.openai import OpenAIToolsResponse
-from app.handlers import handle_tools_list, handle_tools_call, extract_progress_token
+from app.server import ctx_api_key, ctx_correlation_id, ctx_org_id, session_manager
+from app.services.backend_client import backend_client
 from app.services.openai_converter import mcp_tools_to_openai
 from app.services.policy_service import policy_service
-from app.services.backend_client import backend_client
 from app.services.progress_service import progress_service
-from app.server import session_manager, ctx_org_id, ctx_api_key, ctx_correlation_id
 
 # Configure logging
 logging.basicConfig(

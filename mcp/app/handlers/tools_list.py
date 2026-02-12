@@ -5,8 +5,7 @@ import logging
 import time
 from typing import Any, Dict, List, Optional
 
-from app.config import settings
-from app.models.mcp import MCPTool, MCPToolsListResponse
+from app.models.mcp import MCPToolsListResponse
 from app.services.backend_client import backend_client
 from app.services.contract_converter import ContractConverter
 from app.services.policy_service import policy_service

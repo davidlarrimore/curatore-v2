@@ -7,17 +7,16 @@ then optionally propagates to search_chunks.metadata for searchability.
 This is NOT SharePoint-specific — it works for any asset type and namespace.
 """
 
-from typing import Any, Dict, Optional
-from uuid import UUID
 import logging
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm.attributes import flag_modified
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext

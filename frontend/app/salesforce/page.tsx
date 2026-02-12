@@ -5,6 +5,8 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { useActiveJobs } from '@/lib/context-shims'
+import { useJobProgressByType } from '@/lib/useJobProgress'
+import { JobProgressPanelByType } from '@/components/ui/JobProgressPanel'
 import { salesforceApi, SalesforceStats } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
@@ -48,6 +50,9 @@ function SalesforceDashboardContent() {
   const [uploadMessage, setUploadMessage] = useState('')
   const [lastRunId, setLastRunId] = useState<string | null>(null)
   const [isDragging, setIsDragging] = useState(false)
+
+  // Track Salesforce import jobs and auto-refresh on completion
+  useJobProgressByType('salesforce_import', { onComplete: () => loadData() })
 
   // Load data
   const loadData = useCallback(async () => {
@@ -102,8 +107,7 @@ function SalesforceDashboardContent() {
       }
 
       setUploadMessage(`Import started for ${file.name}`)
-      // Refresh stats after a short delay
-      setTimeout(() => loadData(), 2000)
+      // WebSocket hook handles refresh on job completion
     } catch (err: any) {
       setError(err.message || 'Failed to start import')
     } finally {
@@ -238,6 +242,9 @@ function SalesforceDashboardContent() {
             </div>
           </div>
         )}
+
+        {/* Active Import Jobs */}
+        <JobProgressPanelByType jobType="salesforce_import" variant="compact" className="mb-6 space-y-2" />
 
         {/* Error State */}
         {error && (

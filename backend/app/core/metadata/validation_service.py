@@ -8,7 +8,7 @@ the YAML registry declares.
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 
 logger = logging.getLogger("curatore.core.metadata.validation")
 

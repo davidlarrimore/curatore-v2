@@ -5,10 +5,10 @@ This module defines the abstract base class that all extraction engines must imp
 providing a consistent interface for document-to-markdown conversion.
 """
 
-from abc import ABC, abstractmethod
-from typing import Optional, Dict, Any
-from pathlib import Path
 import logging
+from abc import ABC, abstractmethod
+from pathlib import Path
+from typing import Any, Dict, Optional
 
 
 class ExtractionResult:

@@ -13,8 +13,8 @@ This registry enables the ContentService to fetch and transform
 database records into ContentItem instances consistently.
 """
 
-from typing import Any, Dict, List, Optional
 import logging
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("curatore.functions.content.registry")
 

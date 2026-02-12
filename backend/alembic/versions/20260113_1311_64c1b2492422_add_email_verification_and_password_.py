@@ -5,10 +5,8 @@ Revises:
 Create Date: 2026-01-13 13:11:55.325183
 
 """
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = '64c1b2492422'

@@ -5,15 +5,14 @@ Tests the FastPdfEngine, ExtractionServiceEngine, DoclingEngine,
 and ExtractionEngineFactory functionality.
 """
 
-import pytest
 import sys
 from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
+import pytest
+from app.core.ingestion.extraction.base import BaseExtractionEngine, ExtractionResult
 from app.core.ingestion.extraction.factory import ExtractionEngineFactory
 from app.core.ingestion.extraction.fast_pdf import FastPdfEngine
-from app.core.ingestion.extraction.base import BaseExtractionEngine, ExtractionResult
-
 
 # =============================================================================
 # ExtractionResult Tests

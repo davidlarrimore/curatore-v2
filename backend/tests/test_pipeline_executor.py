@@ -6,20 +6,19 @@ Tests execute_definition() with mock functions and sessions.
 Covers gather, filter, transform, output stages, error handling, and resume.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-from app.cwr.pipelines.runtime.definitions import PipelineDefinition, StageDefinition, StageType, OnErrorPolicy
+import pytest
+from app.cwr.pipelines.runtime.definitions import OnErrorPolicy, PipelineDefinition, StageDefinition, StageType
 from app.cwr.pipelines.runtime.executor import PipelineExecutor
 from app.cwr.tools import fn
 from app.cwr.tools.base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
-
 
 # =============================================================================
 # DUMMY FUNCTIONS FOR TESTING

@@ -32,41 +32,38 @@ Security:
 """
 
 import logging
-from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import select
-
 from fastapi.responses import PlainTextResponse
 
 from app.api.v1.data.schemas import (
-    ScrapeCollectionResponse,
-    ScrapeCollectionCreateRequest,
-    ScrapeCollectionUpdateRequest,
-    ScrapeCollectionListResponse,
-    ScrapeSourceResponse,
-    ScrapeSourceCreateRequest,
-    ScrapeSourceListResponse,
-    ScrapedAssetResponse,
-    ScrapedAssetListResponse,
-    PathTreeResponse,
-    PathTreeNode,
-    PromoteToRecordResponse,
     CrawlCollectionRequest,
     CrawlCollectionResponse,
     CrawlStatusResponse,
+    PathTreeNode,
+    PathTreeResponse,
+    PromoteToRecordResponse,
+    ScrapeCollectionCreateRequest,
+    ScrapeCollectionListResponse,
+    ScrapeCollectionResponse,
+    ScrapeCollectionUpdateRequest,
+    ScrapedAssetListResponse,
+    ScrapedAssetResponse,
+    ScrapeSourceCreateRequest,
+    ScrapeSourceListResponse,
+    ScrapeSourceResponse,
 )
-from app.core.database.models import User, ScrapeCollection, ScrapedAsset, Run
-from app.dependencies import get_current_user, require_org_admin
-from app.connectors.scrape.scrape_service import scrape_service
 from app.connectors.scrape.crawl_service import crawl_service
-from app.core.shared.run_service import run_service
-from app.core.shared.database_service import database_service
+from app.connectors.scrape.scrape_service import scrape_service
+from app.core.database.models import Run, ScrapeCollection, ScrapedAsset, User
 from app.core.ingestion.extraction_result_service import extraction_result_service
+from app.core.shared.database_service import database_service
+from app.core.shared.run_service import run_service
 from app.core.storage.minio_service import get_minio_service
 from app.core.tasks import async_delete_scrape_collection_task
+from app.dependencies import get_current_user, require_org_admin
 
 # Initialize router
 router = APIRouter(prefix="/scrape", tags=["Web Scraping"])

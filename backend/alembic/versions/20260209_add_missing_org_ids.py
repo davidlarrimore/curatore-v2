@@ -17,7 +17,6 @@ Create Date: 2026-02-09
 import sqlalchemy as sa
 from alembic import op
 
-
 # revision identifiers
 revision = "add_missing_org_ids"
 down_revision = "sharepoint_site_name"

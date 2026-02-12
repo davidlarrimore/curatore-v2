@@ -14,12 +14,11 @@ import argparse
 import asyncio
 import json
 import re
-import sys
-from typing import Any, Dict, List, Tuple
 
 
 async def fix_procedures(dry_run: bool = False) -> None:
-    from sqlalchemy import select, text
+    from sqlalchemy import select
+
     from app.core.database.procedures import Procedure
     from app.core.shared.database_service import database_service
 

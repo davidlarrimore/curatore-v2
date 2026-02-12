@@ -33,6 +33,8 @@ import {
   Trash2,
   Settings,
   Sparkles,
+  ArrowUpCircle,
+  Box,
 } from 'lucide-react'
 import { AIGeneratorPanel, type AIGeneratorPanelHandle } from '@/components/procedures/AIGeneratorPanel'
 
@@ -66,6 +68,8 @@ function ProcedureEditor() {
   const [isRunning, setIsRunning] = useState(false)
   const [isValidating, setIsValidating] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
+  const [isConverting, setIsConverting] = useState(false)
+  const [isTogglingSchedule, setIsTogglingSchedule] = useState(false)
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
   const [successMessage, setSuccessMessage] = useState('')
   const [errorMessage, setErrorMessage] = useState('')
@@ -74,6 +78,9 @@ function ProcedureEditor() {
   const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
   const [validationWarnings, setValidationWarnings] = useState<ValidationError[]>([])
   const [validationPassed, setValidationPassed] = useState(false)
+
+  // Right panel tab state
+  const [activeTab, setActiveTab] = useState<'generator' | 'catalog'>('generator')
 
   // Function catalog state
   const [functions, setFunctions] = useState<FunctionMeta[]>([])
@@ -194,12 +201,11 @@ function ProcedureEditor() {
       const result = await proceduresApi.validateProcedure(token, fullProc as any)
       setValidationErrors(result.errors)
       setValidationWarnings(result.warnings)
-      // Show success indicator if valid (even with warnings)
       if (result.valid) {
         setValidationPassed(true)
-        // Auto-hide success after 5 seconds if no warnings
         if (result.warnings.length === 0) {
-          setTimeout(() => setValidationPassed(false), 5000)
+          setSuccessMessage('Validation passed — no errors or warnings')
+          setTimeout(() => setSuccessMessage(''), 5000)
         }
       }
       return result.valid
@@ -298,6 +304,59 @@ function ProcedureEditor() {
     } finally {
       setIsDeleting(false)
       setShowDeleteConfirm(false)
+    }
+  }
+
+  // Toggle scheduling (enable/disable procedure)
+  const handleToggleSchedule = async () => {
+    if (!token || !procedure) return
+
+    setIsTogglingSchedule(true)
+    try {
+      if (procedure.is_active) {
+        await proceduresApi.disableProcedure(token, procedure.slug)
+        setProcedure({ ...procedure, is_active: false })
+        setSuccessMessage(`Scheduling has been disabled for "${procedure.name}"`)
+      } else {
+        await proceduresApi.enableProcedure(token, procedure.slug)
+        setProcedure({ ...procedure, is_active: true })
+        setSuccessMessage(`Scheduling has been enabled for "${procedure.name}"`)
+      }
+      setTimeout(() => setSuccessMessage(''), 5000)
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to toggle scheduling')
+      setTimeout(() => setErrorMessage(''), 5000)
+    } finally {
+      setIsTogglingSchedule(false)
+    }
+  }
+
+  // Convert to system procedure
+  const handleConvertToSystem = async () => {
+    if (!token || !procedure) return
+
+    const confirmed = window.confirm(
+      `Convert "${procedure.name}" to a system procedure?\n\nThis will write the definition as a JSON file to the codebase and mark it as a system procedure. This action cannot be reversed via the UI.`
+    )
+    if (!confirmed) return
+
+    setIsConverting(true)
+    try {
+      const saved = await proceduresApi.updateProcedure(token, procedure.slug, { convert_to_system: true })
+      setProcedure(saved)
+
+      // Update saved YAML from the returned definition
+      const yaml = YAML.stringify(saved.definition)
+      setSavedYaml(yaml)
+      setYamlContent(yaml)
+
+      setSuccessMessage('Procedure converted to system procedure!')
+      setTimeout(() => setSuccessMessage(''), 5000)
+    } catch (err: any) {
+      setErrorMessage(err.message || 'Failed to convert procedure')
+      setTimeout(() => setErrorMessage(''), 5000)
+    } finally {
+      setIsConverting(false)
     }
   }
 
@@ -443,20 +502,67 @@ function ProcedureEditor() {
                   Unsaved changes
                 </span>
               )}
+
+              {procedure && procedure.triggers.length > 0 && (
+                <button
+                  onClick={handleToggleSchedule}
+                  disabled={isTogglingSchedule}
+                  title={procedure.is_active ? 'Disable scheduling' : 'Enable scheduling'}
+                  className="flex items-center gap-2 ml-4 pl-4 border-l border-gray-200 dark:border-gray-700"
+                >
+                  <span className="text-xs text-gray-400 dark:text-gray-500">Schedule</span>
+                  {isTogglingSchedule ? (
+                    <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                  ) : (
+                    <div className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                      procedure.is_active
+                        ? 'bg-emerald-500'
+                        : 'bg-gray-300 dark:bg-gray-600'
+                    }`}>
+                      <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                        procedure.is_active ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                      }`} />
+                    </div>
+                  )}
+                  <span className={`text-xs font-medium w-6 ${
+                    procedure.is_active
+                      ? 'text-emerald-600 dark:text-emerald-400'
+                      : 'text-gray-400 dark:text-gray-500'
+                  }`}>
+                    {procedure.is_active ? 'On' : 'Off'}
+                  </span>
+                </button>
+              )}
             </div>
 
             {/* Control buttons */}
             <div className="flex items-center gap-3">
               {!isSystemProcedure && (
-                <Button
-                  variant="secondary"
-                  onClick={() => setShowDeleteConfirm(true)}
-                  disabled={isDeleting}
-                  className="gap-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
-                >
-                  <Trash2 className="w-4 h-4" />
-                  Delete
-                </Button>
+                <>
+                  <Button
+                    variant="secondary"
+                    onClick={handleConvertToSystem}
+                    disabled={isConverting || isDirty}
+                    title={isDirty ? 'Save changes before converting' : 'Convert to a system procedure backed by a JSON file'}
+                    className="gap-2"
+                  >
+                    {isConverting ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : (
+                      <ArrowUpCircle className="w-4 h-4" />
+                    )}
+                    Convert to System
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    onClick={() => setShowDeleteConfirm(true)}
+                    disabled={isDeleting}
+                    className="gap-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                    Delete
+                  </Button>
+                </>
               )}
               <Button
                 variant="secondary"
@@ -481,35 +587,29 @@ function ProcedureEditor() {
                 )}
                 Run
               </Button>
-              {!isSystemProcedure && (
-                <Button
-                  variant="primary"
-                  onClick={handleSave}
-                  disabled={isSaving}
-                  className="gap-2"
-                >
-                  {isSaving ? (
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                  ) : (
-                    <Save className="w-4 h-4" />
-                  )}
-                  Save
-                </Button>
-              )}
+              <Button
+                variant="primary"
+                onClick={handleSave}
+                disabled={isSaving}
+                className="gap-2"
+              >
+                {isSaving ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4" />
+                )}
+                Save
+              </Button>
             </div>
           </div>
 
           {/* System procedure notice */}
           {isSystemProcedure && (
-            <div className="mt-4 rounded-lg bg-purple-50 dark:bg-purple-900/20 border border-purple-100 dark:border-purple-900/50 p-3">
+            <div className="mt-4 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/50 p-3">
               <div className="flex items-center gap-2">
-                <Settings className="w-4 h-4 text-purple-600 dark:text-purple-400" />
-                <p className="text-sm text-purple-800 dark:text-purple-200">
-                  This is a system procedure. To edit it, modify the YAML file at{' '}
-                  <code className="text-xs bg-purple-100 dark:bg-purple-800/30 px-1 py-0.5 rounded">
-                    {procedure?.source_type === 'yaml' ? 'backend/app/procedures/definitions/' : ''}
-                  </code>{' '}
-                  and call the reload endpoint.
+                <Settings className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  System procedure — changes will be saved to the database and written back to the source JSON definition file.
                 </p>
               </div>
             </div>
@@ -571,10 +671,10 @@ function ProcedureEditor() {
 
       {/* Main content - two panels */}
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left panel - Editor */}
-          <div className="lg:col-span-2 space-y-4">
-            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <div className="space-y-4">
+            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
                 <div className="flex items-center justify-between">
                   <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
@@ -610,37 +710,12 @@ function ProcedureEditor() {
               <textarea
                 value={yamlContent}
                 onChange={(e) => setYamlContent(e.target.value)}
-                className="w-full h-[700px] p-4 font-mono text-sm bg-gray-900 text-gray-100 focus:outline-none resize-none"
+                className="w-full h-[500px] p-4 font-mono text-sm bg-gray-900 text-gray-100 focus:outline-none resize-none"
                 placeholder="Enter procedure YAML..."
                 spellCheck={false}
-                readOnly={isSystemProcedure}
+                readOnly={false}
               />
             </div>
-
-            {/* Validation success panel */}
-            {validationPassed && validationErrors.length === 0 && validationWarnings.length === 0 && (
-              <div className="bg-white dark:bg-gray-800 rounded-xl border border-emerald-200 dark:border-emerald-700 overflow-hidden">
-                <div className="px-4 py-3 bg-emerald-50 dark:bg-emerald-900/20">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                      <h2 className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">
-                        Validation Passed
-                      </h2>
-                      <span className="text-xs text-emerald-600 dark:text-emerald-400">
-                        No errors or warnings found
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => setValidationPassed(false)}
-                      className="p-1 rounded hover:bg-emerald-100 dark:hover:bg-emerald-900/30"
-                    >
-                      <X className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
 
             {/* Validation with warnings panel (valid but has warnings) */}
             {validationPassed && validationErrors.length === 0 && validationWarnings.length > 0 && (
@@ -654,19 +729,17 @@ function ProcedureEditor() {
                       </h2>
                     </div>
                     <div className="flex items-center gap-2">
-                      {!isSystemProcedure && (
-                        <button
-                          onClick={() => {
-                            aiGeneratorRef.current?.fixValidationErrors([], validationWarnings)
-                          }}
-                          disabled={aiGeneratorRef.current?.isGenerating}
-                          className="group inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
-                          title="Use AI to fix these warnings"
-                        >
-                          <Sparkles className="w-3 h-3" />
-                          Fix with AI
-                        </button>
-                      )}
+                      <button
+                        onClick={() => {
+                          aiGeneratorRef.current?.fixValidationErrors([], validationWarnings)
+                        }}
+                        disabled={aiGeneratorRef.current?.isGenerating}
+                        className="group inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+                        title="Use AI to fix these warnings"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        Fix with AI
+                      </button>
                       <button
                         onClick={() => {
                           setValidationPassed(false)
@@ -723,19 +796,17 @@ function ProcedureEditor() {
                       </h2>
                     </div>
                     <div className="flex items-center gap-2">
-                      {!isSystemProcedure && (
-                        <button
-                          onClick={() => {
-                            aiGeneratorRef.current?.fixValidationErrors(validationErrors, validationWarnings)
-                          }}
-                          disabled={aiGeneratorRef.current?.isGenerating}
-                          className="group inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
-                          title="Use AI to automatically fix these errors"
-                        >
-                          <Sparkles className="w-3 h-3" />
-                          Fix with AI
-                        </button>
-                      )}
+                      <button
+                        onClick={() => {
+                          aiGeneratorRef.current?.fixValidationErrors(validationErrors, validationWarnings)
+                        }}
+                        disabled={aiGeneratorRef.current?.isGenerating}
+                        className="group inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-gradient-to-r from-indigo-500 to-purple-500 hover:from-indigo-600 hover:to-purple-600 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+                        title="Use AI to automatically fix these errors"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        Fix with AI
+                      </button>
                       <button
                         onClick={() => {
                           setValidationErrors([])
@@ -799,44 +870,73 @@ function ProcedureEditor() {
             )}
           </div>
 
-          {/* Right panel - AI Generator + Function catalog */}
-          <div className="lg:col-span-1 space-y-4">
-            {/* AI Generator Panel */}
-            <AIGeneratorPanel
-              ref={aiGeneratorRef}
-              currentYaml={yamlContent}
-              onYamlGenerated={(yaml) => setYamlContent(yaml)}
-              onSuccess={(msg) => {
-                setSuccessMessage(msg)
-                setValidationErrors([])
-                setValidationWarnings([])
-                setTimeout(() => setSuccessMessage(''), 5000)
-              }}
-              onError={(msg) => {
-                setErrorMessage(msg)
-                setTimeout(() => setErrorMessage(''), 5000)
-              }}
-            />
-
-            {/* Function catalog */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden sticky top-6">
-              <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
-                <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
+          {/* Right panel - Tabbed: AI Generator / Function Catalog */}
+          <div className="sticky top-6">
+            {/* Tab bar */}
+            <div className="flex border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-t-lg overflow-hidden">
+              <button
+                onClick={() => setActiveTab('generator')}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                  activeTab === 'generator'
+                    ? 'text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600 dark:border-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                }`}
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4" />
+                  AI Generator
+                </span>
+              </button>
+              <button
+                onClick={() => setActiveTab('catalog')}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                  activeTab === 'catalog'
+                    ? 'text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600 dark:border-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                }`}
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <Box className="w-4 h-4" />
                   Function Catalog
-                </h2>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Search functions..."
-                    value={functionSearch}
-                    onChange={(e) => setFunctionSearch(e.target.value)}
-                    className="w-full pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-              </div>
+                </span>
+              </button>
+            </div>
 
-              <div className="max-h-[600px] overflow-y-auto">
+            {/* Tab content */}
+            {activeTab === 'generator' && (
+              <AIGeneratorPanel
+                ref={aiGeneratorRef}
+                currentYaml={yamlContent}
+                onYamlGenerated={(yaml) => setYamlContent(yaml)}
+                onSuccess={(msg) => {
+                  setSuccessMessage(msg)
+                  setValidationErrors([])
+                  setValidationWarnings([])
+                  setTimeout(() => setSuccessMessage(''), 5000)
+                }}
+                onError={(msg) => {
+                  setErrorMessage(msg)
+                  setTimeout(() => setErrorMessage(''), 5000)
+                }}
+              />
+            )}
+
+            {activeTab === 'catalog' && (
+              <div className="bg-white dark:bg-gray-800 rounded-b-lg border border-t-0 border-gray-200 dark:border-gray-700 overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search functions..."
+                      value={functionSearch}
+                      onChange={(e) => setFunctionSearch(e.target.value)}
+                      className="w-full pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="max-h-[700px] overflow-y-auto">
                 {loadingFunctions ? (
                   <div className="p-8 text-center">
                     <Loader2 className="w-6 h-6 animate-spin mx-auto text-gray-400" />
@@ -948,7 +1048,8 @@ function ProcedureEditor() {
                   </div>
                 )}
               </div>
-            </div>
+              </div>
+            )}
           </div>
         </div>
       </div>

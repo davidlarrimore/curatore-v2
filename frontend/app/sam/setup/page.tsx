@@ -1,10 +1,11 @@
 'use client'
 
-import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useState, useEffect, useCallback, useMemo } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { useActiveJobs } from '@/lib/context-shims'
-import { useUnifiedJobs } from '@/lib/unified-jobs-context'
+import { useJobProgressByType } from '@/lib/useJobProgress'
+import { JobProgressPanelByType } from '@/components/ui/JobProgressPanel'
 import { samApi, connectionsApi, SamSearch, SamApiUsage, SamQueueStats } from '@/lib/api'
 import { formatCompact } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
@@ -51,7 +52,6 @@ function SamSetupContent() {
   const router = useRouter()
   const { token } = useAuth()
   const { addJob, getJobsForResource } = useActiveJobs()
-  const { getJobsByType } = useUnifiedJobs()
 
   // State
   const [searches, setSearches] = useState<SamSearch[]>([])
@@ -65,9 +65,10 @@ function SamSetupContent() {
   const [sortColumn, setSortColumn] = useState<SortColumn>('name')
   const [sortDirection, setSortDirection] = useState<SortDirection>('asc')
 
-  // Track SAM pull jobs via WebSocket
-  const samPullJobs = getJobsByType('sam_pull' as any)
-  const prevJobCountRef = useRef(samPullJobs.length)
+  // Track SAM pull jobs and auto-refresh on completion
+  const { jobs: samPullJobs } = useJobProgressByType('sam_pull', {
+    onComplete: () => loadData(true),
+  })
 
   // Sort handler
   const handleSort = (column: SortColumn) => {
@@ -175,19 +176,6 @@ function SamSetupContent() {
   if (hasConnection === false) {
     return <SamConnectionRequired />
   }
-
-  // Refresh data when a SAM pull job completes (via WebSocket)
-  useEffect(() => {
-    const currentCount = samPullJobs.length
-    const prevCount = prevJobCountRef.current
-
-    // If job count decreased, a job completed - refresh data
-    if (currentCount < prevCount) {
-      loadData(true) // Silent refresh
-    }
-
-    prevJobCountRef.current = currentCount
-  }, [samPullJobs.length, loadData])
 
   // Handlers
   const handleCreate = () => {
@@ -500,6 +488,9 @@ function SamSetupContent() {
             onCancel={handleFormCancel}
           />
         )}
+
+        {/* Active Job Progress */}
+        <JobProgressPanelByType jobType="sam_pull" variant="compact" className="mb-6 space-y-2" />
 
         {/* Content */}
         {isLoading ? (

@@ -4,9 +4,16 @@
 # Run tests for all services sequentially and log results.
 # - Creates a timestamped report directory under logs/test_reports
 # - Pre-flight: verify app is not already running (ports 8000/3000)
+# - Runs linting (Ruff for Python, ESLint for frontend)
+# - Runs dependency vulnerability scanning (pip-audit, npm audit)
 # - Sets up per-service test environments (Python venvs, Node deps) as needed
 # - Runs backend pytest, extraction-service pytest, mcp pytest, and frontend npm test
 # - Summarizes PASS/WARN/FAIL per service and exits nonzero on failures
+#
+# Env overrides:
+#   SKIP_LINT=1        Skip linting steps
+#   SKIP_COVERAGE=1    Omit --cov flags from pytest commands
+#   SKIP_DEP_SCAN=1    Skip dependency vulnerability scanning
 
 set -uo pipefail
 
@@ -20,6 +27,11 @@ touch "$SUMMARY_FILE"
 
 # By default, recreate Python virtualenvs on each run unless explicitly disabled
 export RECREATE_VENV=${RECREATE_VENV:-1}
+
+# Optional skip flags
+SKIP_LINT=${SKIP_LINT:-0}
+SKIP_COVERAGE=${SKIP_COVERAGE:-0}
+SKIP_DEP_SCAN=${SKIP_DEP_SCAN:-0}
 
 log_note() {
   echo "$*" | tee -a "$SUMMARY_FILE"
@@ -189,6 +201,135 @@ PY
   echo "$venv"
 }
 
+# -------- Linting --------
+run_python_lint() {
+  if [[ "$SKIP_LINT" = "1" ]]; then
+    log_note "[SKIP] Python lint (SKIP_LINT=1)"
+    return 0
+  fi
+
+  print_header "Python Lint (Ruff)"
+  local log="$REPORT_DIR/python_lint.log"
+  local venv="$ROOT_DIR/backend/.venv"
+
+  # Ensure backend venv exists (needed to install ruff)
+  if [[ ! -d "$venv" ]]; then
+    log_note "[WARN] python-lint: backend venv not found, skipping"
+    return 0
+  fi
+
+  # Install ruff if not present
+  "$venv/bin/python" -m pip install ruff >>"$REPORT_DIR/lint_setup.log" 2>&1 || {
+    log_note "[WARN] python-lint: failed to install ruff"
+    return 0
+  }
+
+  log_note "Running Ruff on backend/, extraction-service/, mcp/ …"
+  local code=0
+  "$venv/bin/python" -m ruff check \
+    "$ROOT_DIR/backend/" "$ROOT_DIR/extraction-service/" "$ROOT_DIR/mcp/" \
+    --config "$ROOT_DIR/ruff.toml" >"$log" 2>&1 || code=$?
+
+  if [[ $code -eq 0 ]]; then
+    log_note "[CLEAN] No Python lint issues found"
+  else
+    local issue_count
+    issue_count=$(wc -l < "$log" | tr -d ' ')
+    log_note "[INFO] Ruff found issues ($issue_count lines) — see python_lint.log (report-only, not failing)"
+    # Show a brief summary
+    tail -n 20 "$log" | tee -a "$SUMMARY_FILE"
+  fi
+}
+
+run_frontend_lint() {
+  if [[ "$SKIP_LINT" = "1" ]]; then
+    log_note "[SKIP] Frontend lint (SKIP_LINT=1)"
+    return 0
+  fi
+
+  print_header "Frontend Lint (ESLint)"
+  local svc_dir="$ROOT_DIR/frontend"
+  local log="$REPORT_DIR/frontend_lint.log"
+
+  if [[ ! -d "$svc_dir" ]]; then
+    log_note "[WARN] frontend-lint: frontend directory not found"
+    return 0
+  fi
+
+  if ! command -v npm >/dev/null 2>&1; then
+    log_note "[WARN] frontend-lint: npm not installed, skipping"
+    return 0
+  fi
+
+  log_note "Running ESLint on frontend/ …"
+  local code=0
+  npm --prefix "$svc_dir" run lint >"$log" 2>&1 || code=$?
+
+  if [[ $code -eq 0 ]]; then
+    log_note "[CLEAN] No frontend lint issues found"
+  else
+    log_note "[INFO] ESLint found issues — see frontend_lint.log (report-only, not failing)"
+    tail -n 20 "$log" | tee -a "$SUMMARY_FILE"
+  fi
+}
+
+# -------- Dependency Scanning --------
+run_dependency_scan() {
+  if [[ "$SKIP_DEP_SCAN" = "1" ]]; then
+    log_note "[SKIP] Dependency scan (SKIP_DEP_SCAN=1)"
+    return 0
+  fi
+
+  print_header "Dependency Vulnerability Scan"
+  local log="$REPORT_DIR/dependency_scan.log"
+  local venv="$ROOT_DIR/backend/.venv"
+
+  # Python: pip-audit
+  if [[ -d "$venv" ]]; then
+    "$venv/bin/python" -m pip install pip-audit >>"$REPORT_DIR/dep_scan_setup.log" 2>&1 || {
+      log_note "[WARN] dep-scan: failed to install pip-audit, skipping Python scan"
+    }
+
+    if "$venv/bin/python" -m pip_audit --version >/dev/null 2>&1; then
+      log_note "Scanning Python dependencies (pip-audit) …"
+      for req_file in backend/requirements.txt extraction-service/requirements.txt mcp/requirements.txt; do
+        local full_path="$ROOT_DIR/$req_file"
+        if [[ -f "$full_path" ]]; then
+          echo "--- $req_file ---" >>"$log"
+          "$venv/bin/python" -m pip_audit -r "$full_path" >>"$log" 2>&1 || true
+          echo "" >>"$log"
+        fi
+      done
+      # Summarize
+      local vuln_count
+      vuln_count=$(grep -c "VULN" "$log" 2>/dev/null || echo "0")
+      if [[ "$vuln_count" -gt 0 ]]; then
+        log_note "[INFO] pip-audit found $vuln_count vulnerability(ies) — see dependency_scan.log (report-only)"
+      else
+        log_note "[CLEAN] No Python dependency vulnerabilities found"
+      fi
+    fi
+  else
+    log_note "[WARN] dep-scan: backend venv not found, skipping Python scan"
+  fi
+
+  # Node.js: npm audit
+  local npm_log="$REPORT_DIR/npm_audit.log"
+  if command -v npm >/dev/null 2>&1 && [[ -d "$ROOT_DIR/frontend" ]]; then
+    log_note "Scanning Node.js dependencies (npm audit) …"
+    npm audit --prefix "$ROOT_DIR/frontend" >"$npm_log" 2>&1 || true
+    if grep -q "found 0 vulnerabilities" "$npm_log" 2>/dev/null; then
+      log_note "[CLEAN] No Node.js dependency vulnerabilities found"
+    else
+      log_note "[INFO] npm audit found issues — see npm_audit.log (report-only)"
+      tail -n 10 "$npm_log" | tee -a "$SUMMARY_FILE"
+    fi
+  else
+    log_note "[WARN] dep-scan: npm or frontend directory not found, skipping Node.js scan"
+  fi
+}
+
+# -------- Test Runners --------
 run_backend_tests() {
   local svc="backend"
   local subdir="$REPORT_DIR/$svc"
@@ -264,13 +405,19 @@ run_mcp_tests() {
   }
   local venv="$svc_dir/.venv"
 
+  # Build coverage flags
+  local cov_flags=()
+  if [[ "$SKIP_COVERAGE" != "1" ]]; then
+    cov_flags=(--cov=app --cov-report=term-missing --cov-report=html:"$subdir/mcp_coverage_html")
+  fi
+
   log_note "Running $svc tests (pytest) …"
   local code=0
   (
     cd "$svc_dir" && \
     MCP_API_KEY="test-key" BACKEND_URL="http://localhost:8000" \
     PYTHONPATH="${svc_dir}${PYTHONPATH:+:$PYTHONPATH}" \
-    "$venv/bin/python" -m pytest tests -q
+    "$venv/bin/python" -m pytest tests -q "${cov_flags[@]}"
   ) >"$log" 2>&1 || code=$?
 
   # Surface results
@@ -312,10 +459,18 @@ run_frontend_tests() {
   local runner cmd
   if [[ -f "$svc_dir/pnpm-lock.yaml" ]] && command -v pnpm >/dev/null 2>&1; then
     runner="pnpm"
-    cmd=(pnpm -C "$svc_dir" -s test)
+    if [[ "$SKIP_COVERAGE" != "1" ]]; then
+      cmd=(pnpm -C "$svc_dir" -s test -- --coverage)
+    else
+      cmd=(pnpm -C "$svc_dir" -s test)
+    fi
   elif [[ -f "$svc_dir/yarn.lock" ]] && command -v yarn >/dev/null 2>&1; then
     runner="yarn"
-    cmd=(yarn --cwd "$svc_dir" test -s)
+    if [[ "$SKIP_COVERAGE" != "1" ]]; then
+      cmd=(yarn --cwd "$svc_dir" test -s -- --coverage)
+    else
+      cmd=(yarn --cwd "$svc_dir" test -s)
+    fi
   else
     runner="npm"
     if ! command -v npm >/dev/null 2>&1; then
@@ -323,7 +478,11 @@ run_frontend_tests() {
       record_result "$svc" "WARN" "npm missing"
       return 0
     fi
-    cmd=(npm --prefix "$svc_dir" run -s test --if-present)
+    if [[ "$SKIP_COVERAGE" != "1" ]]; then
+      cmd=(npm --prefix "$svc_dir" run -s test --if-present -- --coverage)
+    else
+      cmd=(npm --prefix "$svc_dir" run -s test --if-present)
+    fi
   fi
 
   # Check if a test script exists without requiring jq
@@ -361,8 +520,16 @@ RESULTS=()
 print_header "Curatore v2: Test Run ($TIMESTAMP)"
 echo "Reports: $REPORT_DIR" | tee -a "$SUMMARY_FILE"
 echo "Recreate venvs (RECREATE_VENV): ${RECREATE_VENV}" | tee -a "$SUMMARY_FILE"
+echo "Skip lint: ${SKIP_LINT}, Skip coverage: ${SKIP_COVERAGE}, Skip dep scan: ${SKIP_DEP_SCAN}" | tee -a "$SUMMARY_FILE"
 
-# Execute suites sequentially
+# Lint first (fast feedback)
+run_python_lint
+run_frontend_lint
+
+# Dependency scanning
+run_dependency_scan
+
+# Then tests
 run_backend_tests
 run_extraction_service_tests
 run_mcp_tests

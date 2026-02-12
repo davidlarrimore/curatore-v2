@@ -6,7 +6,7 @@ Development guidance for Claude Code working with Curatore v2.
 
 **Getting Started**: [Quick Start](#quick-start) | [Project Structure](#project-structure) | [Dev Commands](#development-commands)
 
-**Core Systems**: [Architecture](#architecture-principles) | [Data Models](#key-data-models) | [Search & Indexing](docs/SEARCH_INDEXING.md) | [Queue System](docs/QUEUE_SYSTEM.md)
+**Core Systems**: [Architecture](#architecture-principles) | [Data Models](#key-data-models) | [Search & Indexing](docs/SEARCH_INDEXING.md) | [Metadata Catalog](docs/METADATA_CATALOG.md) | [Queue System](docs/QUEUE_SYSTEM.md)
 
 **Workflows**: [Functions & Procedures](docs/FUNCTIONS_PROCEDURES.md) | [Tool Contracts](#tool-contracts--governance) | [Document Processing](docs/DOCUMENT_PROCESSING.md)
 
@@ -712,6 +712,7 @@ docker exec -it curatore-postgres psql -U curatore -d curatore -c "\dt"
 | [MCP Gateway](mcp/README.md) | AI tool server for Claude Desktop, Open WebUI, and MCP clients |
 | [MCP & Open WebUI](docs/MCP_OPEN_WEBUI.md) | Open WebUI integration guide |
 | [Search & Indexing](docs/SEARCH_INDEXING.md) | Hybrid search, pgvector, chunking, embeddings, reindexing |
+| [Metadata Catalog](docs/METADATA_CATALOG.md) | Namespaces, fields, facets, reference data, registry service |
 | [Queue System](docs/QUEUE_SYSTEM.md) | Queue architecture, job groups, cancellation |
 | [SAM.gov Integration](docs/SAM_INTEGRATION.md) | SAM.gov data model and API |
 | [Salesforce Integration](docs/SALESFORCE_INTEGRATION.md) | Salesforce CRM integration |

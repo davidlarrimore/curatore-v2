@@ -9,8 +9,6 @@ This migration converts Run.config and Asset.source_metadata from JSON to JSONB.
 """
 
 from alembic import op
-import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import JSONB
 
 # revision identifiers, used by Alembic.
 revision = "change_json_to_jsonb"

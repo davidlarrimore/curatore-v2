@@ -10,7 +10,8 @@ The registry maintains a catalog of all available functions and provides:
 """
 
 import logging
-from typing import Dict, List, Optional, Type, Any, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Type
+
 from .base import BaseFunction, FunctionCategory, FunctionMeta
 
 if TYPE_CHECKING:
@@ -151,12 +152,12 @@ class FunctionRegistry:
         """
         # Import LLM functions
         try:
-            from .primitives.llm.generate import GenerateFunction
-            from .primitives.llm.extract import ExtractFunction
-            from .primitives.llm.summarize import SummarizeFunction
             from .primitives.llm.classify import ClassifyFunction
             from .primitives.llm.decide import DecideFunction
+            from .primitives.llm.extract import ExtractFunction
+            from .primitives.llm.generate import GenerateFunction
             from .primitives.llm.route import RouteFunction
+            from .primitives.llm.summarize import SummarizeFunction
             self.register(GenerateFunction)
             self.register(ExtractFunction)
             self.register(SummarizeFunction)
@@ -168,18 +169,18 @@ class FunctionRegistry:
 
         # Import search functions
         try:
-            from .primitives.search.query_model import QueryModelFunction
-            from .primitives.search.get_content import GetContentFunction
-            from .primitives.search.get_asset import GetAssetFunction
-            from .primitives.search.get import GetFunction
-            from .primitives.search.search_assets import SearchAssetsFunction
-            from .primitives.search.search_solicitations import SearchSolicitationsFunction
-            from .primitives.search.search_notices import SearchNoticesFunction
-            from .primitives.search.search_scraped_assets import SearchScrapedAssetsFunction
-            from .primitives.search.search_salesforce import SearchSalesforceFunction
-            from .primitives.search.search_forecasts import SearchForecastsFunction
             from .primitives.search.discover_data_sources import DiscoverDataSourcesFunction
             from .primitives.search.discover_metadata import DiscoverMetadataFunction
+            from .primitives.search.get import GetFunction
+            from .primitives.search.get_asset import GetAssetFunction
+            from .primitives.search.get_content import GetContentFunction
+            from .primitives.search.query_model import QueryModelFunction
+            from .primitives.search.search_assets import SearchAssetsFunction
+            from .primitives.search.search_forecasts import SearchForecastsFunction
+            from .primitives.search.search_notices import SearchNoticesFunction
+            from .primitives.search.search_salesforce import SearchSalesforceFunction
+            from .primitives.search.search_scraped_assets import SearchScrapedAssetsFunction
+            from .primitives.search.search_solicitations import SearchSolicitationsFunction
             self.register(QueryModelFunction)
             self.register(GetContentFunction)
             self.register(GetAssetFunction)
@@ -197,11 +198,11 @@ class FunctionRegistry:
 
         # Import output functions
         try:
-            from .primitives.output.update_metadata import UpdateMetadataFunction
             from .primitives.output.bulk_update_metadata import BulkUpdateMetadataFunction
             from .primitives.output.create_artifact import CreateArtifactFunction
             from .primitives.output.generate_document import GenerateDocumentFunction
             from .primitives.output.log import LogFunction
+            from .primitives.output.update_metadata import UpdateMetadataFunction
             from .primitives.output.update_source_metadata import UpdateSourceMetadataFunction
             self.register(UpdateMetadataFunction)
             self.register(BulkUpdateMetadataFunction)
@@ -224,10 +225,10 @@ class FunctionRegistry:
         # Import compound functions
         try:
             from .compounds.analyze_solicitation import AnalyzeSolicitationFunction
-            from .compounds.summarize_solicitations import SummarizeSolicitationsFunction
-            from .compounds.generate_digest import GenerateDigestFunction
             from .compounds.classify_document import ClassifyDocumentFunction
             from .compounds.enrich_assets import EnrichAssetsFunction
+            from .compounds.generate_digest import GenerateDigestFunction
+            from .compounds.summarize_solicitations import SummarizeSolicitationsFunction
             self.register(AnalyzeSolicitationFunction)
             self.register(SummarizeSolicitationsFunction)
             self.register(GenerateDigestFunction)
@@ -238,7 +239,7 @@ class FunctionRegistry:
 
         # Import email workflow functions (MCP two-step confirmation)
         try:
-            from .compounds.email_workflow import PrepareEmailFunction, ConfirmEmailFunction
+            from .compounds.email_workflow import ConfirmEmailFunction, PrepareEmailFunction
             self.register(PrepareEmailFunction)
             self.register(ConfirmEmailFunction)
         except ImportError as e:
@@ -246,10 +247,10 @@ class FunctionRegistry:
 
         # Import flow control functions
         try:
-            from .primitives.flow.if_branch import IfBranchFunction
-            from .primitives.flow.switch_branch import SwitchBranchFunction
-            from .primitives.flow.parallel import ParallelFunction
             from .primitives.flow.foreach import ForeachFunction
+            from .primitives.flow.if_branch import IfBranchFunction
+            from .primitives.flow.parallel import ParallelFunction
+            from .primitives.flow.switch_branch import SwitchBranchFunction
             self.register(IfBranchFunction)
             self.register(SwitchBranchFunction)
             self.register(ParallelFunction)
@@ -259,12 +260,14 @@ class FunctionRegistry:
 
         # Import SharePoint/data functions
         try:
+            from .primitives.sharepoint.resolve_sharepoint_folders import ResolveSharepointFoldersFunction
+            from .primitives.sharepoint.sp_get_item import SpGetItemFunction
             from .primitives.sharepoint.sp_get_site import SpGetSiteFunction
             from .primitives.sharepoint.sp_list_items import SpListItemsFunction
-            from .primitives.sharepoint.sp_get_item import SpGetItemFunction
             self.register(SpGetSiteFunction)
             self.register(SpListItemsFunction)
             self.register(SpGetItemFunction)
+            self.register(ResolveSharepointFoldersFunction)
         except ImportError as e:
             logger.warning(f"Failed to import SharePoint functions: {e}")
 

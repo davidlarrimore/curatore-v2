@@ -33,29 +33,25 @@ Usage:
 """
 
 import asyncio
-import json
 import logging
 from datetime import datetime, timedelta, timezone
-from zoneinfo import ZoneInfo
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
 # Note: We don't use urljoin because it strips path for absolute endpoints
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from app.config import settings
 from app.core.database.models import (
     Asset,
-    Artifact,
     Run,
-    SamAttachment,
-    SamNotice,
-    SamSearch,
-    SamSolicitation,
 )
+from app.core.shared.run_log_service import run_log_service
+
 from .sam_api_usage_service import sam_api_usage_service
 from .sam_service import sam_service
-from app.core.shared.run_log_service import run_log_service
 
 logger = logging.getLogger("curatore.api.sam_pull_service")
 
@@ -694,7 +690,7 @@ class SamPullService:
 
         # The description API is at a different path than the search API
         # https://api.sam.gov/prod/opportunities/v1/noticedesc?noticeid={notice_id}
-        description_url = f"https://api.sam.gov/prod/opportunities/v1/noticedesc"
+        description_url = "https://api.sam.gov/prod/opportunities/v1/noticedesc"
 
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
@@ -2554,9 +2550,9 @@ class SamPullService:
             opportunity: Raw opportunity data from API
             solicitation: Optional SamSolicitation instance
         """
-        from app.core.shared.config_loader import config_loader
-        from app.core.search.pg_index_service import pg_index_service
         from app.config import settings
+        from app.core.search.pg_index_service import pg_index_service
+        from app.core.shared.config_loader import config_loader
 
         # Check if search is enabled
         search_config = config_loader.get_search_config()
@@ -2696,7 +2692,7 @@ class SamPullService:
 
             if not opportunities:
                 # No results from solnum search - fall back to description-only refresh
-                logger.info(f"No results for solnum search, falling back to description refresh")
+                logger.info("No results for solnum search, falling back to description refresh")
                 return await self._refresh_description_only(
                     session, solicitation, organization_id, results
                 )

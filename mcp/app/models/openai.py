@@ -2,6 +2,7 @@
 """Pydantic models for OpenAI function calling format."""
 
 from typing import Any, Dict, List, Literal
+
 from pydantic import BaseModel, Field
 
 

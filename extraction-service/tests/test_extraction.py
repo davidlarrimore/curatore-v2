@@ -1,10 +1,10 @@
+import importlib.util
 import json
 import pathlib
+import tempfile
 
 import pytest
-import tempfile
 from fastapi.testclient import TestClient
-import importlib.util
 
 
 def _has_module(mod: str) -> bool:

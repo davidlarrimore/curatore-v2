@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
@@ -9,6 +9,8 @@ import { formatDateTime, formatDuration } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import { ConfirmDeleteDialog } from '@/components/ui/ConfirmDeleteDialog'
 import { useDeletionJobs, useActiveJobs } from '@/lib/context-shims'
+import { useJobProgress } from '@/lib/useJobProgress'
+import { JobProgressPanel } from '@/components/ui/JobProgressPanel'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import toast from 'react-hot-toast'
 import {
@@ -1075,8 +1077,6 @@ function SharePointSyncConfigContent() {
   const [showEditModal, setShowEditModal] = useState(false)
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
 
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
-
   // Toast helper functions
   const addToast = useCallback((type: Toast['type'], message: string) => {
     const id = Date.now().toString()
@@ -1091,15 +1091,6 @@ function SharePointSyncConfigContent() {
     setToasts(prev => prev.filter(t => t.id !== id))
   }, [])
 
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current)
-      }
-    }
-  }, [])
-
   const loadConfig = useCallback(async () => {
     if (!token || !configId) return
 
@@ -1110,10 +1101,8 @@ function SharePointSyncConfigContent() {
       // Check if currently syncing
       if (configData.is_syncing) {
         setIsSyncing(true)
-        startPolling()
       } else {
         setIsSyncing(false)
-        stopPolling()
       }
 
       return configData
@@ -1150,7 +1139,6 @@ function SharePointSyncConfigContent() {
       if (activeRun) {
         setCurrentRun(activeRun)
         setIsSyncing(true)
-        startPolling()
       } else {
         setCurrentRun(null)
       }
@@ -1162,78 +1150,47 @@ function SharePointSyncConfigContent() {
     }
   }, [token, configId])
 
-  const startPolling = useCallback(() => {
-    // Clear any existing polling
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current)
-    }
-
-    // Poll every 3 seconds
-    pollIntervalRef.current = setInterval(async () => {
-      if (!token || !configId) return
-
-      try {
-        // Fetch latest config and history
-        const [configData, historyResponse] = await Promise.all([
-          sharepointSyncApi.getConfig(token, configId),
-          sharepointSyncApi.getHistory(token, configId, { limit: 5 }),
-        ])
-
-        setConfig(configData)
-
-        // Find the most recent run
-        const latestRun = historyResponse.runs[0]
-        if (latestRun) {
-          setCurrentRun(latestRun)
-
-          // Check if completed or failed
-          if (latestRun.status === 'completed' || latestRun.status === 'failed') {
-            setIsSyncing(false)
-            stopPolling()
-
-            // Refresh all data
-            await loadDocuments(activeTab === 'deleted' ? 'deleted_in_source' : 'synced')
-            setSyncHistory(historyResponse.runs)
-
-            // Show completion toast
-            if (latestRun.status === 'completed') {
-              const summary = latestRun.results_summary
-              if (summary) {
-                const newFiles = summary.new_files || 0
-                const updated = summary.updated_files || 0
-                const failed = summary.failed_files || 0
-
-                if (failed > 0) {
-                  addToast('warning', `Sync completed with errors: ${newFiles} new, ${updated} updated, ${failed} failed`)
-                } else {
-                  addToast('success', `Sync completed: ${newFiles} new, ${updated} updated files`)
-                }
-              } else {
-                addToast('success', 'Sync completed successfully')
-              }
+  // Job progress tracking via WebSocket
+  const { isActive: isSyncJobActive } = useJobProgress('sharepoint_config', configId, {
+    onComplete: async () => {
+      setIsSyncing(false)
+      setCurrentRun(null)
+      // Refresh all data
+      const [, , runs] = await Promise.all([
+        loadConfig(),
+        loadDocuments(activeTab === 'deleted' ? 'deleted_in_source' : 'synced'),
+        loadHistory(),
+      ])
+      // Show completion toast with stats from the latest completed run
+      if (runs && runs.length > 0) {
+        const latestRun = runs[0]
+        if (latestRun.status === 'completed') {
+          const summary = latestRun.results_summary
+          if (summary) {
+            const newFiles = summary.new_files || 0
+            const updated = summary.updated_files || 0
+            const failed = summary.failed_files || 0
+            if (failed > 0) {
+              addToast('warning', `Sync completed with errors: ${newFiles} new, ${updated} updated, ${failed} failed`)
             } else {
-              addToast('error', `Sync failed: ${latestRun.error_message || 'Unknown error'}`)
+              addToast('success', `Sync completed: ${newFiles} new, ${updated} updated files`)
             }
+          } else {
+            addToast('success', 'Sync completed successfully')
           }
+        } else if (latestRun.status === 'failed') {
+          addToast('error', `Sync failed: ${latestRun.error_message || 'Unknown error'}`)
         }
-
-        // Also check config.is_syncing
-        if (!configData.is_syncing) {
-          setIsSyncing(false)
-          stopPolling()
-        }
-      } catch (err) {
-        console.error('Failed to poll status:', err)
       }
-    }, 3000)
-  }, [token, configId, activeTab, addToast, loadDocuments])
+    },
+  })
 
-  const stopPolling = useCallback(() => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current)
-      pollIntervalRef.current = null
+  // Sync isSyncing state with job progress hook
+  useEffect(() => {
+    if (isSyncJobActive) {
+      setIsSyncing(true)
     }
-  }, [])
+  }, [isSyncJobActive])
 
   // Initial load
   useEffect(() => {
@@ -1255,14 +1212,6 @@ function SharePointSyncConfigContent() {
       loadDocuments('deleted_in_source')
     }
   }, [activeTab, loadDocuments])
-
-  // Check for active sync on config load
-  useEffect(() => {
-    if (config?.is_syncing) {
-      setIsSyncing(true)
-      startPolling()
-    }
-  }, [config?.is_syncing, startPolling])
 
   // Redirect if config is being deleted
   useEffect(() => {
@@ -1290,9 +1239,6 @@ function SharePointSyncConfigContent() {
           resourceType: 'sharepoint_config',
         })
       }
-
-      // Start polling for status
-      startPolling()
 
       // Refresh history to show new run
       await loadHistory()
@@ -1858,37 +1804,20 @@ function SharePointSyncConfigContent() {
           </div>
         )}
 
-        {/* Sync Progress Banner */}
-        {isSyncing && currentRun && (
-          <div className="mb-6 rounded-xl bg-blue-50 dark:bg-blue-900/20 border border-blue-100 dark:border-blue-800 p-4">
-            <div className="flex items-center gap-4">
-              <div className="flex-shrink-0">
-                <div className="w-10 h-10 rounded-full bg-blue-100 dark:bg-blue-800 flex items-center justify-center">
-                  <Loader2 className="w-5 h-5 text-blue-600 dark:text-blue-400 animate-spin" />
-                </div>
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="text-sm font-medium text-blue-800 dark:text-blue-200">
-                  {currentRun.config?.full_sync ? 'Full sync' : 'Incremental sync'} in progress...
-                </p>
-                <p className="text-xs text-blue-600 dark:text-blue-400 mt-0.5">
-                  Started {formatDate(currentRun.started_at || currentRun.created_at)}
-                </p>
-                {currentRun.progress && (
-                  <p className="text-xs text-blue-600 dark:text-blue-400 mt-1">
-                    {currentRun.progress.message || 'Processing files...'}
-                  </p>
-                )}
-              </div>
-              <Link
-                href={`/admin/queue/${currentRun.id}`}
-                className="flex-shrink-0 text-xs font-medium text-blue-600 hover:text-blue-800 dark:text-blue-400 dark:hover:text-blue-200 underline"
-              >
-                View Job →
-              </Link>
-            </div>
-          </div>
-        )}
+        {/* Sync Progress */}
+        <JobProgressPanel
+          resourceType="sharepoint_config"
+          resourceId={configId}
+          onComplete={async () => {
+            setIsSyncing(false)
+            await Promise.all([
+              loadConfig(),
+              loadDocuments(activeTab === 'deleted' ? 'deleted_in_source' : 'synced'),
+              loadHistory(),
+            ])
+          }}
+          className="mb-6"
+        />
 
         {/* Error Banner for Last Sync */}
         {!isSyncing && lastErrors.length > 0 && (

@@ -1,10 +1,12 @@
 'use client'
 
-import { useState, useEffect, use, useCallback, useRef } from 'react'
+import { useState, useEffect, use, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { useDeletionJobs, useActiveJobs } from '@/lib/context-shims'
-import { scrapeApi, ScrapeCollection, ScrapedAsset, PathTreeNode, CrawlStatus } from '@/lib/api'
+import { useJobProgress } from '@/lib/useJobProgress'
+import { JobProgressPanel } from '@/components/ui/JobProgressPanel'
+import { scrapeApi, ScrapeCollection, ScrapedAsset, PathTreeNode } from '@/lib/api'
 import { formatCompact } from '@/lib/date-utils'
 import Link from 'next/link'
 import toast from 'react-hot-toast'
@@ -22,7 +24,6 @@ import {
   FolderOpen,
   ChevronRight,
   Clock,
-  Settings,
   CheckCircle,
   XCircle,
   Info,
@@ -53,6 +54,9 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
   const { token, user } = useAuth()
   const { addJob: addDeletionJob, isDeleting } = useDeletionJobs()
   const { addJob } = useActiveJobs()
+  const { isActive: isCrawlActive } = useJobProgress('scrape_collection', collectionId, {
+    onComplete: () => loadCollection(),
+  })
 
   const [collection, setCollection] = useState<ScrapeCollection | null>(null)
   const [assets, setAssets] = useState<ScrapedAsset[]>([])
@@ -62,12 +66,9 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
   const [error, setError] = useState<string | null>(null)
   const [activeTab, setActiveTab] = useState<'assets' | 'tree'>('assets')
   const [assetFilter, setAssetFilter] = useState<'all' | 'page' | 'document'>('all')
-  const [crawling, setCrawling] = useState(false)
-  const [crawlStatus, setCrawlStatus] = useState<CrawlStatus | null>(null)
   const [toasts, setToasts] = useState<Toast[]>([])
   const [showDeleteDialog, setShowDeleteDialog] = useState(false)
   const [deleting, setDeleting] = useState(false)
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   // Content viewer state
   const [contentViewerOpen, setContentViewerOpen] = useState(false)
@@ -91,27 +92,11 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
     setToasts(prev => prev.filter(t => t.id !== id))
   }, [])
 
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current)
-      }
-    }
-  }, [])
-
   useEffect(() => {
     if (token && collectionId) {
       loadCollection()
     }
   }, [token, collectionId])
-
-  // Check for ongoing crawl when collection loads
-  useEffect(() => {
-    if (collection?.last_crawl_run_id && token) {
-      checkCrawlStatus()
-    }
-  }, [collection?.last_crawl_run_id, token])
 
   async function loadCollection() {
     if (!token) return
@@ -140,75 +125,14 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
     }
   }
 
-  async function checkCrawlStatus() {
-    if (!token) return
-    try {
-      const status = await scrapeApi.getCrawlStatus(token, collectionId)
-      setCrawlStatus(status)
-
-      if (status.status === 'pending' || status.status === 'running') {
-        setCrawling(true)
-        startPolling()
-      } else {
-        setCrawling(false)
-        stopPolling()
-      }
-    } catch {
-      setCrawlStatus(null)
-      setCrawling(false)
-      stopPolling()
-    }
-  }
-
-  function startPolling() {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current)
-    }
-
-    pollIntervalRef.current = setInterval(async () => {
-      if (!token) return
-      try {
-        const status = await scrapeApi.getCrawlStatus(token, collectionId)
-        setCrawlStatus(status)
-
-        if (status.status === 'completed' || status.status === 'failed') {
-          setCrawling(false)
-          stopPolling()
-          loadCollection()
-
-          if (status.status === 'completed') {
-            const summary = status.results_summary as any
-            const pagesNew = summary?.pages_new || 0
-            const pagesUpdated = summary?.pages_updated || 0
-            addToast('success', `Crawl complete! ${pagesNew} new pages, ${pagesUpdated} updated.`)
-          } else {
-            addToast('error', `Crawl failed: ${status.error_message || 'Unknown error'}`)
-          }
-        }
-      } catch (err) {
-        console.error('Failed to poll crawl status:', err)
-      }
-    }, 3000)
-  }
-
-  function stopPolling() {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current)
-      pollIntervalRef.current = null
-    }
-  }
-
   async function handleStartCrawl() {
     if (!token || !collection) return
-
-    setCrawling(true)
     setError(null)
 
     try {
       const result = await scrapeApi.startCrawl(token, collectionId)
       addToast('info', 'Crawl started! Fetching pages...')
 
-      // Track the job in the activity monitor
       if (result.run_id) {
         addJob({
           runId: result.run_id,
@@ -218,24 +142,7 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
           resourceType: 'scrape_collection',
         })
       }
-
-      setCrawlStatus({
-        run_id: result.run_id,
-        status: 'running',
-        progress: { current: 0, total: 0, unit: 'pages' },
-        results_summary: null,
-        error_message: null,
-      })
-
-      startPolling()
-
-      setTimeout(() => {
-        scrapeApi.getCollection(token, collectionId).then(col => {
-          setCollection(col)
-        }).catch(() => {})
-      }, 1000)
     } catch (err: any) {
-      setCrawling(false)
       const errorMsg = err.message || 'Failed to start crawl'
       setError(errorMsg)
       addToast('error', errorMsg)
@@ -457,10 +364,10 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
             {isAdmin && collection.status === 'active' && (
               <button
                 onClick={handleStartCrawl}
-                disabled={crawling}
+                disabled={isCrawlActive}
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-emerald-500 to-teal-600 rounded-lg hover:from-emerald-600 hover:to-teal-700 disabled:opacity-50 shadow-lg shadow-emerald-500/25 transition-all"
               >
-                {crawling ? (
+                {isCrawlActive ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Crawling...
@@ -477,7 +384,7 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
             {isAdmin && (
               <button
                 onClick={() => setShowDeleteDialog(true)}
-                disabled={crawling || deleting}
+                disabled={isCrawlActive || deleting}
                 className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/30 border border-red-200 dark:border-red-800 rounded-lg disabled:opacity-50 transition-all"
                 title="Delete collection"
               >
@@ -489,56 +396,12 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
         </div>
 
         {/* Crawl Progress */}
-        {crawling && crawlStatus && (
-          <div className="mb-6 rounded-xl bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800 p-4">
-            <div className="flex items-center gap-3">
-              <Loader2 className="w-5 h-5 text-emerald-600 dark:text-emerald-400 animate-spin flex-shrink-0" />
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between gap-2">
-                  <p className="text-sm font-medium text-emerald-800 dark:text-emerald-200">
-                    {crawlStatus.progress?.phase === 'starting' ? 'Starting crawl...' : 'Crawling in progress...'}
-                  </p>
-                  {crawlStatus.progress?.percent !== null && crawlStatus.progress?.percent !== undefined && (
-                    <span className="text-xs font-medium text-emerald-700 dark:text-emerald-300">
-                      {crawlStatus.progress.percent}%
-                    </span>
-                  )}
-                </div>
-                {crawlStatus.progress && crawlStatus.progress.total > 0 && (
-                  <div className="mt-2 h-2 bg-emerald-200 dark:bg-emerald-900 rounded-full overflow-hidden">
-                    <div
-                      className="h-full bg-emerald-500 dark:bg-emerald-400 rounded-full transition-all duration-300"
-                      style={{ width: `${crawlStatus.progress.percent || 0}%` }}
-                    />
-                  </div>
-                )}
-                {crawlStatus.progress && (
-                  <div className="text-xs text-emerald-600 dark:text-emerald-400 mt-1.5">
-                    <span>
-                      {crawlStatus.progress.current} {crawlStatus.progress.unit} processed
-                      {crawlStatus.progress.total > 0 && ` of ${crawlStatus.progress.total}`}
-                    </span>
-                    {crawlStatus.progress.pages_new !== undefined && crawlStatus.progress.current > 0 && (
-                      <span className="ml-2">
-                        ({crawlStatus.progress.pages_new} new
-                        {crawlStatus.progress.pages_failed > 0 && `, ${crawlStatus.progress.pages_failed} failed`})
-                      </span>
-                    )}
-                  </div>
-                )}
-              </div>
-              {crawlStatus.run_id && (
-                <Link
-                  href={`/admin/queue/${crawlStatus.run_id}`}
-                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-300 bg-emerald-100 dark:bg-emerald-800/50 hover:bg-emerald-200 dark:hover:bg-emerald-800 rounded-lg transition-colors flex-shrink-0"
-                >
-                  <Settings className="w-3.5 h-3.5" />
-                  View Job
-                </Link>
-              )}
-            </div>
-          </div>
-        )}
+        <JobProgressPanel
+          resourceType="scrape_collection"
+          resourceId={collectionId}
+          onComplete={() => loadCollection()}
+          className="mb-6"
+        />
 
         {/* Stats Cards */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 mb-6">
@@ -549,12 +412,10 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
               </div>
               <div>
                 <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                  {crawling && crawlStatus?.progress?.pages_new !== undefined
-                    ? crawlStatus.progress.pages_new
-                    : collection.stats?.page_count || 0}
+                  {collection.stats?.page_count || 0}
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
-                  {crawling ? 'New Pages' : 'Pages'}
+                  Pages
                 </p>
               </div>
             </div>
@@ -567,12 +428,10 @@ export default function ScrapeCollectionDetailPage({ params }: PageProps) {
               </div>
               <div>
                 <p className="text-2xl font-bold text-gray-900 dark:text-white">
-                  {crawling && crawlStatus?.progress?.documents_discovered !== undefined
-                    ? crawlStatus.progress.documents_discovered
-                    : collection.stats?.document_count || 0}
+                  {collection.stats?.document_count || 0}
                 </p>
                 <p className="text-xs text-gray-500 dark:text-gray-400">
-                  {crawling ? 'Docs Found' : 'Documents'}
+                  Documents
                 </p>
               </div>
             </div>

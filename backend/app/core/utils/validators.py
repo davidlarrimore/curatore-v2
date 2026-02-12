@@ -23,7 +23,6 @@ import re
 import uuid
 from typing import Optional
 
-
 # Regex patterns
 UUID_PATTERN = re.compile(
     r'^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$',

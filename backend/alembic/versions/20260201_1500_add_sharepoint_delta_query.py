@@ -12,8 +12,8 @@ incremental SharePoint synchronization:
 - delta_token_acquired_at: When current delta token was first obtained
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "20260201_1500"

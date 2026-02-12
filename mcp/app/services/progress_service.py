@@ -4,9 +4,9 @@
 import asyncio
 import logging
 import time
-from typing import Any, Dict, Optional, AsyncGenerator
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, AsyncGenerator, Dict, Optional
 
 logger = logging.getLogger("mcp.services.progress")
 

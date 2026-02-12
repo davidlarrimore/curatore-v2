@@ -226,7 +226,7 @@ class DocumentGenerationService:
         """
         try:
             # Import WeasyPrint lazily to avoid import errors if not installed
-            from weasyprint import HTML, CSS
+            from weasyprint import CSS, HTML
 
             # Convert markdown to HTML
             self._markdown_converter.reset()
@@ -307,8 +307,8 @@ class DocumentGenerationService:
         try:
             # Import python-docx lazily
             from docx import Document
-            from docx.shared import Pt, Inches
             from docx.enum.text import WD_ALIGN_PARAGRAPH
+            from docx.shared import Inches, Pt
 
             doc = Document()
 

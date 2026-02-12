@@ -49,6 +49,7 @@ class ContextBuilder:
         self,
         session: Optional[Any] = None,
         org_id: Optional[UUID] = None,
+        include_planning_tools: bool = False,
     ) -> str:
         """
         Build the complete v2 system prompt.
@@ -56,6 +57,7 @@ class ContextBuilder:
         Args:
             session: Optional database session for org-specific context
             org_id: Optional organization ID
+            include_planning_tools: Whether to include planning tools instructions
 
         Returns:
             Complete system prompt string
@@ -69,22 +71,36 @@ class ContextBuilder:
             self._build_profile_constraints(),
         ]
 
-        # Add org-specific context if session available
-        if session and org_id:
-            try:
-                data_source_ctx = await self._build_data_source_context(session, org_id)
-                if data_source_ctx:
-                    sections.append(data_source_ctx)
-            except Exception as e:
-                logger.warning(f"Failed to build data source context: {e}")
+        # Add org-specific static context when planning tools are NOT active.
+        # When planning tools are enabled, the LLM discovers this info via
+        # discover_data_sources / discover_metadata calls instead.
+        if session and org_id and not include_planning_tools:
+            import asyncio
 
-            try:
-                metadata_ctx = await self._build_metadata_context(session, org_id)
-                if metadata_ctx:
-                    sections.append(metadata_ctx)
-            except Exception as e:
-                logger.warning(f"Failed to build metadata context: {e}")
+            async def _safe_data_source():
+                try:
+                    return await self._build_data_source_context(session, org_id)
+                except Exception as e:
+                    logger.warning(f"Failed to build data source context: {e}")
+                    return ""
 
+            async def _safe_metadata():
+                try:
+                    return await self._build_metadata_context(session, org_id)
+                except Exception as e:
+                    logger.warning(f"Failed to build metadata context: {e}")
+                    return ""
+
+            data_source_ctx, metadata_ctx = await asyncio.gather(
+                _safe_data_source(), _safe_metadata()
+            )
+            if data_source_ctx:
+                sections.append(data_source_ctx)
+            if metadata_ctx:
+                sections.append(metadata_ctx)
+
+        if include_planning_tools:
+            sections.append(self._build_planning_tools_section())
         sections.append(self._build_output_instructions())
 
         return "\n\n".join(sections)
@@ -104,7 +120,9 @@ Key rules:
 - Output ONLY valid JSON (no markdown fences, no commentary)
 - Use the tools listed in the TOOL CATALOG section
 - Reference previous step outputs and parameters using ref objects
-- Follow the generation profile constraints"""
+- Follow the generation profile constraints
+- Always generate a complete, standalone procedure with a descriptive name, slug, and full description
+- The description must clearly explain what the procedure does, not just restate the user prompt"""
 
     # ------------------------------------------------------------------
     # Section 2: Plan JSON Schema
@@ -279,7 +297,8 @@ Use ONLY these tools in your plan. Any tool not listed here will be rejected.
 
 Choose the correct search function based on the data source:
 
-- **Documents / SharePoint files** → `search_assets` (supports `site_name` for human-friendly filtering)
+- **Documents / SharePoint files** → `search_assets` (supports `site_name` and `folder_path` for filtering)
+- **Resolve folder names** → `resolve_sharepoint_folders` (finds valid paths from human-readable names like "Past Performances")
 - **SAM.gov solicitations** (grouped by solicitation number) → `search_solicitations` (supports `search_name` for human-friendly filtering)
 - **SAM.gov notices** (individual postings) → `search_notices`
 - **Salesforce records** (accounts, contacts, opportunities) → `search_salesforce`
@@ -295,12 +314,20 @@ Choose the correct search function based on the data source:
 ## Human-Friendly Names
 
 Search functions accept human-readable names instead of UUIDs:
-- `search_assets(query="contracts", site_name="IT Department")` — resolves to sync_config_ids
+- `search_assets(query="contracts", site_name="IT Department", folder_path="Proposals/2024")` — filter by site and folder
 - `search_solicitations(keyword="cyber", search_name="IT Services Opportunities")` — resolves to search_id
 - `search_scraped_assets(keyword="forecast", collection_name="GSA AG")` — resolves to collection_id
 - All search functions accept `facet_filters` for cross-domain filtering: `{"agency": "GSA", "naics_code": "541512"}`
 
-IMPORTANT: Do not confuse these. Using `search_assets` for SAM.gov data will return zero results."""
+IMPORTANT: Do not confuse these. Using `search_assets` for SAM.gov data will return zero results.
+
+## Folder Path Best Practice
+
+When a procedure filters by folder, ALWAYS use the full storage path with folder_match_mode="prefix":
+- Call `resolve_sharepoint_folders` during planning to get the `storage_path`
+- Use `search_assets(folder_path="sharepoint/growth/reuse-material/past-performances", folder_match_mode="prefix")`
+- This ensures exact prefix matching — no accidental matches on similarly-named folders
+- NEVER use partial human-readable paths without folder_match_mode="contains" """
 
     # ------------------------------------------------------------------
     # Section 5: Efficiency Patterns
@@ -374,133 +401,192 @@ The TOOL CATALOG includes each tool's output_schema. Use it to:
         organization_id: UUID,
     ) -> str:
         """Build context about available data sources for the organization."""
+        import asyncio
+
         from sqlalchemy import select
+
         from app.core.database.models import (
-            SharePointSyncConfig,
-            SamSearch,
             Connection,
-            ScrapeCollection,
             ForecastSync,
+            SamSearch,
+            ScrapeCollection,
+            SharePointSyncConfig,
         )
 
         sources: List[Dict[str, Any]] = []
 
-        # SharePoint
-        try:
-            result = await session.execute(
-                select(SharePointSyncConfig)
-                .where(SharePointSyncConfig.organization_id == organization_id)
-                .where(SharePointSyncConfig.is_active == True)
-            )
-            configs = result.scalars().all()
-            for c in configs:
-                site_name = getattr(c, "site_name", None)
-                stats = c.stats if hasattr(c, "stats") and c.stats else {}
-                entry: Dict[str, Any] = {
-                    "type": "sharepoint",
-                    "name": c.name,
-                    "id": str(c.id),
-                    "folder": c.folder_name or c.folder_url or "",
-                }
-                if site_name:
-                    entry["site_name"] = site_name
-                if c.description:
-                    entry["description"] = c.description[:120]
-                if stats:
-                    entry["total_files"] = stats.get("total_files")
-                sources.append(entry)
-        except Exception as e:
-            logger.warning(f"Failed to fetch SharePoint configs: {e}")
+        # Run all data source queries in parallel
+        async def _fetch_sharepoint() -> List[Dict[str, Any]]:
+            items: List[Dict[str, Any]] = []
+            try:
+                from app.core.database.models import SharePointSyncedDocument
 
-        # SAM.gov Saved Searches
-        try:
-            result = await session.execute(
-                select(SamSearch)
-                .where(SamSearch.organization_id == organization_id)
-                .where(SamSearch.is_active == True)
-            )
-            searches = result.scalars().all()
-            for s in searches:
-                entry = {
-                    "type": "sam_search",
-                    "name": s.name,
-                    "id": str(s.id),
-                }
-                if s.description:
-                    entry["description"] = s.description[:120]
-                # Summarize search config filters
-                config = s.search_config or {}
-                filter_parts = []
-                if config.get("naics_codes"):
-                    filter_parts.append(f"NAICS: {', '.join(config['naics_codes'][:5])}")
-                if config.get("agencies"):
-                    filter_parts.append(f"Agencies: {', '.join(config['agencies'][:3])}")
-                if config.get("notice_types"):
-                    filter_parts.append(f"Types: {', '.join(config['notice_types'][:5])}")
-                if filter_parts:
-                    entry["filters"] = " | ".join(filter_parts)
-                sources.append(entry)
-        except Exception as e:
-            logger.warning(f"Failed to fetch SAM searches: {e}")
+                result = await session.execute(
+                    select(SharePointSyncConfig)
+                    .where(SharePointSyncConfig.organization_id == organization_id)
+                    .where(SharePointSyncConfig.is_active == True)
+                )
+                configs = result.scalars().all()
 
-        # Salesforce (uses Connection model with connection_type='salesforce')
-        try:
-            result = await session.execute(
-                select(Connection)
-                .where(Connection.organization_id == organization_id)
-                .where(Connection.connection_type == "salesforce")
-                .where(Connection.is_active == True)
-            )
-            connections = result.scalars().all()
-            for c in connections:
-                config = c.config or {}
-                sources.append({
-                    "type": "salesforce",
-                    "name": c.name,
-                    "id": str(c.id),
-                    "instance_url": config.get("instance_url", ""),
-                })
-        except Exception as e:
-            logger.warning(f"Failed to fetch Salesforce connections: {e}")
+                # Fetch folder paths for all configs
+                folder_paths_by_config: Dict[str, set] = {}
+                if configs:
+                    path_result = await session.execute(
+                        select(
+                            SharePointSyncedDocument.sync_config_id,
+                            SharePointSyncedDocument.sharepoint_path,
+                        )
+                        .where(SharePointSyncedDocument.sync_config_id.in_([c.id for c in configs]))
+                        .where(SharePointSyncedDocument.sync_status == "synced")
+                        .where(SharePointSyncedDocument.sharepoint_path.isnot(None))
+                    )
+                    for row in path_result:
+                        cfg_id = str(row.sync_config_id)
+                        path = row.sharepoint_path or ""
+                        parts = [p for p in path.strip("/").split("/") if p]
+                        if len(parts) >= 2:
+                            folder_paths_by_config.setdefault(cfg_id, set()).add(parts[0])
+                        if len(parts) >= 3:
+                            folder_paths_by_config.setdefault(cfg_id, set()).add(
+                                f"{parts[0]}/{parts[1]}"
+                            )
 
-        # Scrape Collections
-        try:
-            result = await session.execute(
-                select(ScrapeCollection)
-                .where(ScrapeCollection.organization_id == organization_id)
-                .where(ScrapeCollection.status == "active")
-            )
-            collections = result.scalars().all()
-            for c in collections:
-                entry = {
-                    "type": "scrape_collection",
-                    "name": c.name,
-                    "id": str(c.id),
-                    "root_url": c.root_url,
-                }
-                if c.description:
-                    entry["description"] = c.description[:120]
-                sources.append(entry)
-        except Exception as e:
-            logger.warning(f"Failed to fetch scrape collections: {e}")
+                for c in configs:
+                    site_name = getattr(c, "site_name", None)
+                    stats = c.stats if hasattr(c, "stats") and c.stats else {}
+                    entry: Dict[str, Any] = {
+                        "type": "sharepoint",
+                        "name": c.name,
+                        "id": str(c.id),
+                        "folder": c.folder_name or c.folder_url or "",
+                    }
+                    if site_name:
+                        entry["site_name"] = site_name
+                    if c.description:
+                        entry["description"] = c.description[:120]
+                    if stats:
+                        entry["total_files"] = stats.get("total_files")
+                    cfg_folders = folder_paths_by_config.get(str(c.id))
+                    if cfg_folders:
+                        entry["available_folders"] = sorted(cfg_folders)
+                        entry["folder_hint"] = (
+                            "Use resolve_sharepoint_folders to find exact paths, "
+                            "or search_assets(folder_path='...') to filter by folder."
+                        )
+                    items.append(entry)
+            except Exception as e:
+                logger.warning(f"Failed to fetch SharePoint configs: {e}")
+            return items
 
-        # Forecast Syncs
-        try:
-            result = await session.execute(
-                select(ForecastSync)
-                .where(ForecastSync.organization_id == organization_id)
-                .where(ForecastSync.is_active == True)
-            )
-            syncs = result.scalars().all()
-            for f in syncs:
-                sources.append({
-                    "type": "forecast_sync",
-                    "name": f.name,
-                    "id": str(f.id),
-                    "source_type": f.source_type,
-                })
-        except Exception as e:
-            logger.warning(f"Failed to fetch forecast syncs: {e}")
+        async def _fetch_sam() -> List[Dict[str, Any]]:
+            items: List[Dict[str, Any]] = []
+            try:
+                result = await session.execute(
+                    select(SamSearch)
+                    .where(SamSearch.organization_id == organization_id)
+                    .where(SamSearch.is_active == True)
+                )
+                searches = result.scalars().all()
+                for s in searches:
+                    entry: Dict[str, Any] = {
+                        "type": "sam_search",
+                        "name": s.name,
+                        "id": str(s.id),
+                    }
+                    if s.description:
+                        entry["description"] = s.description[:120]
+                    config = s.search_config or {}
+                    filter_parts = []
+                    if config.get("naics_codes"):
+                        filter_parts.append(f"NAICS: {', '.join(config['naics_codes'][:5])}")
+                    if config.get("agencies"):
+                        filter_parts.append(f"Agencies: {', '.join(config['agencies'][:3])}")
+                    if config.get("notice_types"):
+                        filter_parts.append(f"Types: {', '.join(config['notice_types'][:5])}")
+                    if filter_parts:
+                        entry["filters"] = " | ".join(filter_parts)
+                    items.append(entry)
+            except Exception as e:
+                logger.warning(f"Failed to fetch SAM searches: {e}")
+            return items
+
+        async def _fetch_salesforce() -> List[Dict[str, Any]]:
+            items: List[Dict[str, Any]] = []
+            try:
+                result = await session.execute(
+                    select(Connection)
+                    .where(Connection.organization_id == organization_id)
+                    .where(Connection.connection_type == "salesforce")
+                    .where(Connection.is_active == True)
+                )
+                connections = result.scalars().all()
+                for c in connections:
+                    config = c.config or {}
+                    items.append({
+                        "type": "salesforce",
+                        "name": c.name,
+                        "id": str(c.id),
+                        "instance_url": config.get("instance_url", ""),
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to fetch Salesforce connections: {e}")
+            return items
+
+        async def _fetch_scrape() -> List[Dict[str, Any]]:
+            items: List[Dict[str, Any]] = []
+            try:
+                result = await session.execute(
+                    select(ScrapeCollection)
+                    .where(ScrapeCollection.organization_id == organization_id)
+                    .where(ScrapeCollection.status == "active")
+                )
+                collections = result.scalars().all()
+                for c in collections:
+                    entry: Dict[str, Any] = {
+                        "type": "scrape_collection",
+                        "name": c.name,
+                        "id": str(c.id),
+                        "root_url": c.root_url,
+                    }
+                    if c.description:
+                        entry["description"] = c.description[:120]
+                    items.append(entry)
+            except Exception as e:
+                logger.warning(f"Failed to fetch scrape collections: {e}")
+            return items
+
+        async def _fetch_forecasts() -> List[Dict[str, Any]]:
+            items: List[Dict[str, Any]] = []
+            try:
+                result = await session.execute(
+                    select(ForecastSync)
+                    .where(ForecastSync.organization_id == organization_id)
+                    .where(ForecastSync.is_active == True)
+                )
+                syncs = result.scalars().all()
+                for f in syncs:
+                    items.append({
+                        "type": "forecast_sync",
+                        "name": f.name,
+                        "id": str(f.id),
+                        "source_type": f.source_type,
+                    })
+            except Exception as e:
+                logger.warning(f"Failed to fetch forecast syncs: {e}")
+            return items
+
+        sp, sam, sf, scrape, forecasts = await asyncio.gather(
+            _fetch_sharepoint(),
+            _fetch_sam(),
+            _fetch_salesforce(),
+            _fetch_scrape(),
+            _fetch_forecasts(),
+        )
+        sources.extend(sp)
+        sources.extend(sam)
+        sources.extend(sf)
+        sources.extend(scrape)
+        sources.extend(forecasts)
 
         if not sources:
             return ""
@@ -508,7 +594,7 @@ The TOOL CATALOG includes each tool's output_schema. Use it to:
         sources_json = json.dumps(sources, indent=2)
         return f"""# AVAILABLE DATA SOURCES
 
-The organization has these configured data sources. Use human-friendly names (site_name, search_name, collection_name) when the user references them. Use `discover_data_sources` to get full details including capabilities and search hints.
+The organization has these configured data sources. Use human-friendly names (site_name, search_name, collection_name) when the user references them.
 
 ```json
 {sources_json}
@@ -523,18 +609,20 @@ The organization has these configured data sources. Use human-friendly names (si
         session: Any,
         organization_id: UUID,
     ) -> str:
-        """Build context about available metadata facets and namespaces."""
-        from app.core.search.pg_search_service import pg_search_service
+        """
+        Build context about available metadata facets and namespaces.
+
+        Uses the metadata registry (YAML baseline) directly instead of querying
+        search_chunks for live sample values.  This avoids 27+ sequential
+        SELECT DISTINCT queries that take ~2 s each.
+        """
         from app.core.metadata.registry_service import metadata_registry_service
 
-        schema = await pg_search_service.get_metadata_schema(
-            session, organization_id, max_sample_values=10,
-        )
-
-        namespaces = schema.get("namespaces", {})
+        registry_namespaces = metadata_registry_service.get_namespaces()
+        registry_fields = metadata_registry_service.get_all_fields()
         facets = metadata_registry_service.get_facet_definitions()
 
-        if not namespaces and not facets:
+        if not registry_namespaces and not facets:
             return ""
 
         ctx: Dict[str, Any] = {}
@@ -551,25 +639,28 @@ The organization has these configured data sources. Use human-friendly names (si
                 })
             ctx["facets"] = facet_list
 
-        if namespaces:
-            ns_list = []
-            for ns_name, ns_info in namespaces.items():
-                fields = ns_info.get("fields", {})
-                if not fields:
+        # Build namespace info from registry — no DB queries needed
+        ns_list = []
+        for ns_name, ns_def in registry_namespaces.items():
+            ns_field_defs = registry_fields.get(ns_name, {})
+            if not ns_field_defs:
+                continue
+            # Include facetable fields with their examples from the registry
+            fields = {}
+            for fname, fdef in ns_field_defs.items():
+                if not fdef.get("facetable", False):
                     continue
-                ns_entry = {
-                    "namespace": ns_name,
-                    "display_name": ns_info.get("display_name", ns_name),
-                    "doc_count": ns_info.get("doc_count", 0),
-                    "fields": {
-                        fname: {
-                            "type": finfo.get("type", "string"),
-                            "samples": finfo.get("sample_values", [])[:5],
-                        }
-                        for fname, finfo in fields.items()
-                    },
+                fields[fname] = {
+                    "type": fdef.get("data_type", "string"),
+                    "samples": (fdef.get("examples") or [])[:5],
                 }
-                ns_list.append(ns_entry)
+            if fields:
+                ns_list.append({
+                    "namespace": ns_name,
+                    "display_name": ns_def.get("display_name", ns_name),
+                    "fields": fields,
+                })
+        if ns_list:
             ctx["namespaces"] = ns_list
 
         if not ctx:
@@ -608,6 +699,56 @@ Search tools accept `facet_filters` (preferred, cross-domain) and `metadata_filt
 ```
 
 Use `facet_filters` when possible: `{{"agency": "GSA", "naics_code": "541512"}}`{ref_note}"""
+
+    # ------------------------------------------------------------------
+    # Planning Phase Instructions
+    # ------------------------------------------------------------------
+
+    def _build_planning_tools_section(self) -> str:
+        return """# PLANNING PHASE
+
+You have planning tools to discover and verify data BEFORE creating the plan.
+This is your research phase: gather information first, then produce the plan.
+
+REQUIRED FIRST STEP: Call `discover_data_sources` to learn what data sources
+are available for this organization. This returns configured SharePoint sites,
+SAM.gov searches, forecast syncs, Salesforce connections, and scrape collections
+with details about each.
+
+OPTIONAL RESEARCH:
+- Call `discover_metadata` if you need to know available facets and filter fields
+- Call `resolve_sharepoint_folders` if the user references folder names that need path resolution
+- Call `search_assets` to verify specific documents exist before building steps around them
+
+VALIDATION:
+When you call a planning tool to verify something, you MUST check the result:
+- `resolve_sharepoint_folders` returns both `folder_path` (human-readable) and `storage_path` (full storage path).
+  Always use `storage_path` in generated search_assets steps for unambiguous matching.
+- If `resolve_sharepoint_folders` returns an empty list, the folder does NOT exist.
+  Ask the user for clarification by describing the issue in your response text BEFORE emitting the plan JSON.
+- If multiple folders match, list them in your response text and ask the user which one to use.
+- Example: call `resolve_sharepoint_folders(query="Past Performances", site_name="Growth")`.
+  If it returns `storage_path: "sharepoint/growth-sharepoint/reuse-material/past-performances"`,
+  use that exact string: `search_assets(folder_path="sharepoint/growth-sharepoint/reuse-material/past-performances", folder_match_mode="prefix")`
+
+RULES:
+1. Always call discover_data_sources first unless the request is purely generic.
+2. Max 5 tool calls. Be efficient — one discover_data_sources call typically provides
+   everything you need.
+3. When done researching, emit the Typed Plan JSON as your final response.
+4. Planning tool results inform YOUR decisions. The generated plan must be
+   self-contained — use verified paths, names, and IDs directly in step args.
+5. Never ignore tool results. If verification fails, adjust the plan accordingly.
+
+AMBIGUITY HANDLING:
+If your research reveals ambiguity (zero matches, multiple matches, unclear user intent),
+respond with a CLARIFICATION instead of a plan:
+- Describe what you found (or didn't find)
+- List the options if multiple matches exist
+- Ask the user to clarify
+- Do NOT emit a Typed Plan JSON when asking for clarification
+
+The user can then refine their prompt and re-generate."""
 
     # ------------------------------------------------------------------
     # Output Instructions

@@ -36,16 +36,17 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import text, select, delete, update
+from sqlalchemy import select, text, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.database.models import Asset, ExtractionResult
+from app.core.database.models import Asset
 from app.core.shared.asset_service import asset_service
-from .chunking_service import chunking_service, DocumentChunk
+from app.core.storage.minio_service import get_minio_service
+
+from .chunking_service import DocumentChunk, chunking_service
 from .embedding_service import embedding_service
 from .metadata_builders import metadata_builder_registry
-from app.core.storage.minio_service import get_minio_service
 
 logger = logging.getLogger("curatore.pg_index_service")
 
@@ -453,6 +454,7 @@ class PgIndexService:
             True if propagation succeeded or no metadata to propagate
         """
         import json
+
         from app.core.database.models import AssetMetadata
 
         try:
@@ -532,6 +534,7 @@ class PgIndexService:
 
         try:
             from sqlalchemy import select as sa_select
+
             from app.core.database.models import Asset as AssetModel
 
             result = await session.execute(
@@ -554,14 +557,13 @@ class PgIndexService:
                     UPDATE search_chunks
                     SET metadata = jsonb_set(
                         COALESCE(metadata, '{}'::jsonb),
-                        CAST(:ns_path AS text[]),
-                        COALESCE(metadata->CAST(:ns AS text), '{}'::jsonb) || CAST(:fields AS jsonb),
+                        ARRAY[:ns]::text[],
+                        COALESCE(metadata->:ns, '{}'::jsonb) || CAST(:fields AS jsonb),
                         true
                     )
                     WHERE source_type = 'asset' AND source_id = CAST(:aid AS UUID)
                 """)
                 await session.execute(sql, {
-                    "ns_path": "{" + namespace + "}",
                     "ns": namespace,
                     "fields": json.dumps(fields),
                     "aid": str(asset_id),
@@ -597,8 +599,8 @@ class PgIndexService:
         This is fire-and-forget — indexing is never blocked by this.
         """
         try:
-            from app.core.metadata.registry_service import metadata_registry_service
             from app.core.metadata.facet_reference_service import facet_reference_service
+            from app.core.metadata.registry_service import metadata_registry_service
 
             facets = metadata_registry_service.get_facet_definitions()
 

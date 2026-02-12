@@ -24,8 +24,8 @@ Revises: phase7_decouple_search
 Create Date: 2026-01-29 15:00:00.000000
 
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy import text
 
 # revision identifiers, used by Alembic.

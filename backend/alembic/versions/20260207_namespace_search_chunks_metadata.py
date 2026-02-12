@@ -16,7 +16,6 @@ Create Date: 2026-02-07
 
 from alembic import op
 
-
 # revision identifiers
 revision = "namespace_search_metadata"
 down_revision = "add_indexed_at_columns"

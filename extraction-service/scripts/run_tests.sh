@@ -174,7 +174,8 @@ run_local() {
   (
     cd "$SVC_DIR" && \
     MIN_TEXT_CHARS_FOR_NO_OCR="${MIN_TEXT_CHARS_FOR_NO_OCR:-1}" \
-    PYTHONPATH="${SVC_DIR}${PYTHONPATH:+:$PYTHONPATH}" "$venv/bin/python" -m pytest -q
+    PYTHONPATH="${SVC_DIR}${PYTHONPATH:+:$PYTHONPATH}" "$venv/bin/python" -m pytest -q \
+      --cov=extraction_service --cov-report=term-missing --cov-report=html:"$REPORT_DIR/extraction_coverage_html"
   ) >"$test_log" 2>&1 || code=$?
   print_pytest_summary "$test_log" "$test_log"
   if [[ $code -eq 0 ]]; then
@@ -204,7 +205,8 @@ run_docker() {
       python -m pip install --no-cache-dir -U pip >/dev/null; \
       python -m pip install --no-cache-dir -r requirements.txt >/dev/null; \
       if [ -f requirements-dev.txt ]; then python -m pip install --no-cache-dir -r requirements-dev.txt >/dev/null; fi; \
-      MIN_TEXT_CHARS_FOR_NO_OCR="${MIN_TEXT_CHARS_FOR_NO_OCR:-1}" python -m pytest -q tests' >"$test_log" 2>&1; then
+      MIN_TEXT_CHARS_FOR_NO_OCR="${MIN_TEXT_CHARS_FOR_NO_OCR:-1}" python -m pytest -q tests \
+      --cov=extraction_service --cov-report=term-missing' >"$test_log" 2>&1; then
     print_pytest_summary "$test_log" "$test_log"
     log_note "[FAIL] extraction-service (Docker) — see $(basename "$test_log")"
     show_log_tail "$test_log" "extraction-service (Docker) test failure"

@@ -19,12 +19,10 @@ Options:
 import argparse
 import asyncio
 import logging
-import sys
 from datetime import datetime
 from typing import List
-from uuid import UUID
 
-from sqlalchemy import select, and_
+from sqlalchemy import and_, select
 
 # Set up logging
 logging.basicConfig(
@@ -57,7 +55,6 @@ async def get_assets_for_reextraction(session, limit: int = None) -> List:
 
 async def reset_asset_for_reextraction(session, asset) -> bool:
     """Reset an asset for re-extraction."""
-    from ..database.models import ExtractionResult
 
     # Reset asset status to pending
     asset.status = "pending"

@@ -1,10 +1,12 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { useDeletionJobs, useActiveJobs } from '@/lib/context-shims'
+import { useJobProgressByType } from '@/lib/useJobProgress'
+import { JobProgressPanelByType } from '@/components/ui/JobProgressPanel'
 import { sharepointSyncApi, SharePointSyncConfig } from '@/lib/api'
 import { formatDateTime } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
@@ -55,11 +57,7 @@ function SharePointSyncContent() {
   const [configs, setConfigs] = useState<SharePointSyncConfig[]>([])
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
-  const [syncingConfigs, setSyncingConfigs] = useState<Set<string>>(new Set())
   const [toasts, setToasts] = useState<Toast[]>([])
-
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
-  const previousSyncingRef = useRef<Set<string>>(new Set())
 
   // Toast helper functions
   const addToast = useCallback((type: Toast['type'], message: string, configId?: string) => {
@@ -82,69 +80,21 @@ function SharePointSyncContent() {
 
     try {
       const response = await sharepointSyncApi.listConfigs(token, { limit: 100 })
-      const newConfigs = response.configs
-
-      // Track which configs are syncing
-      const currentSyncing = new Set<string>()
-      newConfigs.forEach(config => {
-        if (config.is_syncing) {
-          currentSyncing.add(config.id)
-        }
-      })
-
-      // Check for completed syncs
-      previousSyncingRef.current.forEach(configId => {
-        if (!currentSyncing.has(configId)) {
-          // This config finished syncing
-          const config = newConfigs.find(c => c.id === configId)
-          if (config) {
-            if (config.last_sync_status === 'success') {
-              addToast('success', `"${config.name}" sync completed`, configId)
-            } else if (config.last_sync_status === 'failed') {
-              addToast('error', `"${config.name}" sync failed`, configId)
-            } else if (config.last_sync_status === 'partial') {
-              addToast('warning', `"${config.name}" sync completed with errors`, configId)
-            }
-          }
-        }
-      })
-
-      previousSyncingRef.current = currentSyncing
-      setSyncingConfigs(currentSyncing)
-      setConfigs(newConfigs)
-
-      // Start or stop polling based on syncing status
-      if (currentSyncing.size > 0) {
-        startPolling()
-      } else {
-        stopPolling()
-      }
+      setConfigs(response.configs)
     } catch (err: any) {
       setError(err.message || 'Failed to load sync configurations')
     } finally {
       if (showLoading) setIsLoading(false)
     }
-  }, [token, addToast])
+  }, [token])
 
-  const startPolling = useCallback(() => {
-    if (pollIntervalRef.current) return // Already polling
+  const { jobs: syncJobs, isActive: hasSyncJobs } = useJobProgressByType('sharepoint_sync', {
+    onComplete: () => loadConfigs(false),
+  })
 
-    pollIntervalRef.current = setInterval(() => {
-      loadConfigs(false)
-    }, 5000)
-  }, [loadConfigs])
-
-  const stopPolling = useCallback(() => {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current)
-      pollIntervalRef.current = null
-    }
-  }, [])
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => stopPolling()
-  }, [stopPolling])
+  const isConfigSyncing = (configId: string) => {
+    return syncJobs.some(j => j.resourceId === configId)
+  }
 
   useEffect(() => {
     if (token) {
@@ -155,9 +105,6 @@ function SharePointSyncContent() {
   const handleSync = async (configId: string, configName: string) => {
     if (!token) return
 
-    // Optimistically add to syncing set
-    setSyncingConfigs(prev => new Set(prev).add(configId))
-    previousSyncingRef.current.add(configId)
     addToast('info', `Starting sync for "${configName}"...`, configId)
 
     try {
@@ -174,18 +121,10 @@ function SharePointSyncContent() {
         })
       }
 
-      // Start polling for status updates
-      startPolling()
       // Refresh to show syncing status
       await loadConfigs(false)
     } catch (err: any) {
       addToast('error', `Failed to start sync: ${err.message}`, configId)
-      setSyncingConfigs(prev => {
-        const next = new Set(prev)
-        next.delete(configId)
-        return next
-      })
-      previousSyncingRef.current.delete(configId)
     }
   }
 
@@ -203,7 +142,7 @@ function SharePointSyncContent() {
       )
     }
 
-    if (config.is_syncing || syncingConfigs.has(config.id)) {
+    if (config.is_syncing || isConfigSyncing(config.id)) {
       return (
         <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-400">
           <Loader2 className="w-3 h-3 animate-spin" />
@@ -266,7 +205,7 @@ function SharePointSyncContent() {
   }
 
   // Count syncing configs
-  const activeSyncCount = configs.filter(c => c.is_syncing || syncingConfigs.has(c.id)).length
+  const activeSyncCount = configs.filter(c => c.is_syncing || isConfigSyncing(c.id)).length
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
@@ -379,13 +318,24 @@ function SharePointSyncContent() {
             </Link>
           </div>
         ) : (
-          /* Sync Configs List */
+          <>
+          {hasSyncJobs && (
+            <div className="mb-4">
+              <JobProgressPanelByType
+                jobType="sharepoint_sync"
+                variant="compact"
+                className="space-y-2"
+              />
+            </div>
+          )}
+
+          {/* Sync Configs List */}
           <div className="space-y-4">
             {configs.map((config) => (
               <div
                 key={config.id}
                 className={`bg-white dark:bg-gray-800 rounded-xl border overflow-hidden transition-colors ${
-                  config.is_syncing || syncingConfigs.has(config.id)
+                  config.is_syncing || isConfigSyncing(config.id)
                     ? 'border-blue-300 dark:border-blue-700 ring-2 ring-blue-100 dark:ring-blue-900/30'
                     : 'border-gray-200 dark:border-gray-700 hover:border-indigo-300 dark:hover:border-indigo-700'
                 }`}
@@ -394,11 +344,11 @@ function SharePointSyncContent() {
                   <div className="flex items-start justify-between gap-4">
                     <div className="flex items-start gap-4 min-w-0">
                       <div className={`flex items-center justify-center w-10 h-10 rounded-lg flex-shrink-0 ${
-                        config.is_syncing || syncingConfigs.has(config.id)
+                        config.is_syncing || isConfigSyncing(config.id)
                           ? 'bg-blue-100 dark:bg-blue-900/30'
                           : 'bg-gradient-to-br from-indigo-500/10 to-purple-500/10'
                       }`}>
-                        {config.is_syncing || syncingConfigs.has(config.id) ? (
+                        {config.is_syncing || isConfigSyncing(config.id) ? (
                           <Loader2 className="w-5 h-5 text-blue-600 dark:text-blue-400 animate-spin" />
                         ) : (
                           <Folder className="w-5 h-5 text-indigo-600 dark:text-indigo-400" />
@@ -431,18 +381,18 @@ function SharePointSyncContent() {
                             variant="secondary"
                             size="sm"
                             onClick={() => handleSync(config.id, config.name)}
-                            disabled={config.is_syncing || syncingConfigs.has(config.id) || !config.has_delta_token}
+                            disabled={config.is_syncing || isConfigSyncing(config.id) || !config.has_delta_token}
                             className="gap-1.5"
                           >
-                            {config.is_syncing || syncingConfigs.has(config.id) ? (
+                            {config.is_syncing || isConfigSyncing(config.id) ? (
                               <Loader2 className="w-3.5 h-3.5 animate-spin" />
                             ) : (
                               <Play className="w-3.5 h-3.5" />
                             )}
-                            {config.is_syncing || syncingConfigs.has(config.id) ? 'Syncing...' : 'Incremental Sync'}
+                            {config.is_syncing || isConfigSyncing(config.id) ? 'Syncing...' : 'Incremental Sync'}
                           </Button>
                           {/* Tooltip for disabled state - needs full sync first */}
-                          {!config.has_delta_token && !config.is_syncing && !syncingConfigs.has(config.id) && (
+                          {!config.has_delta_token && !config.is_syncing && !isConfigSyncing(config.id) && (
                             <div className="absolute z-50 px-2 py-1.5 text-xs font-normal text-white bg-gray-900 dark:bg-gray-700 rounded-lg shadow-lg whitespace-nowrap left-1/2 -translate-x-1/2 bottom-full mb-2 pointer-events-none opacity-0 group-hover:opacity-100 transition-opacity">
                               Run a full sync first
                               <div className="absolute left-1/2 -translate-x-1/2 top-full border-4 border-transparent border-t-gray-900 dark:border-t-gray-700" />
@@ -497,6 +447,7 @@ function SharePointSyncContent() {
               </div>
             ))}
           </div>
+          </>
         )}
       </div>
 

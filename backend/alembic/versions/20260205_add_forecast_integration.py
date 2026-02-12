@@ -23,8 +23,8 @@ Revises: add_salesforce_integration
 Create Date: 2026-02-05 16:00:00.000000
 
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy import text
 
 # revision identifiers, used by Alembic.

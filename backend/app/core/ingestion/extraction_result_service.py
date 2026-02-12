@@ -30,15 +30,13 @@ Usage:
 """
 
 import logging
-from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database.models import ExtractionResult, Asset
-from app.config import settings
+from app.core.database.models import ExtractionResult
 
 logger = logging.getLogger("curatore.extraction_result_service")
 

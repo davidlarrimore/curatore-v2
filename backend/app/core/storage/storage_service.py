@@ -19,12 +19,13 @@
 # Version: 2.0.0
 # ============================================================================
 
-from typing import Dict, Optional, List
 import json
 import os
+from typing import Dict, List, Optional
 
 import redis
-from app.core.models import ProcessingResult, BatchProcessingResult
+
+from app.core.models import BatchProcessingResult, ProcessingResult
 
 
 class InMemoryStorage:

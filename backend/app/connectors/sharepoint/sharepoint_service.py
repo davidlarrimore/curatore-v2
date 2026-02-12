@@ -13,9 +13,6 @@ from uuid import UUID
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-
-
 logger = logging.getLogger("curatore.sharepoint")
 
 

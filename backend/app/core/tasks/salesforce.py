@@ -11,9 +11,9 @@ from typing import Any, Dict
 from celery import shared_task
 
 from app.celery_app import app as celery_app
-from app.core.shared.database_service import database_service
-from app.core.shared.config_loader import config_loader
 from app.config import settings
+from app.core.shared.config_loader import config_loader
+from app.core.shared.database_service import database_service
 
 
 def _is_search_enabled() -> bool:
@@ -99,10 +99,10 @@ async def _reindex_salesforce_organization_async(
     Returns:
         Dict with reindex results
     """
-    from app.core.search.pg_index_service import pg_index_service
-    from app.connectors.salesforce.salesforce_service import salesforce_service
-    from app.core.database.models import SalesforceAccount, SalesforceContact, SalesforceOpportunity
     from sqlalchemy import select
+
+    from app.core.database.models import SalesforceAccount, SalesforceContact, SalesforceOpportunity
+    from app.core.search.pg_index_service import pg_index_service
 
     logger = logging.getLogger("curatore.tasks.salesforce_indexing")
 
@@ -241,9 +241,10 @@ def salesforce_import_task(
     Returns:
         Dict with import statistics
     """
-    from uuid import UUID
-    from app.core.storage.minio_service import get_minio_service
     import tempfile
+    from uuid import UUID
+
+    from app.core.storage.minio_service import get_minio_service
 
     logger = logging.getLogger("curatore.tasks.salesforce")
     logger.info(f"Starting Salesforce import task for run {run_id}, minio_key={minio_key}")
@@ -320,8 +321,8 @@ async def _execute_salesforce_import_async(
     Returns:
         Dict with import statistics
     """
-    from app.core.shared.run_service import run_service
     from app.connectors.salesforce.salesforce_import_service import salesforce_import_service
+    from app.core.shared.run_service import run_service
 
     async with database_service.get_session() as session:
         # Update run to running

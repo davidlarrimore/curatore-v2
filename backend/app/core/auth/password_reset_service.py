@@ -36,7 +36,6 @@ Configuration:
 
 import logging
 import secrets
-import uuid
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -44,8 +43,8 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.core.database.models import PasswordResetToken, User
 from app.core.auth.auth_service import auth_service
+from app.core.database.models import PasswordResetToken, User
 
 logger = logging.getLogger("curatore.password_reset")
 

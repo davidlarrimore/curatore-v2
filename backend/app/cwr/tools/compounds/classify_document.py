@@ -1,21 +1,22 @@
-# backend/app/functions/compound/classify_document.py
+# backend/app/cwr/tools/compounds/classify_document.py
 """
-Classify Document function - Classify documents using rules and LLM.
+Classify Document compound — Compose primitives to classify + persist.
 
-Applies rule-based classification first, then uses LLM for uncertain cases.
+Composes three existing primitives:
+  1. get_content — fetch extracted markdown
+  2. llm_classify — LLM-based classification
+  3. update_source_metadata — persist to file.document_type and propagate to search
+
+Default categories are loaded from the metadata registry (fields.yaml →
+file.document_type.examples) so the compound stays in sync with the catalog.
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
-import re
 import logging
-
-from sqlalchemy import select
 
 from ..base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ..context import FunctionContext
@@ -23,59 +24,21 @@ from ..context import FunctionContext
 logger = logging.getLogger("curatore.functions.compound.classify_document")
 
 
-# Rule-based classification patterns
-CLASSIFICATION_RULES = {
-    "proposal": {
-        "filename_patterns": [r"(?i)proposal", r"(?i)rfp[-_]response", r"(?i)bid"],
-        "content_patterns": [r"(?i)executive\s+summary", r"(?i)technical\s+approach"],
-        "path_patterns": [r"(?i)/proposals?/"],
-    },
-    "contract": {
-        "filename_patterns": [r"(?i)contract", r"(?i)agreement", r"(?i)^[A-Z]{2,5}-\d+"],
-        "content_patterns": [r"(?i)terms\s+and\s+conditions", r"(?i)scope\s+of\s+work"],
-        "path_patterns": [r"(?i)/contracts?/"],
-    },
-    "report": {
-        "filename_patterns": [r"(?i)report", r"(?i)analysis", r"(?i)summary"],
-        "content_patterns": [r"(?i)findings", r"(?i)recommendations", r"(?i)conclusion"],
-        "path_patterns": [r"(?i)/reports?/"],
-    },
-    "presentation": {
-        "filename_patterns": [r"(?i)\.pptx?$", r"(?i)deck", r"(?i)slides"],
-        "content_patterns": [],
-        "path_patterns": [r"(?i)/presentations?/"],
-    },
-    "spreadsheet": {
-        "filename_patterns": [r"(?i)\.xlsx?$", r"(?i)data", r"(?i)budget"],
-        "content_patterns": [],
-        "path_patterns": [r"(?i)/data/", r"(?i)/financials?/"],
-    },
-    "policy": {
-        "filename_patterns": [r"(?i)policy", r"(?i)procedure", r"(?i)sop"],
-        "content_patterns": [r"(?i)policy\s+statement", r"(?i)effective\s+date"],
-        "path_patterns": [r"(?i)/policies/", r"(?i)/procedures/"],
-    },
-}
-
-
 class ClassifyDocumentFunction(BaseFunction):
     """
-    Classify a document using rules and optionally LLM.
+    Classify a document by type using LLM and optionally persist to
+    searchable metadata (file.document_type).
 
-    First applies rule-based classification using filename, path, and content
-    patterns. If confidence is low, uses LLM for more accurate classification.
+    Composes get_content → llm_classify → update_source_metadata.
 
     Example:
-        result = await fn.classify_document(ctx,
-            asset_id="uuid",
-            categories=["proposal", "contract", "report", "other"],
-        )
+        result = await fn.classify_document(ctx, asset_id="uuid")
     """
 
     meta = FunctionMeta(
         name="classify_document",
         category=FunctionCategory.COMPOUND,
-        description="Classify a document using rules and optionally LLM",
+        description="Classify a document by type using LLM and optionally persist to searchable metadata",
         input_schema={
             "type": "object",
             "properties": {
@@ -83,231 +46,230 @@ class ClassifyDocumentFunction(BaseFunction):
                     "type": "string",
                     "description": "Asset ID to classify",
                 },
-                "categories": {
-                    "type": "array",
-                    "items": {"type": "string"},
-                    "description": "Categories to classify into",
-                    "default": None,
-                },
-                "use_llm": {
+                "persist": {
                     "type": "boolean",
-                    "description": "Use LLM for uncertain cases",
+                    "description": "Write classification to file.document_type metadata and propagate to search",
                     "default": True,
                 },
-                "confidence_threshold": {
-                    "type": "number",
-                    "description": "Minimum confidence for rule-based classification",
-                    "default": 0.7,
+                "item": {
+                    "type": "object",
+                    "description": "Pipeline item (provides asset_id when called from pipeline transform stage)",
+                    "default": None,
                 },
             },
             "required": ["asset_id"],
         },
         output_schema={
             "type": "object",
-            "description": "Document classification result with confidence scores",
+            "description": "Classification result with updated metadata",
             "properties": {
                 "asset_id": {
                     "type": "string",
-                    "description": "UUID of the classified asset",
+                    "description": "UUID of classified asset",
+                },
+                "filename": {
+                    "type": "string",
+                    "description": "Original filename",
+                },
+                "file_path": {
+                    "type": "string",
+                    "description": "Object storage path for the raw file",
                 },
                 "category": {
                     "type": "string",
-                    "description": "Assigned category name",
-                    "examples": ["contract"],
+                    "description": "Assigned category",
                 },
                 "confidence": {
                     "type": "number",
-                    "description": "Confidence score (0.0-1.0)",
-                    "examples": [0.85],
-                },
-                "all_scores": {
-                    "type": "object",
-                    "description": "Confidence scores for all categories",
+                    "description": "Classification confidence (0.0-1.0)",
                 },
                 "method": {
                     "type": "string",
-                    "description": "Classification method used (rules or llm)",
-                    "examples": ["rules"],
+                    "description": "Classification method (llm)",
+                },
+                "document_type": {
+                    "type": "string",
+                    "description": "Same as category (pipeline filter compat)",
+                },
+                "metadata_updated": {
+                    "type": "object",
+                    "description": "Metadata persistence details",
+                    "properties": {
+                        "namespace": {"type": "string"},
+                        "fields": {"type": "object"},
+                        "persisted": {"type": "boolean"},
+                        "propagated_to_search": {"type": "boolean"},
+                    },
                 },
             },
         },
         tags=["compound", "classification", "document"],
-        requires_llm=False,  # LLM is optional
-        side_effects=False,
+        requires_llm=True,
+        side_effects=True,
         is_primitive=False,
         payload_profile="full",
         examples=[
             {
-                "description": "Classify document",
+                "description": "Classify and persist",
                 "params": {
                     "asset_id": "uuid",
-                    "categories": ["proposal", "contract", "report"],
+                },
+            },
+            {
+                "description": "Classify without persisting",
+                "params": {
+                    "asset_id": "uuid",
+                    "persist": False,
                 },
             },
         ],
     )
 
     async def execute(self, ctx: FunctionContext, **params) -> FunctionResult:
-        """Classify document."""
-        asset_id = params["asset_id"]
-        categories = params.get("categories") or list(CLASSIFICATION_RULES.keys())
-        use_llm = params.get("use_llm", True)
-        confidence_threshold = params.get("confidence_threshold", 0.7)
+        """Classify document by composing get_content → llm_classify → update_source_metadata."""
 
-        from app.core.database.models import Asset, ExtractionResult
-
-        try:
-            # Get asset
-            asset_uuid = UUID(asset_id) if isinstance(asset_id, str) else asset_id
-            query = select(Asset).where(
-                Asset.id == asset_uuid,
-                Asset.organization_id == ctx.organization_id,
-            )
-            result = await ctx.session.execute(query)
-            asset = result.scalar_one_or_none()
-
-            if not asset:
-                return FunctionResult.failed_result(
-                    error="Asset not found",
-                    message=f"Asset {asset_id} not found",
-                )
-
-            # Get source path if available
-            source_path = ""
-            if asset.source_metadata:
-                source_path = asset.source_metadata.get("path", "") or asset.source_metadata.get("url", "")
-
-            # Get content preview
-            content_preview = ""
-            extraction_query = select(ExtractionResult).where(
-                ExtractionResult.asset_id == asset.id,
-                ExtractionResult.status == "completed",
-            ).order_by(ExtractionResult.created_at.desc()).limit(1)
-
-            extraction_result = await ctx.session.execute(extraction_query)
-            extraction = extraction_result.scalar_one_or_none()
-
-            if extraction and extraction.extracted_bucket:
-                try:
-                    content = ctx.minio_service.get_object_content(
-                        bucket=extraction.extracted_bucket,
-                        object_key=extraction.extracted_object_key,
-                    )
-                    if content:
-                        content_preview = content.decode("utf-8")[:2000] if isinstance(content, bytes) else content[:2000]
-                except Exception as e:
-                    logger.warning(f"Failed to get content: {e}")
-
-            # Apply rule-based classification
-            scores = {}
-            for category in categories:
-                if category not in CLASSIFICATION_RULES:
-                    scores[category] = 0.0
-                    continue
-
-                rules = CLASSIFICATION_RULES[category]
-                score = 0.0
-
-                # Check filename patterns
-                for pattern in rules.get("filename_patterns", []):
-                    if re.search(pattern, asset.original_filename):
-                        score += 0.4
-
-                # Check path patterns
-                for pattern in rules.get("path_patterns", []):
-                    if re.search(pattern, source_path):
-                        score += 0.3
-
-                # Check content patterns
-                for pattern in rules.get("content_patterns", []):
-                    if content_preview and re.search(pattern, content_preview):
-                        score += 0.3
-
-                scores[category] = min(score, 1.0)
-
-            # Find best category
-            best_category = max(scores, key=scores.get) if scores else "other"
-            best_confidence = scores.get(best_category, 0.0)
-
-            # Use LLM if confidence is low
-            llm_used = False
-            if use_llm and best_confidence < confidence_threshold and ctx.llm_service.is_available:
-                llm_result = await self._classify_with_llm(
-                    ctx, asset.original_filename, source_path, content_preview, categories
-                )
-                if llm_result:
-                    best_category = llm_result["category"]
-                    best_confidence = llm_result["confidence"]
-                    llm_used = True
-
-            return FunctionResult.success_result(
-                data={
-                    "asset_id": str(asset.id),
-                    "category": best_category,
-                    "confidence": best_confidence,
-                    "all_scores": scores,
-                    "method": "llm" if llm_used else "rules",
-                },
-                message=f"Classified as '{best_category}' ({best_confidence:.0%})",
-                items_processed=1,
-            )
-
-        except Exception as e:
-            logger.exception(f"Classification failed: {e}")
+        # ── Resolve asset_id ────────────────────────────────────────────
+        asset_id = params.get("asset_id")
+        item = params.get("item")
+        if not asset_id and item and isinstance(item, dict):
+            asset_id = item.get("asset_id") or item.get("id")
+        if not asset_id:
             return FunctionResult.failed_result(
-                error=str(e),
-                message="Document classification failed",
+                error="No asset_id provided",
+                message="asset_id is required (directly or via item)",
             )
 
-    async def _classify_with_llm(
-        self,
-        ctx: FunctionContext,
-        filename: str,
-        path: str,
-        content: str,
-        categories: List[str],
-    ) -> Optional[Dict[str, Any]]:
-        """Classify using LLM."""
+        persist = params.get("persist", True)
+
+        # ── Load categories and descriptions from registry ──────────────
+        categories = None
+        category_descriptions = None
         try:
-            import json
+            from app.core.metadata.registry_service import metadata_registry_service
 
-            system_prompt = """You are a document classifier. Classify documents into categories based on their filename, path, and content.
-Return JSON: {"category": "category_name", "confidence": 0.0-1.0, "reasoning": "brief explanation"}"""
+            all_fields = metadata_registry_service.get_all_fields()
+            doc_type_def = all_fields.get("file", {}).get("document_type", {})
+            categories = doc_type_def.get("examples")
+            category_descriptions = doc_type_def.get("value_descriptions")
+        except Exception as e:
+            logger.warning(f"Failed to load categories from registry: {e}")
 
-            user_prompt = f"""Classify this document into one of: {', '.join(categories)}
+        if not categories:
+            # Hardcoded fallback — kept minimal; full list lives in fields.yaml
+            categories = [
+                "Proposal Response", "Solicitation", "White Paper",
+                "Capability Statement", "Past Performance", "RFI Response",
+                "Contract", "Task Order", "Statement of Work",
+                "Correspondence", "Presentation", "Other",
+            ]
 
-Filename: {filename}
-Path: {path}
-Content preview: {content[:1000] if content else 'No content available'}
+        # ── Step 1: get_content ─────────────────────────────────────────
+        from ..primitives.search.get_content import GetContentFunction
 
-Return only JSON:"""
+        get_content_fn = GetContentFunction()
+        content_result = await get_content_fn.execute(
+            ctx, asset_ids=[asset_id], include_metadata=True,
+        )
 
-            response = ctx.llm_service._client.chat.completions.create(
-                model=ctx.llm_service._get_model(),
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                temperature=0.1,
-                max_tokens=200,
+        if content_result.failed:
+            return FunctionResult.failed_result(
+                error=content_result.error or "Failed to retrieve content",
+                message=f"get_content failed for asset {asset_id}",
             )
 
-            result_text = response.choices[0].message.content.strip()
+        # Extract content and filename from the first (only) item
+        items = content_result.data or []
+        if not items:
+            return FunctionResult.failed_result(
+                error="Asset not found",
+                message=f"No content returned for asset {asset_id}",
+            )
 
-            # Parse JSON
-            if result_text.startswith("```"):
-                result_text = result_text.split("```")[1]
-                if result_text.startswith("json"):
-                    result_text = result_text[4:]
+        asset_item = items[0]
+        content = asset_item.get("content") or ""
+        filename = asset_item.get("filename", "")
+        file_path = asset_item.get("file_path", "")
 
-            result = json.loads(result_text)
+        if not content:
+            return FunctionResult.failed_result(
+                error=asset_item.get("content_error", "No extracted content available"),
+                message=f"No content available for asset {asset_id}",
+            )
 
-            # Validate category
-            if result.get("category") not in categories:
-                result["category"] = "other"
+        # ── Step 2: llm_classify ────────────────────────────────────────
+        from ..primitives.llm.classify import ClassifyFunction
 
-            return result
+        classify_fn = ClassifyFunction()
+        classify_params = {
+            "text": content,
+            "categories": categories,
+            "include_reasoning": False,
+        }
+        if category_descriptions:
+            classify_params["category_descriptions"] = category_descriptions
 
-        except Exception as e:
-            logger.warning(f"LLM classification failed: {e}")
-            return None
+        classify_result = await classify_fn.execute(ctx, **classify_params)
+
+        if classify_result.failed:
+            return FunctionResult.failed_result(
+                error=classify_result.error or "Classification failed",
+                message=f"llm_classify failed for asset {asset_id}",
+            )
+
+        classification = classify_result.data or {}
+        category = classification.get("category", "Other")
+        confidence = classification.get("confidence", 0.0)
+
+        # ── Step 3: update_source_metadata (if persist=True) ────────────
+        metadata_updated = {
+            "namespace": "file",
+            "fields": {"document_type": category},
+            "persisted": False,
+            "propagated_to_search": False,
+        }
+
+        if persist:
+            from ..primitives.output.update_source_metadata import UpdateSourceMetadataFunction
+
+            update_fn = UpdateSourceMetadataFunction()
+            update_result = await update_fn.execute(
+                ctx,
+                asset_id=asset_id,
+                namespace="file",
+                fields={"document_type": category},
+                propagate_to_search=True,
+            )
+
+            if update_result.failed:
+                logger.warning(
+                    f"Metadata persistence failed for asset {asset_id}: "
+                    f"{update_result.error}"
+                )
+                # Classification still succeeded — return partial success info
+            else:
+                update_data = update_result.data or {}
+                metadata_updated["persisted"] = True
+                metadata_updated["propagated_to_search"] = update_data.get(
+                    "propagated", False
+                )
+                logger.info(
+                    f"Metadata update for asset {asset_id}: "
+                    f"persisted=True, propagated={update_data.get('propagated')}, "
+                    f"fields_updated={update_data.get('fields_updated')}"
+                )
+
+        # ── Build canonical result ──────────────────────────────────────
+        return FunctionResult.success_result(
+            data={
+                "asset_id": str(asset_id),
+                "filename": filename,
+                "file_path": file_path,
+                "category": category,
+                "confidence": confidence,
+                "method": "llm",
+                "document_type": category,
+                "metadata_updated": metadata_updated,
+            },
+            message=f"Classified '{filename}' as '{category}' ({confidence:.0%}) — {file_path}",
+            items_processed=1,
+        )

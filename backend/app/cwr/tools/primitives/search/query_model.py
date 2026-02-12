@@ -5,17 +5,16 @@ Query Model function - SQLAlchemy model queries.
 Executes queries against SQLAlchemy models with filters and pagination.
 """
 
-from typing import Any, Dict, List, Optional, Type
-from uuid import UUID
 import logging
+from typing import Any, Dict
+from uuid import UUID
 
-from sqlalchemy import select, and_, or_, func, String, Integer, Float
-from sqlalchemy.orm import selectinload
+from sqlalchemy import Float, Integer, String, and_, func, select
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext

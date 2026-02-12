@@ -1,10 +1,12 @@
 'use client'
 
-import { useState, useEffect, useRef, useCallback } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { useDeletionJobs, useActiveJobs } from '@/lib/context-shims'
-import { scrapeApi, ScrapeCollection, CrawlStatus } from '@/lib/api'
+import { useJobProgressByType } from '@/lib/useJobProgress'
+import { JobProgressPanelByType } from '@/components/ui/JobProgressPanel'
+import { scrapeApi, ScrapeCollection } from '@/lib/api'
 import { formatCompact } from '@/lib/date-utils'
 import Link from 'next/link'
 import toast from 'react-hot-toast'
@@ -38,34 +40,16 @@ export default function ScrapeCollectionsPage() {
   const [error, setError] = useState<string | null>(null)
   const [showCreateModal, setShowCreateModal] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
-  const [crawlStatuses, setCrawlStatuses] = useState<Record<string, CrawlStatus>>({})
   const [deleteConfirm, setDeleteConfirm] = useState<string | null>(null)
   const [deleting, setDeleting] = useState<string | null>(null)
-  const pollIntervalRef = useRef<NodeJS.Timeout | null>(null)
 
   const isAdmin = user?.role === 'org_admin' || user?.role === 'admin'
-
-  // Cleanup polling on unmount
-  useEffect(() => {
-    return () => {
-      if (pollIntervalRef.current) {
-        clearInterval(pollIntervalRef.current)
-      }
-    }
-  }, [])
 
   useEffect(() => {
     if (token) {
       loadCollections()
     }
   }, [token])
-
-  // Check crawl status for collections that might be running
-  useEffect(() => {
-    if (token && collections.length > 0) {
-      checkActiveCrawls()
-    }
-  }, [token, collections])
 
   async function loadCollections() {
     if (!token) return
@@ -81,67 +65,9 @@ export default function ScrapeCollectionsPage() {
     }
   }
 
-  async function checkActiveCrawls() {
-    if (!token) return
-
-    // Check status for collections with recent crawl run IDs
-    const collectionsToCheck = collections.filter(c => c.last_crawl_run_id)
-
-    for (const collection of collectionsToCheck) {
-      try {
-        const status = await scrapeApi.getCrawlStatus(token, collection.id)
-        if (status.status === 'pending' || status.status === 'running') {
-          setCrawlStatuses(prev => ({ ...prev, [collection.id]: status }))
-          startPolling()
-        }
-      } catch {
-        // Ignore - no active crawl
-      }
-    }
-  }
-
-  function startPolling() {
-    if (pollIntervalRef.current) return // Already polling
-
-    pollIntervalRef.current = setInterval(async () => {
-      if (!token) return
-
-      const activeIds = Object.keys(crawlStatuses)
-      if (activeIds.length === 0) {
-        stopPolling()
-        return
-      }
-
-      for (const collectionId of activeIds) {
-        try {
-          const status = await scrapeApi.getCrawlStatus(token, collectionId)
-          if (status.status === 'completed' || status.status === 'failed') {
-            setCrawlStatuses(prev => {
-              const updated = { ...prev }
-              delete updated[collectionId]
-              return updated
-            })
-            loadCollections() // Refresh to get updated stats
-          } else {
-            setCrawlStatuses(prev => ({ ...prev, [collectionId]: status }))
-          }
-        } catch {
-          setCrawlStatuses(prev => {
-            const updated = { ...prev }
-            delete updated[collectionId]
-            return updated
-          })
-        }
-      }
-    }, 3000)
-  }
-
-  function stopPolling() {
-    if (pollIntervalRef.current) {
-      clearInterval(pollIntervalRef.current)
-      pollIntervalRef.current = null
-    }
-  }
+  const { jobs: scrapeJobs, isActive: hasScrapeJobs } = useJobProgressByType('scrape', {
+    onComplete: () => loadCollections(),
+  })
 
   async function handleDelete(collection: ScrapeCollection) {
     if (!token) return
@@ -169,8 +95,7 @@ export default function ScrapeCollectionsPage() {
   }
 
   const isCrawling = (collectionId: string) => {
-    const status = crawlStatuses[collectionId]
-    return status && (status.status === 'pending' || status.status === 'running')
+    return scrapeJobs.some(j => j.resourceId === collectionId)
   }
 
   const filteredCollections = collections.filter((c) => {
@@ -196,8 +121,8 @@ export default function ScrapeCollectionsPage() {
 
     // Check if crawl is in progress
     if (isCrawling(collection.id)) {
-      const status = crawlStatuses[collection.id]
-      const progress = status?.progress?.percent
+      const activeJob = scrapeJobs.find(j => j.resourceId === collection.id)
+      const progress = activeJob?.progress?.percent
       return (
         <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-400">
           <Loader2 className="w-3 h-3 animate-spin" />
@@ -329,6 +254,17 @@ export default function ScrapeCollectionsPage() {
           </div>
         )}
 
+        {/* Job Progress Panel */}
+        {hasScrapeJobs && (
+          <div className="mb-6">
+            <JobProgressPanelByType
+              jobType="scrape"
+              variant="compact"
+              className="space-y-2"
+            />
+          </div>
+        )}
+
         {/* Table */}
         {!loading && filteredCollections.length > 0 && (
           <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
@@ -397,15 +333,18 @@ export default function ScrapeCollectionsPage() {
                     <td className="px-4 py-3">
                       <div className="flex items-center gap-1">
                         {/* View Job link when crawling */}
-                        {isCrawling(collection.id) && crawlStatuses[collection.id]?.run_id && (
-                          <Link
-                            href={`/admin/queue/${crawlStatuses[collection.id].run_id}`}
-                            className="p-1.5 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition-colors"
-                            title="View running job"
-                          >
-                            <Settings className="w-4 h-4" />
-                          </Link>
-                        )}
+                        {isCrawling(collection.id) && (() => {
+                          const activeJob = scrapeJobs.find(j => j.resourceId === collection.id)
+                          return activeJob ? (
+                            <Link
+                              href={`/admin/queue/${activeJob.runId}`}
+                              className="p-1.5 text-blue-500 hover:text-blue-700 dark:text-blue-400 dark:hover:text-blue-300 hover:bg-blue-50 dark:hover:bg-blue-900/30 rounded transition-colors"
+                              title="View running job"
+                            >
+                              <Settings className="w-4 h-4" />
+                            </Link>
+                          ) : null
+                        })()}
 
                         {/* Delete button for admins on archived collections */}
                         {isAdmin && collection.status === 'archived' && !isDeleting(collection.id) && (

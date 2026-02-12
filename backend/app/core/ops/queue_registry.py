@@ -31,10 +31,9 @@ Example - Adding a Google Drive sync queue:
 """
 
 import logging
-from abc import ABC
 from dataclasses import dataclass, field
 from enum import IntEnum
-from typing import Dict, List, Optional, Any, Type
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger("curatore.services.queue_registry")
 

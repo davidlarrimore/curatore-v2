@@ -13,15 +13,16 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import select, and_, or_
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database.procedures import (
-    Procedure, Pipeline,
-    ProcedureTrigger, PipelineTrigger,
+    Pipeline,
     PipelineRun,
+    PipelineTrigger,
+    Procedure,
+    ProcedureTrigger,
 )
-from app.core.database.models import Run
 
 logger = logging.getLogger("curatore.services.event_service")
 

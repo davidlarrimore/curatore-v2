@@ -3,11 +3,13 @@
 Converts CWR ToolContracts to MCP Tool format.
 
 The CWR ToolContract already uses JSON Schema for input_schema, which is exactly
-what MCP expects. The only conversion needed is:
+what MCP expects. The conversion includes:
 1. Rename input_schema → inputSchema (snake_case → camelCase)
-2. Optionally enhance description with payload_profile hints
+2. Strip properties marked with x-procedure-only (internal to procedure runtime)
+3. Optionally enhance description with payload_profile hints
 """
 
+import copy
 import logging
 from typing import Any, Dict, List
 
@@ -18,12 +20,52 @@ from app.models.mcp import MCPTool
 logger = logging.getLogger("mcp.services.contract_converter")
 
 
+def _clean_schema_for_mcp(schema: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    Deep-copy a JSON Schema and clean it for MCP/agent exposure:
+
+    1. Remove properties marked ``"x-procedure-only": true`` (CWR
+       procedure-runtime params like ``items`` that confuse agents).
+    2. Strip ``"default": null`` from remaining properties.  The backend
+       Python schemas use ``"default": None`` to indicate "optional, no
+       default", but that serialises as ``"default": null`` in JSON Schema.
+       LLMs see the literal ``null`` and faithfully send it back, which
+       then fails Draft 7 type validation (e.g. null vs string).
+    """
+    schema = copy.deepcopy(schema)
+    props = schema.get("properties")
+    if not isinstance(props, dict):
+        return schema
+
+    # 1. Remove procedure-only properties
+    to_remove = [
+        key for key, defn in props.items()
+        if isinstance(defn, dict) and defn.get("x-procedure-only")
+    ]
+
+    for key in to_remove:
+        del props[key]
+
+    # Also remove from required list if present
+    required = schema.get("required")
+    if isinstance(required, list) and to_remove:
+        schema["required"] = [r for r in required if r not in to_remove]
+
+    # 2. Strip "default": null from remaining properties
+    for defn in props.values():
+        if isinstance(defn, dict) and defn.get("default") is None and "default" in defn:
+            del defn["default"]
+
+    return schema
+
+
 class ContractConverter:
     """
     Converts CWR ToolContracts to MCP Tool definitions.
 
     The CWR input_schema is already MCP-compatible JSON Schema.
-    This is essentially a field rename + optional description enhancement.
+    This converter renames fields, strips procedure-only parameters,
+    and optionally enhances descriptions.
     """
 
     @staticmethod
@@ -55,11 +97,13 @@ class ContractConverter:
             if contract.get("requires_llm", False):
                 description += "\n\nRequires LLM connection."
 
-        # The input_schema is already valid JSON Schema - just rename the field
+        # The input_schema is already valid JSON Schema — strip procedure-only
+        # params and rename the field for MCP.
         input_schema = contract.get("input_schema", {
             "type": "object",
             "properties": {},
         })
+        input_schema = _clean_schema_for_mcp(input_schema)
 
         return MCPTool(
             name=name,
@@ -139,10 +183,13 @@ class ContractConverter:
         if contract.get("requires_llm", False):
             description += "\n\nRequires LLM connection."
 
+        input_schema = contract.get("input_schema", {"type": "object", "properties": {}})
+        input_schema = _clean_schema_for_mcp(input_schema)
+
         return types.Tool(
             name=contract.get("name", "unknown"),
             description=description,
-            inputSchema=contract.get("input_schema", {"type": "object", "properties": {}}),
+            inputSchema=input_schema,
             annotations=types.ToolAnnotations(
                 readOnlyHint=not has_side_effects,
                 destructiveHint=False,

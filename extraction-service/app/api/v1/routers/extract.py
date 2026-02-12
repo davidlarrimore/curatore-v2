@@ -5,14 +5,16 @@ Handles document extraction for Office files, text files, and emails.
 PDFs and images are handled by fast_pdf (PyMuPDF) and Docling respectively.
 """
 
+import logging
 import os
 import time
-import logging
 from typing import Optional
-from fastapi import APIRouter, UploadFile, File, HTTPException, Depends, Header
-from ....models import ExtractionOptions, ExtractionResult
+
+from fastapi import APIRouter, Depends, File, Header, HTTPException, UploadFile
+
 from ....config import settings
-from ....services.extraction_service import save_upload_to_disk, extract_markdown
+from ....models import ExtractionOptions, ExtractionResult
+from ....services.extraction_service import extract_markdown, save_upload_to_disk
 from ....services.metadata_extractor import extract_document_metadata
 
 router = APIRouter(prefix="/extract", tags=["extraction"])

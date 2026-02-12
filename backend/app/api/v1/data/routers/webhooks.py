@@ -6,23 +6,20 @@ Provides endpoints for triggering procedures and pipelines via webhooks.
 Webhooks require authentication via X-Webhook-Secret header.
 """
 
-from typing import Any, Dict, Optional
-from uuid import UUID
-from datetime import datetime
 import logging
 import secrets
+from datetime import datetime
+from typing import Any, Dict, Optional
+from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Header, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select, and_
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, select
 
+from app.core.database.procedures import Pipeline, PipelineRun, PipelineTrigger, Procedure, ProcedureTrigger
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_org_id
 from app.core.shared.run_service import run_service
-from app.core.database.procedures import (
-    Procedure, Pipeline, ProcedureTrigger, PipelineTrigger, PipelineRun
-)
+from app.dependencies import get_current_org_id
 
 logger = logging.getLogger("curatore.api.webhooks")
 

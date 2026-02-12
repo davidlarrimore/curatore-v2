@@ -95,6 +95,9 @@ function ProcedureEditor() {
   const [validationWarnings, setValidationWarnings] = useState<ValidationError[]>([])
   const [validationPassed, setValidationPassed] = useState(false)
 
+  // Right panel tab state
+  const [activeTab, setActiveTab] = useState<'generator' | 'catalog'>('generator')
+
   // Function catalog state
   const [functions, setFunctions] = useState<FunctionMeta[]>([])
   const [categories, setCategories] = useState<Record<string, string[]>>({})
@@ -189,12 +192,11 @@ function ProcedureEditor() {
       const result = await proceduresApi.validateProcedure(token, procedure)
       setValidationErrors(result.errors)
       setValidationWarnings(result.warnings)
-      // Show success indicator if valid (even with warnings)
       if (result.valid) {
         setValidationPassed(true)
-        // Auto-hide success after 5 seconds if no warnings
         if (result.warnings.length === 0) {
-          setTimeout(() => setValidationPassed(false), 5000)
+          setSuccessMessage('Validation passed — no errors or warnings')
+          setTimeout(() => setSuccessMessage(''), 5000)
         }
       }
       return result.valid
@@ -474,10 +476,10 @@ function ProcedureEditor() {
 
       {/* Main content - two panels */}
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           {/* Left panel - Editor */}
-          <div className="lg:col-span-2 space-y-4">
-            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+          <div className="space-y-4">
+            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
               <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
                 <div className="flex items-center justify-between">
                   <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
@@ -513,36 +515,11 @@ function ProcedureEditor() {
               <textarea
                 value={yamlContent}
                 onChange={(e) => setYamlContent(e.target.value)}
-                className="w-full h-[700px] p-4 font-mono text-sm bg-gray-900 text-gray-100 focus:outline-none resize-none"
+                className="w-full h-[500px] p-4 font-mono text-sm bg-gray-900 text-gray-100 focus:outline-none resize-none"
                 placeholder="Enter procedure YAML..."
                 spellCheck={false}
               />
             </div>
-
-            {/* Validation success panel */}
-            {validationPassed && validationErrors.length === 0 && validationWarnings.length === 0 && (
-              <div className="bg-white dark:bg-gray-800 rounded-xl border border-emerald-200 dark:border-emerald-700 overflow-hidden">
-                <div className="px-4 py-3 bg-emerald-50 dark:bg-emerald-900/20">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <CheckCircle className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
-                      <h2 className="text-sm font-semibold text-emerald-800 dark:text-emerald-200">
-                        Validation Passed
-                      </h2>
-                      <span className="text-xs text-emerald-600 dark:text-emerald-400">
-                        No errors or warnings found
-                      </span>
-                    </div>
-                    <button
-                      onClick={() => setValidationPassed(false)}
-                      className="p-1 rounded hover:bg-emerald-100 dark:hover:bg-emerald-900/30"
-                    >
-                      <X className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )}
 
             {/* Validation with warnings panel (valid but has warnings) */}
             {validationPassed && validationErrors.length === 0 && validationWarnings.length > 0 && (
@@ -697,44 +674,73 @@ function ProcedureEditor() {
             )}
           </div>
 
-          {/* Right panel - AI Generator + Function catalog */}
-          <div className="lg:col-span-1 space-y-4">
-            {/* AI Generator Panel */}
-            <AIGeneratorPanel
-              ref={aiGeneratorRef}
-              currentYaml={yamlContent}
-              onYamlGenerated={(yaml) => setYamlContent(yaml)}
-              onSuccess={(msg) => {
-                setSuccessMessage(msg)
-                setValidationErrors([])
-                setValidationWarnings([])
-                setTimeout(() => setSuccessMessage(''), 5000)
-              }}
-              onError={(msg) => {
-                setErrorMessage(msg)
-                setTimeout(() => setErrorMessage(''), 5000)
-              }}
-            />
-
-            {/* Function catalog */}
-            <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden sticky top-6">
-              <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
-                <h2 className="text-sm font-semibold text-gray-900 dark:text-white mb-3">
+          {/* Right panel - Tabbed: AI Generator / Function Catalog */}
+          <div className="sticky top-6">
+            {/* Tab bar */}
+            <div className="flex border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-t-lg overflow-hidden">
+              <button
+                onClick={() => setActiveTab('generator')}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                  activeTab === 'generator'
+                    ? 'text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600 dark:border-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                }`}
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4" />
+                  AI Generator
+                </span>
+              </button>
+              <button
+                onClick={() => setActiveTab('catalog')}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                  activeTab === 'catalog'
+                    ? 'text-indigo-600 dark:text-indigo-400 border-b-2 border-indigo-600 dark:border-indigo-400 bg-indigo-50/50 dark:bg-indigo-950/20'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                }`}
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <Box className="w-4 h-4" />
                   Function Catalog
-                </h2>
-                <div className="relative">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
-                  <input
-                    type="text"
-                    placeholder="Search functions..."
-                    value={functionSearch}
-                    onChange={(e) => setFunctionSearch(e.target.value)}
-                    className="w-full pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
-                  />
-                </div>
-              </div>
+                </span>
+              </button>
+            </div>
 
-              <div className="max-h-[600px] overflow-y-auto">
+            {/* Tab content */}
+            {activeTab === 'generator' && (
+              <AIGeneratorPanel
+                ref={aiGeneratorRef}
+                currentYaml={yamlContent}
+                onYamlGenerated={(yaml) => setYamlContent(yaml)}
+                onSuccess={(msg) => {
+                  setSuccessMessage(msg)
+                  setValidationErrors([])
+                  setValidationWarnings([])
+                  setTimeout(() => setSuccessMessage(''), 5000)
+                }}
+                onError={(msg) => {
+                  setErrorMessage(msg)
+                  setTimeout(() => setErrorMessage(''), 5000)
+                }}
+              />
+            )}
+
+            {activeTab === 'catalog' && (
+              <div className="bg-white dark:bg-gray-800 rounded-b-lg border border-t-0 border-gray-200 dark:border-gray-700 overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search functions..."
+                      value={functionSearch}
+                      onChange={(e) => setFunctionSearch(e.target.value)}
+                      className="w-full pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="max-h-[700px] overflow-y-auto">
                 {loadingFunctions ? (
                   <div className="p-8 text-center">
                     <Loader2 className="w-6 h-6 animate-spin mx-auto text-gray-400" />
@@ -956,6 +962,7 @@ ${Object.entries(ex.params || {}).map(([k, v]) =>
                 )}
               </div>
             </div>
+            )}
           </div>
         </div>
       </div>

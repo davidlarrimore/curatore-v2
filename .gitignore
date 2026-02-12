@@ -44,6 +44,13 @@ logs/
 .pytest_cache/
 extraction-service/test_documents/*
 
+# Coverage reports
+.coverage
+.coverage.*
+htmlcov/
+coverage/
+*_coverage_html/
+
 # Temporary documentation and status files
 STATUS*.txt
 STATUS*.md

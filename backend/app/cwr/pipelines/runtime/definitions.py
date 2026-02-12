@@ -9,7 +9,6 @@ Each stage can gather, filter, transform, or enrich items.
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 
 
 class StageType(str, Enum):
@@ -183,7 +182,7 @@ class PipelineDefinition:
             on_error=OnErrorPolicy(data.get("on_error", "continue")),
             checkpoint_after_stages=data.get("checkpoint_after_stages", []),
             tags=data.get("tags", []),
-            is_system=data.get("is_system", False),
+            is_system=data.get("is_system", source_type == "system"),
             source_type=source_type,
             source_path=source_path,
         )

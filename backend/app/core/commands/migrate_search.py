@@ -26,8 +26,8 @@ What this does:
     3. Migrates SAM.gov notices and solicitations
 """
 
-import asyncio
 import argparse
+import asyncio
 import logging
 import sys
 from datetime import datetime
@@ -57,9 +57,10 @@ async def migrate_assets(
         Dict with migration statistics
     """
     from sqlalchemy import select
-    from app.core.shared.database_service import database_service
-    from app.core.search.pg_index_service import pg_index_service
+
     from app.core.database.models import Asset, Organization
+    from app.core.search.pg_index_service import pg_index_service
+    from app.core.shared.database_service import database_service
 
     stats = {
         "total_assets": 0,
@@ -147,9 +148,10 @@ async def migrate_sam_data(
         Dict with migration statistics
     """
     from sqlalchemy import select
-    from app.core.shared.database_service import database_service
+
+    from app.core.database.models import Organization, SamNotice, SamSolicitation
     from app.core.search.pg_index_service import pg_index_service
-    from app.core.database.models import Organization, SamSolicitation, SamNotice
+    from app.core.shared.database_service import database_service
 
     stats = {
         "solicitations_indexed": 0,

@@ -5,16 +5,15 @@ Get Content function - Retrieve extracted markdown content.
 Gets the extracted markdown content for assets.
 """
 
-from typing import Any, Dict, List, Optional, Union
-from uuid import UUID
 import logging
+from uuid import UUID
 
 from sqlalchemy import select
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext
@@ -80,6 +79,7 @@ class GetContentFunction(BaseFunction):
                     "source_type": {"type": "string"},
                     "content_type": {"type": "string"},
                     "file_size": {"type": "integer"},
+                    "file_path": {"type": "string", "description": "Object storage path for the raw file"},
                     "created_at": {"type": "string"},
                 },
             },
@@ -152,6 +152,7 @@ class GetContentFunction(BaseFunction):
                         "content_type": asset.content_type,
                         "file_size": asset.file_size,
                         "created_at": asset.created_at.isoformat() if asset.created_at else None,
+                        "file_path": asset.raw_object_key,
                     })
 
                 # Get latest extraction result

@@ -21,10 +21,10 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from app.cwr.tools.schema_utils import ContractView
-from app.cwr.governance.generation_profiles import GenerationProfile, get_profile
 from app.cwr.governance.capability_profiles import check_exposure
+from app.cwr.governance.generation_profiles import GenerationProfile, get_profile
 from app.cwr.tools.registry import function_registry
+from app.cwr.tools.schema_utils import ContractView
 
 logger = logging.getLogger("curatore.cwr.contracts.contract_pack")
 

@@ -28,15 +28,14 @@ Usage:
 """
 
 import logging
-from datetime import datetime, timedelta
-from typing import Dict, List, Optional, Any
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import select, and_, or_
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database.models import Artifact
-from app.config import settings
 
 logger = logging.getLogger("curatore.artifact_service")
 

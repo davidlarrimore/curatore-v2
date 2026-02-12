@@ -5,15 +5,14 @@ Tests LLM client initialization, document evaluation, config management,
 and connection testing for OpenAI-compatible APIs.
 """
 
-import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
 import json
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.core.llm.llm_service import LLMService
+import pytest
 from app.connectors.adapters.llm_adapter import LLMAdapter
-from app.core.models import LLMEvaluation, LLMConnectionStatus
+from app.core.llm.llm_service import LLMService
+from app.core.models import LLMEvaluation
 from openai import OpenAI
-
 
 # ============================================================================
 # Patch targets — initialization logic lives in llm_adapter

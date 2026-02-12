@@ -6,18 +6,18 @@ Wraps the pg_search_service to search assets using hybrid search.
 Returns results as ContentItem instances for unified handling.
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
 import logging
+from typing import Any, Dict, List
+from uuid import UUID
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
-from ...context import FunctionContext
 from ...content import ContentItem
+from ...context import FunctionContext
 from ...filters import WHERE_SCHEMA, build_jsonb_where
 
 logger = logging.getLogger("curatore.functions.search.search_assets")
@@ -91,13 +91,22 @@ class SearchAssetsFunction(BaseFunction):
                 "folder_path": {
                     "type": "string",
                     "description": (
-                        "Filter by folder path. Accepts human-readable SharePoint paths "
-                        "(e.g., 'Reuse Material/Past Performances') which prefix-match folders and subfolders, "
-                        "or slugified storage paths (e.g., 'sharepoint/my-site/shared-documents'). "
-                        "Use discover_data_sources(source_type='sharepoint') to see available folder paths."
+                        "Filter by storage folder path. Use the full storage path from "
+                        "resolve_sharepoint_folders (e.g., 'sharepoint/growth-sharepoint/reuse-material/past-performances'). "
+                        "Combined with folder_match_mode to control matching."
                     ),
                     "default": None,
-                    "examples": ["Reuse Material/Past Performances"],
+                    "examples": ["sharepoint/growth-sharepoint/reuse-material/past-performances"],
+                },
+                "folder_match_mode": {
+                    "type": "string",
+                    "enum": ["prefix", "contains"],
+                    "default": "prefix",
+                    "description": (
+                        "How to match folder_path: "
+                        "'prefix' = exact prefix match on slugified storage folder (default, recommended). "
+                        "'contains' = substring match anywhere in the storage folder path."
+                    ),
                 },
                 "search_mode": {
                     "type": "string",
@@ -172,6 +181,7 @@ class SearchAssetsFunction(BaseFunction):
         site_name = params.get("site_name")
         facet_filters = params.get("facet_filters")
         folder_path = params.get("folder_path")
+        folder_match_mode = params.get("folder_match_mode", "prefix")
         search_mode = params.get("search_mode", "hybrid")
         keyword_weight = params.get("keyword_weight", 0.5)
         limit = min(params.get("limit", 20), 100)
@@ -190,7 +200,8 @@ class SearchAssetsFunction(BaseFunction):
             return await self._list_by_filters(
                 ctx, source_type=source_type, sync_config_id=sync_config_id,
                 collection_id=collection_id, site_name=site_name, limit=wildcard_limit,
-                where_conditions=where_conditions,
+                where_conditions=where_conditions, folder_path=folder_path,
+                folder_match_mode=folder_match_mode,
             )
 
         try:
@@ -217,8 +228,10 @@ class SearchAssetsFunction(BaseFunction):
 
             # Resolve site_name to sync_config_ids (case-insensitive)
             if site_name and not sync_config_ids:
+                from sqlalchemy import func as sqla_func
+                from sqlalchemy import select
+
                 from app.core.database.models import SharePointSyncConfig
-                from sqlalchemy import select, func as sqla_func
 
                 result = await ctx.session.execute(
                     select(SharePointSyncConfig.id)
@@ -263,6 +276,7 @@ class SearchAssetsFunction(BaseFunction):
                 collection_ids=collection_ids,
                 sync_config_ids=sync_config_ids,
                 folder_path=folder_path,
+                folder_match_mode=folder_match_mode,
                 facet_filters=facet_filters,
                 limit=limit,
             )
@@ -347,6 +361,8 @@ class SearchAssetsFunction(BaseFunction):
         site_name: str = None,
         limit: int = 100,
         where_conditions: List[Dict[str, Any]] = None,
+        folder_path: str = None,
+        folder_match_mode: str = "prefix",
     ) -> FunctionResult:
         """
         List assets by filters without full-text search.
@@ -354,13 +370,18 @@ class SearchAssetsFunction(BaseFunction):
         Used when query="*" to return all matching assets ordered by creation date.
         Queries the Asset table directly instead of search_chunks.
         """
-        from uuid import UUID as _UUID
-        from sqlalchemy import select, func as sqla_func, or_, and_, literal
+        from sqlalchemy import func as sqla_func
+        from sqlalchemy import select
+
         from app.core.database.models import Asset
 
         try:
+            # Only return assets with completed extraction (status='ready').
+            # This is consistent with the search-based path which only returns
+            # indexed assets, and excludes unsupported/failed/pending/deleted files.
             query = select(Asset).where(
                 Asset.organization_id == ctx.organization_id,
+                Asset.status == "ready",
             )
 
             # Apply operator-based where conditions via shared filter module
@@ -402,6 +423,19 @@ class SearchAssetsFunction(BaseFunction):
                 query = query.where(
                     Asset.source_metadata["sync"]["config_id"].astext.in_(config_ids)
                 )
+
+            if folder_path:
+                from app.core.storage.storage_path_service import slugify as slugify_component
+
+                clean = folder_path.strip("/")
+                slugified = "/".join(slugify_component(p) for p in clean.split("/") if p)
+                storage_folder_col = Asset.source_metadata["source"]["storage_folder"].astext
+
+                if folder_match_mode == "contains":
+                    query = query.where(storage_folder_col.like(f"%{slugified}%"))
+                else:
+                    # Default: prefix match
+                    query = query.where(storage_folder_col.like(f"{slugified}%"))
 
             query = query.order_by(Asset.created_at.desc()).limit(limit)
 

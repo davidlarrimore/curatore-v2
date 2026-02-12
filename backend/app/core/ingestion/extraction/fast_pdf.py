@@ -14,10 +14,9 @@ Usage:
 
 import logging
 from pathlib import Path
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List, Optional
 
 from .base import BaseExtractionEngine, ExtractionResult
-
 
 logger = logging.getLogger("curatore.extraction.fast_pdf")
 

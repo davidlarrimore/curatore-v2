@@ -13,15 +13,14 @@ The service enables efficient document collection updates without data loss.
 import hashlib
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple
+from typing import Dict, List, Tuple
 from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database.models import Asset, AssetVersion
+from app.core.database.models import Asset
 from app.core.shared.asset_service import asset_service
-
 
 logger = logging.getLogger("curatore.services.bulk_upload")
 

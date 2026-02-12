@@ -19,7 +19,6 @@ Create Date: 2026-02-07
 import sqlalchemy as sa
 from alembic import op
 
-
 # revision identifiers
 revision = "metadata_registry_tables"
 down_revision = "namespace_search_metadata"

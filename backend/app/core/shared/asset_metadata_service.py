@@ -25,13 +25,13 @@ Usage:
 
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database.models import AssetMetadata, Asset
+from app.core.database.models import Asset, AssetMetadata
 
 logger = logging.getLogger("curatore.asset_metadata_service")
 

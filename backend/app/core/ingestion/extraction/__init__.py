@@ -31,12 +31,12 @@ Available Engines:
 """
 
 from .base import BaseExtractionEngine, ExtractionResult
-from .extraction_service import ExtractionServiceEngine
 from .docling import DoclingEngine
-from .tika import TikaEngine
-from .fast_pdf import FastPdfEngine
+from .extraction_service import ExtractionServiceEngine
 from .factory import ExtractionEngineFactory
+from .fast_pdf import FastPdfEngine
 from .file_type_registry import FileTypeRegistry, file_type_registry
+from .tika import TikaEngine
 
 __all__ = [
     # Base classes

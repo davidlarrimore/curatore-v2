@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect, use, useCallback, useRef } from 'react'
+import { useState, useEffect, use, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { useActiveJobs } from '@/lib/context-shims'
 import { samApi, SamSolicitation, SamNotice, SamAttachment } from '@/lib/api'
-import { RunningJobBanner } from '@/components/ui/RunningJobBanner'
+import { useJobProgress } from '@/lib/useJobProgress'
+import { JobProgressPanel } from '@/components/ui/JobProgressPanel'
 import { formatDate as formatDateUtil, formatDateTime as formatDateTimeUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import SamBreadcrumbs from '@/components/sam/SamBreadcrumbs'
@@ -50,7 +51,7 @@ function SolicitationDetailContent({ params }: PageProps) {
   const solicitationId = resolvedParams.id
   const router = useRouter()
   const { token } = useAuth()
-  const { addJob, getJobsForResource } = useActiveJobs()
+  const { addJob } = useActiveJobs()
 
   // State
   const [solicitation, setSolicitation] = useState<SamSolicitation | null>(null)
@@ -62,6 +63,13 @@ function SolicitationDetailContent({ params }: PageProps) {
   const [activeTab, setActiveTab] = useState<'notices' | 'attachments' | 'metadata'>('notices')
   const [isRegenerating, setIsRegenerating] = useState(false)
   const [isRefreshingFromSam, setIsRefreshingFromSam] = useState(false)
+
+  // Track refresh jobs for this solicitation
+  const { jobs: activeRefreshJobs, isActive: hasActiveRefreshJob } = useJobProgress(
+    'sam_solicitation',
+    solicitationId,
+    { onComplete: () => loadData() }
+  )
 
   // Load solicitation data
   const loadSolicitation = useCallback(async () => {
@@ -110,10 +118,6 @@ function SolicitationDetailContent({ params }: PageProps) {
     }
   }, [solicitation?.summary_status, loadSolicitation])
 
-  // Get active refresh jobs for this solicitation (via WebSocket)
-  const activeRefreshJobs = getJobsForResource('sam_solicitation', solicitationId)
-  const prevJobCountRef = useRef(activeRefreshJobs.length)
-
   // Handle refresh from SAM.gov
   const handleRefreshFromSam = async () => {
     if (!token || !solicitation) return
@@ -144,19 +148,6 @@ function SolicitationDetailContent({ params }: PageProps) {
       setIsRefreshingFromSam(false)
     }
   }
-
-  // Refresh data when a refresh job completes (via WebSocket)
-  useEffect(() => {
-    const currentCount = activeRefreshJobs.length
-    const prevCount = prevJobCountRef.current
-
-    // If job count decreased, a job completed - refresh data
-    if (currentCount < prevCount) {
-      loadData()
-    }
-
-    prevJobCountRef.current = currentCount
-  }, [activeRefreshJobs.length, loadData])
 
   // Handle regenerate summary
   const handleRegenerateSummary = async () => {
@@ -372,13 +363,11 @@ function SolicitationDetailContent({ params }: PageProps) {
         />
 
         {/* Active Refresh Jobs */}
-        {activeRefreshJobs.length > 0 && (
-          <div className="mb-4">
-            {activeRefreshJobs.map(job => (
-              <RunningJobBanner key={job.runId} job={job} />
-            ))}
-          </div>
-        )}
+        <JobProgressPanel
+          resourceType="sam_solicitation"
+          resourceId={solicitationId}
+          className="mb-4"
+        />
 
         {/* Header */}
         <div className="mb-8">
@@ -418,11 +407,11 @@ function SolicitationDetailContent({ params }: PageProps) {
               <Button
                 variant="secondary"
                 onClick={handleRefreshFromSam}
-                disabled={isRefreshingFromSam || activeRefreshJobs.length > 0}
+                disabled={isRefreshingFromSam || hasActiveRefreshJob}
                 className="gap-2"
                 title="Re-fetch data from SAM.gov API"
               >
-                {isRefreshingFromSam || activeRefreshJobs.length > 0 ? (
+                {isRefreshingFromSam || hasActiveRefreshJob ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <Download className="w-4 h-4" />

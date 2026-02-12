@@ -4,13 +4,10 @@ Tests for configuration loader service.
 Tests YAML configuration loading, validation, and environment variable resolution.
 """
 
-import os
-import pytest
-import tempfile
-from pathlib import Path
 
-from app.core.shared.config_loader import ConfigLoader
+import pytest
 from app.core.models.config_models import AppConfig, LLMConfig
+from app.core.shared.config_loader import ConfigLoader
 
 
 class TestConfigLoader:

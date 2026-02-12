@@ -59,10 +59,12 @@ from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select, desc
+from sqlalchemy import desc, select
 
-from app.core.tasks import sam_pull_task, sam_refresh_solicitation_task, sam_refresh_notice_task
-from app.core.shared.run_service import run_service
+from app.connectors.sam_gov.sam_api_usage_service import sam_api_usage_service
+from app.connectors.sam_gov.sam_pull_service import sam_pull_service
+from app.connectors.sam_gov.sam_service import sam_service
+from app.connectors.sam_gov.sam_summarization_service import sam_summarization_service
 from app.core.database.models import (
     Run,
     SamAttachment,
@@ -72,12 +74,10 @@ from app.core.database.models import (
     SamSolicitationSummary,
     User,
 )
-from app.dependencies import get_current_user, require_org_admin
 from app.core.shared.database_service import database_service
-from app.connectors.sam_gov.sam_api_usage_service import sam_api_usage_service
-from app.connectors.sam_gov.sam_pull_service import sam_pull_service
-from app.connectors.sam_gov.sam_service import sam_service
-from app.connectors.sam_gov.sam_summarization_service import sam_summarization_service
+from app.core.shared.run_service import run_service
+from app.core.tasks import sam_pull_task, sam_refresh_notice_task, sam_refresh_solicitation_task
+from app.dependencies import get_current_user, require_org_admin
 
 # Initialize router
 router = APIRouter(prefix="/sam", tags=["SAM.gov"])
@@ -742,8 +742,8 @@ async def reindex_sam_data(
 
     Requires org_admin role.
     """
-    from app.core.tasks import reindex_sam_organization_task
     from app.core.shared.config_loader import config_loader
+    from app.core.tasks import reindex_sam_organization_task
 
     # Check if search is enabled
     search_config = config_loader.get_search_config()
@@ -935,7 +935,6 @@ async def list_searches(
 ) -> SamSearchListResponse:
     """List SAM searches for the organization."""
     from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
 
     async with database_service.get_session() as session:
         searches, total = await sam_service.list_searches(
@@ -1132,6 +1131,7 @@ async def pull_search(
     Rate limited to one pull per minute per search to prevent duplicate jobs.
     """
     from datetime import timedelta
+
     from sqlalchemy import and_
 
     async with database_service.get_session() as session:

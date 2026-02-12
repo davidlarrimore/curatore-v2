@@ -41,8 +41,8 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import select
 
 from app.config import settings
-from app.core.database.models import ApiKey, Organization, User
 from app.core.auth.auth_service import auth_service
+from app.core.database.models import ApiKey, Organization, User
 from app.core.shared.database_service import database_service
 
 # Initialize logger

@@ -5,16 +5,15 @@ Summarize Solicitations function - Batch summarize SAM.gov solicitations.
 Generates summaries for multiple solicitations efficiently.
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
 import logging
+from uuid import UUID
 
-from sqlalchemy import select, and_
+from sqlalchemy import and_, select
 
 from ..base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ..context import FunctionContext

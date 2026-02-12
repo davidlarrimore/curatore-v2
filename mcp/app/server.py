@@ -5,11 +5,11 @@ import logging
 from contextvars import ContextVar
 from typing import Optional
 
+import mcp.types as types
 from mcp.server import Server
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
-import mcp.types as types
 
-from app.handlers import handle_tools_list, handle_tools_call, handle_resources_list
+from app.handlers import handle_resources_list, handle_tools_call, handle_tools_list
 from app.services.contract_converter import ContractConverter
 
 logger = logging.getLogger("mcp.server")
@@ -69,3 +69,24 @@ async def sdk_list_resources() -> list[types.Resource]:
         )
         for r in result.get("resources", [])
     ]
+
+
+@server.read_resource()
+async def sdk_read_resource(uri: types.AnyUrl) -> str:
+    """Read a specific resource by URI. Returns description text."""
+    api_key = ctx_api_key.get()
+    correlation_id = ctx_correlation_id.get()
+    result = await handle_resources_list(api_key, correlation_id)
+
+    uri_str = str(uri)
+    for r in result.get("resources", []):
+        if r["uri"] == uri_str:
+            return r.get("description", "")
+
+    raise ValueError(f"Resource not found: {uri_str}")
+
+
+@server.list_resource_templates()
+async def sdk_list_resource_templates() -> list[types.ResourceTemplate]:
+    """List resource templates (none currently)."""
+    return []

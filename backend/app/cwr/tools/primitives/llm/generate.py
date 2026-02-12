@@ -9,20 +9,21 @@ Supports collection processing via the `items` parameter - when provided,
 the prompt is rendered for each item with {{ item.xxx }} template placeholders.
 """
 
-from typing import Any, Dict, List, Optional
 import logging
+from typing import Any, List, Optional
 
 from jinja2 import Template
 
+from app.core.models.llm_models import LLMTaskType
+from app.core.shared.config_loader import config_loader
+
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext
-from app.core.models.llm_models import LLMTaskType
-from app.core.shared.config_loader import config_loader
 
 logger = logging.getLogger("curatore.functions.llm.generate")
 
@@ -76,13 +77,13 @@ class GenerateFunction(BaseFunction):
     meta = FunctionMeta(
         name="llm_generate",
         category=FunctionCategory.LLM,
-        description="Generate text using an LLM",
+        description="Generate text using an LLM from a prompt. Supports system prompts, temperature, and model selection.",
         input_schema={
             "type": "object",
             "properties": {
                 "prompt": {
                     "type": "string",
-                    "description": "The prompt to generate from",
+                    "description": "The prompt to generate text from. Can include document content inline.",
                     "examples": ["Summarize the following document in 3 bullet points..."],
                 },
                 "system_prompt": {
@@ -112,6 +113,7 @@ class GenerateFunction(BaseFunction):
                     "description": "Collection of items to iterate over. When provided, the prompt is rendered for each item with {{ item.xxx }} placeholders replaced by item data.",
                     "default": None,
                     "examples": [[{"title": "Item 1"}, {"title": "Item 2"}]],
+                    "x-procedure-only": True,
                 },
             },
             "required": ["prompt"],

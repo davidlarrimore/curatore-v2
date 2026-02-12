@@ -21,16 +21,16 @@ Usage:
 """
 
 import logging
-from typing import Optional, Dict, Any
+from typing import Dict, Optional
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.models.llm_models import (
-    LLMTaskType,
-    LLMTaskConfig,
     DEFAULT_FUNCTION_TASK_TYPES,
     DEFAULT_TEMPERATURES,
+    LLMTaskConfig,
+    LLMTaskType,
 )
 from app.core.shared.config_loader import config_loader
 
@@ -170,6 +170,7 @@ class LLMRoutingService:
         """
         try:
             from sqlalchemy import select
+
             from app.core.database.models import OrganizationSetting
 
             # Query for organization LLM settings

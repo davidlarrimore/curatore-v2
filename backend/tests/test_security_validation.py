@@ -5,18 +5,18 @@ Tests the middleware functions that enforce organization-level access control
 and prevent cross-tenant data leakage.
 """
 
-import pytest
-from uuid import uuid4
 from unittest.mock import AsyncMock, MagicMock
-from sqlalchemy.ext.asyncio import AsyncSession
+from uuid import uuid4
 
+import pytest
 from app.api.v1.middleware import (
+    check_document_exists,
     validate_document_access,
     validate_document_ownership,
-    check_document_exists,
 )
 from app.core.database.models import Artifact, User
 from fastapi import HTTPException
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 @pytest.fixture

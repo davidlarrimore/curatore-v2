@@ -1,21 +1,21 @@
 # backend/app/api/v1/routers/system.py
 import asyncio
-from datetime import datetime
-from fastapi import APIRouter, HTTPException, Query, Depends
-import os
-from typing import Dict, Any, Optional, List
 import json
-import redis
+import os
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
+import redis
+from fastapi import APIRouter, Depends, HTTPException, Query
+
+from app.celery_app import app as celery_app
 from app.config import settings
-from app.api.v1.admin.schemas import HealthStatus, LLMConnectionStatus
 from app.core.llm.llm_service import llm_service
+from app.core.shared.config_loader import config_loader
+from app.core.shared.database_service import database_service
 from app.core.shared.document_service import document_service
 from app.core.storage.storage_service import storage_service
 from app.core.storage.zip_service import zip_service
-from app.core.shared.database_service import database_service
-from app.core.shared.config_loader import config_loader
-from app.celery_app import app as celery_app
 from app.dependencies import get_current_user
 
 
@@ -740,8 +740,9 @@ async def get_system_settings(
     Aggregates configuration into grouped sections for display in the
     admin UI.  Secrets (API keys, passwords, tokens) are explicitly excluded.
     """
-    from app.core.database.models import Organization
     from sqlalchemy import select
+
+    from app.core.database.models import Organization
 
     sections: Dict[str, Any] = {}
 

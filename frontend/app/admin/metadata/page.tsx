@@ -28,6 +28,8 @@ import {
   Link2,
   Search,
   AlertTriangle,
+  Download,
+  Upload,
 } from 'lucide-react'
 import { metadataApi } from '@/lib/api'
 import type {
@@ -614,6 +616,9 @@ export default function MetadataCatalogPage() {
   const [refExpandedIds, setRefExpandedIds] = useState<Set<string>>(new Set())
   const [pendingSuggestions, setPendingSuggestions] = useState<FacetPendingSuggestions | null>(null)
   const [discovering, setDiscovering] = useState(false)
+  const [syncing, setSyncing] = useState(false)
+  const [syncingFacets, setSyncingFacets] = useState(false)
+  const [rebuilding, setRebuilding] = useState(false)
   const [discoverResults, setDiscoverResults] = useState<FacetDiscoverResult | null>(null)
   const [showAddValueModal, setShowAddValueModal] = useState(false)
   const [addValuePrefill, setAddValuePrefill] = useState<string>('')
@@ -779,6 +784,50 @@ export default function MetadataCatalogPage() {
       setError(err.message || 'Discovery failed')
     } finally {
       setDiscovering(false)
+    }
+  }
+
+  const handleSyncToYaml = async () => {
+    if (!token) return
+    setSyncing(true)
+    try {
+      const result = await metadataApi.exportReferenceBaseline(token)
+      showMessage(`Synced to YAML: ${result.facets_exported} facets, ${result.values_exported} values, ${result.aliases_exported} aliases`)
+    } catch (err: any) {
+      setError(err.message || 'Sync to YAML failed')
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const handleSyncFacetsToYaml = async () => {
+    if (!token) return
+    setSyncingFacets(true)
+    try {
+      const result = await metadataApi.exportFacetsBaseline(token)
+      showMessage(`Synced to YAML: ${result.facets_exported} facets, ${result.mappings_exported} mappings`)
+    } catch (err: any) {
+      setError(err.message || 'Sync facets to YAML failed')
+    } finally {
+      setSyncingFacets(false)
+    }
+  }
+
+  const handleRebuildFromYaml = async () => {
+    if (!token) return
+    setRebuilding(true)
+    try {
+      const result = await metadataApi.rebuildFromYaml(token)
+      showMessage(
+        `Rebuilt from YAML: ${result.fields_synced} fields, ${result.facets_synced} facets, ` +
+        `${result.mappings_synced} mappings, ${result.reference_values_seeded} ref values, ` +
+        `${result.reference_aliases_seeded} ref aliases`
+      )
+      await loadCatalog()
+    } catch (err: any) {
+      setError(err.message || 'Rebuild from YAML failed')
+    } finally {
+      setRebuilding(false)
     }
   }
 
@@ -977,48 +1026,59 @@ export default function MetadataCatalogPage() {
 
         {/* Tabs */}
         <div className="border-b border-gray-200 dark:border-gray-700 mb-6">
-          <nav className="-mb-px flex space-x-8">
+          <div className="flex items-center justify-between">
+            <nav className="-mb-px flex space-x-8">
+              <button
+                onClick={() => setActiveTab('namespaces')}
+                className={`flex items-center py-3 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'namespaces'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
+                }`}
+              >
+                <BookOpen className="w-4 h-4 mr-2" />
+                Namespaces & Fields
+                {catalog && <span className="ml-2 text-xs bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">{catalog.namespaces.length}</span>}
+              </button>
+              <button
+                onClick={() => setActiveTab('facets')}
+                className={`flex items-center py-3 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'facets'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
+                }`}
+              >
+                <Filter className="w-4 h-4 mr-2" />
+                Facets
+                {catalog && <span className="ml-2 text-xs bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">{catalog.facets.length}</span>}
+              </button>
+              <button
+                onClick={() => setActiveTab('reference')}
+                className={`flex items-center py-3 px-1 border-b-2 font-medium text-sm ${
+                  activeTab === 'reference'
+                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
+                    : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
+                }`}
+              >
+                <Link2 className="w-4 h-4 mr-2" />
+                Reference Data
+                {pendingSuggestions && pendingSuggestions.total > 0 && (
+                  <span className="ml-2 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded-full">
+                    {pendingSuggestions.total} pending
+                  </span>
+                )}
+              </button>
+            </nav>
             <button
-              onClick={() => setActiveTab('namespaces')}
-              className={`flex items-center py-3 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'namespaces'
-                  ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
-              }`}
+              onClick={handleRebuildFromYaml}
+              disabled={rebuilding}
+              className="flex items-center space-x-2 px-3 py-1.5 mb-1 text-sm border border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300 rounded-md hover:bg-gray-50 dark:hover:bg-gray-800 disabled:opacity-50"
+              title="Flush and rebuild metadata catalog in DB from YAML baseline files"
             >
-              <BookOpen className="w-4 h-4 mr-2" />
-              Namespaces & Fields
-              {catalog && <span className="ml-2 text-xs bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">{catalog.namespaces.length}</span>}
+              {rebuilding ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              <span>{rebuilding ? 'Rebuilding...' : 'Rebuild from YAML'}</span>
             </button>
-            <button
-              onClick={() => setActiveTab('facets')}
-              className={`flex items-center py-3 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'facets'
-                  ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
-              }`}
-            >
-              <Filter className="w-4 h-4 mr-2" />
-              Facets
-              {catalog && <span className="ml-2 text-xs bg-gray-100 dark:bg-gray-800 px-2 py-0.5 rounded-full">{catalog.facets.length}</span>}
-            </button>
-            <button
-              onClick={() => setActiveTab('reference')}
-              className={`flex items-center py-3 px-1 border-b-2 font-medium text-sm ${
-                activeTab === 'reference'
-                  ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 dark:text-gray-400'
-              }`}
-            >
-              <Link2 className="w-4 h-4 mr-2" />
-              Reference Data
-              {pendingSuggestions && pendingSuggestions.total > 0 && (
-                <span className="ml-2 text-xs bg-amber-100 dark:bg-amber-900/30 text-amber-700 dark:text-amber-400 px-2 py-0.5 rounded-full">
-                  {pendingSuggestions.total} pending
-                </span>
-              )}
-            </button>
-          </nav>
+          </div>
         </div>
 
         {loading ? (
@@ -1147,8 +1207,17 @@ export default function MetadataCatalogPage() {
             {/* Facets Tab */}
             {activeTab === 'facets' && (
               <div className="space-y-3">
-                {/* Add Facet button */}
-                <div className="flex justify-end">
+                {/* Facets controls bar */}
+                <div className="flex justify-end space-x-2">
+                  <button
+                    onClick={handleSyncFacetsToYaml}
+                    disabled={syncingFacets}
+                    className="flex items-center space-x-2 px-3 py-2 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700 disabled:opacity-50"
+                    title="Export facet definitions to YAML baseline file"
+                  >
+                    {syncingFacets ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                    <span>{syncingFacets ? 'Syncing...' : 'Sync to YAML'}</span>
+                  </button>
                   <button
                     onClick={() => setShowAddFacetModal(true)}
                     className="flex items-center space-x-2 px-3 py-2 text-sm bg-purple-600 text-white rounded-md hover:bg-purple-700"
@@ -1262,6 +1331,15 @@ export default function MetadataCatalogPage() {
                     </label>
                   </div>
                   <div className="flex items-center space-x-2">
+                    <button
+                      onClick={handleSyncToYaml}
+                      disabled={syncing}
+                      className="flex items-center space-x-2 px-3 py-1.5 text-sm bg-gray-600 text-white rounded-md hover:bg-gray-700 disabled:opacity-50"
+                      title="Export reference data to YAML baseline file"
+                    >
+                      {syncing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Download className="w-4 h-4" />}
+                      <span>{syncing ? 'Syncing...' : 'Sync to YAML'}</span>
+                    </button>
                     <button
                       onClick={handleDiscover}
                       disabled={discovering || !selectedRefFacet}

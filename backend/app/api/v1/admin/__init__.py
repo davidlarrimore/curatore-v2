@@ -2,13 +2,13 @@
 from fastapi import APIRouter
 
 from .routers import (
-    auth,
-    users,
-    organizations,
-    connections,
-    system,
-    scheduled_tasks,
     api_keys,
+    auth,
+    connections,
+    organizations,
+    scheduled_tasks,
+    system,
+    users,
 )
 
 router = APIRouter(prefix="/admin", tags=["Admin"])

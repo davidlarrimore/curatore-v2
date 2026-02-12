@@ -26,19 +26,11 @@ The `fn` namespace provides a convenient interface to the function registry:
 
 from .base import (
     BaseFunction,
-    FunctionResult,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
+    FunctionResult,
     FunctionStatus,
 )
-from .context import FunctionContext
-from .registry import (
-    function_registry,
-    get_function,
-    list_functions,
-    initialize_functions,
-)
-from .schema_utils import ContractView
 from .content import (
     ContentItem,
     ContentService,
@@ -46,6 +38,14 @@ from .content import (
     content_service,
     content_type_registry,
 )
+from .context import FunctionContext
+from .registry import (
+    function_registry,
+    get_function,
+    initialize_functions,
+    list_functions,
+)
+from .schema_utils import ContractView
 
 
 class FunctionNamespace:

@@ -5,22 +5,18 @@ Tests the queue registry, job lifecycle, cancellation, and monitoring capabiliti
 for all queue types (extraction, SAM, scrape, SharePoint, maintenance).
 """
 
-import pytest
-from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
 
+import pytest
 from app.core.ops.queue_registry import (
+    ExtractionQueue,
+    MaintenanceQueue,
     QueueDefinition,
     QueueRegistry,
-    ExtractionQueue,
     SamQueue,
     ScrapeQueue,
     SharePointQueue,
-    MaintenanceQueue,
     queue_registry,
 )
-
 
 # =============================================================================
 # Queue Registry Tests

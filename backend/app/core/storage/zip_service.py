@@ -30,17 +30,17 @@
 
 import os
 import re
-import zipfile
 import tempfile
+import zipfile
+from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
-from datetime import datetime
-from io import BytesIO
 
-from .storage_service import storage_service
-from .minio_service import get_minio_service
+from app.core.models import DownloadType, ProcessingResult
 from app.core.shared.artifact_service import artifact_service
-from app.core.models import ProcessingResult, DownloadType
+
+from .minio_service import get_minio_service
+from .storage_service import storage_service
 
 
 class ZipService:

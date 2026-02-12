@@ -25,7 +25,7 @@ Usage:
 """
 
 from .content_item import ContentItem
-from .registry import ContentTypeRegistry, content_type_registry, CONTENT_TYPE_REGISTRY
+from .registry import CONTENT_TYPE_REGISTRY, ContentTypeRegistry, content_type_registry
 from .service import ContentService, content_service
 
 __all__ = [

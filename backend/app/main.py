@@ -30,31 +30,28 @@ Author: Curatore Team
 Version: 2.0.0
 """
 
-import os
-import json
-import uuid
 import logging
-from logging.handlers import RotatingFileHandler
+import os
+import uuid
 from datetime import datetime
-from pathlib import Path
+from logging.handlers import RotatingFileHandler
 from typing import Any, Dict
 
 from fastapi import FastAPI, HTTPException, Request
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
 from fastapi.encoders import jsonable_encoder
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.docs import get_swagger_ui_html
 from fastapi.openapi.utils import get_openapi
+from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 from starlette.requests import Request as StarletteRequest
 from starlette.types import Message
-from pydantic import ValidationError
 
+from .api.v1 import api_router as v1_router
 from .config import settings
 from .core.models import ErrorResponse
-from .api.v1 import api_router as v1_router
-from .core.shared.document_service import document_service
-from .core.storage.storage_service import storage_service
 from .core.shared.database_service import database_service
+from .core.storage.storage_service import storage_service
 
 # ============================================================================
 # APPLICATION INITIALIZATION
@@ -235,10 +232,10 @@ async def startup_event() -> None:
     print("🚀 Starting Curatore v2...")
     print(f"   Version: {settings.api_version}")
     print(f"   Debug Mode: {settings.debug}")
-    
+
     # Log current working directory and storage configuration
     print(f"📍 Current working directory: {os.getcwd()}")
-    print(f"📦 Object Storage Configuration:")
+    print("📦 Object Storage Configuration:")
     print(f"   USE_OBJECT_STORAGE: {settings.use_object_storage}")
     print(f"   MINIO_ENDPOINT: {getattr(settings, 'minio_endpoint', 'Not configured')}")
     print(f"   MINIO_BUCKET_UPLOADS: {getattr(settings, 'minio_bucket_uploads', 'curatore-uploads')}")
@@ -251,7 +248,7 @@ async def startup_event() -> None:
         print(f"   DOCLING_SERVICE_URL: {getattr(settings, 'docling_service_url', None)}")
     except Exception:
         pass
-    
+
     try:
         # Initialize database
         print("🗄️  Initializing database...")
@@ -352,10 +349,11 @@ async def startup_event() -> None:
         try:
             print("🔄 Discovering procedures and pipelines...")
             async with database_service.get_session() as session:
-                from .cwr.procedures.store.discovery import procedure_discovery_service
-                from .cwr.pipelines.store.discovery import pipeline_discovery_service
                 from sqlalchemy import select
+
                 from .core.database.models import Organization
+                from .cwr.pipelines.store.discovery import pipeline_discovery_service
+                from .cwr.procedures.store.discovery import procedure_discovery_service
 
                 # Get organizations to register procedures/pipelines for
                 result = await session.execute(select(Organization))
@@ -394,10 +392,12 @@ async def startup_event() -> None:
         try:
             print("🔗 Syncing default connections from environment variables...")
             async with database_service.get_session() as session:
-                from .core.auth.connection_service import sync_default_connections_from_env
-                from sqlalchemy import select
-                from .core.database.models import Organization
                 from uuid import UUID
+
+                from sqlalchemy import select
+
+                from .core.auth.connection_service import sync_default_connections_from_env
+                from .core.database.models import Organization
 
                 # Determine which organization to sync for
                 org_id = None
@@ -512,8 +512,9 @@ async def startup_event() -> None:
             print(f"🔍 Embedding config: model={embedding_state['model']}, dimensions={embedding_state['dimensions']}")
 
             from sqlalchemy import select
-            from .core.database.models import Organization
             from sqlalchemy.orm.attributes import flag_modified
+
+            from .core.database.models import Organization
 
             async with database_service.get_session() as session:
                 result = await session.execute(select(Organization))
@@ -547,7 +548,7 @@ async def startup_event() -> None:
             print(f"   ⚠️  Embedding config check failed: {e}")
 
         print("✅ Startup complete - Curatore v2 ready to process documents")
-        
+
     except Exception as e:
         print(f"❌ Startup failed: {e}")
         raise
@@ -614,7 +615,7 @@ async def validation_exception_handler(request: Request, exc: ValidationError) -
         error_response.request_id = getattr(request.state, "request_id", None)
     except Exception:
         pass
-    
+
     return JSONResponse(status_code=422, content=jsonable_encoder(error_response))
 
 
@@ -639,7 +640,7 @@ async def http_exception_handler(request: Request, exc: HTTPException) -> JSONRe
         error_response.request_id = getattr(request.state, "request_id", None)
     except Exception:
         pass
-    
+
     return JSONResponse(status_code=exc.status_code, content=jsonable_encoder(error_response))
 
 
@@ -664,7 +665,7 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
         detail="An unexpected error occurred",
         timestamp=datetime.now()
     )
-    
+
     # In debug mode, include the actual error details
     if settings.debug:
         error_response.detail = str(exc)
@@ -677,7 +678,7 @@ async def general_exception_handler(request: Request, exc: Exception) -> JSONRes
         error_response.request_id = getattr(request.state, "request_id", None)
     except Exception:
         pass
-    
+
     return JSONResponse(status_code=500, content=jsonable_encoder(error_response))
 
 
@@ -864,7 +865,7 @@ if __name__ == "__main__":
     In production, use a proper ASGI server configuration.
     """
     import uvicorn
-    
+
     # Development server configuration
     uvicorn.run(
         "app.main:app",  # Application path

@@ -19,7 +19,6 @@ Key methods:
 from __future__ import annotations
 
 import logging
-import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -366,7 +365,7 @@ class FacetReferenceService:
 
         Returns True if alias was added, False if it already exists.
         """
-        from ..database.models import FacetReferenceAlias, FacetReferenceValue
+        from ..database.models import FacetReferenceAlias
 
         # Find the reference value that owns the matched alias
         result = await session.execute(
@@ -1048,7 +1047,7 @@ Return ONLY valid JSON: {{"match": "canonical_value_or_null", "confidence": 0.9}
         self, session: AsyncSession, reference_value_id: UUID, org_id: Optional[UUID] = None,
     ) -> bool:
         """Approve a suggested canonical value (and all its aliases)."""
-        from ..database.models import FacetReferenceAlias, FacetReferenceValue
+        from ..database.models import FacetReferenceValue
 
         result = await session.execute(
             select(FacetReferenceValue).where(FacetReferenceValue.id == reference_value_id)
@@ -1182,6 +1181,117 @@ Return ONLY valid JSON: {{"match": "canonical_value_or_null", "confidence": 0.9}
             total += row[1]
 
         return {"facets": counts, "total": total}
+
+    # =========================================================================
+    # Export to YAML Baseline
+    # =========================================================================
+
+    async def export_to_yaml(self, session: AsyncSession) -> Dict[str, Any]:
+        """
+        Export current DB reference data (active values + aliases) back to
+        ``registry/reference_data.yaml``.
+
+        Merges global + all org-level active values into the YAML baseline
+        format.  Excludes the canonical-self alias (since ``load_baseline``
+        auto-creates it on seed).
+
+        Returns summary: ``{facets_exported, values_exported, aliases_exported}``.
+        """
+        from ..database.models import FacetReferenceAlias, FacetReferenceValue
+
+        # Fetch all active canonical values across all facets
+        result = await session.execute(
+            select(FacetReferenceValue).where(
+                FacetReferenceValue.status == "active",
+            ).order_by(FacetReferenceValue.facet_name, FacetReferenceValue.sort_order, FacetReferenceValue.canonical_value)
+        )
+        all_values = result.scalars().all()
+
+        if not all_values:
+            return {"facets_exported": 0, "values_exported": 0, "aliases_exported": 0}
+
+        # Batch-fetch all active aliases
+        ref_ids = [rv.id for rv in all_values]
+        alias_result = await session.execute(
+            select(FacetReferenceAlias).where(
+                and_(
+                    FacetReferenceAlias.reference_value_id.in_(ref_ids),
+                    FacetReferenceAlias.status == "active",
+                )
+            ).order_by(FacetReferenceAlias.alias_value)
+        )
+        all_aliases = alias_result.scalars().all()
+
+        # Group aliases by reference value id
+        aliases_by_ref: Dict[str, List[Any]] = {}
+        for a in all_aliases:
+            aliases_by_ref.setdefault(str(a.reference_value_id), []).append(a)
+
+        # Build YAML structure grouped by facet
+        yaml_data: Dict[str, list] = {}
+        total_values = 0
+        total_aliases = 0
+
+        for rv in all_values:
+            facet = rv.facet_name
+            entry: Dict[str, Any] = {"canonical": rv.canonical_value}
+            if rv.display_label:
+                entry["display_label"] = rv.display_label
+
+            # Collect non-self aliases
+            ref_aliases = aliases_by_ref.get(str(rv.id), [])
+            alias_entries = []
+            for a in ref_aliases:
+                # Skip the canonical-self alias (load_baseline auto-creates it)
+                if a.alias_value_lower == rv.canonical_value.lower():
+                    continue
+                alias_entry: Dict[str, str] = {"value": a.alias_value}
+                if a.source_hint:
+                    alias_entry["source_hint"] = a.source_hint
+                alias_entries.append(alias_entry)
+
+            if alias_entries:
+                entry["aliases"] = alias_entries
+                total_aliases += len(alias_entries)
+
+            yaml_data.setdefault(facet, []).append(entry)
+            total_values += 1
+
+        # Write YAML
+        yaml_path = Path(__file__).parent / "registry" / "reference_data.yaml"
+        output = {"reference_data": yaml_data}
+
+        with open(yaml_path, "w") as f:
+            f.write("# ============================================================================\n")
+            f.write("# Facet Reference Data — Canonical Values & Aliases\n")
+            f.write("# ============================================================================\n")
+            f.write("#\n")
+            f.write("# Auto-exported from database by Sync to YAML.\n")
+            f.write("# See FacetReferenceService.export_to_yaml() for details.\n")
+            f.write("#\n\n")
+            yaml.dump(
+                output,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+                width=120,
+            )
+
+        # Force reload on next access
+        self._yaml_loaded = False
+
+        facets_exported = len(yaml_data)
+        logger.info(
+            f"Exported reference data to YAML: {facets_exported} facets, "
+            f"{total_values} values, {total_aliases} aliases"
+        )
+
+        return {
+            "facets_exported": facets_exported,
+            "values_exported": total_values,
+            "aliases_exported": total_aliases,
+        }
 
     # =========================================================================
     # Reference Data Summary (for AI context)

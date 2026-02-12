@@ -6,18 +6,17 @@ Generic content retrieval function that works with any content type
 (asset, solicitation, notice, scraped_asset) and returns a ContentItem.
 """
 
-from typing import Any, Dict, Optional
-from uuid import UUID
 import logging
+from uuid import UUID
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
+from ...content import content_service, content_type_registry
 from ...context import FunctionContext
-from ...content import ContentItem, content_service, content_type_registry
 
 logger = logging.getLogger("curatore.functions.search.get")
 

@@ -15,9 +15,10 @@ backend_dir = Path(__file__).parent.parent
 sys.path.insert(0, str(backend_dir))
 
 import asyncio
-from sqlalchemy import select
+
 from app.core.database.models import Artifact
 from app.core.shared.database_service import database_service
+from sqlalchemy import select
 
 
 async def fix_document_ids():

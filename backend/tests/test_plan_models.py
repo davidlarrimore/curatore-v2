@@ -1,14 +1,13 @@
 """Tests for Typed Plan models."""
 
-import pytest
 import jsonschema
-
+import pytest
 from app.cwr.procedures.compiler.plan_models import (
-    TypedPlan,
-    PlanProcedure,
-    PlanParameter,
-    PlanStep,
     TYPED_PLAN_JSON_SCHEMA,
+    PlanParameter,
+    PlanProcedure,
+    PlanStep,
+    TypedPlan,
     is_ref,
     is_template,
     parse_ref,

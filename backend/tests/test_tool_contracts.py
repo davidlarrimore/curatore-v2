@@ -13,13 +13,12 @@ Covers:
 
 import pytest
 from app.cwr.tools.base import (
-    FunctionMeta,
-    FunctionCategory,
-    FunctionResult,
     BaseFunction,
+    FunctionCategory,
+    FunctionMeta,
+    FunctionResult,
 )
 from app.cwr.tools.schema_utils import ContractView
-
 
 # =============================================================================
 # FIXTURES

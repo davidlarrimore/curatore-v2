@@ -5,14 +5,14 @@ This module provides a factory for creating extraction engine instances
 based on configuration from config.yml or database connections.
 """
 
-from typing import Optional, Dict, Any
 import logging
+from typing import Any, Dict, Optional
 
 from .base import BaseExtractionEngine
-from .extraction_service import ExtractionServiceEngine
 from .docling import DoclingEngine
-from .tika import TikaEngine
+from .extraction_service import ExtractionServiceEngine
 from .fast_pdf import FastPdfEngine
+from .tika import TikaEngine
 
 logger = logging.getLogger(__name__)
 

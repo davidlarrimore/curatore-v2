@@ -10,11 +10,11 @@ The FunctionContext provides functions with access to:
 - Logging utilities
 """
 
+import logging
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional, TYPE_CHECKING
+from typing import Any, Dict, Optional
 from uuid import UUID
-import logging
 
 import markdown
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -288,8 +288,9 @@ class FunctionContext:
         Returns:
             Configured Jinja2 Environment
         """
-        from jinja2 import Environment
         from zoneinfo import ZoneInfo
+
+        from jinja2 import Environment
 
         env = Environment()
 

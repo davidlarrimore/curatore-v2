@@ -5,7 +5,6 @@ import logging
 import time
 from typing import Any, Dict, List, Optional, Set
 
-from app.config import settings
 from app.services.backend_client import backend_client
 
 logger = logging.getLogger("mcp.services.facet_validator")

@@ -29,9 +29,9 @@ from typing import Any
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
-    FunctionCategory,
     FlowResult,
+    FunctionCategory,
+    FunctionMeta,
 )
 from ...context import FunctionContext
 

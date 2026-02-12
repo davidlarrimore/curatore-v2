@@ -5,15 +5,14 @@ Webhook function - Call external webhooks.
 Makes HTTP calls to external webhook endpoints.
 """
 
-from typing import Any, Dict, List, Optional
 import logging
 
 import httpx
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext

@@ -8,13 +8,11 @@ Tests cover:
 - Facet validation in the procedure validator
 """
 
-import pytest
-from unittest.mock import patch, MagicMock
+from unittest.mock import MagicMock, patch
 
 from app.cwr.contracts.validation import ProcedureValidator, ValidationErrorCode
-from app.cwr.procedures.compiler.context_builder import ContextBuilder
 from app.cwr.governance.generation_profiles import get_profile
-
+from app.cwr.procedures.compiler.context_builder import ContextBuilder
 
 # =============================================================================
 # SYSTEM PROMPT TESTS (v2: ContextBuilder)

@@ -6,17 +6,16 @@ Compound function that generates a structured analysis of a solicitation
 including key requirements, evaluation criteria, and recommendations.
 """
 
-from typing import Any, Dict, Optional
-from uuid import UUID
 import logging
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.orm import selectinload
 
 from ..base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ..context import FunctionContext
@@ -267,8 +266,9 @@ Return your analysis in markdown format."""
 
             # If brief analysis, save as summary
             if analysis_depth == "brief" and not ctx.dry_run:
-                from app.core.database.models import SamSolicitationSummary
                 from datetime import datetime
+
+                from app.core.database.models import SamSolicitationSummary
 
                 # Create new summary record
                 summary_record = SamSolicitationSummary(

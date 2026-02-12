@@ -19,7 +19,6 @@ from __future__ import annotations
 
 import uuid
 from datetime import datetime
-from typing import List, Optional, Dict, Any
 
 from sqlalchemy import (
     Boolean,
@@ -33,7 +32,8 @@ from sqlalchemy import (
     TypeDecorator,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlalchemy.orm import relationship
 
 from .base import Base
@@ -93,7 +93,7 @@ class Procedure(Base):
         description: Detailed description of what the procedure does
         definition: JSONB containing steps, parameters, outputs, etc.
         version: Incremented when definition changes
-        is_active: Whether procedure can be triggered
+        is_active: Whether scheduled/cron triggers fire (ad-hoc runs always allowed)
         is_system: System procedures are managed by code, not editable
         source_type: 'system' or 'user' (created via UI)
         source_path: Path to source file for system procedures
@@ -131,7 +131,7 @@ class Procedure(Base):
     definition = Column(JSONB, nullable=False, default=dict, server_default="{}")
     version = Column(Integer, nullable=False, default=1)
 
-    # Status
+    # Scheduling — controls whether cron/event triggers fire; ad-hoc runs always allowed
     is_active = Column(Boolean, nullable=False, default=True)
     is_system = Column(Boolean, nullable=False, default=False)
 

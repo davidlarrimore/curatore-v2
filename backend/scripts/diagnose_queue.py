@@ -7,16 +7,16 @@ Run from backend directory:
 """
 
 import asyncio
-import sys
 import os
+import sys
 
 # Add backend to path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from sqlalchemy import select, func, and_, text
-from app.core.shared.database_service import database_service
-from app.core.database.models import Asset, Run, ExtractionResult
 from app.config import settings
+from app.core.database.models import Asset, ExtractionResult, Run
+from app.core.shared.database_service import database_service
+from sqlalchemy import and_, func, select
 
 
 async def diagnose():
@@ -33,7 +33,7 @@ async def diagnose():
     from app.core.ops.queue_registry import queue_registry
     queue_registry._ensure_initialized()
     extraction_queue = queue_registry.get("extraction")
-    print(f"\n[1b] QUEUE CONFIG (from config.yml)")
+    print("\n[1b] QUEUE CONFIG (from config.yml)")
     print(f"  extraction.max_concurrent: {extraction_queue.max_concurrent if extraction_queue else 'N/A'}")
     print(f"  extraction.timeout_seconds: {extraction_queue.timeout_seconds if extraction_queue else 'N/A'}")
 

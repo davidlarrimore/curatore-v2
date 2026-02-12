@@ -1,0 +1,97 @@
+{
+  "name": "Classify Past Performance Documents",
+  "slug": "classify_document_types",
+  "tags": [
+    "classification",
+    "sharepoint",
+    "past_performances"
+  ],
+  "steps": [
+    {
+      "name": "find_unclassified_documents",
+      "function": "search_assets",
+      "params": {
+        "query": "*",
+        "site_name": "Growth",
+        "folder_path": "sharepoint/growth-sharepoint/reuse-material/past-performances",
+        "folder_match_mode": "prefix",
+        "limit": 200,
+        "where": [
+          {
+            "field": "file.document_type",
+            "op": "is_empty"
+          }
+        ]
+      },
+      "on_error": "fail",
+      "condition": null,
+      "description": "Find all documents in Past Performances folder without document_type metadata",
+      "foreach": null,
+      "branches": null
+    },
+    {
+      "name": "log_found_documents",
+      "function": "log",
+      "params": {
+        "message": "Found {{ steps.find_unclassified_documents | length }} unclassified documents in Past Performances folder",
+        "level": "INFO",
+        "label": "document_count"
+      },
+      "on_error": "fail",
+      "condition": null,
+      "description": "Log the number of unclassified documents found",
+      "foreach": null,
+      "branches": null
+    },
+    {
+      "name": "classify_each_document",
+      "function": "foreach",
+      "params": {
+        "items": "{{ steps.find_unclassified_documents }}",
+        "concurrency": 3
+      },
+      "on_error": "fail",
+      "condition": null,
+      "description": "Classify each unclassified document",
+      "foreach": null,
+      "branches": {
+        "each": [
+          {
+            "name": "classify_document",
+            "function": "classify_document",
+            "params": {
+              "asset_id": "{{ item.id }}",
+              "persist": true
+            },
+            "on_error": "continue",
+            "condition": null,
+            "description": "Classify the document and persist to metadata",
+            "foreach": null,
+            "branches": null
+          }
+        ]
+      }
+    },
+    {
+      "name": "filter_successful_classifications",
+      "function": "log",
+      "params": {
+        "message": "Successfully classified {{ steps.classify_each_document | compact | length }} documents",
+        "data": "{{ steps.classify_each_document | compact }}",
+        "level": "INFO",
+        "label": "classification_results"
+      },
+      "on_error": "fail",
+      "condition": null,
+      "description": "Log successful classifications",
+      "foreach": null,
+      "branches": null
+    }
+  ],
+  "outputs": [],
+  "version": "1.0.0",
+  "on_error": "fail",
+  "triggers": [],
+  "parameters": [],
+  "description": "Classify documents by type using LLM and persist to searchable metadata"
+}

@@ -28,15 +28,13 @@ Usage:
 
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import select, and_, or_, func
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
-from app.core.database.models import Asset, AssetVersion, ExtractionResult, Run
-from app.config import settings
+from app.core.database.models import Asset, AssetVersion, ExtractionResult
 
 logger = logging.getLogger("curatore.asset_service")
 

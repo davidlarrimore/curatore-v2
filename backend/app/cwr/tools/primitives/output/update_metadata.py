@@ -5,16 +5,15 @@ Update Metadata function - Update asset metadata.
 Updates the metadata for a single asset.
 """
 
-from typing import Any, Dict, Optional
-from uuid import UUID
 import logging
+from uuid import UUID
 
 from sqlalchemy import select
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext

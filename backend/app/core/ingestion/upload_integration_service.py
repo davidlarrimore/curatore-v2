@@ -22,7 +22,6 @@ Usage:
     )
 """
 
-import hashlib
 import logging
 from datetime import datetime
 from typing import Optional, Tuple
@@ -30,13 +29,12 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database.models import Artifact, Asset, Run, ExtractionResult
+from app.core.database.models import Artifact, Asset, ExtractionResult, Run
 from app.core.shared.asset_service import asset_service
-from app.core.shared.run_service import run_service
-from .extraction_result_service import extraction_result_service
 from app.core.shared.run_log_service import run_log_service
-from app.config import settings
-from app.celery_app import app as celery_app
+from app.core.shared.run_service import run_service
+
+from .extraction_result_service import extraction_result_service
 
 logger = logging.getLogger("curatore.upload_integration")
 

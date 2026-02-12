@@ -9,42 +9,41 @@ import io
 import logging
 import re
 from pathlib import Path
-from typing import Optional, List, Dict, Any
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile
 from fastapi.responses import FileResponse, StreamingResponse
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 
-from app.core.database.models import User, Asset
-from app.dependencies import get_current_user
-from app.core.shared.database_service import database_service
-from app.core.shared.asset_service import asset_service
-from app.core.shared.run_service import run_service
-from app.core.ingestion.extraction_result_service import extraction_result_service
-from app.core.ingestion.upload_integration_service import upload_integration_service
-from app.core.ingestion.extraction_queue_service import extraction_queue_service
-from app.core.shared.artifact_service import artifact_service
-from app.core.storage.zip_service import zip_service
 from app.api.v1.data.schemas import (
-    AssetResponse,
-    AssetWithExtractionResponse,
-    AssetVersionResponse,
-    AssetVersionHistoryResponse,
-    ExtractionResultResponse,
-    RunResponse,
-    AssetsListResponse,
-    BulkUploadAnalysisResponse,
-    BulkUploadFileInfo,
-    BulkUploadApplyResponse,
+    AssetMetadataCreateRequest,
+    AssetMetadataListResponse,
     # Metadata models
     AssetMetadataResponse,
-    AssetMetadataCreateRequest,
-    AssetMetadataUpdateRequest,
-    AssetMetadataListResponse,
+    AssetResponse,
+    AssetsListResponse,
+    AssetVersionHistoryResponse,
+    AssetVersionResponse,
+    AssetWithExtractionResponse,
+    BulkUploadAnalysisResponse,
+    BulkUploadApplyResponse,
+    BulkUploadFileInfo,
+    ExtractionResultResponse,
+    RunResponse,
 )
 from app.api.v1.ops.schemas import AssetQueueInfoResponse
-from app.core.shared.status_mapper import get_unified_status, UnifiedStatus
+from app.core.database.models import Asset, User
+from app.core.ingestion.extraction_queue_service import extraction_queue_service
+from app.core.ingestion.extraction_result_service import extraction_result_service
+from app.core.ingestion.upload_integration_service import upload_integration_service
+from app.core.shared.artifact_service import artifact_service
+from app.core.shared.asset_service import asset_service
+from app.core.shared.database_service import database_service
+from app.core.shared.run_service import run_service
+from app.core.shared.status_mapper import UnifiedStatus, get_unified_status
+from app.core.storage.zip_service import zip_service
+from app.dependencies import get_current_user
 
 logger = logging.getLogger("curatore.api.assets")
 
@@ -420,8 +419,9 @@ async def reextract_asset(
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Pre-check: Verify the raw file exists in object storage
-        from app.core.storage.minio_service import get_minio_service
         from datetime import datetime
+
+        from app.core.storage.minio_service import get_minio_service
         minio = get_minio_service()
         if minio and asset.raw_bucket and asset.raw_object_key:
             if not minio.object_exists(asset.raw_bucket, asset.raw_object_key):
@@ -435,8 +435,8 @@ async def reextract_asset(
                 await session.commit()
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Cannot re-extract: Raw file not found in storage. "
-                           f"The file may have been deleted. Asset has been marked as failed."
+                    detail="Cannot re-extract: Raw file not found in storage. "
+                           "The file may have been deleted. Asset has been marked as failed."
                 )
 
         # Trigger re-extraction
@@ -776,14 +776,15 @@ async def apply_bulk_upload(
             }
         }
     """
-    from app.core.ingestion.bulk_upload_service import bulk_upload_service
-    from app.core.storage.minio_service import get_minio_service
-    from app.core.shared.artifact_service import artifact_service
-    from app.core.ingestion.upload_integration_service import upload_integration_service
-    from app.config import settings
-    from datetime import datetime, timedelta
     import io
     import uuid as uuid_lib
+    from datetime import datetime, timedelta
+
+    from app.config import settings
+    from app.core.ingestion.bulk_upload_service import bulk_upload_service
+    from app.core.ingestion.upload_integration_service import upload_integration_service
+    from app.core.shared.artifact_service import artifact_service
+    from app.core.storage.minio_service import get_minio_service
 
     minio = get_minio_service()
     if not minio:
@@ -1206,9 +1207,10 @@ async def get_asset_queue_info(
 
     Use this when displaying processing status in the UI.
     """
+    from sqlalchemy import and_, select
+
+    from app.core.database.models import ExtractionResult, Run
     from app.core.ingestion.extraction_queue_service import extraction_queue_service
-    from app.core.database.models import Run, ExtractionResult
-    from sqlalchemy import select, and_
 
     async with database_service.get_session() as session:
         # Verify asset belongs to user's organization

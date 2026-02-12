@@ -3302,6 +3302,33 @@ export const metadataApi = {
     return handleJson(res)
   },
 
+  async exportFacetsBaseline(token: string | undefined): Promise<{ facets_exported: number; mappings_exported: number }> {
+    const url = apiUrl('/data/metadata/facets/export-baseline')
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async rebuildFromYaml(token: string | undefined): Promise<{ fields_synced: number; facets_synced: number; mappings_synced: number; reference_values_seeded: number; reference_aliases_seeded: number }> {
+    const url = apiUrl('/data/metadata/rebuild-from-yaml')
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async exportReferenceBaseline(token: string | undefined): Promise<{ facets_exported: number; values_exported: number; aliases_exported: number }> {
+    const url = apiUrl('/data/metadata/reference-data/export-baseline')
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
   async getPendingSuggestionCount(token: string | undefined): Promise<FacetPendingSuggestions> {
     const url = apiUrl('/data/metadata/facets/pending-suggestions')
     const res = await fetch(url, {
@@ -4715,7 +4742,7 @@ export interface ProcedureTrigger {
   cron_expression?: string
   event_name?: string
   event_filter?: Record<string, any>
-  is_active: boolean
+  is_active: boolean  // Whether this trigger fires on schedule
   last_triggered_at?: string
   next_trigger_at?: string
 }
@@ -4726,6 +4753,7 @@ export interface ProcedureListItem {
   slug: string
   description?: string
   version: number
+  /** Controls scheduled/cron execution only. Ad-hoc runs are always allowed. */
   is_active: boolean
   is_system: boolean
   source_type: string
@@ -4742,6 +4770,7 @@ export interface Procedure {
   slug: string
   description?: string
   version: number
+  /** Controls scheduled/cron execution only. Ad-hoc runs are always allowed. */
   is_active: boolean
   is_system: boolean
   source_type: string
@@ -4796,6 +4825,7 @@ export interface UpdateProcedureRequest {
   steps?: ProcedureStep[]
   on_error?: string
   tags?: string[]
+  convert_to_system?: boolean
 }
 
 export interface ValidationError {
@@ -4834,11 +4864,41 @@ export interface PlanDiagnostics {
   tools_available: number
   tools_referenced: string[]
   plan_attempts: number
-  procedure_attempts: number
   total_attempts: number
   validation_error_types: string[]
   clamps_applied: string[]
   timing_ms: number
+  planning_tool_calls: number
+  planning_tools_used: string[]
+  planning_results_summary: Array<{ tool: string; summary: string }>
+}
+
+/** SSE event from the streaming generate endpoint */
+export interface GenerateStreamEvent {
+  event: 'phase' | 'tool_call' | 'tool_result' | 'clarification' | 'complete'
+  // phase events
+  phase?: string
+  message?: string
+  // tool_call events
+  tool?: string
+  args?: Record<string, any>
+  call_index?: number
+  // tool_result events
+  summary?: string
+  // complete event
+  success?: boolean
+  yaml?: string
+  procedure?: Record<string, any>
+  plan_json?: Record<string, any>
+  error?: string
+  attempts?: number
+  validation_errors?: ValidationError[]
+  validation_warnings?: ValidationError[]
+  profile_used?: string
+  diagnostics?: PlanDiagnostics
+  // clarification
+  needs_clarification?: boolean
+  clarification_message?: string
 }
 
 export const proceduresApi = {
@@ -4987,22 +5047,23 @@ export const proceduresApi = {
   },
 
   /**
-   * Generate or refine a procedure using AI.
+   * Generate or refine a procedure using AI with SSE streaming.
+   *
+   * Returns the final result after consuming the SSE stream.
+   * Progress events are delivered via the onEvent callback.
    *
    * @param token - Auth token
-   * @param prompt - Description of procedure to create, or changes to make (in refine mode)
-   * @param currentYaml - Optional current procedure YAML to refine. If provided, prompt describes changes.
-   * @param includeExamples - Whether to include examples in AI context
+   * @param prompt - Natural language description
    * @param profile - Generation profile: safe_readonly, workflow_standard, admin_full
    * @param currentPlan - Optional current Typed Plan JSON to refine
+   * @param onEvent - Optional callback for each SSE event (for streaming UI)
    */
-  async generateProcedure(
+  async generateProcedureStream(
     token: string | undefined,
     prompt: string,
-    currentYaml?: string,
-    includeExamples: boolean = true,
     profile?: string,
-    currentPlan?: Record<string, any>
+    currentPlan?: Record<string, any>,
+    onEvent?: (event: GenerateStreamEvent) => void,
   ): Promise<{
     success: boolean
     yaml?: string
@@ -5014,13 +5075,12 @@ export const proceduresApi = {
     validation_warnings?: ValidationError[]
     profile_used?: string
     diagnostics?: PlanDiagnostics
+    needs_clarification?: boolean
+    clarification_message?: string
   }> {
     const body: Record<string, any> = {
       prompt,
-      include_examples: includeExamples,
-    }
-    if (currentYaml) {
-      body.current_yaml = currentYaml
+      include_examples: true,
     }
     if (profile) {
       body.profile = profile
@@ -5028,12 +5088,84 @@ export const proceduresApi = {
     if (currentPlan) {
       body.current_plan = currentPlan
     }
+
     const res = await fetch(apiUrl('/cwr/procedures/generate'), {
       method: 'POST',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(body),
     })
-    return handleJson(res)
+
+    if (!res.ok) {
+      const errorText = await res.text()
+      throw new Error(errorText || `HTTP ${res.status}`)
+    }
+
+    const reader = res.body?.getReader()
+    if (!reader) {
+      throw new Error('No response body')
+    }
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let finalResult: any = null
+    let currentEventType = ''
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+
+      // Parse SSE events from buffer (handle both \n and \r\n line endings)
+      const lines = buffer.split(/\r?\n/)
+      buffer = lines.pop() || '' // Keep incomplete line in buffer
+
+      let hadEvents = false
+      for (const line of lines) {
+        if (line.startsWith('event: ')) {
+          currentEventType = line.slice(7).trim()
+        } else if (line.startsWith('data: ')) {
+          const data = line.slice(6)
+          try {
+            const parsed = JSON.parse(data) as GenerateStreamEvent
+            parsed.event = (currentEventType || 'message') as GenerateStreamEvent['event']
+            onEvent?.(parsed)
+            hadEvents = true
+
+            if (currentEventType === 'complete') {
+              finalResult = {
+                success: parsed.success ?? false,
+                yaml: parsed.yaml,
+                procedure: parsed.procedure,
+                plan_json: parsed.plan_json,
+                error: parsed.error,
+                attempts: parsed.attempts ?? 0,
+                validation_errors: parsed.validation_errors ?? [],
+                validation_warnings: parsed.validation_warnings,
+                profile_used: parsed.profile_used,
+                diagnostics: parsed.diagnostics,
+                needs_clarification: parsed.needs_clarification,
+                clarification_message: parsed.clarification_message,
+              }
+            }
+          } catch (e) {
+            console.warn('[SSE] Failed to parse event data:', e)
+          }
+          currentEventType = ''
+        }
+      }
+
+      // Yield to browser so React can paint progress updates
+      if (hadEvents) {
+        await new Promise(resolve => setTimeout(resolve, 0))
+      }
+    }
+
+    if (finalResult) {
+      return finalResult
+    }
+
+    throw new Error('Stream ended without complete event')
   },
 
   async getGenerationProfiles(token?: string): Promise<GenerationProfile[]> {

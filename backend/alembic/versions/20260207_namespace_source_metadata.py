@@ -15,8 +15,6 @@ Create Date: 2026-02-07
 """
 
 from alembic import op
-import sqlalchemy as sa
-
 
 # revision identifiers
 revision = "namespace_source_metadata"

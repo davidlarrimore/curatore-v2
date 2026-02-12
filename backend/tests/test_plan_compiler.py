@@ -1,7 +1,6 @@
 """Tests for the Plan Compiler."""
 
-import pytest
-from app.cwr.governance.generation_profiles import get_profile, GenerationProfileName, GENERATION_PROFILES
+from app.cwr.governance.generation_profiles import GENERATION_PROFILES, GenerationProfileName, get_profile
 from app.cwr.procedures.compiler.plan_compiler import PlanCompiler
 
 

@@ -17,26 +17,23 @@ Usage:
     config_loader.reload()
 """
 
-import os
 import logging
-from typing import Any, Optional, Dict, List
 from pathlib import Path
+from typing import Any, List, Optional
 
 from app.core.models.config_models import (
     AppConfig,
-    LLMConfig,
-    LLMTaskTypeConfig,
-    ExtractionConfig,
-    ExtractionEngineConfig,
-    PlaywrightConfig,
-    MicrosoftGraphConfig,
     EmailConfig,
-    QueueConfig,
+    ExtractionConfig,
+    LLMConfig,
+    MicrosoftGraphConfig,
     MinIOConfig,
-    SearchConfig,
+    PlaywrightConfig,
+    QueueConfig,
     SamConfig,
+    SearchConfig,
 )
-from app.core.models.llm_models import LLMTaskType, LLMTaskConfig, DEFAULT_TEMPERATURES
+from app.core.models.llm_models import DEFAULT_TEMPERATURES, LLMTaskConfig, LLMTaskType
 
 logger = logging.getLogger(__name__)
 

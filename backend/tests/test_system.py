@@ -4,9 +4,8 @@ System integration tests for health, config, and items endpoints.
 NOTE: These tests require MinIO and PostgreSQL services to be running.
 """
 import pytest
-from fastapi.testclient import TestClient
-
 from app.main import app
+from fastapi.testclient import TestClient
 
 # Skip entire module if services aren't running
 pytestmark = pytest.mark.skip(

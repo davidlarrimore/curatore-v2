@@ -10,13 +10,11 @@ which includes:
 The pattern is designed to be reusable for SAM searches and web scrape collections.
 """
 
+from unittest.mock import patch
+from uuid import uuid4
+
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
-from uuid import uuid4, UUID
-from datetime import datetime
-
 from fastapi.testclient import TestClient
-
 
 # =============================================================================
 # QUEUE REGISTRY TESTS

@@ -12,6 +12,7 @@ Queue Architecture:
 Workers consume queues left-to-right, so priority queue is processed first.
 """
 import os
+
 from celery import Celery
 from kombu import Queue
 
@@ -258,8 +259,9 @@ app.conf.timezone = "UTC"
 # This ensures any extractions stuck in pending/running state from a crash
 # are automatically recovered
 
-from celery.signals import worker_ready
 import logging
+
+from celery.signals import worker_ready
 
 _recovery_logger = logging.getLogger("curatore.celery.recovery")
 

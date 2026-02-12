@@ -3,20 +3,19 @@
 
 import json
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
-from jsonschema import Draft7Validator, ValidationError
+from jsonschema import Draft7Validator
 
 from app.config import settings
 from app.models.mcp import (
-    MCPError,
     MCPErrorCode,
     MCPTextContent,
     MCPToolsCallResponse,
 )
 from app.services.backend_client import backend_client
-from app.services.policy_service import policy_service
 from app.services.facet_validator import facet_validator
+from app.services.policy_service import policy_service
 from app.services.progress_service import progress_service
 
 logger = logging.getLogger("mcp.handlers.tools_call")
@@ -79,6 +78,12 @@ async def handle_tools_call(
     # Extract progress token from arguments if not provided directly
     if not progress_token:
         progress_token, arguments = extract_progress_token(arguments)
+
+    # Strip explicit null values — MCP clients often send "key": null for
+    # optional parameters they don't intend to set.  Absent and null are
+    # semantically equivalent for optional params, and Draft 7 validation
+    # would otherwise reject null against a "type": "string" schema.
+    arguments = {k: v for k, v in arguments.items() if v is not None}
 
     # Start progress tracking if token provided
     progress_state = None
@@ -189,7 +194,7 @@ async def handle_tools_call(
             progress_service.update(progress_token, progress=90, message="Formatting response...")
 
         # 7. Convert result to MCP format
-        response = _format_result(result)
+        response = _format_result(result, tool_name=name)
 
         if progress_state:
             progress_service.complete(progress_token, result)
@@ -235,7 +240,22 @@ def _error_response(code: MCPErrorCode, message: str) -> MCPToolsCallResponse:
     )
 
 
-def _format_result(result: Dict[str, Any]) -> MCPToolsCallResponse:
+# Tools whose primary output is structured data (dicts/lists of extracted
+# values, classifications, decisions, routes).  These get formatted as clean
+# JSON so agents can parse the result precisely — markdown prose would lose
+# the structure that is the whole point of these tools.
+_STRUCTURED_OUTPUT_TOOLS: Set[str] = {
+    "llm_extract",
+    "llm_classify",
+    "llm_decide",
+    "llm_route",
+}
+
+
+def _format_result(
+    result: Dict[str, Any],
+    tool_name: str = "",
+) -> MCPToolsCallResponse:
     """Format backend result as MCP response."""
     status = result.get("status", "unknown")
 
@@ -251,13 +271,22 @@ def _format_result(result: Dict[str, Any]) -> MCPToolsCallResponse:
     metadata = result.get("metadata", {})
     items_processed = result.get("items_processed", 0)
 
+    # Structured-output tools: return clean JSON, no prose.
+    if tool_name in _STRUCTURED_OUTPUT_TOOLS and data is not None:
+        text = json.dumps(data, indent=2, default=str)
+        return MCPToolsCallResponse(
+            content=[MCPTextContent(type="text", text=text)],
+            isError=False,
+        )
+
     parts: List[str] = []
 
     # Always lead with the human-readable message
     if message:
         parts.append(message)
 
-    # Format data based on shape
+    # Format data as readable markdown.
+    # MCP TextContent.text must be human/LLM-readable text.
     if data is None:
         if not message:
             parts.append("Operation completed successfully.")
@@ -270,9 +299,9 @@ def _format_result(result: Dict[str, Any]) -> MCPToolsCallResponse:
         elif _is_formattable_list(data):
             parts.append(_format_content_items(data))
         else:
-            parts.append(json.dumps(data, indent=2, default=str))
+            parts.append(_format_list_as_text(data))
     elif isinstance(data, dict):
-        parts.append(json.dumps(data, indent=2, default=str))
+        parts.append(_format_dict_as_text(data))
     else:
         parts.append(str(data))
 
@@ -403,6 +432,140 @@ def _format_content_items(items: List[Dict[str, Any]]) -> str:
             lines.append(f"  {i}. {item_id} ({title})")
 
     return "\n".join(lines).rstrip()
+
+
+def _format_dict_as_text(data: Dict[str, Any]) -> str:
+    """
+    Format a dict response as readable markdown text.
+
+    If the dict contains a prominent list of dicts (e.g. source_types,
+    items, results), formats those as numbered items.  Otherwise formats
+    as key-value pairs.
+    """
+    # Find the most prominent list of dicts in the top-level keys
+    primary_key: Optional[str] = None
+    primary_list: Optional[List] = None
+    best_len = 0
+    for k, v in data.items():
+        if isinstance(v, list) and len(v) > best_len and v and isinstance(v[0], dict):
+            primary_key = k
+            primary_list = v
+            best_len = len(v)
+
+    parts: List[str] = []
+
+    if primary_list is not None:
+        # Render non-list scalars as context line
+        context = []
+        for k, v in data.items():
+            if k == primary_key or v is None:
+                continue
+            if isinstance(v, (str, int, float, bool)):
+                context.append(f"{k.replace('_', ' ').title()}: {v}")
+        if context:
+            parts.append(" | ".join(context))
+
+        # Render the primary list items
+        if _is_formattable_list(primary_list):
+            parts.append(_format_content_items(primary_list))
+        else:
+            parts.append(_format_list_as_text(primary_list))
+    else:
+        # Plain key-value dict
+        parts.append(_format_kv(data))
+
+    return "\n\n".join(p for p in parts if p)
+
+
+def _format_list_as_text(data: List[Any]) -> str:
+    """
+    Format a list that doesn't match the ContentItem pattern as
+    readable markdown text.
+    """
+    if not data:
+        return "(none)"
+
+    # Flat list of scalars
+    if all(isinstance(x, (str, int, float, bool)) for x in data):
+        return "\n".join(f"- {x}" for x in data)
+
+    # List of dicts — render each as a numbered item
+    if all(isinstance(x, dict) for x in data):
+        lines: List[str] = []
+        for i, item in enumerate(data, 1):
+            name = (
+                item.get("display_name")
+                or item.get("name")
+                or item.get("title")
+                or item.get("label")
+                or f"Item {i}"
+            )
+            lines.append(f"### {i}. {name}")
+            lines.append(_format_kv(item, exclude={"display_name", "name", "title", "label"}))
+            lines.append("")
+        return "\n".join(lines).rstrip()
+
+    # Mixed types
+    return "\n".join(f"- {x}" for x in data)
+
+
+def _format_kv(data: Dict[str, Any], exclude: Optional[set] = None) -> str:
+    """
+    Format a dict as readable key-value lines.
+
+    Handles nested lists/dicts one level deep; truncates long strings.
+    """
+    exclude = exclude or set()
+    lines: List[str] = []
+
+    for k, v in data.items():
+        if k in exclude or v is None:
+            continue
+        label = k.replace("_", " ").title()
+
+        if isinstance(v, str):
+            if len(v) > 300:
+                v = v[:300] + "..."
+            lines.append(f"{label}: {v}")
+        elif isinstance(v, (int, float, bool)):
+            lines.append(f"{label}: {v}")
+        elif isinstance(v, list):
+            if not v:
+                continue
+            if all(isinstance(x, (str, int, float, bool)) for x in v):
+                lines.append(f"{label}: {', '.join(str(x) for x in v)}")
+            elif all(isinstance(x, dict) for x in v):
+                lines.append(f"{label}:")
+                for item in v:
+                    # Pick a display name for each sub-item
+                    sub_name = (
+                        item.get("name") or item.get("title") or item.get("tool")
+                        or item.get("display_name") or item.get("label")
+                    )
+                    # Collect compact details
+                    detail_parts = []
+                    for sk, sv in item.items():
+                        if sk in ("name", "title", "tool", "display_name", "label") or sv is None:
+                            continue
+                        sv_str = str(sv)
+                        if len(sv_str) > 120:
+                            sv_str = sv_str[:120] + "..."
+                        detail_parts.append(f"{sk.replace('_', ' ')}: {sv_str}")
+                    detail = f" — {', '.join(detail_parts)}" if detail_parts else ""
+                    lines.append(f"  - {sub_name or '•'}{detail}")
+            else:
+                lines.append(f"{label}: {', '.join(str(x) for x in v)}")
+        elif isinstance(v, dict):
+            nested = ", ".join(
+                f"{nk.replace('_', ' ').title()}: {nv}"
+                for nk, nv in v.items() if nv is not None
+            )
+            if nested:
+                lines.append(f"{label}: {nested}")
+        else:
+            lines.append(f"{label}: {v}")
+
+    return "\n".join(lines)
 
 
 def _format_metadata(metadata: Dict[str, Any], items_processed: int = 0) -> str:

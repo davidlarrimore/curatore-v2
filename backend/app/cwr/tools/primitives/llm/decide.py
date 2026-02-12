@@ -27,20 +27,21 @@ Example usage in a procedure:
 """
 
 import json
-from typing import Any, Dict, List, Optional
 import logging
+from typing import Any, List, Optional
 
 from jinja2 import Template
 
+from app.core.models.llm_models import LLMTaskType
+from app.core.shared.config_loader import config_loader
+
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext
-from app.core.models.llm_models import LLMTaskType
-from app.core.shared.config_loader import config_loader
 
 logger = logging.getLogger("curatore.functions.llm.decide")
 
@@ -75,7 +76,7 @@ class DecideFunction(BaseFunction):
     meta = FunctionMeta(
         name="llm_decide",
         category=FunctionCategory.LOGIC,
-        description="Make a boolean (yes/no) decision using an LLM",
+        description="Make a boolean (yes/no) decision using an LLM. Returns decision, confidence score, and reasoning.",
         input_schema={
             "type": "object",
             "properties": {
@@ -86,7 +87,7 @@ class DecideFunction(BaseFunction):
                 },
                 "data": {
                     "type": "string",
-                    "description": "The data/content to evaluate",
+                    "description": "The text content to evaluate. For documents, first call get_content with the asset ID, then pass the returned text here.",
                     "examples": ["Contract opportunity for IT modernization..."],
                 },
                 "criteria": {
@@ -126,6 +127,7 @@ class DecideFunction(BaseFunction):
                     "description": "Collection of items to evaluate. When provided, data is rendered for each item with {{ item.xxx }} placeholders.",
                     "default": None,
                     "examples": [[{"title": "Item 1", "desc": "..."}, {"title": "Item 2", "desc": "..."}]],
+                    "x-procedure-only": True,
                 },
             },
             "required": ["question", "data"],

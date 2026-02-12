@@ -2,10 +2,10 @@
 from fastapi import APIRouter
 
 from .routers import (
-    runs,
-    queue_admin,
-    websocket,
     metrics,
+    queue_admin,
+    runs,
+    websocket,
 )
 
 router = APIRouter(prefix="/ops", tags=["Ops"])

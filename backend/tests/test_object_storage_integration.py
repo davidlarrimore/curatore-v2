@@ -8,9 +8,10 @@ These tests verify the complete object storage workflow:
 - Presigned URL generation for downloads
 - File retrieval from object storage
 """
-import pytest
 from io import BytesIO
 from uuid import uuid4
+
+import pytest
 
 
 class TestObjectStorageUploadFlow:

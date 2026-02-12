@@ -20,8 +20,7 @@ Usage:
     use_object_storage = settings.use_object_storage  # Always True (required)
 """
 
-from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import List, Optional
 
 from pydantic import Field
 from pydantic_settings import BaseSettings

@@ -12,11 +12,11 @@ Provides comprehensive validation of procedure definitions including:
 Returns structured error codes and messages for frontend display.
 """
 
-import re
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+import re
 from dataclasses import dataclass, field
 from enum import Enum
+from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger("curatore.procedures.validator")
 
@@ -400,7 +400,7 @@ class ProcedureValidator:
                 if not isinstance(step, dict):
                     errors.append(ValidationError(
                         code=ValidationErrorCode.INVALID_FIELD_TYPE,
-                        message=f"Step must be an object",
+                        message="Step must be an object",
                         path=step_path,
                         details={"expected": "object", "received": type(step).__name__},
                     ))
@@ -658,7 +658,7 @@ class ProcedureValidator:
         if not isinstance(branches, dict):
             errors.append(ValidationError(
                 code=ValidationErrorCode.INVALID_BRANCH_STRUCTURE,
-                message=f"'branches' must be an object mapping branch names to step lists",
+                message="'branches' must be an object mapping branch names to step lists",
                 path=f"{step_path}.branches",
                 details={"expected": "object", "received": type(branches).__name__},
             ))
@@ -694,7 +694,7 @@ class ProcedureValidator:
             if len(non_default_branches) < 1:
                 errors.append(ValidationError(
                     code=ValidationErrorCode.INSUFFICIENT_BRANCHES,
-                    message=f"switch_branch requires at least one case branch (not counting 'default')",
+                    message="switch_branch requires at least one case branch (not counting 'default')",
                     path=f"{step_path}.branches",
                     details={
                         "function": func_name,
@@ -750,7 +750,7 @@ class ProcedureValidator:
                 if not isinstance(nested_step, dict):
                     errors.append(ValidationError(
                         code=ValidationErrorCode.INVALID_FIELD_TYPE,
-                        message=f"Step must be an object",
+                        message="Step must be an object",
                         path=nested_path,
                         details={"expected": "object", "received": type(nested_step).__name__},
                     ))

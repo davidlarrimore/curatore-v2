@@ -5,16 +5,15 @@ Create Artifact function - Save content to object storage.
 Creates an artifact (file) in object storage.
 """
 
-from typing import Any, Dict, Optional
-from uuid import UUID, uuid4
-from datetime import datetime
 import json
 import logging
+from datetime import datetime
+from uuid import uuid4
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext

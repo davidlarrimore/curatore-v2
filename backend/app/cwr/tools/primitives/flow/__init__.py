@@ -13,10 +13,10 @@ Functions:
     - foreach: Iterate over a list with multi-step logic per item
 """
 
-from .if_branch import IfBranchFunction
-from .switch_branch import SwitchBranchFunction
-from .parallel import ParallelFunction
 from .foreach import ForeachFunction
+from .if_branch import IfBranchFunction
+from .parallel import ParallelFunction
+from .switch_branch import SwitchBranchFunction
 
 __all__ = [
     "IfBranchFunction",

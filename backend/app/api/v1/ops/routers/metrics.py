@@ -6,15 +6,13 @@ Provides endpoints for querying execution metrics from RunLogEvent data.
 
 import logging
 from datetime import datetime, timedelta
-from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy import select, func, and_, cast, String
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, select
 
-from app.core.database.models import User, RunLogEvent, Run
-from app.dependencies import get_current_user
+from app.core.database.models import Run, RunLogEvent, User
 from app.core.shared.database_service import database_service
+from app.dependencies import get_current_user
 
 logger = logging.getLogger("curatore.api.metrics")
 

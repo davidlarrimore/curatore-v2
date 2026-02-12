@@ -9,6 +9,7 @@ Handles:
 - Run tracking and logging
 """
 
+import asyncio
 import logging
 import time
 from datetime import datetime
@@ -17,13 +18,12 @@ from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-import asyncio
-
-from ..store.definitions import ProcedureDefinition, StepDefinition, OnErrorPolicy
-from ..store.loader import procedure_loader
-from app.cwr.tools import fn, FunctionContext, FunctionResult
-from app.cwr.tools.base import FlowResult
 from app.core.shared.database_service import database_service
+from app.cwr.tools import FunctionContext, FunctionResult, fn
+from app.cwr.tools.base import FlowResult
+
+from ..store.definitions import OnErrorPolicy, ProcedureDefinition, StepDefinition
+from ..store.loader import procedure_loader
 
 logger = logging.getLogger("curatore.procedures.executor")
 
@@ -100,6 +100,7 @@ class ProcedureExecutor:
         Used for user-created procedures that don't have YAML files.
         """
         from sqlalchemy import select
+
         from app.core.database.procedures import Procedure
 
         try:
@@ -171,6 +172,7 @@ class ProcedureExecutor:
         if run_id:
             try:
                 from sqlalchemy import select, update
+
                 from app.core.database.models import Run
                 run_result = await session.execute(
                     select(Run.trace_id).where(Run.id == run_id)
@@ -221,7 +223,9 @@ class ProcedureExecutor:
                 step_results[step.name] = result
 
                 # Store result for subsequent steps
-                ctx.set_step_result(step.name, result.get("data") if result.get("status") == "success" else None)
+                # Include data for both "success" and "partial" — partial results
+                # (e.g. foreach where some items failed) still have useful data
+                ctx.set_step_result(step.name, result.get("data") if result.get("status") in ("success", "partial") else None)
 
                 # Handle step failure
                 if result.get("status") == "failed":
@@ -406,7 +410,7 @@ class ProcedureExecutor:
         # For other types, convert to string if too long
         str_repr = str(data)
         if len(str_repr) > max_length:
-            return str_repr[:max_length] + f"... [truncated]"
+            return str_repr[:max_length] + "... [truncated]"
         return data
 
     async def _execute_step(self, ctx: FunctionContext, step: StepDefinition) -> Dict[str, Any]:
@@ -1097,6 +1101,7 @@ class ProcedureExecutor:
         """
         from croniter import croniter
         from sqlalchemy import select
+
         from app.core.database.procedures import Procedure, ProcedureTrigger
 
         try:

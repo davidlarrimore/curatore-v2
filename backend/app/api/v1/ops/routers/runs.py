@@ -12,21 +12,21 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from app.api.v1.ops.schemas import (
+    RunLogEventResponse,
+    RunResponse,
+    RunsListResponse,
+    RunWithLogsResponse,
+)
 from app.core.database.models import User
-from app.dependencies import get_current_user
-from app.core.shared.database_service import database_service
-from app.core.shared.run_service import run_service
-from app.core.shared.run_log_service import run_log_service
-from app.core.shared.run_group_service import run_group_service
-from app.core.shared.asset_service import asset_service
 from app.core.ingestion.extraction_result_service import extraction_result_service
 from app.core.ops.priority_queue_service import PriorityTier
-from app.api.v1.ops.schemas import (
-    RunResponse,
-    RunWithLogsResponse,
-    RunLogEventResponse,
-    RunsListResponse,
-)
+from app.core.shared.asset_service import asset_service
+from app.core.shared.database_service import database_service
+from app.core.shared.run_group_service import run_group_service
+from app.core.shared.run_log_service import run_log_service
+from app.core.shared.run_service import run_service
+from app.dependencies import get_current_user
 
 logger = logging.getLogger("curatore.api.runs")
 
@@ -84,9 +84,11 @@ async def get_run_stats(
 ):
     """Get run statistics for the organization."""
     async with database_service.get_session() as session:
-        from sqlalchemy import func, select, and_
         from datetime import datetime, timedelta
-        from app.core.database.models import Run, Asset
+
+        from sqlalchemy import and_, func, select
+
+        from app.core.database.models import Asset, Run
 
         org_id = current_user.organization_id
 

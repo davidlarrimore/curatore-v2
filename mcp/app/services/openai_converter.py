@@ -4,7 +4,7 @@
 from typing import List
 
 from app.models.mcp import MCPTool
-from app.models.openai import OpenAITool, OpenAIFunctionDef
+from app.models.openai import OpenAIFunctionDef, OpenAITool
 
 
 def mcp_to_openai_tool(mcp_tool: MCPTool) -> OpenAITool:

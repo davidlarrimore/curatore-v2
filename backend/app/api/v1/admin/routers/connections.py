@@ -39,10 +39,10 @@ from app.api.v1.admin.schemas import (
     ConnectionTypesResponse,
     ConnectionUpdateRequest,
 )
-from app.core.database.models import Connection, User
-from app.dependencies import get_current_user, require_org_admin
 from app.core.auth.connection_service import connection_service
+from app.core.database.models import Connection, User
 from app.core.shared.database_service import database_service
+from app.dependencies import get_current_user, require_org_admin
 
 # Initialize router
 router = APIRouter(prefix="/connections", tags=["Connections"])

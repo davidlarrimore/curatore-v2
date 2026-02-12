@@ -11,10 +11,10 @@ from app.api.v1.data.schemas import (
     SharePointInventoryRequest,
     SharePointInventoryResponse,
 )
-from app.core.database.models import User
-from app.dependencies import get_current_user_optional
 from app.connectors.sharepoint import sharepoint_service
+from app.core.database.models import User
 from app.core.shared.database_service import database_service
+from app.dependencies import get_current_user_optional
 
 router = APIRouter()
 

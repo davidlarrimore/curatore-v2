@@ -6,25 +6,22 @@ Tests execute_definition() with mock FunctionContext and mock functions.
 Covers basic execution, error handling, flow control, and dry run.
 """
 
-import pytest
-import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
-from app.cwr.procedures.store.definitions import ProcedureDefinition, StepDefinition, OnErrorPolicy
+import pytest
 from app.cwr.procedures.runtime.executor import ProcedureExecutor
+from app.cwr.procedures.store.definitions import OnErrorPolicy, ProcedureDefinition, StepDefinition
 from app.cwr.tools import fn
 from app.cwr.tools.base import (
     BaseFunction,
-    FunctionMeta,
-    FunctionCategory,
-    FunctionResult,
-    FunctionStatus,
     FlowResult,
+    FunctionCategory,
+    FunctionMeta,
+    FunctionResult,
 )
-from app.cwr.tools.registry import FunctionRegistry
 from app.cwr.tools.context import FunctionContext
-
+from app.cwr.tools.registry import FunctionRegistry
 
 # =============================================================================
 # DUMMY FUNCTIONS FOR TESTING

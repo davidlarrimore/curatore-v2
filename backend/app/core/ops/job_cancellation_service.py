@@ -22,10 +22,10 @@ Usage:
 import logging
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database.models import Run, RunGroup
@@ -233,8 +233,9 @@ class JobCancellationService:
 
         # Update associated extraction result if this is an extraction
         if run.run_type == "extraction" and run.input_asset_ids:
-            from app.core.database.models import ExtractionResult, Asset
             from uuid import UUID as PyUUID
+
+            from app.core.database.models import Asset, ExtractionResult
 
             asset_id = PyUUID(run.input_asset_ids[0])
 

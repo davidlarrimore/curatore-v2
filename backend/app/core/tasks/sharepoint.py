@@ -11,12 +11,10 @@ from pathlib import Path
 from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
 
 from celery import shared_task
-from sqlalchemy import select, and_
+from sqlalchemy import select
 
-from app.celery_app import app as celery_app
-from app.core.shared.database_service import database_service
 from app.config import settings
-
+from app.core.shared.database_service import database_service
 
 # Logger for tasks
 logger = logging.getLogger("curatore.tasks")
@@ -101,13 +99,13 @@ async def _sharepoint_sync_async(
     - Post-sync procedure triggers via group completion events
     """
     from app.connectors.sharepoint.sharepoint_sync_service import sharepoint_sync_service
-    from app.core.shared.run_service import run_service
-    from app.core.shared.run_log_service import run_log_service
+    from app.core.database.models import Asset, SharePointSyncConfig, SharePointSyncedDocument
     from app.core.ingestion.extraction_queue_service import extraction_queue_service
-    from app.core.shared.run_group_service import run_group_service
-    from app.core.ops.queue_registry import QueuePriority
     from app.core.ops.heartbeat_service import heartbeat_service
-    from app.core.database.models import SharePointSyncedDocument, Asset, SharePointSyncConfig
+    from app.core.ops.queue_registry import QueuePriority
+    from app.core.shared.run_group_service import run_group_service
+    from app.core.shared.run_log_service import run_log_service
+    from app.core.shared.run_service import run_service
 
     logger = logging.getLogger("curatore.tasks.sharepoint_sync")
 
@@ -514,8 +512,8 @@ async def _expand_folders_to_files_stream(
     Yields:
         File entry dicts as they are discovered during BFS traversal
     """
-    from app.core.shared.run_service import run_service
     from app.core.shared.run_log_service import run_log_service
+    from app.core.shared.run_service import run_service
 
     # BFS queue: (drive_id, folder_id, parent_path)
     folder_queue: List[Tuple[str, str, str]] = []
@@ -611,17 +609,16 @@ async def _sharepoint_import_async(
     """
     import hashlib
     import tempfile
-    from pathlib import Path
 
     import httpx
 
-    from app.connectors.sharepoint.sharepoint_sync_service import sharepoint_sync_service
     from app.connectors.sharepoint.sharepoint_service import _get_sharepoint_credentials, _graph_base_url
-    from app.core.shared.run_service import run_service
-    from app.core.shared.run_log_service import run_log_service
-    from app.core.shared.asset_service import asset_service
-    from app.core.storage.minio_service import get_minio_service
+    from app.connectors.sharepoint.sharepoint_sync_service import sharepoint_sync_service
     from app.core.ingestion.upload_integration_service import upload_integration_service
+    from app.core.shared.asset_service import asset_service
+    from app.core.shared.run_log_service import run_log_service
+    from app.core.shared.run_service import run_service
+    from app.core.storage.minio_service import get_minio_service
     from app.core.storage.storage_path_service import storage_paths
 
     logger = logging.getLogger("curatore.tasks.sharepoint_import")
@@ -1044,17 +1041,23 @@ async def _async_delete_sync_config(
     """
     Async implementation of SharePoint sync config deletion.
     """
+    from sqlalchemy import delete as sql_delete
+
     from app.connectors.sharepoint.sharepoint_sync_service import sharepoint_sync_service
-    from app.core.shared.run_service import run_service
-    from app.core.shared.run_log_service import run_log_service
-    from app.core.shared.asset_service import asset_service
-    from app.core.search.pg_index_service import pg_index_service
-    from app.core.storage.minio_service import get_minio_service
-    from sqlalchemy import delete as sql_delete, func
     from app.core.database.models import (
-        Asset, AssetVersion, ExtractionResult, Run, RunLogEvent,
-        SharePointSyncConfig, SharePointSyncedDocument
+        Asset,
+        AssetVersion,
+        ExtractionResult,
+        Run,
+        RunLogEvent,
+        SharePointSyncConfig,
+        SharePointSyncedDocument,
     )
+    from app.core.search.pg_index_service import pg_index_service
+    from app.core.shared.asset_service import asset_service
+    from app.core.shared.run_log_service import run_log_service
+    from app.core.shared.run_service import run_service
+    from app.core.storage.minio_service import get_minio_service
 
     logger = logging.getLogger("curatore.tasks.sharepoint_delete")
 

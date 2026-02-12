@@ -6,20 +6,20 @@ Provides unified hybrid search across Salesforce Accounts, Contacts, and Opportu
 with filtering by entity type, account, stage, and other fields.
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
 import logging
+from typing import List, Optional
+from uuid import UUID
 
-from sqlalchemy import select, or_, func, and_
+from sqlalchemy import or_, select
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
-from ...context import FunctionContext
 from ...content import ContentItem
+from ...context import FunctionContext
 
 logger = logging.getLogger("curatore.functions.search.search_salesforce")
 
@@ -231,11 +231,6 @@ class SearchSalesforceFunction(BaseFunction):
         offset = params.get("offset", 0)
 
         # Import models
-        from app.core.database.models import (
-            SalesforceAccount,
-            SalesforceContact,
-            SalesforceOpportunity,
-        )
 
         try:
             # If query is provided, use PgSearchService for hybrid search

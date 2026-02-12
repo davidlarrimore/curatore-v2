@@ -9,20 +9,21 @@ the text is rendered for each item with {{ item.xxx }} template placeholders.
 """
 
 import json
-from typing import Any, Dict, List, Optional
 import logging
+from typing import Any, Dict, List, Optional
 
 from jinja2 import Template
 
+from app.core.models.llm_models import LLMTaskType
+from app.core.shared.config_loader import config_loader
+
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext
-from app.core.models.llm_models import LLMTaskType
-from app.core.shared.config_loader import config_loader
 
 logger = logging.getLogger("curatore.functions.llm.classify")
 
@@ -50,13 +51,13 @@ class ClassifyFunction(BaseFunction):
     meta = FunctionMeta(
         name="llm_classify",
         category=FunctionCategory.LLM,
-        description="Classify text into categories using an LLM",
+        description="Classify text into one or more categories using an LLM. Pass the text directly — use get_content first to fetch document content by asset ID.",
         input_schema={
             "type": "object",
             "properties": {
                 "text": {
                     "type": "string",
-                    "description": "The text to classify",
+                    "description": "The text content to classify. For documents, first call get_content with the asset ID, then pass the returned text here.",
                 },
                 "categories": {
                     "type": "array",
@@ -90,6 +91,7 @@ class ClassifyFunction(BaseFunction):
                     "description": "Collection of items to iterate over. When provided, the text is rendered for each item with {{ item.xxx }} placeholders replaced by item data.",
                     "default": None,
                     "examples": [[{"content": "Text 1"}, {"content": "Text 2"}]],
+                    "x-procedure-only": True,
                 },
             },
             "required": ["text", "categories"],
@@ -234,11 +236,16 @@ class ClassifyFunction(BaseFunction):
             else:
                 output_format = """Return JSON: {"category": "category_name", "confidence": 0.0-1.0, "reasoning": "explanation"}"""
 
-            system_prompt = f"""You are a text classification expert. Classify the given text into the most appropriate category.
-{"You may select multiple categories if they apply." if multi_label else "Select exactly one category."}
-Confidence should be between 0.0 and 1.0.
-{output_format}
-Return ONLY valid JSON, no explanation or markdown."""
+            system_prompt = f"""You are a document classification system. You MUST classify the text into EXACTLY ONE of the provided categories.
+
+RULES:
+1. You MUST select from the provided categories list — do NOT invent new categories.
+2. If the text doesn't clearly match any category, select "Other" (or the closest match).
+3. Confidence should be between 0.0 and 1.0.
+4. Return ONLY valid JSON, no explanation or markdown.
+
+{"You may select multiple categories if they apply." if multi_label else ""}
+{output_format}"""
 
             user_prompt = f"""Categories:
 {category_list}
@@ -255,19 +262,37 @@ Classification:"""
             resolved_model = model or task_config.model
             temperature = task_config.temperature if task_config.temperature is not None else 0.1
 
+            messages = [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+
             # Generate
             response = ctx.llm_service._client.chat.completions.create(
                 model=resolved_model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
+                messages=messages,
                 temperature=temperature,
                 max_tokens=500,
             )
 
             response_text = response.choices[0].message.content.strip()
-            result = self._parse_json_response(response_text)
+
+            # Parse JSON with retry on malformed response
+            try:
+                result = self._parse_json_response(response_text)
+            except json.JSONDecodeError:
+                # Retry once asking for valid JSON
+                retry_response = ctx.llm_service._client.chat.completions.create(
+                    model=resolved_model,
+                    messages=messages + [
+                        {"role": "assistant", "content": response_text},
+                        {"role": "user", "content": "That was not valid JSON. Return ONLY a JSON object, no markdown or explanation."},
+                    ],
+                    temperature=0.0,
+                    max_tokens=500,
+                )
+                retry_text = retry_response.choices[0].message.content.strip()
+                result = self._parse_json_response(retry_text)  # If this fails, exception propagates
 
             # Validate and normalize result
             if multi_label:
@@ -280,9 +305,36 @@ Classification:"""
                 ]
             else:
                 if "category" not in result or result["category"] not in categories:
-                    # Fall back to first category if invalid
-                    result["category"] = categories[0]
-                    result["confidence"] = 0.5
+                    # Retry once with correction feedback
+                    retry_response = ctx.llm_service._client.chat.completions.create(
+                        model=resolved_model,
+                        messages=messages + [
+                            {"role": "assistant", "content": response_text},
+                            {"role": "user", "content": (
+                                f"Invalid response. You returned '{result.get('category')}' which is not in the "
+                                f"allowed categories: {', '.join(categories)}. "
+                                "Please select EXACTLY ONE category from the list and return valid JSON."
+                            )},
+                        ],
+                        temperature=0.0,
+                        max_tokens=500,
+                    )
+                    retry_text = retry_response.choices[0].message.content.strip()
+                    try:
+                        result = self._parse_json_response(retry_text)
+                    except json.JSONDecodeError:
+                        pass  # Fall through to fallback below
+
+                    # Final fallback if retry also failed
+                    if "category" not in result or result["category"] not in categories:
+                        logger.warning(
+                            f"Classification fallback: LLM returned '{result.get('category')}', "
+                            f"expected one of {categories}. Defaulting to 'Other'."
+                        )
+                        other_cat = "Other" if "Other" in categories else categories[-1]
+                        result["category"] = other_cat
+                        result["confidence"] = 0.0
+                        result["_fallback"] = True
 
             if not include_reasoning:
                 result.pop("reasoning", None)
@@ -336,11 +388,16 @@ Classification:"""
         else:
             output_format = """Return JSON: {"category": "category_name", "confidence": 0.0-1.0, "reasoning": "explanation"}"""
 
-        system_prompt = f"""You are a text classification expert. Classify the given text into the most appropriate category.
-{"You may select multiple categories if they apply." if multi_label else "Select exactly one category."}
-Confidence should be between 0.0 and 1.0.
-{output_format}
-Return ONLY valid JSON, no explanation or markdown."""
+        system_prompt = f"""You are a document classification system. You MUST classify the text into EXACTLY ONE of the provided categories.
+
+RULES:
+1. You MUST select from the provided categories list — do NOT invent new categories.
+2. If the text doesn't clearly match any category, select "Other" (or the closest match).
+3. Confidence should be between 0.0 and 1.0.
+4. Return ONLY valid JSON, no explanation or markdown.
+
+{"You may select multiple categories if they apply." if multi_label else ""}
+{output_format}"""
 
         # Get model and temperature from task type routing (BULK for collection mode)
         task_config = config_loader.get_task_type_config(LLMTaskType.BULK)
@@ -362,19 +419,36 @@ Text to classify:
 
 Classification:"""
 
+                messages = [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+
                 # Generate
                 response = ctx.llm_service._client.chat.completions.create(
                     model=resolved_model,
-                    messages=[
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ],
+                    messages=messages,
                     temperature=temperature,
                     max_tokens=500,
                 )
 
                 response_text = response.choices[0].message.content.strip()
-                classification = self._parse_json_response(response_text)
+
+                # Parse JSON with retry on malformed response
+                try:
+                    classification = self._parse_json_response(response_text)
+                except json.JSONDecodeError:
+                    retry_response = ctx.llm_service._client.chat.completions.create(
+                        model=resolved_model,
+                        messages=messages + [
+                            {"role": "assistant", "content": response_text},
+                            {"role": "user", "content": "That was not valid JSON. Return ONLY a JSON object, no markdown or explanation."},
+                        ],
+                        temperature=0.0,
+                        max_tokens=500,
+                    )
+                    retry_text = retry_response.choices[0].message.content.strip()
+                    classification = self._parse_json_response(retry_text)
 
                 # Validate and normalize result
                 if multi_label:
@@ -386,8 +460,36 @@ Classification:"""
                     ]
                 else:
                     if "category" not in classification or classification["category"] not in categories:
-                        classification["category"] = categories[0]
-                        classification["confidence"] = 0.5
+                        # Retry once with correction feedback
+                        retry_response = ctx.llm_service._client.chat.completions.create(
+                            model=resolved_model,
+                            messages=messages + [
+                                {"role": "assistant", "content": response_text},
+                                {"role": "user", "content": (
+                                    f"Invalid response. You returned '{classification.get('category')}' which is not in the "
+                                    f"allowed categories: {', '.join(categories)}. "
+                                    "Please select EXACTLY ONE category from the list and return valid JSON."
+                                )},
+                            ],
+                            temperature=0.0,
+                            max_tokens=500,
+                        )
+                        retry_text = retry_response.choices[0].message.content.strip()
+                        try:
+                            classification = self._parse_json_response(retry_text)
+                        except json.JSONDecodeError:
+                            pass  # Fall through to fallback below
+
+                        # Final fallback if retry also failed
+                        if "category" not in classification or classification["category"] not in categories:
+                            logger.warning(
+                                f"Classification fallback for item {idx}: LLM returned "
+                                f"'{classification.get('category')}', expected one of {categories}."
+                            )
+                            other_cat = "Other" if "Other" in categories else categories[-1]
+                            classification["category"] = other_cat
+                            classification["confidence"] = 0.0
+                            classification["_fallback"] = True
 
                 if not include_reasoning:
                     classification.pop("reasoning", None)

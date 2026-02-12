@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 import yaml
 
 from app.config import settings
-from app.models.policy import Policy, ClampConfig
+from app.models.policy import ClampConfig, Policy
 
 logger = logging.getLogger("mcp.services.policy_service")
 

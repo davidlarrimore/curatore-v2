@@ -26,12 +26,12 @@ CI/CD Compatible:
     - Fast execution (<5 seconds)
 """
 
-import pytest
 import re
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
-from datetime import datetime
+
+import pytest
 
 # Test fixtures directory
 FIXTURES_DIR = Path(__file__).parent / "fixtures" / "web_scrape"

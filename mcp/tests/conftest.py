@@ -1,14 +1,12 @@
 # Test Configuration
 """Pytest fixtures for MCP Gateway tests."""
 
+from unittest.mock import AsyncMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from typing import Any, Dict, List
-
-from fastapi.testclient import TestClient
-
 from app.config import settings
 from app.main import app
+from fastapi.testclient import TestClient
 
 
 @pytest.fixture

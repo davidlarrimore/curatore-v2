@@ -2,8 +2,8 @@
 
 import { useState, useRef, useEffect, forwardRef, useImperativeHandle } from 'react'
 import { useAuth } from '@/lib/auth-context'
-import { proceduresApi, type ValidationError, type GenerationProfile, type PlanDiagnostics } from '@/lib/api'
-import { Sparkles, Loader2, Send, Wand2, ArrowLeftRight, ChevronDown, ChevronRight, Shield, Clock, Wrench, Code2 } from 'lucide-react'
+import { proceduresApi, type ValidationError, type PlanDiagnostics, type GenerateStreamEvent } from '@/lib/api'
+import { Sparkles, Loader2, Send, ChevronDown, ChevronRight, Clock, Code2, Search, CheckCircle2, XCircle, HelpCircle, User, Bot } from 'lucide-react'
 
 interface AIGeneratorPanelProps {
   currentYaml: string
@@ -21,20 +21,32 @@ export interface AIGeneratorPanelHandle {
   isGenerating: boolean
 }
 
-const PROFILE_INFO: Record<string, { label: string; icon: string; color: string }> = {
-  safe_readonly: { label: 'Safe (Read-only)', icon: 'shield', color: 'emerald' },
-  workflow_standard: { label: 'Standard', icon: 'wrench', color: 'indigo' },
-  admin_full: { label: 'Admin (Full)', icon: 'shield', color: 'amber' },
+interface ProgressEntry {
+  type: 'phase' | 'tool_call' | 'tool_result' | 'error' | 'clarification'
+  message: string
+  detail?: string
+  timestamp: number
+}
+
+interface ConversationEntry {
+  role: 'user' | 'assistant'
+  content: string
+  timestamp: number
+  progressLog?: ProgressEntry[]
+  diagnostics?: PlanDiagnostics | null
+  planJson?: Record<string, any> | null
+  isGenerating?: boolean
 }
 
 /**
  * AI Generator Panel for creating or refining procedure definitions.
  *
  * Features:
- * - Profile selector dropdown (3 generation profiles)
- * - Collapsible diagnostics panel (profile, attempts, tools, clamps, timing)
- * - Collapsible Plan JSON debug viewer
- * - Auto-mode detection: generate vs refine
+ * - SSE streaming with real-time progress display
+ * - Conversation history with user prompts and AI responses
+ * - Planning phase shows tool calls and results
+ * - Clarification support — AI can ask questions before generating
+ * - Auto-detects refine mode when existing procedure content exists
  */
 export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPanelProps>(function AIGeneratorPanel({
   currentYaml,
@@ -45,53 +57,34 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
   const { token } = useAuth()
   const [prompt, setPrompt] = useState('')
   const [isGenerating, setIsGenerating] = useState(false)
-  const [manualModeOverride, setManualModeOverride] = useState<'generate' | 'refine' | null>(null)
-  const [selectedProfile, setSelectedProfile] = useState('workflow_standard')
-  const [profiles, setProfiles] = useState<GenerationProfile[]>([])
-  const [lastDiagnostics, setLastDiagnostics] = useState<PlanDiagnostics | null>(null)
-  const [lastPlanJson, setLastPlanJson] = useState<Record<string, any> | null>(null)
-  const [showDiagnostics, setShowDiagnostics] = useState(false)
-  const [showPlanJson, setShowPlanJson] = useState(false)
+  const [conversation, setConversation] = useState<ConversationEntry[]>([])
+  const [currentProgressLog, setCurrentProgressLog] = useState<ProgressEntry[]>([])
+  const [currentPhase, setCurrentPhase] = useState<string>('')
+  const [showDiagnostics, setShowDiagnostics] = useState<number | null>(null)
+  const [showPlanJson, setShowPlanJson] = useState<number | null>(null)
   const textareaRef = useRef<HTMLTextAreaElement>(null)
-
-  // Load profiles on mount
-  useEffect(() => {
-    proceduresApi.getGenerationProfiles(token ?? undefined).then(setProfiles).catch(() => {})
-  }, [token])
+  const conversationEndRef = useRef<HTMLDivElement>(null)
 
   // Auto-resize textarea as content grows
   useEffect(() => {
     const textarea = textareaRef.current
     if (textarea) {
       textarea.style.height = 'auto'
-      const minHeight = 80
-      textarea.style.height = `${Math.max(minHeight, textarea.scrollHeight)}px`
+      const minHeight = 60
+      const maxHeight = 200
+      textarea.style.height = `${Math.min(maxHeight, Math.max(minHeight, textarea.scrollHeight))}px`
     }
   }, [prompt])
+
+  // Auto-scroll conversation
+  useEffect(() => {
+    conversationEndRef.current?.scrollIntoView({ behavior: 'smooth' })
+  }, [conversation, currentProgressLog])
 
   // Check if we have meaningful content (not just the default template)
   const hasExistingContent = currentYaml.trim().length > 0 &&
     !currentYaml.includes('name: My Procedure') &&
     currentYaml.includes('steps:')
-
-  // Determine mode: use manual override if set, otherwise auto-detect
-  const isRefineMode = manualModeOverride !== null
-    ? manualModeOverride === 'refine'
-    : hasExistingContent
-
-  // Toggle between modes when user clicks the badge
-  const handleModeToggle = () => {
-    if (manualModeOverride === null) {
-      setManualModeOverride(hasExistingContent ? 'generate' : 'refine')
-    } else {
-      setManualModeOverride(manualModeOverride === 'refine' ? 'generate' : 'refine')
-    }
-  }
-
-  // Reset manual override when YAML content changes significantly
-  useEffect(() => {
-    setManualModeOverride(null)
-  }, [hasExistingContent])
 
   // Build a fix prompt from validation errors
   const buildFixPrompt = (errors: ValidationError[], warnings: ValidationError[] = []): string => {
@@ -119,53 +112,123 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
     return lines.join('\n')
   }
 
-  // Core generation logic
-  const doGenerate = async (promptText: string, forceRefine: boolean = false) => {
+  // Handle SSE events
+  const handleStreamEvent = (event: GenerateStreamEvent) => {
+    const now = Date.now()
+
+    switch (event.event) {
+      case 'phase':
+        setCurrentPhase(event.phase || '')
+        setCurrentProgressLog(prev => [...prev, {
+          type: 'phase',
+          message: event.message || `Phase: ${event.phase}`,
+          timestamp: now,
+        }])
+        break
+
+      case 'tool_call':
+        setCurrentProgressLog(prev => [...prev, {
+          type: 'tool_call',
+          message: `Calling ${event.tool}...`,
+          detail: event.args ? JSON.stringify(event.args, null, 2) : undefined,
+          timestamp: now,
+        }])
+        break
+
+      case 'tool_result':
+        setCurrentProgressLog(prev => [...prev, {
+          type: 'tool_result',
+          message: event.summary || `${event.tool} completed`,
+          timestamp: now,
+        }])
+        break
+
+      case 'clarification' as any:
+        setCurrentProgressLog(prev => [...prev, {
+          type: 'clarification' as const,
+          message: (event as any).message || 'The AI needs more information.',
+          timestamp: now,
+        }])
+        break
+    }
+  }
+
+  // Core generation logic with streaming
+  const doGenerate = async (promptText: string) => {
     if (!token || !promptText.trim()) return
 
-    setIsGenerating(true)
-    if (forceRefine) {
-      setManualModeOverride('refine')
+    // Add user message to conversation
+    const userEntry: ConversationEntry = {
+      role: 'user',
+      content: promptText.trim(),
+      timestamp: Date.now(),
     }
+    setConversation(prev => [...prev, userEntry])
+
+    setIsGenerating(true)
+    setCurrentProgressLog([])
+    setCurrentPhase('')
 
     try {
-      const useRefineMode = forceRefine || isRefineMode
-      const result = await proceduresApi.generateProcedure(
+      // Auto-pass currentPlan when procedure exists (replaces manual refine mode)
+      let currentPlan: Record<string, any> | undefined
+      if (hasExistingContent) {
+        // Pass the current YAML as context for refinement
+        currentPlan = { _yaml: currentYaml }
+      }
+
+      const result = await proceduresApi.generateProcedureStream(
         token,
         promptText.trim(),
-        useRefineMode ? currentYaml : undefined,
-        true,
-        selectedProfile,
+        'workflow_standard',
+        currentPlan,
+        handleStreamEvent,
       )
 
-      // Store diagnostics and plan
-      if (result.diagnostics) {
-        setLastDiagnostics(result.diagnostics)
-      }
-      if (result.plan_json) {
-        setLastPlanJson(result.plan_json)
+      // Build assistant response
+      const assistantEntry: ConversationEntry = {
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        progressLog: [...currentProgressLog],
+        diagnostics: result.diagnostics || null,
+        planJson: result.plan_json || null,
       }
 
-      if (result.success && result.yaml) {
+      // Check for clarification
+      if ((result as any).needs_clarification && (result as any).clarification_message) {
+        assistantEntry.content = (result as any).clarification_message
+        setConversation(prev => [...prev, assistantEntry])
+      } else if (result.success && result.yaml) {
+        assistantEntry.content = 'Procedure generated successfully.'
+        setConversation(prev => [...prev, assistantEntry])
         onYamlGenerated(result.yaml)
-        setPrompt('')
-        const profileLabel = PROFILE_INFO[result.profile_used || selectedProfile]?.label || selectedProfile
         onSuccess?.(
-          useRefineMode
-            ? `Procedure updated (${result.attempts} attempts, ${profileLabel} profile)`
-            : `Procedure generated (${result.attempts} attempts, ${profileLabel} profile)`
+          `Procedure generated successfully (${result.attempts} attempt${result.attempts !== 1 ? 's' : ''})`
         )
       } else {
         const errorMsg = result.error || 'Failed to generate procedure'
         const validationInfo = result.validation_errors?.length
           ? ` - ${result.validation_errors.map(e => e.message).join(', ')}`
           : ''
+        assistantEntry.content = errorMsg + validationInfo
+        setConversation(prev => [...prev, assistantEntry])
         onError?.(errorMsg + validationInfo)
       }
     } catch (err: any) {
+      const errorEntry: ConversationEntry = {
+        role: 'assistant',
+        content: err.message || 'Failed to generate procedure',
+        timestamp: Date.now(),
+        progressLog: [...currentProgressLog],
+      }
+      setConversation(prev => [...prev, errorEntry])
       onError?.(err.message || 'Failed to generate procedure')
     } finally {
       setIsGenerating(false)
+      setCurrentPhase('')
+      setCurrentProgressLog([])
+      setPrompt('')
     }
   }
 
@@ -175,7 +238,7 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
       const fixPrompt = buildFixPrompt(errors, warnings)
       setPrompt(fixPrompt)
       await new Promise(resolve => setTimeout(resolve, 50))
-      await doGenerate(fixPrompt, true)
+      await doGenerate(fixPrompt)
     },
     setPromptAndGenerate: async (promptText: string, autoGenerate: boolean = true) => {
       setPrompt(promptText)
@@ -185,7 +248,7 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
       }
     },
     isGenerating,
-  }), [token, currentYaml, isRefineMode, isGenerating, selectedProfile, onYamlGenerated, onSuccess, onError])
+  }), [token, currentYaml, hasExistingContent, isGenerating, onYamlGenerated, onSuccess, onError])
 
   const handleGenerate = async () => {
     await doGenerate(prompt)
@@ -198,227 +261,246 @@ export const AIGeneratorPanel = forwardRef<AIGeneratorPanelHandle, AIGeneratorPa
     }
   }
 
-  return (
-    <div className="bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 dark:from-indigo-950/30 dark:via-purple-950/30 dark:to-pink-950/30 rounded-xl border border-indigo-200 dark:border-indigo-800 overflow-hidden">
-      {/* Header */}
-      <div className="px-4 py-3 border-b border-indigo-200 dark:border-indigo-800 bg-white/50 dark:bg-gray-900/50">
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <div className="p-1.5 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600">
-              <Sparkles className="w-4 h-4 text-white" />
-            </div>
-            <div>
-              <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
-                AI Procedure Generator
-              </h2>
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                {isRefineMode
-                  ? 'Describe changes to make to the current procedure'
-                  : 'Describe the procedure you want to create'}
-              </p>
-            </div>
-          </div>
-
-          {/* Profile Selector */}
-          <select
-            value={selectedProfile}
-            onChange={(e) => setSelectedProfile(e.target.value)}
-            disabled={isGenerating}
-            className="text-xs px-2 py-1 rounded-md border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-1 focus:ring-indigo-500 disabled:opacity-50"
-          >
-            {profiles.length > 0 ? (
-              profiles.map(p => (
-                <option key={p.name} value={p.name}>
-                  {PROFILE_INFO[p.name]?.label || p.name}
-                </option>
-              ))
-            ) : (
+  const renderProgressLog = (log: ProgressEntry[]) => (
+    <div className="mt-2 rounded-lg bg-gray-900 border border-gray-700 overflow-hidden">
+      <div className="px-3 py-2 max-h-[180px] overflow-y-auto text-xs font-mono space-y-1">
+        {log.map((entry, i) => (
+          <div key={i} className="flex items-start gap-2">
+            {entry.type === 'phase' && (
               <>
-                <option value="safe_readonly">Safe (Read-only)</option>
-                <option value="workflow_standard">Standard</option>
-                <option value="admin_full">Admin (Full)</option>
+                <Sparkles className="w-3 h-3 text-indigo-400 mt-0.5 shrink-0" />
+                <span className="text-indigo-300">{entry.message}</span>
               </>
             )}
-          </select>
+            {entry.type === 'tool_call' && (
+              <>
+                <Search className="w-3 h-3 text-amber-400 mt-0.5 shrink-0" />
+                <span className="text-amber-300">{entry.message}</span>
+              </>
+            )}
+            {entry.type === 'tool_result' && (
+              <>
+                <CheckCircle2 className="w-3 h-3 text-emerald-400 mt-0.5 shrink-0" />
+                <span className="text-gray-300">{entry.message}</span>
+              </>
+            )}
+            {entry.type === 'error' && (
+              <>
+                <XCircle className="w-3 h-3 text-red-400 mt-0.5 shrink-0" />
+                <span className="text-red-300">{entry.message}</span>
+              </>
+            )}
+            {entry.type === 'clarification' && (
+              <>
+                <HelpCircle className="w-3 h-3 text-amber-400 mt-0.5 shrink-0" />
+                <span className="text-amber-300">{entry.message}</span>
+              </>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  )
+
+  return (
+    <div className="bg-gradient-to-br from-indigo-50 via-purple-50 to-pink-50 dark:from-indigo-950/30 dark:via-purple-950/30 dark:to-pink-950/30 border border-t-0 border-gray-200 dark:border-gray-700 rounded-b-lg overflow-hidden flex flex-col h-[500px]">
+      {/* Header */}
+      <div className="px-4 py-3 border-b border-indigo-200 dark:border-indigo-800 bg-white/50 dark:bg-gray-900/50">
+        <div className="flex items-center gap-2">
+          <div className="p-1.5 rounded-lg bg-gradient-to-br from-indigo-500 to-purple-600">
+            <Sparkles className="w-4 h-4 text-white" />
+          </div>
+          <div>
+            <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
+              AI Procedure Generator
+            </h2>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              Describe what you want to create or change
+            </p>
+          </div>
         </div>
       </div>
 
-      {/* Input area */}
-      <div className="p-4">
-        <div className="relative">
-          <textarea
-            ref={textareaRef}
-            value={prompt}
-            onChange={(e) => setPrompt(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              isRefineMode
-                ? "e.g., Add a logging step before sending the email..."
-                : "e.g., Create a procedure that searches for SAM.gov notices from the last 24 hours and emails a summary to reports@company.com..."
-            }
-            className="w-full min-h-[80px] px-4 py-3 pb-7 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none overflow-hidden"
-            disabled={isGenerating}
-          />
-
-          {/* Character count */}
-          <div className="absolute bottom-2 left-3 text-xs text-gray-400">
-            {prompt.length > 0 && `${prompt.length} characters`}
+      {/* Conversation history */}
+      <div className="flex-1 overflow-y-auto px-4 py-3 space-y-4 min-h-0">
+        {conversation.length === 0 && !isGenerating && (
+          <div className="flex flex-col items-center justify-center h-full text-center py-12">
+            <Sparkles className="w-8 h-8 text-indigo-300 dark:text-indigo-600 mb-3" />
+            <p className="text-sm text-gray-500 dark:text-gray-400 max-w-xs">
+              Describe the procedure you want to create, or ask the AI to modify the current one.
+            </p>
           </div>
-        </div>
+        )}
 
-        {/* Actions */}
-        <div className="mt-3 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={handleModeToggle}
+        {conversation.map((entry, i) => (
+          <div key={i} className={`flex gap-2 ${entry.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+            {entry.role === 'assistant' && (
+              <div className="shrink-0 mt-1">
+                <div className="w-6 h-6 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+                  <Bot className="w-3.5 h-3.5 text-white" />
+                </div>
+              </div>
+            )}
+            <div className={`max-w-[85%] ${entry.role === 'user' ? 'order-first' : ''}`}>
+              <div className={`rounded-lg px-3 py-2 text-sm ${
+                entry.role === 'user'
+                  ? 'bg-indigo-600 text-white'
+                  : 'bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-900 dark:text-gray-100'
+              }`}>
+                <div className="whitespace-pre-wrap">{entry.content}</div>
+              </div>
+
+              {/* Progress log for assistant messages */}
+              {entry.role === 'assistant' && entry.progressLog && entry.progressLog.length > 0 && (
+                renderProgressLog(entry.progressLog)
+              )}
+
+              {/* Diagnostics toggle */}
+              {entry.role === 'assistant' && entry.diagnostics && (
+                <div className="mt-1">
+                  <button
+                    onClick={() => setShowDiagnostics(showDiagnostics === i ? null : i)}
+                    className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+                  >
+                    {showDiagnostics === i ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                    <Clock className="w-3 h-3" />
+                    {entry.diagnostics.timing_ms.toFixed(0)}ms, {entry.diagnostics.total_attempts} attempts{entry.diagnostics.planning_tool_calls > 0 ? `, ${entry.diagnostics.planning_tool_calls} tools` : ''}
+                  </button>
+                  {showDiagnostics === i && (
+                    <div className="mt-1 rounded-lg bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 p-2 text-xs">
+                      <div className="grid grid-cols-2 gap-1">
+                        <div><span className="text-gray-500">Profile:</span> <span className="font-medium">{entry.diagnostics.profile_used}</span></div>
+                        <div><span className="text-gray-500">Tools:</span> <span className="font-medium">{entry.diagnostics.tools_available}</span></div>
+                      </div>
+                      {entry.diagnostics.tools_referenced.length > 0 && (
+                        <div className="mt-1"><span className="text-gray-500">In plan:</span> <span className="font-mono text-xs">{entry.diagnostics.tools_referenced.join(', ')}</span></div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Plan JSON toggle */}
+              {entry.role === 'assistant' && entry.planJson && (
+                <div className="mt-1">
+                  <button
+                    onClick={() => setShowPlanJson(showPlanJson === i ? null : i)}
+                    className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
+                  >
+                    {showPlanJson === i ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+                    <Code2 className="w-3 h-3" />
+                    Plan JSON
+                  </button>
+                  {showPlanJson === i && (
+                    <pre className="mt-1 rounded-lg bg-gray-900 text-gray-100 p-2 text-xs overflow-auto max-h-[200px] font-mono">
+                      {JSON.stringify(entry.planJson, null, 2)}
+                    </pre>
+                  )}
+                </div>
+              )}
+            </div>
+            {entry.role === 'user' && (
+              <div className="shrink-0 mt-1">
+                <div className="w-6 h-6 rounded-full bg-gray-200 dark:bg-gray-600 flex items-center justify-center">
+                  <User className="w-3.5 h-3.5 text-gray-600 dark:text-gray-300" />
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+
+        {/* Active generation progress */}
+        {isGenerating && currentProgressLog.length > 0 && (
+          <div className="flex gap-2 justify-start">
+            <div className="shrink-0 mt-1">
+              <div className="w-6 h-6 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
+                <Bot className="w-3.5 h-3.5 text-white" />
+              </div>
+            </div>
+            <div className="max-w-[85%]">
+              <div className="rounded-lg bg-gray-900 border border-gray-700 overflow-hidden">
+                <div className="px-3 py-2 border-b border-gray-700 flex items-center gap-2">
+                  <Sparkles className="w-4 h-4 text-indigo-400 animate-pulse" />
+                  <span className="text-xs font-medium text-indigo-300">
+                    {currentPhase === 'researching' ? 'Researching...' :
+                     currentPhase === 'validating' ? 'Validating plan...' :
+                     currentPhase === 'compiling' ? 'Compiling procedure...' :
+                     'Working...'}
+                  </span>
+                </div>
+                <div className="px-3 py-2 max-h-[180px] overflow-y-auto text-xs font-mono space-y-1">
+                  {currentProgressLog.map((entry, i) => (
+                    <div key={i} className="flex items-start gap-2">
+                      {entry.type === 'phase' && (
+                        <>
+                          <Sparkles className="w-3 h-3 text-indigo-400 mt-0.5 shrink-0" />
+                          <span className="text-indigo-300">{entry.message}</span>
+                        </>
+                      )}
+                      {entry.type === 'tool_call' && (
+                        <>
+                          <Search className="w-3 h-3 text-amber-400 mt-0.5 shrink-0" />
+                          <span className="text-amber-300">{entry.message}</span>
+                        </>
+                      )}
+                      {entry.type === 'tool_result' && (
+                        <>
+                          <CheckCircle2 className="w-3 h-3 text-emerald-400 mt-0.5 shrink-0" />
+                          <span className="text-gray-300">{entry.message}</span>
+                        </>
+                      )}
+                      {entry.type === 'clarification' && (
+                        <>
+                          <HelpCircle className="w-3 h-3 text-amber-400 mt-0.5 shrink-0" />
+                          <span className="text-amber-300">{entry.message}</span>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                  <div className="flex items-center gap-2">
+                    <Loader2 className="w-3 h-3 text-gray-500 animate-spin" />
+                    <span className="text-gray-500">...</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        <div ref={conversationEndRef} />
+      </div>
+
+      {/* Input area — pinned to bottom */}
+      <div className="border-t border-indigo-200 dark:border-indigo-800 bg-white/50 dark:bg-gray-900/50 px-4 py-3">
+        <div className="flex items-end gap-2">
+          <div className="relative flex-1">
+            <textarea
+              ref={textareaRef}
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="e.g., Create a procedure that searches for SAM.gov notices and emails a summary, or describe changes to the current procedure..."
+              className="w-full min-h-[60px] max-h-[200px] px-3 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 placeholder:text-gray-400 dark:placeholder:text-gray-500 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent resize-none overflow-y-auto"
               disabled={isGenerating}
-              className="group inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium transition-all duration-200 cursor-pointer disabled:cursor-not-allowed disabled:opacity-50"
-              title="Click to switch mode"
-            >
-              {isRefineMode ? (
-                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-purple-100 dark:bg-purple-900/30 text-purple-700 dark:text-purple-300 group-hover:bg-purple-200 dark:group-hover:bg-purple-900/50 group-hover:ring-2 group-hover:ring-purple-300 dark:group-hover:ring-purple-700">
-                  <Wand2 className="w-3 h-3" />
-                  Refine Mode
-                  <ArrowLeftRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-                </span>
-              ) : (
-                <span className="inline-flex items-center gap-1.5 px-2 py-1 rounded-full bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 group-hover:bg-indigo-200 dark:group-hover:bg-indigo-900/50 group-hover:ring-2 group-hover:ring-indigo-300 dark:group-hover:ring-indigo-700">
-                  <Sparkles className="w-3 h-3" />
-                  Generate Mode
-                  <ArrowLeftRight className="w-3 h-3 opacity-0 group-hover:opacity-100 transition-opacity" />
-                </span>
-              )}
-            </button>
-            <span className="text-xs text-gray-400 dark:text-gray-500">
-              {isRefineMode ? 'Current procedure will be modified' : 'A new procedure will be created'}
-              {manualModeOverride !== null && (
-                <span className="ml-1 text-amber-500 dark:text-amber-400">(manual)</span>
-              )}
-            </span>
+            />
           </div>
-
           <button
             onClick={handleGenerate}
             disabled={isGenerating || !prompt.trim()}
-            className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+            className="shrink-0 self-end inline-flex items-center justify-center w-10 h-10 rounded-lg bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+            title="Generate (Cmd+Enter)"
           >
             {isGenerating ? (
-              <>
-                <Loader2 className="w-4 h-4 animate-spin" />
-                <span>Generating...</span>
-              </>
+              <Loader2 className="w-4 h-4 animate-spin" />
             ) : (
-              <>
-                <Send className="w-4 h-4" />
-                <span>{isRefineMode ? 'Refine' : 'Generate'}</span>
-              </>
+              <Send className="w-4 h-4" />
             )}
           </button>
         </div>
-
-        {/* Keyboard shortcut hint */}
-        <p className="mt-2 text-xs text-gray-400 dark:text-gray-500 text-right">
-          Press <kbd className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[10px]">⌘</kbd> + <kbd className="px-1.5 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[10px]">Enter</kbd> to submit
+        <p className="mt-1 text-xs text-gray-400 dark:text-gray-500 text-right">
+          <kbd className="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[10px]">⌘</kbd>+<kbd className="px-1 py-0.5 rounded bg-gray-100 dark:bg-gray-700 font-mono text-[10px]">Enter</kbd> to send
         </p>
       </div>
-
-      {/* Loading overlay */}
-      {isGenerating && (
-        <div className="px-4 pb-4">
-          <div className="rounded-lg bg-indigo-50 dark:bg-indigo-900/20 border border-indigo-100 dark:border-indigo-800 p-4">
-            <div className="flex items-center gap-3">
-              <div className="relative">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center">
-                  <Sparkles className="w-5 h-5 text-white animate-pulse" />
-                </div>
-                <div className="absolute inset-0 rounded-full bg-gradient-to-br from-indigo-500 to-purple-600 animate-ping opacity-20" />
-              </div>
-              <div>
-                <p className="text-sm font-medium text-indigo-900 dark:text-indigo-100">
-                  {isRefineMode ? 'Refining procedure...' : 'Generating procedure...'}
-                </p>
-                <p className="text-xs text-indigo-600 dark:text-indigo-400">
-                  AI is analyzing your request and {isRefineMode ? 'updating' : 'creating'} the procedure definition
-                </p>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Diagnostics Panel */}
-      {lastDiagnostics && !isGenerating && (
-        <div className="px-4 pb-2">
-          <button
-            onClick={() => setShowDiagnostics(!showDiagnostics)}
-            className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
-          >
-            {showDiagnostics ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            <Clock className="w-3 h-3" />
-            Diagnostics ({lastDiagnostics.timing_ms.toFixed(0)}ms, {lastDiagnostics.total_attempts} attempts)
-          </button>
-
-          {showDiagnostics && (
-            <div className="mt-2 rounded-lg bg-gray-50 dark:bg-gray-800/50 border border-gray-200 dark:border-gray-700 p-3 text-xs">
-              <div className="grid grid-cols-2 gap-2">
-                <div>
-                  <span className="text-gray-500 dark:text-gray-400">Profile:</span>{' '}
-                  <span className="font-medium text-gray-700 dark:text-gray-300">{lastDiagnostics.profile_used}</span>
-                </div>
-                <div>
-                  <span className="text-gray-500 dark:text-gray-400">Tools available:</span>{' '}
-                  <span className="font-medium text-gray-700 dark:text-gray-300">{lastDiagnostics.tools_available}</span>
-                </div>
-                <div>
-                  <span className="text-gray-500 dark:text-gray-400">Plan attempts:</span>{' '}
-                  <span className="font-medium text-gray-700 dark:text-gray-300">{lastDiagnostics.plan_attempts}</span>
-                </div>
-                <div>
-                  <span className="text-gray-500 dark:text-gray-400">Procedure attempts:</span>{' '}
-                  <span className="font-medium text-gray-700 dark:text-gray-300">{lastDiagnostics.procedure_attempts}</span>
-                </div>
-              </div>
-              {lastDiagnostics.tools_referenced.length > 0 && (
-                <div className="mt-2">
-                  <span className="text-gray-500 dark:text-gray-400">Tools used:</span>{' '}
-                  <span className="font-mono text-gray-700 dark:text-gray-300">
-                    {lastDiagnostics.tools_referenced.join(', ')}
-                  </span>
-                </div>
-              )}
-              {lastDiagnostics.validation_error_types.length > 0 && (
-                <div className="mt-1">
-                  <span className="text-gray-500 dark:text-gray-400">Errors encountered:</span>{' '}
-                  <span className="text-red-600 dark:text-red-400 font-mono">
-                    {lastDiagnostics.validation_error_types.join(', ')}
-                  </span>
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* Plan JSON Viewer */}
-      {lastPlanJson && !isGenerating && (
-        <div className="px-4 pb-4">
-          <button
-            onClick={() => setShowPlanJson(!showPlanJson)}
-            className="flex items-center gap-1 text-xs text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 transition-colors"
-          >
-            {showPlanJson ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-            <Code2 className="w-3 h-3" />
-            Plan JSON
-          </button>
-
-          {showPlanJson && (
-            <pre className="mt-2 rounded-lg bg-gray-900 text-gray-100 p-3 text-xs overflow-auto max-h-[300px] font-mono">
-              {JSON.stringify(lastPlanJson, null, 2)}
-            </pre>
-          )}
-        </div>
-      )}
     </div>
   )
 })

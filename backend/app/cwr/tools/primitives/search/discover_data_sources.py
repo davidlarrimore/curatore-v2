@@ -8,16 +8,15 @@ Gives AI clients a curated understanding of what data is available
 and how to search it.
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
 import logging
+from typing import Any, Dict, List
 
-from sqlalchemy import select, func
+from sqlalchemy import func, select
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext
@@ -91,15 +90,15 @@ class DiscoverDataSourcesFunction(BaseFunction):
 
     async def execute(self, ctx: FunctionContext, **params) -> FunctionResult:
         """Execute data source discovery."""
-        from app.core.metadata.registry_service import metadata_registry_service
         from app.core.database.models import (
             Asset,
-            SharePointSyncConfig,
+            Connection,
+            ForecastSync,
             SamSearch,
             ScrapeCollection,
-            ForecastSync,
-            Connection,
+            SharePointSyncConfig,
         )
+        from app.core.metadata.registry_service import metadata_registry_service
 
         source_type_filter = params.get("source_type")
 
@@ -283,6 +282,7 @@ class DiscoverDataSourcesFunction(BaseFunction):
                     "type": "sharepoint_sync",
                     "id": str(c.id),
                     "name": c.name,
+                    "slug": c.slug,
                     "site_name": site_name,
                     "description": (c.description or "")[:200] or None,
                     "folder_name": c.folder_name or c.folder_url or "",

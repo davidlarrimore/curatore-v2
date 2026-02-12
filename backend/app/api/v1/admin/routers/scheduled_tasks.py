@@ -20,18 +20,16 @@ Security:
 """
 
 import logging
-from datetime import datetime, timedelta
-from typing import List, Optional, Any, Dict
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
-from sqlalchemy import select
 
-from app.core.database.models import ScheduledTask, Run, User
-from app.dependencies import get_current_user, require_org_admin
-from app.core.shared.database_service import database_service
+from app.core.database.models import Run, ScheduledTask, User
 from app.core.ops.scheduled_task_service import scheduled_task_service
+from app.core.shared.database_service import database_service
+from app.dependencies import require_org_admin
 
 # Initialize router
 router = APIRouter(prefix="/scheduled-tasks", tags=["Scheduled Tasks"])

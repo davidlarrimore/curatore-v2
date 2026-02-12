@@ -1,11 +1,8 @@
 # End-to-End Tests
 """End-to-end tests for MCP Gateway."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
 
-from fastapi.testclient import TestClient
-from app.main import app
 from app.config import settings
 
 

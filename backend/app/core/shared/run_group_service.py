@@ -35,10 +35,10 @@ Usage:
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
 
-from sqlalchemy import select, update, and_
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database.models import Run, RunGroup
@@ -370,8 +370,8 @@ class RunGroupService:
             return
 
         from ..database.procedures import Procedure
-        from .run_service import run_service
         from ..tasks import execute_procedure_task
+        from .run_service import run_service
 
         # Get procedure
         proc_query = select(Procedure).where(

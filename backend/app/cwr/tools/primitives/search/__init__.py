@@ -17,12 +17,12 @@ Provides functions for searching and retrieving content:
 from .get import GetFunction
 from .get_asset import GetAssetFunction
 from .get_content import GetContentFunction
-from .search_assets import SearchAssetsFunction
-from .search_solicitations import SearchSolicitationsFunction
-from .search_notices import SearchNoticesFunction
-from .search_scraped_assets import SearchScrapedAssetsFunction
-from .search_salesforce import SearchSalesforceFunction
 from .query_model import QueryModelFunction
+from .search_assets import SearchAssetsFunction
+from .search_notices import SearchNoticesFunction
+from .search_salesforce import SearchSalesforceFunction
+from .search_scraped_assets import SearchScrapedAssetsFunction
+from .search_solicitations import SearchSolicitationsFunction
 
 __all__ = [
     "GetFunction",

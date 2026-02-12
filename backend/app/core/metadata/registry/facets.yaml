@@ -217,3 +217,11 @@ facets:
       ag_forecast: "forecast.source_type"
       apfs_forecast: "forecast.source_type"
       state_forecast: "forecast.source_type"
+
+  document_type:
+    display_name: "Document Type"
+    data_type: string
+    description: "Document classification — Proposal, Solicitation, White Paper, etc."
+    operators: [eq, in]
+    mappings:
+      asset: "file.document_type"

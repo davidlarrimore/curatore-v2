@@ -1,77 +1,77 @@
 {
-  "name": "Backfill SharePoint Site Name",
+  "name": "Backfill SharePoint Site Name - Past Performances Folder",
   "slug": "backfill_site_name",
-  "description": "Discover all SharePoint sync configs, resolve each site's display name via Microsoft Graph API, then propagate site_name to all linked assets' source_metadata.sharepoint and the search index. No parameters required — processes all active configs automatically.",
-  "version": "2.0.0",
-  "is_system": true,
-  "tags": ["sharepoint", "backfill", "metadata", "maintenance"],
-  "parameters": [],
+  "tags": [
+    "sharepoint",
+    "backfill",
+    "metadata",
+    "maintenance",
+    "past-performances"
+  ],
   "steps": [
     {
       "name": "discover_configs",
       "function": "discover_data_sources",
-      "description": "Find all active SharePoint sync configurations",
       "params": {
         "source_type": "sharepoint"
       },
       "on_error": "fail",
       "condition": null,
-      "foreach": null
+      "description": "Find the Growth SharePoint sync configuration to get site name",
+      "foreach": null,
+      "branches": null
     },
     {
-      "name": "process_configs",
-      "function": "foreach",
-      "description": "For each SharePoint sync config: resolve site name, find linked assets, and update their metadata",
+      "name": "find_assets",
+      "function": "search_assets",
       "params": {
-        "items": "{{ steps.discover_configs.source_types[0].instances }}",
-        "concurrency": 1
+        "limit": 200,
+        "query": "*",
+        "where": [
+          {
+            "op": "is_empty",
+            "field": "sharepoint.site_name"
+          }
+        ],
+        "folder_path": "sharepoint/growth-sharepoint/reuse-material/past-performances",
+        "source_type": "sharepoint",
+        "sync_config_id": "d88142cb-c117-4296-8884-c069b3139dc8",
+        "folder_match_mode": "prefix"
+      },
+      "on_error": "fail",
+      "condition": null,
+      "description": "Find assets in the Past Performances folder that are missing site_name",
+      "foreach": null,
+      "branches": null
+    },
+    {
+      "name": "update_assets",
+      "function": "foreach",
+      "params": {
+        "items": "{{ steps.find_assets }}"
       },
       "on_error": "continue",
       "condition": null,
+      "description": "Set site_name in source_metadata.sharepoint for each asset and propagate to search index",
       "foreach": null,
       "branches": {
         "each": [
           {
-            "name": "get_site",
-            "function": "sp_get_site",
-            "description": "Resolve site display name from Microsoft Graph API",
-            "params": {
-              "sync_config_id": "{{ item.id }}"
-            },
-            "on_error": "fail",
-            "condition": null,
-            "foreach": null
-          },
-          {
-            "name": "find_assets",
-            "function": "search_assets",
-            "description": "Find assets linked to this sync config that are missing site_name",
-            "params": {
-              "query": "*",
-              "source_type": "sharepoint",
-              "sync_config_id": "{{ item.id }}",
-              "where": [{"field": "sharepoint.site_name", "op": "is_empty"}],
-              "limit": 1000
-            },
-            "on_error": "fail",
-            "condition": null,
-            "foreach": null
-          },
-          {
-            "name": "update_assets",
+            "name": "update_metadata",
             "function": "update_source_metadata",
-            "description": "Set site_name in source_metadata.sharepoint for each asset",
             "params": {
+              "fields": {
+                "site_name": "Growth"
+              },
               "asset_id": "{{ item.id }}",
               "namespace": "sharepoint",
-              "fields": {
-                "site_name": "{{ steps.get_site.fields.display_name }}"
-              },
               "propagate_to_search": true
             },
             "on_error": "continue",
             "condition": null,
-            "foreach": "{{ steps.find_assets }}"
+            "description": "Update site_name for this asset",
+            "foreach": null,
+            "branches": null
           }
         ]
       }
@@ -81,10 +81,16 @@
     {
       "type": "result",
       "config": {
-        "include_steps": ["discover_configs", "process_configs"]
+        "include_steps": [
+          "discover_configs",
+          "process_configs"
+        ]
       }
     }
   ],
+  "version": "2.0.0",
+  "on_error": "fail",
   "triggers": [],
-  "on_error": "continue"
+  "parameters": [],
+  "description": "Discover all SharePoint sync configs, resolve each site's display name via Microsoft Graph API, then propagate site_name to all linked assets' source_metadata.sharepoint and the search index. No parameters required \u2014 processes all active configs automatically."
 }

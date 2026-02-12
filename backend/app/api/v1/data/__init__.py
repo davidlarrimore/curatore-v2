@@ -3,16 +3,16 @@ from fastapi import APIRouter
 
 from .routers import (
     assets,
-    storage,
-    search,
-    metadata,
-    sam,
-    salesforce,
     forecasts,
-    sharepoint_sync,
-    scrape,
-    sharepoint,
+    metadata,
     render,
+    salesforce,
+    sam,
+    scrape,
+    search,
+    sharepoint,
+    sharepoint_sync,
+    storage,
     webhooks,
 )
 

@@ -13,7 +13,8 @@ Task types allow different models to be used for different purposes:
 """
 
 from enum import Enum
-from typing import Optional, Dict, Any
+from typing import Dict, Optional
+
 from pydantic import BaseModel, Field
 
 

@@ -20,10 +20,10 @@ Usage:
     )
 """
 
-from .store.definitions import BaseProcedure, ProcedureDefinition, StepDefinition
 from .runtime.executor import ProcedureExecutor, procedure_executor
-from .store.loader import ProcedureLoader, procedure_loader
+from .store.definitions import BaseProcedure, ProcedureDefinition, StepDefinition
 from .store.discovery import ProcedureDiscoveryService, procedure_discovery_service
+from .store.loader import ProcedureLoader, procedure_loader
 
 __all__ = [
     "BaseProcedure",

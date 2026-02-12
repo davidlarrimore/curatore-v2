@@ -9,20 +9,21 @@ the text is rendered for each item with {{ item.xxx }} template placeholders.
 """
 
 import json
-from typing import Any, Dict, List, Optional
 import logging
+from typing import Any, Dict, List, Optional
 
 from jinja2 import Template
 
+from app.core.models.llm_models import LLMTaskType
+from app.core.shared.config_loader import config_loader
+
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext
-from app.core.models.llm_models import LLMTaskType
-from app.core.shared.config_loader import config_loader
 
 logger = logging.getLogger("curatore.functions.llm.extract")
 
@@ -51,29 +52,27 @@ class ExtractFunction(BaseFunction):
     meta = FunctionMeta(
         name="llm_extract",
         category=FunctionCategory.LLM,
-        description="Extract structured data from text using an LLM",
+        description="Extract structured metadata from text using an LLM. Returns JSON with the requested fields. Use this to identify topics, labels, entities, and other metadata from documents. Use get_content first to fetch document content by asset ID.",
         input_schema={
             "type": "object",
             "properties": {
                 "text": {
                     "type": "string",
-                    "description": "The text to extract from",
+                    "description": "The text content to extract data from. For documents, first call get_content with the asset ID, then pass the returned text here.",
                 },
                 "fields": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "Fields to extract",
-                    "examples": [["name", "email", "phone"]],
+                    "description": "Fields to extract (returned as JSON keys in the response)",
+                    "examples": [["topic", "agency", "contract_type", "set_aside", "naics_code"]],
                 },
                 "field_descriptions": {
                     "type": "object",
-                    "description": "Optional descriptions for each field",
-                    "default": None,
+                    "description": "Optional descriptions to guide extraction for each field, e.g. {\"topic\": \"The primary subject area\", \"agency\": \"Federal agency name\"}",
                 },
                 "instructions": {
                     "type": "string",
-                    "description": "Additional extraction instructions",
-                    "default": None,
+                    "description": "Additional extraction instructions, e.g. 'Return NAICS codes as 6-digit numbers'",
                 },
                 "model": {
                     "type": "string",
@@ -86,6 +85,7 @@ class ExtractFunction(BaseFunction):
                     "description": "Collection of items to iterate over. When provided, the text is rendered for each item with {{ item.xxx }} placeholders replaced by item data.",
                     "default": None,
                     "examples": [[{"content": "Text 1"}, {"content": "Text 2"}]],
+                    "x-procedure-only": True,
                 },
             },
             "required": ["text", "fields"],

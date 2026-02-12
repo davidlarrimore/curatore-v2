@@ -1,0 +1,11 @@
+target-version = "py312"
+line-length = 120
+src = ["backend", "extraction-service", "mcp"]
+
+[lint]
+select = ["E", "F", "W", "I"]  # pycodestyle, pyflakes, warnings, isort
+ignore = ["E501"]               # line length handled by formatter
+
+[lint.per-file-ignores]
+"*/alembic/*" = ["E", "F", "W", "I"]
+"**/tests/*" = ["E712"]

@@ -7,7 +7,7 @@ that governs where they can be invoked.
 """
 
 import logging
-from typing import List, Optional
+from typing import List
 
 from app.cwr.tools.base import FunctionMeta
 from app.cwr.tools.registry import function_registry, initialize_functions

@@ -5,16 +5,15 @@ Bulk Update Metadata function - Update metadata for multiple assets.
 Efficiently updates metadata for a batch of assets.
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
 import logging
+from uuid import UUID
 
 from sqlalchemy import select
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext

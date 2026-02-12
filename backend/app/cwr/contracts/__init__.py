@@ -5,7 +5,7 @@ CWR Contracts - Tool contracts and procedure validation.
 Provides ContractView for functions and validation for procedure definitions.
 """
 
-from .validation import validate_procedure, ValidationResult, ValidationError
+from .validation import ValidationError, ValidationResult, validate_procedure
 
 
 def __getattr__(name):

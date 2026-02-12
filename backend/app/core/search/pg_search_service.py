@@ -47,10 +47,9 @@ from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import text, func, select, and_, or_
+from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from .embedding_service import embedding_service
 
 logger = logging.getLogger("curatore.pg_search_service")
@@ -839,7 +838,7 @@ class PgSearchService:
     ) -> List[Any]:
         """Get sample distinct values for a specific metadata field."""
         try:
-            sql = text(f"""
+            sql = text("""
                 SELECT DISTINCT sc.metadata->:namespace->>:field as val
                 FROM search_chunks sc
                 WHERE sc.organization_id = :org_id
@@ -932,6 +931,7 @@ class PgSearchService:
         date_from: Optional[datetime] = None,
         date_to: Optional[datetime] = None,
         folder_path: Optional[str] = None,
+        folder_match_mode: str = "prefix",
         metadata_filters: Optional[Dict[str, Any]] = None,
         facet_filters: Optional[Dict[str, Any]] = None,
         limit: int = 20,
@@ -1067,21 +1067,15 @@ class PgSearchService:
             if folder_path:
                 from app.core.storage.storage_path_service import slugify
                 clean = folder_path.strip("/")
-                # Slugify each path component for normalization
                 slugified = "/".join(slugify(p) for p in clean.split("/") if p)
 
-                if any(slugified.startswith(prefix) for prefix in ("sharepoint/", "uploads/", "scrape/", "sam/")):
-                    # Full storage path — prefix match
+                if folder_match_mode == "contains":
+                    filters.append("sc.metadata->'source'->>'storage_folder' LIKE :folder_path_prefix")
+                    params["folder_path_prefix"] = f"%{slugified}%"
+                else:
+                    # Default: prefix match
                     filters.append("sc.metadata->'source'->>'storage_folder' LIKE :folder_path_prefix")
                     params["folder_path_prefix"] = f"{slugified}%"
-                else:
-                    # Partial path — match slugified storage_folder OR human-readable sharepoint.path
-                    filters.append(
-                        "(sc.metadata->'source'->>'storage_folder' LIKE :folder_path_prefix"
-                        " OR sc.metadata->'sharepoint'->>'path' ILIKE :folder_path_human)"
-                    )
-                    params["folder_path_prefix"] = f"%/{slugified}%"
-                    params["folder_path_human"] = f"{clean}%"
 
             if metadata_filters:
                 filters.append("sc.metadata @> CAST(:metadata_filter AS jsonb)")
@@ -1089,8 +1083,8 @@ class PgSearchService:
 
             # Resolve facet_filters via registry service (with alias expansion)
             if facet_filters:
-                from app.core.metadata.registry_service import metadata_registry_service
                 from app.core.metadata.facet_reference_service import facet_reference_service
+                from app.core.metadata.registry_service import metadata_registry_service
 
                 facet_idx = 0
                 for facet_name, facet_value in facet_filters.items():

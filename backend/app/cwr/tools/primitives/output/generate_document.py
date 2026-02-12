@@ -12,13 +12,12 @@ Supported formats:
 """
 
 import base64
-from typing import Any, Dict, List, Optional
 import logging
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext
@@ -277,10 +276,11 @@ class GenerateDocumentFunction(BaseFunction):
                         message="MinIO service is not configured",
                     )
 
-                from app.config import settings
                 from datetime import datetime
-                from uuid import uuid4
                 from io import BytesIO
+                from uuid import uuid4
+
+                from app.config import settings
 
                 bucket = settings.minio_bucket_processed
                 timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")

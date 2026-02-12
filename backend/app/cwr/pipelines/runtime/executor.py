@@ -11,9 +11,10 @@ from uuid import UUID
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .definitions import PipelineDefinition, StageDefinition, StageType, OnErrorPolicy
+from app.cwr.tools import FunctionContext, FunctionResult, fn
+
 from ..store.loader import pipeline_loader
-from app.cwr.tools import fn, FunctionContext, FunctionResult
+from .definitions import OnErrorPolicy, PipelineDefinition, StageDefinition, StageType
 
 logger = logging.getLogger("curatore.pipelines.executor")
 
@@ -212,7 +213,7 @@ class PipelineExecutor:
                     result = await func(ctx, item=item, **rendered_params)
                     if result.success and result.data:
                         filtered_items.append(item)
-                except Exception as e:
+                except Exception:
                     if stage.on_error == OnErrorPolicy.FAIL:
                         raise
             return {"status": "success", "items": filtered_items}
@@ -242,7 +243,7 @@ class PipelineExecutor:
                                 processed_items.append(item)
                             else:
                                 raise Exception(result.error)
-                    except Exception as e:
+                    except Exception:
                         failed_count += 1
                         if stage.on_error == OnErrorPolicy.FAIL:
                             raise

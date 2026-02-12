@@ -28,20 +28,21 @@ Example usage in a procedure:
 """
 
 import json
-from typing import Any, Dict, List, Optional
 import logging
+from typing import Any, Dict, List, Optional
 
 from jinja2 import Template
 
+from app.core.models.llm_models import LLMTaskType
+from app.core.shared.config_loader import config_loader
+
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext
-from app.core.models.llm_models import LLMTaskType
-from app.core.shared.config_loader import config_loader
 
 logger = logging.getLogger("curatore.functions.llm.route")
 
@@ -70,13 +71,13 @@ class RouteFunction(BaseFunction):
     meta = FunctionMeta(
         name="llm_route",
         category=FunctionCategory.LOGIC,
-        description="Route data to one of several branches using LLM analysis",
+        description="Route data to one of several named branches using LLM analysis. Like a switch/case — returns the best matching route with confidence.",
         input_schema={
             "type": "object",
             "properties": {
                 "data": {
                     "type": "string",
-                    "description": "The data/content to analyze for routing",
+                    "description": "The text content to analyze for routing. For documents, first call get_content with the asset ID, then pass the returned text here.",
                     "examples": ["Customer message or document content..."],
                 },
                 "routes": {
@@ -119,6 +120,7 @@ class RouteFunction(BaseFunction):
                     "description": "Collection of items to route. When provided, data is rendered for each item with {{ item.xxx }} placeholders.",
                     "default": None,
                     "examples": [[{"title": "Item 1", "desc": "..."}, {"title": "Item 2", "desc": "..."}]],
+                    "x-procedure-only": True,
                 },
             },
             "required": ["data", "routes"],

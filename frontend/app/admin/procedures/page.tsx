@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { useActiveJobs } from '@/lib/context-shims'
+import { JobProgressPanelByType } from '@/components/ui/JobProgressPanel'
+import { useJobProgressByType } from '@/lib/useJobProgress'
 import { proceduresApi, type ProcedureListItem, type Procedure, type ProcedureTrigger } from '@/lib/api'
 import { formatDateTime, formatTimeAgo, formatTimeUntil, formatCompact } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
@@ -15,9 +17,7 @@ import {
   Workflow,
   Search,
   Play,
-  Pause,
   CheckCircle,
-  XCircle,
   AlertTriangle,
   Loader2,
   Clock,
@@ -108,6 +108,9 @@ function ProceduresContent() {
   const router = useRouter()
   const { token } = useAuth()
   const { addJob } = useActiveJobs()
+  const { isActive: hasRunningProcedures } = useJobProgressByType('procedure', {
+    onComplete: () => loadData(true),
+  })
 
   const [procedures, setProcedures] = useState<ProcedureListItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -116,7 +119,6 @@ function ProceduresContent() {
   const [successMessage, setSuccessMessage] = useState('')
 
   // Filters
-  const [showInactive, setShowInactive] = useState(false)
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedTag, setSelectedTag] = useState<string>('all')
 
@@ -131,7 +133,7 @@ function ProceduresContent() {
   const [deletingProcedure, setDeletingProcedure] = useState<string | null>(null)
   const [confirmDelete, setConfirmDelete] = useState<ProcedureListItem | null>(null)
 
-  // Load procedures
+  // Load procedures (always fetch all, filter client-side)
   const loadData = useCallback(async (silent = false) => {
     if (!token) return
 
@@ -142,7 +144,6 @@ function ProceduresContent() {
 
     try {
       const data = await proceduresApi.listProcedures(token, {
-        is_active: showInactive ? undefined : true,
         tag: selectedTag !== 'all' ? selectedTag : undefined,
       })
       setProcedures(data.procedures)
@@ -156,7 +157,7 @@ function ProceduresContent() {
       }
       setIsRefreshing(false)
     }
-  }, [token, showInactive, selectedTag])
+  }, [token, selectedTag])
 
   // Initial load
   useEffect(() => {
@@ -229,14 +230,10 @@ function ProceduresContent() {
     try {
       if (procedure.is_active) {
         await proceduresApi.disableProcedure(token, procedure.slug)
-        // Automatically show inactive procedures so the user can still see the deactivated one
-        if (!showInactive) {
-          setShowInactive(true)
-        }
-        setSuccessMessage(`Procedure "${procedure.name}" has been deactivated. It will not run until re-enabled.`)
+        setSuccessMessage(`Procedure "${procedure.name}" scheduling has been disabled`)
       } else {
         await proceduresApi.enableProcedure(token, procedure.slug)
-        setSuccessMessage(`Procedure "${procedure.name}" has been activated`)
+        setSuccessMessage(`Procedure "${procedure.name}" scheduling has been enabled`)
       }
       await loadData(true)
       setTimeout(() => setSuccessMessage(''), 5000)
@@ -287,6 +284,9 @@ function ProceduresContent() {
         (p.description && p.description.toLowerCase().includes(query))
       )
     }
+
+    // Sort alphabetically by name (A→Z)
+    result.sort((a, b) => a.name.localeCompare(b.name))
 
     return result
   }, [procedures, searchQuery])
@@ -378,20 +378,6 @@ function ProceduresContent() {
               ))}
             </select>
 
-            {/* Show inactive toggle */}
-            <button
-              onClick={() => setShowInactive(!showInactive)}
-              className={`
-                flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors
-                ${showInactive
-                  ? 'bg-indigo-100 text-indigo-700 dark:bg-indigo-900/30 dark:text-indigo-400'
-                  : 'bg-white dark:bg-gray-800 text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-700 border border-gray-200 dark:border-gray-700'
-                }
-              `}
-            >
-              <Eye className="w-4 h-4" />
-              Show Inactive
-            </button>
           </div>
 
           {/* Search */}
@@ -427,9 +413,9 @@ function ProceduresContent() {
                 <CheckCircle className="w-5 h-5 text-green-600 dark:text-green-400" />
               </div>
               <div>
-                <p className="text-xs text-gray-500 dark:text-gray-400">Active</p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">Scheduled</p>
                 <p className="text-xl font-bold text-gray-900 dark:text-white">
-                  {procedures.filter(p => p.is_active).length}
+                  {procedures.filter(p => p.is_active && p.trigger_count > 0).length}
                 </p>
               </div>
             </div>
@@ -475,6 +461,13 @@ function ProceduresContent() {
             </p>
           </div>
 
+          {/* Active procedure jobs */}
+          <JobProgressPanelByType
+            jobType="procedure"
+            variant="compact"
+            className="px-6 py-3 space-y-2 border-b border-gray-200 dark:border-gray-700"
+          />
+
           {filteredProcedures.length === 0 ? (
             <div className="p-12 text-center">
               <Workflow className="w-12 h-12 mx-auto mb-4 text-gray-300 dark:text-gray-600" />
@@ -506,18 +499,6 @@ function ProceduresContent() {
                         </button>
 
                         {/* Status badges */}
-                        {procedure.is_active ? (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-400">
-                            <CheckCircle className="w-3 h-3" />
-                            Active
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-700 dark:text-gray-400">
-                            <Pause className="w-3 h-3" />
-                            Inactive
-                          </span>
-                        )}
-
                         {procedure.is_system && (
                           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-purple-100 text-purple-700 dark:bg-purple-900/30 dark:text-purple-400">
                             <Settings className="w-3 h-3" />
@@ -549,25 +530,58 @@ function ProceduresContent() {
                         </p>
                       )}
 
-                      <div className="mt-2 ml-6 flex items-center gap-4">
-                        <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">
-                          {procedure.slug}
-                        </span>
-                        <span className="text-xs text-gray-400 dark:text-gray-500">
-                          v{procedure.version}
-                        </span>
-                        {procedure.tags.length > 0 && (
-                          <div className="flex items-center gap-1">
-                            {procedure.tags.map(tag => (
-                              <span
-                                key={tag}
-                                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
-                              >
-                                <Tag className="w-3 h-3" />
-                                {tag}
-                              </span>
-                            ))}
-                          </div>
+                      <div className="mt-2 ml-6 flex items-center justify-between">
+                        <div className="flex items-center gap-4">
+                          <span className="text-xs text-gray-400 dark:text-gray-500 font-mono">
+                            {procedure.slug}
+                          </span>
+                          <span className="text-xs text-gray-400 dark:text-gray-500">
+                            v{procedure.version}
+                          </span>
+                          {procedure.tags.length > 0 && (
+                            <div className="flex items-center gap-1">
+                              {procedure.tags.map(tag => (
+                                <span
+                                  key={tag}
+                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-xs bg-gray-100 dark:bg-gray-700 text-gray-600 dark:text-gray-400"
+                                >
+                                  <Tag className="w-3 h-3" />
+                                  {tag}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+
+                        {procedure.trigger_count > 0 && (
+                          <button
+                            onClick={() => handleToggleActive(procedure)}
+                            disabled={togglingProcedure === procedure.slug}
+                            title={procedure.is_active ? 'Disable scheduling' : 'Enable scheduling'}
+                            className="flex items-center gap-2"
+                          >
+                            <span className="text-xs text-gray-400 dark:text-gray-500">Schedule</span>
+                            {togglingProcedure === procedure.slug ? (
+                              <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
+                            ) : (
+                              <div className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors ${
+                                procedure.is_active
+                                  ? 'bg-emerald-500'
+                                  : 'bg-gray-300 dark:bg-gray-600'
+                              }`}>
+                                <span className={`inline-block h-3.5 w-3.5 rounded-full bg-white shadow-sm transition-transform ${
+                                  procedure.is_active ? 'translate-x-[18px]' : 'translate-x-[3px]'
+                                }`} />
+                              </div>
+                            )}
+                            <span className={`text-xs font-medium w-6 ${
+                              procedure.is_active
+                                ? 'text-emerald-600 dark:text-emerald-400'
+                                : 'text-gray-400 dark:text-gray-500'
+                            }`}>
+                              {procedure.is_active ? 'On' : 'Off'}
+                            </span>
+                          </button>
                         )}
                       </div>
                     </div>
@@ -575,17 +589,16 @@ function ProceduresContent() {
                     {/* Actions */}
                     <div className="flex items-center gap-2">
                       <Link href={`/admin/procedures/${procedure.slug}/edit`}>
-                        <Button variant="secondary" className="gap-2">
-                          <Settings className="w-4 h-4" />
-                          Edit
-                        </Button>
+                        <button className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg bg-gradient-to-r from-indigo-500 to-purple-600 text-white shadow-sm shadow-indigo-500/25 hover:from-indigo-600 hover:to-purple-700 hover:shadow-md hover:shadow-indigo-500/30 transition-all">
+                          <Eye className="w-4 h-4" />
+                          View
+                        </button>
                       </Link>
 
-                      <Button
-                        variant="secondary"
+                      <button
                         onClick={() => handleRun(procedure.slug)}
-                        disabled={runningProcedure === procedure.slug || !procedure.is_active}
-                        className="gap-2"
+                        disabled={runningProcedure === procedure.slug}
+                        className="inline-flex items-center gap-2 px-3.5 py-2 text-sm font-medium rounded-lg bg-gradient-to-r from-emerald-500 to-teal-600 text-white shadow-sm shadow-emerald-500/25 hover:from-emerald-600 hover:to-teal-700 hover:shadow-md hover:shadow-emerald-500/30 transition-all disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:shadow-sm"
                       >
                         {runningProcedure === procedure.slug ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
@@ -593,37 +606,20 @@ function ProceduresContent() {
                           <Play className="w-4 h-4" />
                         )}
                         Run
-                      </Button>
+                      </button>
 
-                      <Button
-                        variant="secondary"
-                        onClick={() => handleToggleActive(procedure)}
-                        disabled={togglingProcedure === procedure.slug}
-                        title={procedure.is_active ? 'Deactivate procedure' : 'Activate procedure'}
-                        className={procedure.is_active ? 'text-amber-600 dark:text-amber-400' : 'text-emerald-600 dark:text-emerald-400'}
-                      >
-                        {togglingProcedure === procedure.slug ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : procedure.is_active ? (
-                          <Pause className="w-4 h-4" />
-                        ) : (
-                          <Play className="w-4 h-4" />
-                        )}
-                      </Button>
-
-                      <Button
-                        variant="secondary"
+                      <button
                         onClick={() => setConfirmDelete(procedure)}
                         disabled={deletingProcedure === procedure.slug}
                         title="Delete procedure"
-                        className="text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                        className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-red-500 dark:text-red-400 border border-red-200 dark:border-red-800/50 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 hover:border-red-300 dark:hover:border-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                       >
                         {deletingProcedure === procedure.slug ? (
                           <Loader2 className="w-4 h-4 animate-spin" />
                         ) : (
                           <Trash2 className="w-4 h-4" />
                         )}
-                      </Button>
+                      </button>
                     </div>
                   </div>
 

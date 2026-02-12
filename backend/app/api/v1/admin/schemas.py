@@ -4,14 +4,13 @@ Admin-related Pydantic models extracted from the monolithic models.py.
 Covers connections, organizations, users, API keys, and system health models.
 """
 
-from typing import Optional, List, Dict, Any
 from datetime import datetime
-from uuid import UUID
-from pydantic import BaseModel, Field, EmailStr
+from typing import Any, Dict, List, Optional
+
+from pydantic import BaseModel, EmailStr, Field
 
 # Shared domain models
 from app.core.models import HealthStatus, LLMConnectionStatus
-
 
 # =========================================================================
 # CONNECTION MODELS

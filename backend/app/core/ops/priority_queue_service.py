@@ -33,10 +33,10 @@ from enum import Enum
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database.models import Asset, Run, ExtractionResult, SamAttachment
+from app.core.database.models import Asset, ExtractionResult, Run, SamAttachment
 
 logger = logging.getLogger("curatore.priority")
 

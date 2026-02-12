@@ -1,13 +1,13 @@
 """Integration tests for the v2 AI Procedure Generator."""
 
 import json
+from dataclasses import dataclass
+from dataclasses import field as dc_field
+from typing import Any, Dict, List, Optional
+from unittest.mock import AsyncMock, MagicMock, patch
+
 import pytest
-from unittest.mock import patch, MagicMock, AsyncMock
-from dataclasses import dataclass, field as dc_field
-from typing import Dict, Any, List, Optional
-
 from app.cwr.procedures.compiler.ai_generator import ProcedureGeneratorService
-
 
 # ---------------------------------------------------------------------------
 # Helper: Create a valid plan JSON that the mock LLM will return
@@ -50,6 +50,26 @@ def _invalid_plan_json_unknown_tool():
     plan = _valid_plan_json()
     plan["steps"][1]["tool"] = "nonexistent_tool"
     return plan
+
+
+def _mock_llm_response(content: str, tool_calls=None):
+    """Create a mock OpenAI-compatible response object."""
+    message = MagicMock()
+    message.content = content
+    message.tool_calls = tool_calls
+    if hasattr(message, "model_dump"):
+        message.model_dump.return_value = {
+            "role": "assistant",
+            "content": content,
+            "tool_calls": None,
+        }
+
+    choice = MagicMock()
+    choice.message = message
+
+    response = MagicMock()
+    response.choices = [choice]
+    return response
 
 
 @dataclass
@@ -164,13 +184,14 @@ class TestProcedureGeneratorService:
 
         service = ProcedureGeneratorService()
 
-        # Mock _call_llm to return valid plan
+        # Mock _call_llm to return valid plan wrapped in response object
         plan = _valid_plan_json()
-        service._call_llm = AsyncMock(return_value=json.dumps(plan))
+        service._call_llm = AsyncMock(return_value=_mock_llm_response(json.dumps(plan)))
 
         result = await service.generate_procedure(
             prompt="Search SAM.gov notices and summarize them",
             profile="workflow_standard",
+            use_planning_tools=False,
         )
 
         assert result["success"] is True
@@ -200,18 +221,19 @@ class TestProcedureGeneratorService:
         valid_plan = _valid_plan_json()
         call_count = 0
 
-        async def mock_call_llm(messages):
+        async def mock_call_llm(messages, tools=None):
             nonlocal call_count
             call_count += 1
             if call_count == 1:
-                return json.dumps(invalid_plan)
-            return json.dumps(valid_plan)
+                return _mock_llm_response(json.dumps(invalid_plan))
+            return _mock_llm_response(json.dumps(valid_plan))
 
         service._call_llm = mock_call_llm
 
         result = await service.generate_procedure(
             prompt="Search notices",
             profile="workflow_standard",
+            use_planning_tools=False,
         )
 
         assert result["success"] is True
@@ -234,11 +256,12 @@ class TestProcedureGeneratorService:
 
         # Always return invalid plan
         invalid_plan = _invalid_plan_json_unknown_tool()
-        service._call_llm = AsyncMock(return_value=json.dumps(invalid_plan))
+        service._call_llm = AsyncMock(return_value=_mock_llm_response(json.dumps(invalid_plan)))
 
         result = await service.generate_procedure(
             prompt="Do something",
             profile="workflow_standard",
+            use_planning_tools=False,
         )
 
         assert result["success"] is False
@@ -261,23 +284,16 @@ class TestProcedureGeneratorService:
 
         service = ProcedureGeneratorService()
 
-        # First return with fences, then clean JSON
+        # Return fenced JSON (should be stripped by parser)
         plan = _valid_plan_json()
         fenced = f"```json\n{json.dumps(plan)}\n```"
-        call_count = 0
 
-        async def mock_call_llm(messages):
-            nonlocal call_count
-            call_count += 1
-            if call_count == 1:
-                return fenced
-            return json.dumps(plan)
-
-        service._call_llm = mock_call_llm
+        service._call_llm = AsyncMock(return_value=_mock_llm_response(fenced))
 
         result = await service.generate_procedure(
             prompt="Search notices",
             profile="workflow_standard",
+            use_planning_tools=False,
         )
 
         # Should succeed on first attempt since fence stripping works
@@ -346,15 +362,153 @@ class TestUserPromptBuilding:
         prompt = service._build_user_prompt("Create a search procedure")
         assert "Create a Typed Plan JSON" in prompt
 
-    def test_refine_with_yaml(self):
-        service = ProcedureGeneratorService()
-        prompt = service._build_user_prompt("Add a logging step", current_yaml="name: Test\nsteps:\n  - name: s1")
-        assert "existing procedure definition" in prompt
-        assert "name: Test" in prompt
-
     def test_refine_with_plan(self):
         service = ProcedureGeneratorService()
         plan = _valid_plan_json()
         prompt = service._build_user_prompt("Add email step", current_plan=plan)
         assert "existing Typed Plan" in prompt
         assert "Test Procedure" in prompt
+
+
+class TestPlanningToolsGovernance:
+    """Test governance-based planning tool selection."""
+
+    def test_planning_tools_exclude_side_effects(self):
+        """Planning tools must exclude functions with side_effects=True."""
+        from app.cwr.procedures.compiler.planning_tools import (
+            PLANNING_ELIGIBLE_CATEGORIES,
+            get_planning_tools_openai_format,
+        )
+        from app.cwr.tools.registry import function_registry
+
+        function_registry.initialize()
+        tools = get_planning_tools_openai_format()
+        tool_names = {t["function"]["name"] for t in tools}
+
+        # Verify no tool with side_effects=True is included
+        for name in tool_names:
+            contract = function_registry.get_contract(name)
+            assert contract is not None, f"Tool '{name}' not found in registry"
+            assert contract.side_effects is False, f"Tool '{name}' has side_effects=True"
+            assert contract.requires_llm is False, f"Tool '{name}' requires LLM"
+            assert contract.category in PLANNING_ELIGIBLE_CATEGORIES, (
+                f"Tool '{name}' has ineligible category '{contract.category}'"
+            )
+
+    def test_planning_tools_include_core_search_tools(self):
+        """Core search/data tools should be auto-selected as planning tools."""
+        from app.cwr.procedures.compiler.planning_tools import get_planning_tools_openai_format
+
+        tools = get_planning_tools_openai_format()
+        tool_names = {t["function"]["name"] for t in tools}
+
+        expected_core = {
+            "discover_data_sources",
+            "discover_metadata",
+            "search_assets",
+            "search_notices",
+            "search_solicitations",
+        }
+        for name in expected_core:
+            assert name in tool_names, f"Expected planning tool '{name}' not found"
+
+    def test_planning_tools_exclude_llm_functions(self):
+        """LLM functions (generate, summarize, etc.) must not be planning tools."""
+        from app.cwr.procedures.compiler.planning_tools import get_planning_tools_openai_format
+
+        tools = get_planning_tools_openai_format()
+        tool_names = {t["function"]["name"] for t in tools}
+
+        llm_tools = {"llm_generate", "llm_summarize", "llm_classify", "llm_extract"}
+        for name in llm_tools:
+            assert name not in tool_names, f"LLM tool '{name}' should not be a planning tool"
+
+    @pytest.mark.asyncio
+    async def test_execute_rejects_side_effect_tool(self):
+        """execute_planning_tool should reject tools with side effects."""
+        from app.cwr.procedures.compiler.planning_tools import execute_planning_tool
+        from app.cwr.tools.context import FunctionContext
+
+        ctx = FunctionContext(session=MagicMock(), organization_id=MagicMock())
+        result = await execute_planning_tool("send_email", {}, ctx)
+        assert result["success"] is False
+        assert "side effects" in result["error"] or "not eligible" in result["error"] or "not found" in result["error"]
+
+    @pytest.mark.asyncio
+    async def test_execute_rejects_unknown_tool(self):
+        """execute_planning_tool should reject unknown function names."""
+        from app.cwr.procedures.compiler.planning_tools import execute_planning_tool
+        from app.cwr.tools.context import FunctionContext
+
+        ctx = FunctionContext(session=MagicMock(), organization_id=MagicMock())
+        result = await execute_planning_tool("nonexistent_function_xyz", {}, ctx)
+        assert result["success"] is False
+        assert "not found" in result["error"]
+
+
+class TestClarificationDetection:
+    """Test the _is_clarification_response method."""
+
+    def test_detects_question_without_json(self):
+        """A response with questions and no JSON is a clarification."""
+        service = ProcedureGeneratorService()
+        content = (
+            "I found multiple folders that could match your request:\n\n"
+            "1. Reuse Material/Past Performances (Growth site, 42 documents)\n"
+            "2. Past Performances (IT Department site, 15 documents)\n\n"
+            "Which folder would you like the procedure to target?"
+        )
+        assert service._is_clarification_response(content) is True
+
+    def test_rejects_json_with_questions(self):
+        """A response with both JSON and questions is NOT a clarification."""
+        service = ProcedureGeneratorService()
+        content = '{"procedure": {"name": "Test?"}, "steps": []}'
+        assert service._is_clarification_response(content) is False
+
+    def test_rejects_pure_json(self):
+        """A pure JSON response is not a clarification."""
+        service = ProcedureGeneratorService()
+        content = json.dumps(_valid_plan_json())
+        assert service._is_clarification_response(content) is False
+
+    def test_rejects_empty_content(self):
+        """Empty content is not a clarification."""
+        service = ProcedureGeneratorService()
+        assert service._is_clarification_response("") is False
+        assert service._is_clarification_response(None) is False
+
+    def test_rejects_statement_without_questions(self):
+        """A statement without question marks is not a clarification."""
+        service = ProcedureGeneratorService()
+        content = "I could not find any matching folders for the specified path."
+        assert service._is_clarification_response(content) is False
+
+    @pytest.mark.asyncio
+    @patch("app.cwr.procedures.compiler.ai_generator.get_tool_contract_pack")
+    @patch("app.cwr.procedures.compiler.ai_generator.llm_service")
+    @patch("app.cwr.procedures.compiler.ai_generator.config_loader")
+    async def test_clarification_returned_in_result(self, mock_config, mock_llm, mock_get_pack):
+        """When the AI asks for clarification, result should include needs_clarification."""
+        mock_llm.is_available = True
+        mock_llm._client = MagicMock()
+        mock_config.get_task_type_config.return_value = MagicMock(model="test", temperature=0.2)
+
+        pack = _make_default_pack()
+        mock_get_pack.return_value = pack
+
+        service = ProcedureGeneratorService()
+
+        clarification_text = "Which folder did you mean? I found two matches."
+        service._call_llm = AsyncMock(return_value=_mock_llm_response(clarification_text))
+
+        result = await service.generate_procedure(
+            prompt="Classify documents in Past Performances",
+            profile="workflow_standard",
+            use_planning_tools=False,
+        )
+
+        assert result["success"] is False
+        assert result.get("needs_clarification") is True
+        assert result.get("clarification_message") == clarification_text
+        assert result.get("error") is None

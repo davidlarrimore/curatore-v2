@@ -12,7 +12,6 @@ Defines the structure for procedure definitions including:
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 
 
 class OnErrorPolicy(str, Enum):
@@ -238,7 +237,7 @@ class ProcedureDefinition:
             triggers=triggers,
             on_error=OnErrorPolicy(data.get("on_error", "fail")),
             tags=data.get("tags", []),
-            is_system=data.get("is_system", False),
+            is_system=data.get("is_system", source_type == "system"),
             source_type=source_type,
             source_path=source_path,
         )
@@ -286,5 +285,6 @@ class BaseProcedure:
 
 # Type hint import
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from app.cwr.tools.context import FunctionContext

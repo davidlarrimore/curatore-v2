@@ -8,17 +8,17 @@ Provides endpoints for:
 - Retrieving input/output schemas separately
 """
 
-from typing import Any, Dict, List, Optional
 import logging
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, HTTPException, Query
 
+from app.api.v1.cwr.schemas import (
+    ToolContractListResponse,
+    ToolContractResponse,
+)
 from app.cwr.tools import initialize_functions
 from app.cwr.tools.registry import function_registry
-from app.api.v1.cwr.schemas import (
-    ToolContractResponse,
-    ToolContractListResponse,
-)
 
 logger = logging.getLogger("curatore.api.contracts")
 

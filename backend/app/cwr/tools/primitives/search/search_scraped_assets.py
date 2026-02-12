@@ -6,21 +6,20 @@ Query and filter scraped assets from web crawl collections using hybrid search.
 Returns results as ContentItem instances for unified handling.
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
-from datetime import datetime, timedelta
 import logging
+from typing import List
+from uuid import UUID
 
-from sqlalchemy import select, and_, or_, func, desc
+from sqlalchemy import and_, desc, select
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
-from ...context import FunctionContext
 from ...content import ContentItem
+from ...context import FunctionContext
 
 logger = logging.getLogger("curatore.functions.search.search_scraped_assets")
 
@@ -189,8 +188,9 @@ class SearchScrapedAssetsFunction(BaseFunction):
 
     async def execute(self, ctx: FunctionContext, **params) -> FunctionResult:
         """Query scraped assets with optional hybrid search."""
-        from app.core.database.models import ScrapedAsset, Asset, ScrapeCollection
         from sqlalchemy.orm import selectinload
+
+        from app.core.database.models import ScrapeCollection, ScrapedAsset
 
         collection_id = params.get("collection_id")
         collection_name = params.get("collection_name")

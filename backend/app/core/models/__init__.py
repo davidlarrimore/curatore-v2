@@ -29,12 +29,11 @@ Version: 2.0.0
 """
 
 from datetime import datetime
-from pathlib import Path
 from enum import Enum
-from typing import Dict, List, Optional, Union, Any
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union
 
 from pydantic import BaseModel, Field, validator
-
 
 # ============================================================================
 # ENUMERATION TYPES
@@ -52,7 +51,7 @@ class ProcessingStatus(str, Enum):
         CANCELLED: Processing was cancelled by user
     """
     PENDING = "pending"
-    PROCESSING = "processing" 
+    PROCESSING = "processing"
     COMPLETED = "completed"
     FAILED = "failed"
     CANCELLED = "cancelled"
@@ -583,7 +582,7 @@ class BatchProcessingResult(BaseModel):
     completed_at: datetime = Field(
         description="Timestamp when batch processing completed"
     )
-    
+
     @validator('successful_files', 'failed_files')
     def validate_file_counts(cls, v, values):
         """Validate that file counts are consistent."""
@@ -1012,7 +1011,7 @@ def validate_document_id(document_id: str) -> bool:
     """
     if not document_id or not isinstance(document_id, str):
         return False
-    
+
     # Allow alphanumeric characters, hyphens, and underscores
     return all(c.isalnum() or c in '-_' for c in document_id) and len(document_id) <= 100
 
@@ -1032,15 +1031,15 @@ def validate_filename(filename: str) -> bool:
     """
     if not filename or not isinstance(filename, str):
         return False
-    
+
     # Check for path traversal attempts
     if '..' in filename or '/' in filename or '\\' in filename:
         return False
-    
+
     # Check filename length
     if len(filename) > 255:
         return False
-    
+
     # Check for valid characters (basic validation)
     invalid_chars = '<>:"|?*'
     return not any(char in filename for char in invalid_chars)

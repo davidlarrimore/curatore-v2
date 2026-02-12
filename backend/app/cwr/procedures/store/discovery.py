@@ -16,15 +16,14 @@ Also cleans up stale system procedures where the source file no longer exists.
 
 import logging
 import os
-from typing import Dict, List, Optional
-from uuid import UUID
 from datetime import datetime
+from typing import Dict, Optional
+from uuid import UUID
 
 from croniter import croniter
-from sqlalchemy import select, delete
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .definitions import ProcedureDefinition
 from .loader import procedure_loader
 
 logger = logging.getLogger("curatore.procedures.discovery")
@@ -115,7 +114,13 @@ class ProcedureDiscoveryService:
                         results["updated"] += 1
                         logger.info(f"Updated procedure: {slug}")
                     else:
-                        results["unchanged"] += 1
+                        # Reconcile metadata not tracked in the definition dict
+                        if existing.is_system != definition.is_system:
+                            existing.is_system = definition.is_system
+                            results["updated"] += 1
+                            logger.info(f"Reconciled is_system for procedure: {slug}")
+                        else:
+                            results["unchanged"] += 1
                 else:
                     # Create new procedure
                     procedure = Procedure(

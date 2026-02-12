@@ -23,35 +23,34 @@ Usage:
         result = await handler(session, run, config)
 """
 
-import asyncio
 import logging
 from datetime import datetime, timedelta
 from typing import Any, Callable, Dict, List, Optional
 from uuid import UUID, uuid4
 
-from sqlalchemy import select, func, and_, or_, delete
+from sqlalchemy import and_, delete, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database.models import (
-    Asset,
-    ExtractionResult,
+    AgForecast,
+    ApfsForecast,
     Artifact,
+    Asset,
+    AssetVersion,
+    ExtractionResult,
+    ForecastSync,
+    Organization,
     Run,
     RunLogEvent,
-    Organization,
-    SharePointSyncConfig,
-    SharePointSyncedDocument,
-    AssetVersion,
-    SamSearch,
-    SamSolicitation,
-    SamNotice,
     SalesforceAccount,
     SalesforceContact,
     SalesforceOpportunity,
-    AgForecast,
-    ApfsForecast,
+    SamNotice,
+    SamSearch,
+    SamSolicitation,
+    SharePointSyncConfig,
+    SharePointSyncedDocument,
     StateForecast,
-    ForecastSync,
 )
 
 logger = logging.getLogger("curatore.services.maintenance")
@@ -416,8 +415,8 @@ async def handle_orphan_detection(
 
                 # Auto-fix: Delete orphan SharePoint assets and their files
                 if auto_fix:
-                    from app.core.storage.minio_service import get_minio_service
                     from app.core.search.pg_index_service import pg_index_service
+                    from app.core.storage.minio_service import get_minio_service
                     minio = get_minio_service()
 
                     for asset in orphan_sp_list:
@@ -792,11 +791,11 @@ async def handle_search_reindex(
     Returns:
         Dict with reindex statistics per phase
     """
-    from app.core.shared.config_loader import config_loader
+    from app.config import settings
     from app.core.search.embedding_service import embedding_service
     from app.core.search.pg_index_service import pg_index_service
+    from app.core.shared.config_loader import config_loader
     from app.core.shared.run_service import run_service
-    from app.config import settings
 
     run_id = run.id
 

@@ -5,20 +5,17 @@ Tests connection type registry, config validation, health testing, and CRUD oper
 for runtime-configurable service connections.
 """
 
-import pytest
-from unittest.mock import patch, AsyncMock, MagicMock
-from typing import Dict, Any
-from pydantic import ValidationError
-import httpx
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
+import pytest
 from app.core.auth.connection_service import (
     ConnectionService,
-    ConnectionTypeRegistry,
-    BaseConnectionType,
-    MicrosoftGraphConnectionType,
-    LLMConnectionType,
-    ExtractionConnectionType,
     ConnectionTestResult,
+    ConnectionTypeRegistry,
+    ExtractionConnectionType,
+    LLMConnectionType,
+    MicrosoftGraphConnectionType,
     connection_service,
 )
 

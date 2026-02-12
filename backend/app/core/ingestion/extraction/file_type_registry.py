@@ -20,8 +20,8 @@ Usage:
     docling_formats = file_type_registry.get_engine_formats('docling')
 """
 
-from typing import Dict, List, Optional, Set, Tuple
 import logging
+from typing import Dict, List, Optional, Set, Tuple
 
 logger = logging.getLogger(__name__)
 

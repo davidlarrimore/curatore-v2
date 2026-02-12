@@ -9,17 +9,12 @@ Registered at /api/v1/data/metadata/ to begin the /data namespace migration.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import List
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
 
-from app.core.database.models import User
-from app.dependencies import get_current_user
-from app.core.shared.database_service import database_service
-from app.core.search.pg_search_service import pg_search_service
-from app.core.metadata.registry_service import metadata_registry_service
 from app.api.v1.data.schemas import (
     DataSourceTypeResponse,
     DataSourceTypeUpdateRequest,
@@ -42,7 +37,12 @@ from app.api.v1.data.schemas import (
     MetadataFieldUpdateRequest,
     MetadataNamespaceResponse,
 )
+from app.core.database.models import User
 from app.core.metadata.facet_reference_service import facet_reference_service
+from app.core.metadata.registry_service import metadata_registry_service
+from app.core.search.pg_search_service import pg_search_service
+from app.core.shared.database_service import database_service
+from app.dependencies import get_current_user
 
 logger = logging.getLogger("curatore.api.metadata")
 
@@ -737,6 +737,25 @@ async def reject_reference_value(
         return {"status": "rejected", "id": value_id}
 
 
+@router.post("/reference-data/export-baseline", response_model=dict)
+async def export_reference_baseline(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Export current DB reference data (active values + aliases) back to the
+    YAML baseline file (``registry/reference_data.yaml``).
+
+    This allows admins to persist curated reference data to version control.
+    """
+    async with database_service.get_session() as session:
+        try:
+            result = await facet_reference_service.export_to_yaml(session)
+            return result
+        except Exception as e:
+            logger.error(f"Failed to export reference data to YAML: {e}")
+            raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+
 @router.get("/facets/pending-suggestions", response_model=FacetPendingSuggestionsResponse)
 async def get_pending_suggestions(
     current_user: User = Depends(get_current_user),
@@ -815,6 +834,50 @@ async def update_data_source_type(
             return result
         except ValueError as e:
             raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/facets/export-baseline", response_model=dict)
+async def export_facets_baseline(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Export global facet definitions from DB back to the YAML baseline file
+    (``registry/facets.yaml``).
+
+    This allows admins to persist curated facet configurations to version control.
+    """
+    async with database_service.get_session() as session:
+        try:
+            result = await metadata_registry_service.export_facets_to_yaml(session)
+            return result
+        except Exception as e:
+            logger.error(f"Failed to export facets to YAML: {e}")
+            raise HTTPException(status_code=500, detail=f"Export failed: {str(e)}")
+
+
+@router.post("/rebuild-from-yaml", response_model=dict)
+async def rebuild_from_yaml(
+    current_user: User = Depends(get_current_user),
+):
+    """
+    Flush and rebuild the entire metadata catalog in the database from YAML
+    baseline files.
+
+    This re-reads all YAML files (fields, facets, reference data) and
+    re-seeds the global baseline records. Org-level overrides are untouched.
+
+    .. todo:: Gate behind ``org_admin`` role once role-based access control
+       is implemented. Currently any authenticated user can trigger this.
+    """
+    # TODO: Require org_admin role once RBAC is implemented
+    async with database_service.get_session() as session:
+        try:
+            result = await metadata_registry_service.rebuild_from_yaml(session)
+            await session.commit()
+            return result
+        except Exception as e:
+            logger.error(f"Failed to rebuild metadata from YAML: {e}")
+            raise HTTPException(status_code=500, detail=f"Rebuild failed: {str(e)}")
 
 
 @router.post("/cache/invalidate")

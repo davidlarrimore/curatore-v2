@@ -19,12 +19,12 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Type, Union
 from uuid import UUID
 
-from sqlalchemy import select, and_, or_, desc, func
+from sqlalchemy import desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from .content_item import ContentItem
-from .registry import content_type_registry, CONTENT_TYPE_REGISTRY
+from .registry import content_type_registry
 
 logger = logging.getLogger("curatore.functions.content.service")
 
@@ -72,13 +72,13 @@ class ContentService:
         try:
             from app.core.database.models import (
                 Asset,
-                SamSolicitation,
-                SamNotice,
-                ScrapedAsset,
-                ScrapeCollection,
                 SalesforceAccount,
                 SalesforceContact,
                 SalesforceOpportunity,
+                SamNotice,
+                SamSolicitation,
+                ScrapeCollection,
+                ScrapedAsset,
             )
 
             models = {
@@ -196,13 +196,13 @@ class ContentService:
         # Add eager loading for children
         if include_children:
             if item_type == "solicitation":
-                from app.core.database.models import SamSolicitation, SamAttachment
+                from app.core.database.models import SamAttachment, SamSolicitation
                 query = query.options(
                     selectinload(SamSolicitation.notices),
                     selectinload(SamSolicitation.attachments).selectinload(SamAttachment.asset),
                 )
             elif item_type == "notice":
-                from app.core.database.models import SamNotice, SamAttachment
+                from app.core.database.models import SamAttachment, SamNotice
                 query = query.options(
                     selectinload(SamNotice.attachments).selectinload(SamAttachment.asset),
                 )

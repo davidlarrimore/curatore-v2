@@ -13,9 +13,9 @@ This migration adds:
 - pipeline_triggers.trigger_count: Track how many times a trigger has fired
 """
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 # revision identifiers, used by Alembic
 revision = '20260203_add_run_groups'

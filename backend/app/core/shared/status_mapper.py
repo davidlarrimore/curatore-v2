@@ -7,10 +7,10 @@ canonical unified status.
 """
 
 from enum import Enum
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING, Optional
 
 if TYPE_CHECKING:
-    from app.core.database.models import Asset, Run, ExtractionResult
+    from app.core.database.models import Asset, ExtractionResult, Run
 
 
 class UnifiedStatus(str, Enum):

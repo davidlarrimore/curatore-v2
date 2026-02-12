@@ -1,10 +1,9 @@
 # Contract Converter Tests
 """Tests for ToolContract to MCP Tool conversion."""
 
-import pytest
 import mcp.types as types
-from app.services.contract_converter import ContractConverter
 from app.models.mcp import MCPTool
+from app.services.contract_converter import ContractConverter
 
 
 class TestContractConverter:
@@ -166,3 +165,152 @@ class TestSDKToolConversion:
         sdk_tool = ContractConverter.contract_to_sdk_tool(sample_contract)
 
         assert "Requires LLM" in sdk_tool.description
+
+
+class TestProcedureOnlyStripping:
+    """Test that x-procedure-only properties are stripped for MCP exposure."""
+
+    def _make_contract_with_items(self):
+        """Create a contract with x-procedure-only items property."""
+        return {
+            "name": "llm_summarize",
+            "description": "Summarize text",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The text to summarize",
+                    },
+                    "style": {
+                        "type": "string",
+                        "default": "paragraph",
+                    },
+                    "items": {
+                        "type": "array",
+                        "items": {"type": "object"},
+                        "description": "Collection of items (procedure only)",
+                        "x-procedure-only": True,
+                    },
+                    "chunk_size": {
+                        "type": "integer",
+                        "default": 8000,
+                        "x-procedure-only": True,
+                    },
+                },
+                "required": ["text"],
+            },
+            "side_effects": False,
+            "requires_llm": True,
+        }
+
+    def test_to_mcp_tool_strips_procedure_only(self):
+        """Test that to_mcp_tool removes x-procedure-only properties."""
+        contract = self._make_contract_with_items()
+        tool = ContractConverter.to_mcp_tool(contract)
+
+        assert "text" in tool.inputSchema["properties"]
+        assert "style" in tool.inputSchema["properties"]
+        assert "items" not in tool.inputSchema["properties"]
+        assert "chunk_size" not in tool.inputSchema["properties"]
+
+    def test_contract_to_sdk_tool_strips_procedure_only(self):
+        """Test that contract_to_sdk_tool removes x-procedure-only properties."""
+        contract = self._make_contract_with_items()
+        sdk_tool = ContractConverter.contract_to_sdk_tool(contract)
+
+        assert "text" in sdk_tool.inputSchema["properties"]
+        assert "items" not in sdk_tool.inputSchema["properties"]
+        assert "chunk_size" not in sdk_tool.inputSchema["properties"]
+
+    def test_stripping_does_not_mutate_original(self):
+        """Test that stripping creates a copy and doesn't modify the original."""
+        contract = self._make_contract_with_items()
+        original_props = set(contract["input_schema"]["properties"].keys())
+
+        ContractConverter.to_mcp_tool(contract)
+
+        # Original contract should be unchanged
+        assert set(contract["input_schema"]["properties"].keys()) == original_props
+        assert "items" in contract["input_schema"]["properties"]
+
+    def test_required_list_cleaned(self):
+        """Test that required list is updated when procedure-only props removed."""
+        contract = self._make_contract_with_items()
+        # Add items to required (unusual but should be handled)
+        contract["input_schema"]["required"] = ["text", "items"]
+
+        tool = ContractConverter.to_mcp_tool(contract)
+
+        assert tool.inputSchema["required"] == ["text"]
+
+    def test_no_procedure_only_passes_through(self, sample_contract):
+        """Test that contracts without x-procedure-only pass through unchanged."""
+        tool = ContractConverter.to_mcp_tool(sample_contract)
+
+        assert tool.inputSchema["properties"] == sample_contract["input_schema"]["properties"]
+        assert tool.inputSchema["required"] == sample_contract["input_schema"]["required"]
+
+    def test_null_defaults_stripped(self):
+        """Test that 'default': null is stripped from properties."""
+        contract = {
+            "name": "llm_summarize",
+            "description": "Summarize text",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "text": {
+                        "type": "string",
+                        "description": "The text to summarize",
+                    },
+                    "focus": {
+                        "type": "string",
+                        "description": "What to focus on",
+                        "default": None,
+                    },
+                    "model": {
+                        "type": "string",
+                        "description": "Model to use",
+                        "default": None,
+                    },
+                    "style": {
+                        "type": "string",
+                        "description": "Summary style",
+                        "default": "paragraph",
+                    },
+                },
+                "required": ["text"],
+            },
+            "side_effects": False,
+        }
+        tool = ContractConverter.to_mcp_tool(contract)
+
+        # "default": null should be removed
+        assert "default" not in tool.inputSchema["properties"]["focus"]
+        assert "default" not in tool.inputSchema["properties"]["model"]
+        # Real defaults should be preserved
+        assert tool.inputSchema["properties"]["style"]["default"] == "paragraph"
+        # Non-default fields should be unaffected
+        assert "default" not in tool.inputSchema["properties"]["text"]
+
+    def test_null_defaults_not_mutate_original(self):
+        """Test that stripping null defaults doesn't modify the original contract."""
+        contract = {
+            "name": "test",
+            "description": "Test",
+            "input_schema": {
+                "type": "object",
+                "properties": {
+                    "focus": {
+                        "type": "string",
+                        "default": None,
+                    },
+                },
+            },
+            "side_effects": False,
+        }
+        ContractConverter.to_mcp_tool(contract)
+
+        # Original should still have "default": None
+        assert "default" in contract["input_schema"]["properties"]["focus"]
+        assert contract["input_schema"]["properties"]["focus"]["default"] is None

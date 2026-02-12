@@ -14,6 +14,9 @@ import {
 } from '@/lib/api'
 import { formatDateTime, formatTimeAgo } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
+import { JobProgressPanelByType } from '@/components/ui/JobProgressPanel'
+import { useJobProgressByType } from '@/lib/useJobProgress'
+import { useActiveJobs } from '@/lib/context-shims'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import {
   RefreshCw,
@@ -93,6 +96,10 @@ function getRunStatusColor(status: string): string {
 function PipelinesContent() {
   const router = useRouter()
   const { token } = useAuth()
+  const { addJob } = useActiveJobs()
+  const { isActive: hasRunningPipelines } = useJobProgressByType('pipeline', {
+    onComplete: () => loadData(true),
+  })
 
   const [pipelines, setPipelines] = useState<PipelineListItem[]>([])
   const [isLoading, setIsLoading] = useState(true)
@@ -191,6 +198,17 @@ function PipelinesContent() {
       const result = await pipelinesApi.runPipeline(token, slug, {}, false)
       setSuccessMessage(`Pipeline ${slug} started (Run ID: ${result.pipeline_run_id || result.run_id})`)
       setTimeout(() => setSuccessMessage(''), 5000)
+      const runId = result.pipeline_run_id || result.run_id
+      if (runId) {
+        const pipeline = pipelines.find(p => p.slug === slug)
+        addJob({
+          runId,
+          jobType: 'pipeline',
+          displayName: pipeline?.name || slug,
+          resourceId: slug,
+          resourceType: 'pipeline',
+        })
+      }
       // Refresh to show new run
       if (expandedPipeline === slug) {
         const runsData = await pipelinesApi.listRuns(token, slug, { limit: 5 })
@@ -428,6 +446,13 @@ function PipelinesContent() {
               {filteredPipelines.length} pipeline{filteredPipelines.length !== 1 ? 's' : ''}
             </p>
           </div>
+
+          {/* Active pipeline jobs */}
+          <JobProgressPanelByType
+            jobType="pipeline"
+            variant="compact"
+            className="px-6 py-3 space-y-2 border-b border-gray-200 dark:border-gray-700"
+          />
 
           {filteredPipelines.length === 0 ? (
             <div className="p-12 text-center">

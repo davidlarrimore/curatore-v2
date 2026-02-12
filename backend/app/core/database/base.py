@@ -5,9 +5,10 @@ SQLAlchemy base class and session management.
 Provides the declarative base for all models and async session factory.
 """
 
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.ext.asyncio import AsyncSession
 from typing import AsyncGenerator
+
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.ext.declarative import declarative_base
 
 # Declarative base for all models
 Base = declarative_base()

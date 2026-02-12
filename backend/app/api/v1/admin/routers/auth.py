@@ -30,12 +30,12 @@ from pydantic import BaseModel, EmailStr, Field
 from sqlalchemy import select
 
 from app.config import settings
-from app.core.database.models import Organization, User
-from app.dependencies import get_current_user
 from app.core.auth.auth_service import auth_service
-from app.core.shared.database_service import database_service
-from app.core.auth.verification_service import verification_service
 from app.core.auth.password_reset_service import password_reset_service
+from app.core.auth.verification_service import verification_service
+from app.core.database.models import Organization, User
+from app.core.shared.database_service import database_service
+from app.dependencies import get_current_user
 
 # Initialize router
 router = APIRouter(prefix="/auth", tags=["Authentication"])

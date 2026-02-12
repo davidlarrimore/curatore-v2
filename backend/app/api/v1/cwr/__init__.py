@@ -2,10 +2,10 @@
 from fastapi import APIRouter
 
 from .routers import (
-    functions,
-    procedures,
-    pipelines,
     contracts,
+    functions,
+    pipelines,
+    procedures,
 )
 
 router = APIRouter(prefix="/cwr", tags=["CWR"])

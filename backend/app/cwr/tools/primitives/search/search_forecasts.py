@@ -6,14 +6,12 @@ Searches AG, APFS, and State Department forecasts with hybrid search (keyword + 
 Leverages PgSearchService for consistent search modes across all search functions.
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
 import logging
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext

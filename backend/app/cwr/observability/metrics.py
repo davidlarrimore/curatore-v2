@@ -7,11 +7,11 @@ and success rates.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
-from uuid import UUID
 from datetime import datetime, timedelta
+from typing import Any, Dict, List
+from uuid import UUID
 
-from sqlalchemy import select, and_, func, desc, text
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database.models import Run

@@ -27,9 +27,8 @@ Usage:
 import argparse
 import asyncio
 import logging
-import sys
 
-from sqlalchemy import select, delete
+from sqlalchemy import delete, select
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
 logger = logging.getLogger(__name__)
@@ -37,7 +36,7 @@ logger = logging.getLogger(__name__)
 
 async def fix_delta_sync_paths(dry_run: bool = True):
     """Find and fix assets with incorrect delta sync paths."""
-    from app.core.database.models import Asset, SharePointSyncedDocument, ExtractionResult
+    from app.core.database.models import Asset, ExtractionResult, SharePointSyncedDocument
     from app.core.shared.database_service import database_service
     from app.core.storage.minio_service import get_minio_service
 

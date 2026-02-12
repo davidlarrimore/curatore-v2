@@ -5,13 +5,13 @@ Send Email function - Send email notifications.
 Sends emails using configured email service.
 """
 
-from typing import Any, Dict, List, Optional, Union
 import logging
+from typing import Any, List
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext

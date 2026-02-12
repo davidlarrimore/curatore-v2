@@ -16,13 +16,11 @@ Usage:
     python -m app.commands.fix_orphaned_assets --limit 100
 """
 
-import asyncio
 import argparse
+import asyncio
 import logging
-import sys
-from uuid import UUID
 
-from sqlalchemy import select, and_, text
+from sqlalchemy import and_, select
 
 # Setup logging
 logging.basicConfig(

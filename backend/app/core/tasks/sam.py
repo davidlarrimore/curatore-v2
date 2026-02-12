@@ -5,21 +5,18 @@ Handles SAM.gov data pulls, solicitation/notice refresh, attachment downloads,
 summarization, and queued request processing.
 """
 import asyncio
-import json
 import logging
-import re
 import uuid
-from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
+from datetime import datetime
+from typing import Any, Dict, Optional
 
 from celery import shared_task
-from sqlalchemy import select, and_, update
+from sqlalchemy import select
 
 from app.celery_app import app as celery_app
-from app.core.shared.database_service import database_service
-from app.core.shared.config_loader import config_loader
 from app.config import settings
-
+from app.core.shared.config_loader import config_loader
+from app.core.shared.database_service import database_service
 
 # Logger for tasks
 logger = logging.getLogger("curatore.tasks")
@@ -147,8 +144,8 @@ async def _reindex_sam_organization_async(
     Returns:
         Dict with reindex results
     """
-    from app.core.search.pg_index_service import pg_index_service
     from app.connectors.sam_gov.sam_service import sam_service
+    from app.core.search.pg_index_service import pg_index_service
 
     logger = logging.getLogger("curatore.tasks.sam_indexing")
 
@@ -266,12 +263,13 @@ def sam_pull_task(
             - attachment_downloads: Attachment download results (if auto_download enabled)
             - errors: List of error details
     """
+    from sqlalchemy import select
+
     from app.connectors.sam_gov.sam_pull_service import sam_pull_service
     from app.connectors.sam_gov.sam_service import sam_service
-    from app.core.shared.run_group_service import run_group_service
+    from app.core.database.models import Run
     from app.core.ops.heartbeat_service import heartbeat_service
-    from app.core.database.models import Run, SamSearch
-    from sqlalchemy import select
+    from app.core.shared.run_group_service import run_group_service
 
     logger = logging.getLogger("curatore.sam")
     logger.info(f"Starting SAM pull task for search {search_id}" + (f" (run_id={run_id})" if run_id else ""))
@@ -469,6 +467,7 @@ def sam_pull_task(
 
     except Exception as e:
         logger.error(f"SAM pull task failed: {e}")
+        error_msg = str(e)
 
         # Update Run status to failed if we have a run_uuid
         if run_uuid:
@@ -483,7 +482,7 @@ def sam_pull_task(
                         if run:
                             run.status = "failed"
                             run.completed_at = datetime.utcnow()
-                            run.error_message = str(e)
+                            run.error_message = error_msg
                             await session.commit()
                 asyncio.run(_mark_failed())
             except Exception as inner_e:
@@ -524,9 +523,8 @@ def sam_refresh_solicitation_task(
             - error: Error message (if failed)
     """
     from app.connectors.sam_gov.sam_pull_service import sam_pull_service
-    from app.connectors.sam_gov.sam_service import sam_service
-    from app.core.shared.run_log_service import run_log_service
     from app.core.database.models import Run
+    from app.core.shared.run_log_service import run_log_service
 
     logger = logging.getLogger("curatore.sam")
     logger.info(f"Starting SAM refresh task for solicitation {solicitation_id}")
@@ -653,6 +651,7 @@ def sam_refresh_solicitation_task(
 
     except Exception as e:
         logger.error(f"SAM refresh task failed: {e}")
+        error_msg = str(e)
 
         # Update Run to failed
         if run_uuid:
@@ -666,7 +665,7 @@ def sam_refresh_solicitation_task(
                         if run:
                             run.status = "failed"
                             run.completed_at = datetime.utcnow()
-                            run.error_message = str(e)
+                            run.error_message = error_msg
                             await session.commit()
                 asyncio.run(_mark_failed())
             except Exception as inner_e:
@@ -703,8 +702,8 @@ def sam_refresh_notice_task(
     """
     from app.connectors.sam_gov.sam_pull_service import sam_pull_service
     from app.connectors.sam_gov.sam_service import sam_service
+    from app.core.database.models import Run
     from app.core.shared.run_log_service import run_log_service
-    from app.core.database.models import Run, SamNotice
 
     logger = logging.getLogger("curatore.sam")
     logger.info(f"Starting SAM refresh task for notice {notice_id}")
@@ -896,6 +895,7 @@ def sam_refresh_notice_task(
 
     except Exception as e:
         logger.error(f"SAM notice refresh task failed: {e}")
+        error_msg = str(e)
 
         # Update Run to failed
         if run_uuid:
@@ -909,7 +909,7 @@ def sam_refresh_notice_task(
                         if run:
                             run.status = "failed"
                             run.completed_at = datetime.utcnow()
-                            run.error_message = str(e)
+                            run.error_message = error_msg
                             await session.commit()
                 asyncio.run(_mark_failed())
             except Exception as inner_e:
@@ -1142,8 +1142,9 @@ def sam_auto_summarize_task(
             - summary_preview: First 200 chars of summary (if generated)
     """
     from datetime import datetime
-    from app.connectors.sam_gov.sam_summarization_service import sam_summarization_service
+
     from app.connectors.sam_gov.sam_service import sam_service
+    from app.connectors.sam_gov.sam_summarization_service import sam_summarization_service
 
     logger = logging.getLogger("curatore.sam")
     logger.info(f"Starting SAM auto-summarize task for solicitation {solicitation_id}")
@@ -1152,8 +1153,8 @@ def sam_auto_summarize_task(
         async def _check_and_boost_pending_assets():
             """Check for pending assets and boost their priority using the priority queue service."""
             from app.core.ops.priority_queue_service import (
-                priority_queue_service,
                 BoostReason,
+                priority_queue_service,
             )
 
             async with database_service.get_session() as session:
@@ -1262,6 +1263,7 @@ def sam_auto_summarize_task(
 
                     # Also update the description field if we have a summary
                     from sqlalchemy import update
+
                     from app.core.database.models import SamSolicitation
                     await session.execute(
                         update(SamSolicitation)
@@ -1341,10 +1343,11 @@ def sam_auto_summarize_notice_task(
             - summary_preview: First 200 chars of summary (if generated)
     """
     from datetime import datetime
+
     from app.connectors.sam_gov.sam_service import sam_service
-    from app.core.llm.llm_service import LLMService
     from app.core.auth.connection_service import connection_service
-    from app.core.database.models import SamNotice, SamAttachment, ExtractionResult
+    from app.core.database.models import ExtractionResult
+    from app.core.llm.llm_service import LLMService
 
     logger = logging.getLogger("curatore.sam")
     logger.info(f"Starting SAM auto-summarize task for notice {notice_id}")
@@ -1369,7 +1372,7 @@ def sam_auto_summarize_notice_task(
 
                     if pending_assets:
                         # Check if any extractions are still pending
-                        from sqlalchemy import select, and_
+                        from sqlalchemy import and_, select
                         pending_extractions = await session.execute(
                             select(ExtractionResult)
                             .where(

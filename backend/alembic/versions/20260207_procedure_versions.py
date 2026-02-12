@@ -11,7 +11,6 @@ Create Date: 2026-02-07
 import sqlalchemy as sa
 from alembic import op
 
-
 # revision identifiers
 revision = "procedure_versions"
 down_revision = "namespace_source_metadata"

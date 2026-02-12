@@ -1,9 +1,9 @@
 # Core FastAPI
-fastapi==0.115.0
+fastapi==0.115.12
 uvicorn[standard]==0.30.6
 pydantic==2.8.2
 pydantic-settings==2.5.2
-python-multipart==0.0.6
+python-multipart==0.0.22
 aiofiles>=0.24.0
 python-dotenv>=1.0.0
 email-validator>=2.1.0  # For Pydantic EmailStr validation
@@ -39,7 +39,7 @@ psycopg2-binary==2.9.9  # PostgreSQL sync fallback
 # Authentication & Security
 pyjwt==2.8.0
 bcrypt==4.1.2
-python-jose[cryptography]==3.3.0
+python-jose[cryptography]==3.4.0
 passlib[bcrypt]==1.7.4
 
 # Email

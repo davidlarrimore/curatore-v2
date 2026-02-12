@@ -20,23 +20,22 @@ Security:
 
 import logging
 from datetime import datetime, timedelta
-from typing import List
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import select, func
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 
 from app.api.v1.admin.schemas import (
-    ApiKeyResponse,
-    ApiKeyListResponse,
     ApiKeyCreateRequest,
     ApiKeyCreateResponse,
+    ApiKeyListResponse,
+    ApiKeyResponse,
     ApiKeyUpdateRequest,
 )
-from app.core.database.models import ApiKey, User
-from app.dependencies import get_current_user
 from app.core.auth.auth_service import auth_service
+from app.core.database.models import ApiKey, User
 from app.core.shared.database_service import database_service
+from app.dependencies import get_current_user
 
 # Initialize router
 router = APIRouter(prefix="/api-keys", tags=["API Keys"])

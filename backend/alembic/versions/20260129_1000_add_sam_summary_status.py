@@ -17,8 +17,8 @@ Revises: phase5_scheduling
 Create Date: 2026-01-29 10:00:00.000000
 
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy import text
 
 # revision identifiers, used by Alembic.

@@ -27,7 +27,7 @@ import time
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Literal, Optional, Tuple
+from typing import Literal, Optional
 
 logger = logging.getLogger("curatore.services.triage")
 

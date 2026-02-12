@@ -1,13 +1,11 @@
 """Tests for the Plan Validator."""
 
-import pytest
-from unittest.mock import MagicMock
 from dataclasses import dataclass, field
-from typing import Dict, Any, Optional, List
+from typing import Any, Dict, List
+from unittest.mock import MagicMock
 
 from app.cwr.contracts.validation import ValidationErrorCode
 from app.cwr.procedures.compiler.plan_validator import PlanValidator
-
 
 # ---------------------------------------------------------------------------
 # Helpers to build mock contract packs

@@ -7,8 +7,8 @@ Create Date: 2026-02-01 20:00:00.000000
 Adds indexed_at timestamp to track when assets were indexed to pgvector search.
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic
 revision = '20260201_2000'

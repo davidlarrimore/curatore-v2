@@ -24,15 +24,14 @@ from typing import Any, Dict, Optional
 from uuid import UUID
 
 import jwt
-from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect, Depends
+from fastapi import APIRouter, Query, WebSocket, WebSocketDisconnect
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
 from app.core.auth.auth_service import auth_service
 from app.core.ops.websocket_manager import websocket_manager
+from app.core.shared.database_service import database_service
 from app.core.shared.pubsub_service import pubsub_service
 from app.core.shared.run_service import run_service
-from app.core.shared.database_service import database_service
 
 logger = logging.getLogger("curatore.websocket")
 

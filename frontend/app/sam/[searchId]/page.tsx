@@ -4,6 +4,8 @@ import { useState, useEffect, use, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
 import { useActiveJobs } from '@/lib/context-shims'
+import { useJobProgress } from '@/lib/useJobProgress'
+import { JobProgressPanel } from '@/components/ui/JobProgressPanel'
 import { samApi, SamSearch, SamPullHistoryItem } from '@/lib/api'
 import { formatDate as formatDateUtil, formatCompact, formatDuration as formatDurationUtil } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
@@ -60,6 +62,15 @@ function SamSearchDetailContent({ params }: PageProps) {
   const [error, setError] = useState('')
   const [isPulling, setIsPulling] = useState(false)
   const [showEditForm, setShowEditForm] = useState(false)
+
+  // Track pull jobs and auto-refresh on completion
+  const { isActive: isPullJobActive } = useJobProgress('sam_search', searchId, {
+    onComplete: () => {
+      loadSearch()
+      loadPullHistory()
+      setIsPulling(false)
+    },
+  })
 
   // Pagination
   const [page, setPage] = useState(1)
@@ -138,16 +149,7 @@ function SamSearchDetailContent({ params }: PageProps) {
       } else {
         toast.success(`Pull completed: ${result.new_solicitations || 0} new solicitations`)
       }
-      // Refresh periodically to show results
-      setTimeout(() => {
-        loadSearch()
-        loadPullHistory()
-      }, 3000)
-      setTimeout(() => {
-        loadSearch()
-        loadPullHistory()
-        setIsPulling(false)
-      }, 10000)
+      // WebSocket hook handles refresh on job completion
     } catch (err: any) {
       setError(err.message || 'Failed to trigger pull')
       toast.error(err.message || 'Failed to trigger pull')
@@ -305,10 +307,10 @@ function SamSearchDetailContent({ params }: PageProps) {
               </Button>
               <Button
                 onClick={handleTriggerPull}
-                disabled={isPulling}
+                disabled={isPulling || isPullJobActive}
                 className="gap-2 shadow-lg shadow-blue-500/25"
               >
-                {isPulling ? (
+                {(isPulling || isPullJobActive) ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Pulling...
@@ -342,6 +344,13 @@ function SamSearchDetailContent({ params }: PageProps) {
             </div>
           </div>
         )}
+
+        {/* Job Progress */}
+        <JobProgressPanel
+          resourceType="sam_search"
+          resourceId={searchId}
+          className="mb-8"
+        />
 
         {/* Stats Cards */}
         <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">

@@ -12,7 +12,6 @@ Create Date: 2026-02-10
 import sqlalchemy as sa
 from alembic import op
 
-
 # revision identifiers
 revision = "facet_reference_data"
 down_revision = "data_source_overrides"

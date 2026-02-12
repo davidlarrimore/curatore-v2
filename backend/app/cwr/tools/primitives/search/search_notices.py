@@ -6,21 +6,20 @@ Query and filter SAM.gov notices (amendments, standalone notices) using hybrid s
 Returns results as ContentItem instances for unified handling.
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
-from datetime import datetime, timedelta
 import logging
+from datetime import datetime, timedelta
+from typing import List, Optional
 
-from sqlalchemy import select, and_, or_, func, desc
+from sqlalchemy import and_, desc, or_, select
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
-from ...context import FunctionContext
 from ...content import ContentItem
+from ...context import FunctionContext
 
 logger = logging.getLogger("curatore.functions.search.search_notices")
 
@@ -214,6 +213,7 @@ class SearchNoticesFunction(BaseFunction):
     async def execute(self, ctx: FunctionContext, **params) -> FunctionResult:
         """Query notices with optional hybrid search."""
         from sqlalchemy.orm import selectinload
+
         from app.core.database.models import SamNotice, SamSolicitation
 
         keyword = params.get("keyword")

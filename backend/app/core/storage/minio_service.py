@@ -8,14 +8,14 @@ Integrated directly into backend (no separate microservice needed).
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
+from functools import lru_cache
 from io import BytesIO
 from typing import BinaryIO, Dict, List, Optional, Tuple
-from functools import lru_cache
 
 from minio import Minio
 from minio.commonconfig import ENABLED
 from minio.error import S3Error
-from minio.lifecycleconfig import LifecycleConfig, Rule, Expiration
+from minio.lifecycleconfig import Expiration, LifecycleConfig, Rule
 
 from app.config import settings
 from app.core.shared.config_loader import config_loader

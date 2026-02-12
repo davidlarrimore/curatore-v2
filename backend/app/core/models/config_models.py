@@ -9,9 +9,10 @@ Usage:
     config = AppConfig.from_yaml("config.yml")
 """
 
-from typing import Optional, Dict, Any, List, Literal
-from pydantic import BaseModel, Field, validator, ConfigDict
 import os
+from typing import Any, Dict, List, Literal, Optional
+
+from pydantic import BaseModel, ConfigDict, Field, validator
 
 
 class LLMTaskTypeConfig(BaseModel):

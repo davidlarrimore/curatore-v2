@@ -1,12 +1,10 @@
 """Tests for generation profiles."""
 
-import pytest
 from app.cwr.governance.generation_profiles import (
-    GenerationProfile,
-    GenerationProfileName,
     GENERATION_PROFILES,
-    get_profile,
+    GenerationProfileName,
     get_available_profiles,
+    get_profile,
 )
 
 

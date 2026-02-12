@@ -4,13 +4,13 @@ Discover Metadata function — returns available metadata facets, namespaces,
 and field definitions so users can understand what filters are available.
 """
 
-from typing import Any, Dict, List, Optional
 import logging
+from typing import Any, Dict
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext
@@ -123,13 +123,17 @@ class DiscoverMetadataFunction(BaseFunction):
                     ns_fields = fields_raw.get(ns_key, {})
                     field_list = []
                     for fname, fdef in ns_fields.items():
-                        field_list.append({
+                        field_entry = {
                             "name": fname,
                             "data_type": fdef.get("data_type", "string"),
                             "facetable": fdef.get("facetable", False),
                             "description": fdef.get("description"),
-                            "examples": fdef.get("examples", [])[:3],
-                        })
+                            "examples": fdef.get("examples", [])[:5],
+                        }
+                        # Expose full value list for facetable fields with defined values
+                        if fdef.get("facetable") and len(fdef.get("examples", [])) > 3:
+                            field_entry["allowed_values"] = fdef.get("examples", [])
+                        field_list.append(field_entry)
 
                     ns_list.append({
                         "namespace": ns_key,

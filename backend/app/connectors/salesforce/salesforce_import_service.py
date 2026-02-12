@@ -28,7 +28,7 @@ import csv
 import io
 import logging
 import zipfile
-from datetime import datetime, date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 from uuid import UUID
@@ -36,8 +36,8 @@ from uuid import UUID
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.connectors.salesforce.salesforce_service import salesforce_service
-from app.core.shared.run_log_service import run_log_service
 from app.core.search.pg_index_service import pg_index_service
+from app.core.shared.run_log_service import run_log_service
 
 logger = logging.getLogger("curatore.salesforce_import_service")
 
@@ -646,12 +646,13 @@ class SalesforceImportService:
         Returns:
             Dict with count of indexed records by type
         """
+        from sqlalchemy import select
+
         from app.core.database.models import (
             SalesforceAccount,
             SalesforceContact,
             SalesforceOpportunity,
         )
-        from sqlalchemy import select
 
         counts = {"accounts": 0, "contacts": 0, "opportunities": 0}
 

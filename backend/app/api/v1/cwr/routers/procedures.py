@@ -9,22 +9,20 @@ Provides endpoints for:
 - Managing triggers
 """
 
+import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
-from datetime import datetime
-import logging
 
 from croniter import croniter
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select, and_
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
-from app.core.shared.database_service import database_service
-from app.dependencies import get_current_user, get_current_user_optional, get_optional_current_user, get_current_org_id
-from app.core.database.models import User
 from app.core.database.procedures import Procedure, ProcedureTrigger, ProcedureVersion
+from app.core.shared.database_service import database_service
 from app.cwr.procedures import procedure_executor, procedure_loader
+from app.dependencies import get_current_org_id, get_optional_current_user
 
 logger = logging.getLogger("curatore.api.procedures")
 
@@ -65,7 +63,7 @@ class TriggerSchema(BaseModel):
     cron_expression: Optional[str] = None
     event_name: Optional[str] = None
     event_filter: Optional[Dict[str, Any]] = None
-    is_active: bool = True
+    is_active: bool = True  # Whether this trigger fires on schedule; does not affect ad-hoc runs
     last_triggered_at: Optional[datetime] = None
     next_trigger_at: Optional[datetime] = None
 
@@ -77,7 +75,7 @@ class ProcedureSchema(BaseModel):
     slug: str
     description: Optional[str] = None
     version: int
-    is_active: bool
+    is_active: bool  # Controls scheduled/cron execution only; ad-hoc runs always allowed
     is_system: bool
     source_type: str
     definition: Dict[str, Any]
@@ -93,7 +91,7 @@ class ProcedureListItem(BaseModel):
     slug: str
     description: Optional[str] = None
     version: int
-    is_active: bool
+    is_active: bool  # Controls scheduled/cron execution only; ad-hoc runs always allowed
     is_system: bool
     source_type: str
     trigger_count: int = 0
@@ -176,7 +174,7 @@ class CreateProcedureRequest(BaseModel):
 
 class UpdateProcedureRequest(BaseModel):
     """Request to update procedure settings or definition."""
-    is_active: Optional[bool] = None
+    is_active: Optional[bool] = None  # Controls scheduling only (cron/event triggers); ad-hoc runs always allowed
     description: Optional[str] = None
     # For updating the definition (user-created procedures only)
     name: Optional[str] = None
@@ -185,6 +183,7 @@ class UpdateProcedureRequest(BaseModel):
     on_error: Optional[str] = None
     tags: Optional[List[str]] = None
     change_summary: Optional[str] = Field(None, description="Optional description of what changed in this version")
+    convert_to_system: Optional[bool] = Field(False, description="Convert a user procedure to a system procedure by writing its JSON definition to disk")
 
 
 class ValidationErrorDetail(BaseModel):
@@ -216,11 +215,6 @@ class GenerateProcedureRequest(BaseModel):
             "Add a logging step before the email is sent",
         ],
     )
-    current_yaml: Optional[str] = Field(
-        default=None,
-        description="Current procedure YAML to refine. If provided, the prompt describes changes to make to this procedure.",
-        max_length=50000,
-    )
     include_examples: bool = Field(
         default=True,
         description="Whether to include example procedures in the AI context",
@@ -234,25 +228,6 @@ class GenerateProcedureRequest(BaseModel):
         description="Current Typed Plan JSON to refine. If provided, modifications apply to this plan.",
     )
 
-
-class GenerateProcedureResponse(BaseModel):
-    """Response from procedure generation."""
-    success: bool = Field(description="Whether generation succeeded")
-    yaml: Optional[str] = Field(default=None, description="Generated YAML content (if successful)")
-    procedure: Optional[Dict[str, Any]] = Field(default=None, description="Parsed procedure definition (if successful)")
-    plan_json: Optional[Dict[str, Any]] = Field(default=None, description="Typed Plan JSON (intermediate representation)")
-    error: Optional[str] = Field(default=None, description="Error message (if failed)")
-    attempts: int = Field(description="Number of generation attempts made")
-    validation_errors: List[ValidationErrorDetail] = Field(
-        default_factory=list,
-        description="Final validation errors (if generation failed)",
-    )
-    validation_warnings: List[ValidationErrorDetail] = Field(
-        default_factory=list,
-        description="Validation warnings after LLM review (procedure is valid but may have issues)",
-    )
-    profile_used: Optional[str] = Field(default=None, description="Generation profile that was used")
-    diagnostics: Optional[Dict[str, Any]] = Field(default=None, description="Generation diagnostics (timing, tools, attempts)")
 
 
 # =============================================================================
@@ -344,109 +319,115 @@ async def validate_procedure(
     )
 
 
-@router.post("/generate", response_model=GenerateProcedureResponse)
+@router.post("/generate")
 async def generate_procedure(
     request: GenerateProcedureRequest,
     organization_id: UUID = Depends(get_current_org_id),
 ):
     """
-    Generate or refine a procedure YAML definition using AI.
+    Generate or refine a procedure using AI with SSE streaming.
 
-    **Generate Mode** (no current_yaml):
-    Takes a natural language description and generates a valid procedure YAML
-    from scratch.
+    Returns a Server-Sent Events stream with real-time progress updates
+    during the planning/research phase, followed by the final result.
 
-    **Refine Mode** (with current_yaml):
-    Modifies the provided procedure YAML based on the prompt.
-    Use this to make incremental changes like "add a logging step" or
-    "change the email recipient".
+    **SSE Event Types:**
+    - `phase` — Phase transition (researching, generating, validating, compiling)
+    - `tool_call` — Planning tool invocation (name, args, index)
+    - `tool_result` — Planning tool result (summary)
+    - `complete` — Final result with success/error and full procedure data
 
-    The AI is provided with:
-    - Complete catalog of available functions and their parameters
-    - Example procedure patterns
-    - Understanding of the Curatore system and procedure structure
-    - The current procedure definition (in refine mode)
+    The stream terminates after the `complete` event.
 
-    Args:
-        request: GenerateProcedureRequest with:
-            - prompt: Description of procedure to create, or changes to make
-            - current_yaml: (optional) Current procedure YAML to refine
+    **Generate Mode** (no current_plan): Creates from scratch.
+    **Refine Mode** (with current_plan): Modifies an existing plan.
 
-    Returns:
-        GenerateProcedureResponse with:
-        - success: Whether generation succeeded
-        - yaml: Generated/modified YAML content (if successful)
-        - procedure: Parsed procedure dict (if successful)
-        - error: Error message (if failed)
-        - attempts: Number of generation attempts
-        - validation_errors: Final validation errors (if failed)
-
-    Example prompts (generate mode):
-        - "Create a procedure that sends a daily email summary of new assets"
-        - "Build a workflow that analyzes SAM.gov opportunities"
-
-    Example prompts (refine mode):
-        - "Add a step that logs the results before sending email"
-        - "Change the email recipient to reports@company.com"
-        - "Increase the search limit to 100"
-
-    Note:
-        The generated procedure is NOT saved automatically. Use the POST /procedures
-        endpoint to save the generated procedure after reviewing it.
+    Note: The generated procedure is NOT saved automatically.
+    Use POST /procedures to save after reviewing.
     """
-    from app.cwr.procedures.compiler.ai_generator import procedure_generator_service
+    import asyncio
+
+    from starlette.responses import StreamingResponse
+
     from app.core.shared.database_service import database_service
+    from app.cwr.procedures.compiler.ai_generator import procedure_generator_service
 
-    if request.current_yaml:
-        logger.info(f"Refining procedure with prompt: {request.prompt[:100]}...")
-    else:
-        logger.info(f"Generating procedure from prompt: {request.prompt[:100]}...")
+    logger.info(f"Generating procedure from prompt: {request.prompt[:100]}...")
 
-    # Use database session to fetch available data sources for context
-    async with database_service.get_session() as session:
-        result = await procedure_generator_service.generate_procedure(
-            prompt=request.prompt,
-            organization_id=organization_id,
-            session=session,
-            include_examples=request.include_examples,
-            current_yaml=request.current_yaml,
-            profile=request.profile or "workflow_standard",
-            current_plan=request.current_plan,
-        )
+    async def event_stream():
+        queue: asyncio.Queue = asyncio.Queue()
 
-    # Convert validation errors to response format
-    validation_errors = [
-        ValidationErrorDetail(
-            code=e.get("code", "UNKNOWN"),
-            message=e.get("message", "Unknown error"),
-            path=e.get("path", ""),
-            details=e.get("details", {}),
-        )
-        for e in result.get("validation_errors", [])
-    ]
+        async def on_progress(event: Dict[str, Any]):
+            await queue.put(event)
 
-    # Convert validation warnings to response format
-    validation_warnings = [
-        ValidationErrorDetail(
-            code=w.get("code", "UNKNOWN"),
-            message=w.get("message", "Unknown warning"),
-            path=w.get("path", ""),
-            details=w.get("details", {}),
-        )
-        for w in result.get("validation_warnings", [])
-    ]
+        async def run_generator():
+            try:
+                async with database_service.get_session() as session:
+                    result = await procedure_generator_service.generate_procedure(
+                        prompt=request.prompt,
+                        organization_id=organization_id,
+                        session=session,
+                        include_examples=request.include_examples,
+                        profile=request.profile or "workflow_standard",
+                        current_plan=request.current_plan,
+                        on_progress=on_progress,
+                    )
 
-    return GenerateProcedureResponse(
-        success=result["success"],
-        yaml=result.get("yaml"),
-        procedure=result.get("procedure"),
-        plan_json=result.get("plan_json"),
-        error=result.get("error"),
-        attempts=result.get("attempts", 0),
-        validation_errors=validation_errors,
-        validation_warnings=validation_warnings,
-        profile_used=result.get("profile_used"),
-        diagnostics=result.get("diagnostics"),
+                # Send the complete event (sole source of complete events)
+                complete_event = {
+                    "event": "complete",
+                    "success": result["success"],
+                    "yaml": result.get("yaml"),
+                    "procedure": result.get("procedure"),
+                    "plan_json": result.get("plan_json"),
+                    "error": result.get("error"),
+                    "attempts": result.get("attempts", 0),
+                    "validation_errors": result.get("validation_errors", []),
+                    "validation_warnings": result.get("validation_warnings", []),
+                    "profile_used": result.get("profile_used"),
+                    "diagnostics": result.get("diagnostics"),
+                }
+                if result.get("needs_clarification"):
+                    complete_event["needs_clarification"] = True
+                    complete_event["clarification_message"] = result.get("clarification_message", "")
+                await queue.put(complete_event)
+            except Exception as e:
+                logger.exception(f"Generation failed: {e}")
+                await queue.put({
+                    "event": "complete",
+                    "success": False,
+                    "error": str(e),
+                })
+            finally:
+                await queue.put(None)  # Sentinel
+
+        # Start generation in background task
+        task = asyncio.create_task(run_generator())
+
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+
+                import json as json_mod
+                event_type = event.pop("event", "message")
+                data = json_mod.dumps(event, default=str)
+                yield f"event: {event_type}\ndata: {data}\n\n"
+
+                if event_type == "complete":
+                    break
+        finally:
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 
@@ -480,8 +461,8 @@ async def validate_draft(
 
     Returns validation result with errors and warnings.
     """
-    from app.cwr.governance.generation_profiles import get_profile
     from app.cwr.contracts.contract_pack import get_tool_contract_pack
+    from app.cwr.governance.generation_profiles import get_profile
     from app.cwr.procedures.compiler.plan_validator import PlanValidator
 
     profile = get_profile(request.profile)
@@ -610,7 +591,7 @@ async def create_procedure(
 
 @router.get("/", response_model=ProcedureListResponse)
 async def list_procedures(
-    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    is_active: Optional[bool] = Query(None, description="Filter by scheduling status (is_active controls cron/scheduled execution only)"),
     tag: Optional[str] = Query(None, description="Filter by tag"),
     organization_id: UUID = Depends(get_current_org_id),
 ):
@@ -739,12 +720,19 @@ async def update_procedure(
     """
     Update procedure settings or definition.
 
-    For user-created procedures (source_type='user'), you can update the
-    full definition including name, parameters, steps, and tags.
+    For all procedures (user and system), you can update the full definition
+    including name, description, parameters, steps, and tags.
 
-    For system procedures, only is_active can be changed.
-    To update a system procedure's definition, edit the JSON definition file
-    and call POST /procedures/reload.
+    For system procedures, changes are also written back to the source JSON
+    file on disk (best-effort — the DB update succeeds even if the file write fails).
+
+    Set ``convert_to_system=true`` to promote a user procedure to a system
+    procedure.  This writes the current definition as a JSON file in the
+    system definitions directory and flips the DB record to
+    ``source_type="system"``.  The conversion is atomic — if the file write
+    fails, the request returns 500 and no DB changes are committed.
+
+    # TODO: Gate system procedure editing and conversion behind admin role when RBAC is implemented.
     """
     async with database_service.get_session() as session:
         query = select(Procedure).where(
@@ -757,21 +745,11 @@ async def update_procedure(
         if not procedure:
             raise HTTPException(status_code=404, detail=f"Procedure not found: {slug}")
 
-        # Check if trying to modify definition of system procedure
+        # TODO: Gate system procedure editing behind admin role when RBAC is implemented
+
+        # Check if trying to modify definition
         definition_fields = [request.name, request.parameters, request.steps, request.on_error, request.tags]
         modifying_definition = any(f is not None for f in definition_fields)
-
-        if procedure.source_type != "user" and modifying_definition:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot modify definition of system procedures. Edit the JSON definition file and call POST /procedures/reload instead.",
-            )
-
-        if procedure.is_system and request.description is not None:
-            raise HTTPException(
-                status_code=400,
-                detail="Cannot modify description of system procedures",
-            )
 
         # Update basic fields
         if request.is_active is not None:
@@ -779,8 +757,8 @@ async def update_procedure(
         if request.description is not None:
             procedure.description = request.description
 
-        # Update definition for user-created procedures
-        if procedure.source_type == "user" and modifying_definition:
+        # Update definition (both user and system procedures)
+        if modifying_definition:
             from app.cwr.contracts.validation import validate_procedure as do_validate
 
             definition = procedure.definition.copy() if procedure.definition else {}
@@ -826,7 +804,64 @@ async def update_procedure(
             )
             session.add(version_record)
 
-            logger.info(f"Updated user procedure: {slug} (version {procedure.version})")
+            # Write back to source JSON for system procedures
+            if procedure.source_type != "user" and procedure.source_path:
+                try:
+                    import json as json_mod
+                    from pathlib import Path
+
+                    source_file = Path(procedure.source_path)
+                    if source_file.exists() and source_file.suffix == ".json":
+                        with open(source_file, "w") as f:
+                            json_mod.dump(definition, f, indent=2, default=str)
+                            f.write("\n")
+                        logger.info(f"Wrote system procedure back to source: {source_file}")
+                except Exception as e:
+                    logger.warning(f"Failed to write system procedure to source file: {e}")
+
+            logger.info(f"Updated procedure: {slug} (version {procedure.version})")
+
+        # Convert user procedure to system procedure
+        if request.convert_to_system:
+            if procedure.source_type != "user":
+                raise HTTPException(
+                    status_code=400,
+                    detail="Procedure is already a system procedure",
+                )
+
+            import json as json_mod
+            from pathlib import Path
+
+            definitions_dir = (
+                Path(__file__).resolve().parent.parent.parent.parent.parent
+                / "cwr" / "procedures" / "store" / "definitions"
+            )
+
+            # Ensure the definition has required top-level fields
+            definition = procedure.definition.copy() if procedure.definition else {}
+            definition.setdefault("name", procedure.name)
+            definition.setdefault("slug", procedure.slug)
+            definition.setdefault("description", procedure.description or "")
+
+            target_path = definitions_dir / f"{procedure.slug}.json"
+
+            try:
+                definitions_dir.mkdir(parents=True, exist_ok=True)
+                with open(target_path, "w") as f:
+                    json_mod.dump(definition, f, indent=2, default=str)
+                    f.write("\n")
+            except Exception as e:
+                logger.error(f"Failed to write system procedure file: {e}")
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"Failed to write procedure definition to disk: {e}",
+                )
+
+            procedure.source_type = "system"
+            procedure.is_system = True
+            procedure.source_path = str(target_path)
+
+            logger.info(f"Converted user procedure '{slug}' to system procedure at {target_path}")
 
         procedure.updated_at = datetime.utcnow()
         await session.commit()
@@ -895,8 +930,8 @@ async def run_procedure(
         if not procedure:
             raise HTTPException(status_code=404, detail=f"Procedure not found: {slug}")
 
-        if not procedure.is_active:
-            raise HTTPException(status_code=400, detail="Procedure is not active")
+        # Note: is_active only controls whether scheduled/cron triggers fire.
+        # Ad-hoc runs are always allowed regardless of is_active state.
 
         user_id = user.id if user else None
 
@@ -976,7 +1011,10 @@ async def enable_procedure(
     organization_id: UUID = Depends(get_current_org_id),
 ):
     """
-    Enable a procedure.
+    Enable scheduling for a procedure.
+
+    Sets is_active=True so that cron/event triggers will fire.
+    This does not affect ad-hoc runs, which are always allowed.
     """
     async with database_service.get_session() as session:
         query = select(Procedure).where(
@@ -1002,7 +1040,10 @@ async def disable_procedure(
     organization_id: UUID = Depends(get_current_org_id),
 ):
     """
-    Disable a procedure.
+    Disable scheduling for a procedure.
+
+    Sets is_active=False so that cron/event triggers will NOT fire.
+    This does not affect ad-hoc runs, which are always allowed.
     """
     async with database_service.get_session() as session:
         query = select(Procedure).where(

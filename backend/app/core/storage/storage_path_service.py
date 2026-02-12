@@ -34,9 +34,8 @@ Processed files mirror this structure in curatore-processed bucket.
 import hashlib
 import logging
 import re
-from typing import Optional, Tuple
-from urllib.parse import urlparse, unquote
-from uuid import UUID
+from typing import Tuple
+from urllib.parse import unquote, urlparse
 
 logger = logging.getLogger("curatore.storage_path")
 

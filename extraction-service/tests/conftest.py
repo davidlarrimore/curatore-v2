@@ -1,7 +1,6 @@
-import os
-import pathlib
 import importlib.util
-import sys
+import pathlib
+
 import pytest
 
 # Import fixtures_docs by file path to avoid package-relative imports issues

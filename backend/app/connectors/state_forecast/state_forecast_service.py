@@ -27,7 +27,7 @@ Usage:
 
 import hashlib
 import logging
-from datetime import datetime, date
+from datetime import date, datetime
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 

@@ -5,11 +5,11 @@ Tests async session management, database initialization, health checks,
 and connection pooling for PostgreSQL databases.
 """
 
-import pytest
 import os
 from contextlib import asynccontextmanager
-from unittest.mock import patch, AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from app.core.shared.database_service import DatabaseService, database_service
 from sqlalchemy.ext.asyncio import AsyncSession
 

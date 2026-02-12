@@ -20,11 +20,12 @@ Tika Server REST API:
 Reference: https://cwiki.apache.org/confluence/display/TIKA/TikaServer
 """
 
-from pathlib import Path
-from typing import Dict, Any
-import httpx
 import mimetypes
 import re
+from pathlib import Path
+from typing import Any, Dict
+
+import httpx
 
 from .base import BaseExtractionEngine, ExtractionResult
 

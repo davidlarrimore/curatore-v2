@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { forecastsApi, ForecastSync } from '@/lib/api'
 import { useActiveJobs } from '@/lib/context-shims'
-import { useUnifiedJobs } from '@/lib/unified-jobs-context'
+import { useJobProgressByType } from '@/lib/useJobProgress'
+import { JobProgressPanelByType } from '@/components/ui/JobProgressPanel'
 import { Button } from '@/components/ui/Button'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import {
@@ -50,15 +51,10 @@ function SyncListContent() {
   const { token } = useAuth()
   const router = useRouter()
   const { addJob, getJobsForResource } = useActiveJobs()
-  const { getJobsByType } = useUnifiedJobs()
   const [syncs, setSyncs] = useState<ForecastSync[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [triggeringSync, setTriggeringSync] = useState<string | null>(null)
-
-  // Track forecast sync jobs via WebSocket
-  const forecastSyncJobs = getJobsByType('forecast_sync' as any)
-  const prevJobCountRef = useRef(forecastSyncJobs.length)
 
   const loadSyncs = useCallback(async (silent = false) => {
     if (!token) return
@@ -85,18 +81,8 @@ function SyncListContent() {
     loadSyncs()
   }, [loadSyncs])
 
-  // Refresh data when a forecast sync job completes (via WebSocket)
-  useEffect(() => {
-    const currentCount = forecastSyncJobs.length
-    const prevCount = prevJobCountRef.current
-
-    // If job count decreased, a job completed - refresh data
-    if (currentCount < prevCount) {
-      loadSyncs(true)
-    }
-
-    prevJobCountRef.current = currentCount
-  }, [forecastSyncJobs.length, loadSyncs])
+  // Track forecast sync jobs and auto-refresh on completion
+  useJobProgressByType('forecast_sync', { onComplete: () => loadSyncs(true) })
 
   const handleTriggerSync = async (sync: ForecastSync) => {
     if (!token || triggeringSync) return
@@ -168,6 +154,8 @@ function SyncListContent() {
           <span>{error}</span>
         </div>
       )}
+
+      <JobProgressPanelByType jobType="forecast_sync" variant="compact" className="space-y-2" />
 
       {/* Sync List */}
       {syncs.length === 0 ? (

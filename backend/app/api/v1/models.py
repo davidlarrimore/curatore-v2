@@ -13,6 +13,6 @@ It will be deleted once all routers are updated to import from their namespace s
 
 # Re-export everything from namespace schemas
 from app.api.v1.admin.schemas import *  # noqa: F401,F403
+from app.api.v1.cwr.schemas import *  # noqa: F401,F403
 from app.api.v1.data.schemas import *  # noqa: F401,F403
 from app.api.v1.ops.schemas import *  # noqa: F401,F403
-from app.api.v1.cwr.schemas import *  # noqa: F401,F403

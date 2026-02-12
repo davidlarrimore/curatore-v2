@@ -5,8 +5,9 @@ Note: OCR is handled by the Docling service, not this extraction service.
 This service handles Office documents, text files, and emails via MarkItDown.
 """
 
+from typing import Dict, List, Optional
+
 from pydantic import BaseModel, Field
-from typing import Optional, List, Dict
 
 
 class ExtractionOptions(BaseModel):

@@ -7,7 +7,8 @@ that uses MarkItDown for document conversion.
 
 import uuid
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict, Optional
+
 import httpx
 
 from .base import BaseExtractionEngine, ExtractionResult

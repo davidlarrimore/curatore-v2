@@ -23,13 +23,12 @@ Example usage in a procedure:
 """
 
 import logging
-from typing import List
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
-    FunctionCategory,
     FlowResult,
+    FunctionCategory,
+    FunctionMeta,
 )
 from ...context import FunctionContext
 

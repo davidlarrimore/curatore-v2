@@ -17,8 +17,8 @@ Conditions are implicitly ANDed together.
 
 from typing import Any, Dict, List
 
-from sqlalchemy import or_
 from sqlalchemy import func as sqla_func
+from sqlalchemy import or_
 from sqlalchemy.sql.elements import ClauseElement
 
 # ---------------------------------------------------------------------------

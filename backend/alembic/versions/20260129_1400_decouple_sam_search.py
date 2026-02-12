@@ -5,11 +5,9 @@ Revises: drop_job_tables
 Create Date: 2026-01-29 14:00:00.000000
 
 """
-from typing import Sequence, Union
 
-from alembic import op
 import sqlalchemy as sa
-
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = 'decouple_sam_search'

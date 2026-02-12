@@ -19,19 +19,19 @@
 # ============================================================================
 
 import json
-import re
 import logging
-from typing import Optional, Dict, Any
+import re
+from typing import Any, Dict, Optional
 from uuid import UUID
+
 from openai import OpenAI
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.config import settings
-from app.core.models import LLMEvaluation, LLMConnectionStatus
+from app.connectors.adapters.llm_adapter import LLMAdapter, llm_adapter
+from app.core.llm.llm_routing_service import llm_routing_service
+from app.core.models import LLMConnectionStatus, LLMEvaluation
 from app.core.models.llm_models import LLMTaskType
 from app.core.utils.text_utils import clean_llm_response
-from app.core.llm.llm_routing_service import llm_routing_service
-from app.connectors.adapters.llm_adapter import llm_adapter, LLMAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -409,7 +409,7 @@ class LLMService:
             client = await self._create_client_from_config(config)
 
         if not client:
-            return f"Unable to generate summary - LLM not available"
+            return "Unable to generate summary - LLM not available"
 
         try:
             system_prompt = (

@@ -5,9 +5,10 @@ This service handles Office documents, text files, and emails via MarkItDown.
 PDFs and images are handled by fast_pdf (PyMuPDF) and Docling respectively.
 """
 
-from pydantic import BaseModel, Field
 import os
 from typing import List
+
+from pydantic import BaseModel, Field
 
 
 class Settings(BaseModel):

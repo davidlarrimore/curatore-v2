@@ -42,16 +42,16 @@ Configuration (env vars):
 import logging
 import os
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from uuid import UUID
 
-from sqlalchemy import select, and_, func, or_
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from pathlib import Path
-
-from app.core.database.models import Asset, Run, ExtractionResult
 from app.config import settings
+from app.core.database.models import Asset, ExtractionResult, Run
+
 from .extraction.file_type_registry import file_type_registry
 
 logger = logging.getLogger("curatore.extraction_queue")
@@ -380,8 +380,8 @@ class ExtractionQueueService:
         timeout_at = datetime.utcnow() + timedelta(seconds=soft_limit + self.timeout_buffer)
 
         # Import and call Celery task
-        from ..tasks import execute_extraction_task
         from ..ops.queue_registry import QueuePriority
+        from ..tasks import execute_extraction_task
 
         # Determine queue based on priority
         # Priority >= PIPELINE (2) goes to priority queue, lower goes to regular extraction queue
@@ -1058,7 +1058,6 @@ class ExtractionQueueService:
         Returns:
             List of asset IDs needing extraction
         """
-        from sqlalchemy import text
 
         # Find pending assets older than min_age_seconds
         cutoff = datetime.utcnow() - timedelta(seconds=min_age_seconds)

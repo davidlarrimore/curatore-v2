@@ -10,23 +10,20 @@ Provides endpoints for:
 - Resuming failed pipelines
 """
 
+import logging
+from datetime import datetime
 from typing import Any, Dict, List, Optional
 from uuid import UUID
-from datetime import datetime
-import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
-from sqlalchemy import select, and_, func
-from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import and_, func, select
 
+from app.core.database.procedures import Pipeline, PipelineItemState, PipelineRun, PipelineTrigger
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_user, get_current_user_optional, get_optional_current_user, get_current_org_id
-from app.core.database.models import User
 from app.core.shared.run_service import run_service
-from app.core.database.procedures import Pipeline, PipelineTrigger, PipelineRun, PipelineItemState
-from app.core.database.models import Run
-from app.cwr.pipelines import pipeline_executor, pipeline_loader
+from app.cwr.pipelines import pipeline_executor
+from app.dependencies import get_current_org_id, get_optional_current_user
 
 logger = logging.getLogger("curatore.api.pipelines")
 

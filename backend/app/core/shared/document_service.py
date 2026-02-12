@@ -1,33 +1,26 @@
 # backend/app/services/document_service.py
 from __future__ import annotations
 
+import logging
 import os
 import re
 import tempfile
-import json
-import logging
-import uuid
-import shutil
-from pathlib import Path
-from typing import Iterable, List, Optional, Set, Dict, Any, Tuple
-from datetime import datetime
 import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import httpx
 
 from app.config import settings
-from app.core.models import (
-    ProcessingResult,
-    ConversionResult,
-    ProcessingStatus,
-    LLMEvaluation,
-    OCRSettings,
-    ProcessingOptions,
-)
+from app.core.ingestion.extraction import BaseExtractionEngine, ExtractionEngineFactory
 from app.core.llm.llm_service import llm_service
-from .config_loader import config_loader
-from app.core.utils.text_utils import clean_llm_response
-from app.core.ingestion.extraction import ExtractionEngineFactory, BaseExtractionEngine
+from app.core.models import (
+    ConversionResult,
+    LLMEvaluation,
+    ProcessingOptions,
+    ProcessingResult,
+)
 
 
 class ExtractionFailureError(Exception):
@@ -524,6 +517,7 @@ class DocumentService:
             # Resolve connection from database
             try:
                 from sqlalchemy import select
+
                 from app.core.database.models import Connection
 
                 result = await session.execute(

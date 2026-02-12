@@ -23,22 +23,21 @@ Security:
 import logging
 import secrets
 from datetime import datetime
-from typing import List
 from uuid import UUID, uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query
-from sqlalchemy import select, func
+from fastapi import APIRouter, Depends, HTTPException, Query, status
+from sqlalchemy import func, select
 
 from app.api.v1.admin.schemas import (
-    UserResponse,
-    UserListResponse,
     UserInviteRequest,
+    UserListResponse,
+    UserResponse,
     UserUpdateRequest,
 )
-from app.core.database.models import User
-from app.dependencies import require_org_admin
 from app.core.auth.auth_service import auth_service
+from app.core.database.models import User
 from app.core.shared.database_service import database_service
+from app.dependencies import require_org_admin
 
 # Initialize router
 router = APIRouter(prefix="/organizations/me/users", tags=["User Management"])

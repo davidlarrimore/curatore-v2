@@ -19,20 +19,20 @@ Security:
 
 import logging
 from datetime import datetime
-from typing import Dict, Any
+from typing import Any, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy import select
 
 from app.api.v1.admin.schemas import (
     OrganizationResponse,
-    OrganizationUpdateRequest,
     OrganizationSettingsResponse,
     OrganizationSettingsUpdateRequest,
+    OrganizationUpdateRequest,
 )
 from app.core.database.models import Organization, User
-from app.dependencies import get_current_user, require_org_admin, get_current_organization
 from app.core.shared.database_service import database_service
+from app.dependencies import get_current_organization, require_org_admin
 
 # Initialize router
 router = APIRouter(prefix="/organizations", tags=["Organizations"])

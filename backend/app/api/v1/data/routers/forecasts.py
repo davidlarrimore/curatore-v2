@@ -37,16 +37,16 @@ from fastapi import APIRouter, Depends, HTTPException, Query, status
 from pydantic import BaseModel, Field
 from sqlalchemy import select
 
-from app.core.tasks import forecast_sync_task
-from app.core.shared.run_service import run_service
-from app.core.database.models import ForecastSync, Run, User
-from app.dependencies import get_current_user, require_org_admin
-from app.core.shared.database_service import database_service
-from app.core.shared.forecast_sync_service import forecast_sync_service
-from app.core.shared.forecast_service import forecast_service
-from app.connectors.gsa_gateway.ag_forecast_service import ag_forecast_service
 from app.connectors.dhs_apfs.apfs_forecast_service import apfs_forecast_service
+from app.connectors.gsa_gateway.ag_forecast_service import ag_forecast_service
 from app.connectors.state_forecast.state_forecast_service import state_forecast_service
+from app.core.database.models import ForecastSync, Run, User
+from app.core.shared.database_service import database_service
+from app.core.shared.forecast_service import forecast_service
+from app.core.shared.forecast_sync_service import forecast_sync_service
+from app.core.shared.run_service import run_service
+from app.core.tasks import forecast_sync_task
+from app.dependencies import get_current_user, require_org_admin
 
 # Initialize router
 router = APIRouter(prefix="/forecasts", tags=["Acquisition Forecasts"])

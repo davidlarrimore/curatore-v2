@@ -36,25 +36,22 @@ Usage:
 
 import json
 import logging
-from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
+from app.connectors.sam_gov.sam_service import sam_service
 from app.core.database.models import (
-    Asset,
     AssetMetadata,
     ExtractionResult,
-    Run,
     SamSolicitation,
     SamSolicitationSummary,
 )
-from app.core.models.llm_models import LLMTaskType
-from app.core.llm.llm_service import LLMService
 from app.core.llm.llm_routing_service import llm_routing_service
-from app.connectors.sam_gov.sam_service import sam_service
+from app.core.llm.llm_service import LLMService
+from app.core.models.llm_models import LLMTaskType
 
 logger = logging.getLogger("curatore.sam_summarization_service")
 
@@ -361,6 +358,7 @@ class SamSummarizationService:
             Combined extracted content or None
         """
         from sqlalchemy import select
+
         from app.core.database.models import SamAttachment
 
         # Get downloaded attachments with assets

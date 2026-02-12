@@ -18,38 +18,38 @@ Security:
 
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, status
-from sqlalchemy import select, desc, func
+from sqlalchemy import desc, func, select
 
-from app.core.database.models import Run, SharePointSyncConfig, SharePointSyncedDocument, Asset, User, Connection
-from app.dependencies import get_current_user, require_org_admin
-from app.core.shared.database_service import database_service
-from app.connectors.sharepoint.sharepoint_sync_service import sharepoint_sync_service
-from app.core.shared.run_service import run_service
-from app.core.tasks import sharepoint_sync_task, sharepoint_import_task, async_delete_sync_config_task
 from app.api.v1.data.schemas import (
-    SharePointSyncConfigResponse,
-    SharePointSyncConfigCreateRequest,
-    SharePointSyncConfigUpdateRequest,
-    SharePointSyncConfigListResponse,
-    SharePointSyncedDocumentResponse,
-    SharePointSyncedDocumentListResponse,
-    SharePointSyncTriggerRequest,
-    SharePointSyncTriggerResponse,
-    SharePointSyncHistoryResponse,
+    RunResponse,
     SharePointBrowseFolderRequest,
     SharePointBrowseFolderResponse,
-    SharePointImportRequest,
-    SharePointImportResponse,
     SharePointCleanupRequest,
     SharePointCleanupResponse,
+    SharePointImportRequest,
+    SharePointImportResponse,
     SharePointRemoveItemsRequest,
     SharePointRemoveItemsResponse,
-    RunResponse,
+    SharePointSyncConfigCreateRequest,
+    SharePointSyncConfigListResponse,
+    SharePointSyncConfigResponse,
+    SharePointSyncConfigUpdateRequest,
+    SharePointSyncedDocumentListResponse,
+    SharePointSyncedDocumentResponse,
+    SharePointSyncHistoryResponse,
+    SharePointSyncTriggerRequest,
+    SharePointSyncTriggerResponse,
 )
+from app.connectors.sharepoint.sharepoint_sync_service import sharepoint_sync_service
+from app.core.database.models import Asset, Connection, Run, SharePointSyncConfig, SharePointSyncedDocument, User
+from app.core.shared.database_service import database_service
+from app.core.shared.run_service import run_service
+from app.core.tasks import async_delete_sync_config_task, sharepoint_import_task, sharepoint_sync_task
+from app.dependencies import get_current_user, require_org_admin
 
 # Initialize router
 router = APIRouter(prefix="/sharepoint-sync", tags=["SharePoint Sync"])
@@ -905,7 +905,7 @@ async def browse_sharepoint_folder(
     current_user: User = Depends(get_current_user),
 ):
     """Browse a SharePoint folder for the import wizard."""
-    from app.connectors.sharepoint.sharepoint_service import sharepoint_inventory, get_site_metadata
+    from app.connectors.sharepoint.sharepoint_service import get_site_metadata, sharepoint_inventory
 
     async with database_service.get_session() as session:
         try:

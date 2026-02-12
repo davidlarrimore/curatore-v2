@@ -5,14 +5,14 @@ Generate Digest function - Generate a formatted digest/report.
 Creates formatted reports from structured data with optional AI enhancement.
 """
 
-from typing import Any, Dict, List, Optional
-from datetime import datetime
 import logging
+from datetime import datetime
+from typing import Dict, List, Optional
 
 from ..base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ..context import FunctionContext

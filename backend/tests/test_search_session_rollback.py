@@ -13,12 +13,11 @@ search() method must rollback the session before returning empty results,
 otherwise search_with_facets() fails on the facet queries.
 """
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from uuid import uuid4
 
+import pytest
 from app.core.search.pg_search_service import PgSearchService
-
 
 # =============================================================================
 # FTS Query Escaping Tests
@@ -316,7 +315,7 @@ class TestEmbeddingDimensionMismatch:
 
     def test_embedding_dim_reports_default_for_unknown_model(self):
         """EmbeddingService.embedding_dim falls back to DEFAULT_DIM for unknown models."""
-        from app.core.search.embedding_service import EmbeddingService, EMBEDDING_DIMENSIONS
+        from app.core.search.embedding_service import EMBEDDING_DIMENSIONS, EmbeddingService
 
         service = EmbeddingService()
         # If the model isn't in EMBEDDING_DIMENSIONS, it falls back to DEFAULT_DIM

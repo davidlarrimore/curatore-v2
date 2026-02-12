@@ -46,16 +46,7 @@
       "batch_size": 10,
       "on_error": "continue",
       "params": {
-        "categories": [
-          "proposal",
-          "contract",
-          "modification",
-          "technical_spec",
-          "pricing",
-          "cover_letter",
-          "correspondence",
-          "other"
-        ]
+        "persist": false
       }
     },
     {
@@ -66,9 +57,9 @@
       "params": {
         "field": "document_type",
         "values": [
-          "proposal",
-          "technical_spec",
-          "pricing"
+          "Proposal Response",
+          "Statement of Work",
+          "Pricing & Cost Data"
         ],
         "min_confidence": "{{ params.min_confidence }}"
       }

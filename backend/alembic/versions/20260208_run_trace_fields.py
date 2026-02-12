@@ -12,7 +12,6 @@ Create Date: 2026-02-08
 import sqlalchemy as sa
 from alembic import op
 
-
 # revision identifiers
 revision = "run_trace_fields"
 down_revision = "procedure_versions"

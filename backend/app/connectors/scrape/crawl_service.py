@@ -55,32 +55,29 @@ import logging
 import random
 import re
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Set, Tuple
-from urllib.parse import urljoin, urlparse, urlunparse
-from uuid import UUID, uuid4
 from io import BytesIO
+from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import urljoin, urlparse, urlunparse
+from uuid import UUID
 
 import httpx
 from bs4 import BeautifulSoup
-from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database.models import (
-    ScrapeCollection,
-    ScrapeSource,
-    ScrapedAsset,
-    Asset,
-    Run,
-)
 from app.config import settings
-from app.core.shared.run_service import run_service
-from app.core.shared.run_log_service import run_log_service
-from app.core.shared.asset_service import asset_service
-from .scrape_service import scrape_service, extract_url_path
-from app.core.storage.minio_service import get_minio_service
+from app.core.database.models import (
+    Run,
+    ScrapeCollection,
+)
 from app.core.ingestion.extraction_result_service import extraction_result_service
+from app.core.shared.asset_service import asset_service
+from app.core.shared.run_log_service import run_log_service
+from app.core.shared.run_service import run_service
+from app.core.storage.minio_service import get_minio_service
 from app.core.storage.storage_path_service import storage_paths
+
 from .playwright_client import PlaywrightClient, PlaywrightError, get_playwright_client
+from .scrape_service import extract_url_path, scrape_service
 
 logger = logging.getLogger("curatore.crawl_service")
 
@@ -1276,7 +1273,6 @@ class CrawlService:
         Returns:
             Number of documents successfully downloaded
         """
-        from app.core.ingestion.upload_integration_service import upload_integration_service
 
         downloaded = 0
         config = collection.crawl_config or {}

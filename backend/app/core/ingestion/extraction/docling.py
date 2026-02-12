@@ -5,10 +5,11 @@ This module implements the extraction engine for IBM Docling Serve,
 which provides advanced document conversion with rich layout understanding.
 """
 
-from pathlib import Path
-from typing import Optional, Dict, Any
-import httpx
 import mimetypes
+from pathlib import Path
+from typing import Any, Dict, Optional
+
+import httpx
 
 from .base import BaseExtractionEngine, ExtractionResult
 

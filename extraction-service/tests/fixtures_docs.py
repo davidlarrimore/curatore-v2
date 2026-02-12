@@ -1,10 +1,8 @@
-import os
 import io
 import json
 import zipfile
 from pathlib import Path
-from typing import Dict, List, Tuple
-
+from typing import Dict, List
 
 MARKERS = {
     "txt": "TXT_MARKER_Delta 101112",

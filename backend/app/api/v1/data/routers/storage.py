@@ -15,43 +15,43 @@ All file operations are proxied through the backend for security and simplicity.
 
 from __future__ import annotations
 
-import fastapi
 import logging
 import uuid
 from datetime import datetime, timedelta
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
+import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select
 
-from app.config import settings
-from app.core.database.models import Asset, User
-from app.dependencies import get_current_user
-from app.core.shared.artifact_service import artifact_service
-from app.core.shared.database_service import database_service
-from app.core.storage.minio_service import get_minio_service
-from app.core.ingestion.upload_integration_service import upload_integration_service
 from app.api.v1.data.schemas import (
-    ConfirmUploadResponse,
     ArtifactResponse,
+    BrowseResponse,
+    BucketInfo,
+    BucketsListResponse,
     BulkDeleteArtifactsRequest,
     BulkDeleteArtifactsResponse,
     BulkDeleteResultItem,
-    BucketInfo,
-    BucketsListResponse,
-    BrowseResponse,
-    StorageObjectInfo,
+    ConfirmUploadResponse,
     CreateFolderRequest,
     CreateFolderResponse,
-    DeleteFolderResponse,
     DeleteFileResponse,
+    DeleteFolderResponse,
     MoveFilesRequest,
     MoveFilesResponse,
+    ProtectedBucketsResponse,
     RenameFileRequest,
     RenameFileResponse,
-    ProtectedBucketsResponse,
+    StorageObjectInfo,
 )
+from app.config import settings
+from app.core.database.models import Asset, User
+from app.core.ingestion.upload_integration_service import upload_integration_service
+from app.core.shared.artifact_service import artifact_service
+from app.core.shared.database_service import database_service
+from app.core.storage.minio_service import get_minio_service
+from app.dependencies import get_current_user
 
 logger = logging.getLogger("curatore.api.storage")
 

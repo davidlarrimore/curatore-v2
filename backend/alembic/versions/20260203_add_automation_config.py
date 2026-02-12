@@ -10,8 +10,8 @@ This migration adds:
 - scrape_collections.automation_config: Same field for web scrape collections
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy.dialects.postgresql import JSONB
 
 # revision identifiers, used by Alembic

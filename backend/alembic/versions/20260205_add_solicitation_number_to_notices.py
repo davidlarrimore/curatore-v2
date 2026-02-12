@@ -11,8 +11,8 @@ Revision ID: 20260205_notices_solnum
 Revises: 20260203_expand_sam_agency_columns
 Create Date: 2026-02-05
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic.
 revision = "20260205_notices_solnum"

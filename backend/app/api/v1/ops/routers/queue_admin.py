@@ -18,22 +18,22 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select, and_, func, or_, text
+from sqlalchemy import and_, func, select, text
 
-from app.core.database.models import Run, Asset, ExtractionResult, User
-from app.core.shared.database_service import database_service
-from app.core.ingestion.extraction_queue_service import extraction_queue_service
-from app.core.ops.queue_registry import queue_registry
 from app.api.v1.admin.routers.auth import get_current_user
 from app.api.v1.ops.schemas import (
-    UnifiedQueueStatsResponse,
-    ExtractionQueueInfo,
     CeleryQueuesInfo,
-    ThroughputInfo,
+    ExtractionQueueInfo,
     Recent5mInfo,
     Recent24hInfo,
+    ThroughputInfo,
+    UnifiedQueueStatsResponse,
     WorkersInfo,
 )
+from app.core.database.models import Asset, Run, User
+from app.core.ingestion.extraction_queue_service import extraction_queue_service
+from app.core.ops.queue_registry import queue_registry
+from app.core.shared.database_service import database_service
 
 logger = logging.getLogger("curatore.api.queue_admin")
 
@@ -1045,7 +1045,6 @@ async def get_child_jobs(
     Returns all child jobs linked to the parent job's group, with their status and details.
     """
     async with database_service.get_session() as session:
-        from app.core.database.models import RunGroup
 
         # Verify parent run exists and belongs to user's organization
         parent_run = await session.get(Run, run_id)

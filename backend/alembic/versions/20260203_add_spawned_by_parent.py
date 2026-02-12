@@ -9,8 +9,8 @@ This migration adds:
 - Updates queue_priority default to 3 (user upload priority)
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic
 revision = '20260203_add_spawned_by_parent'

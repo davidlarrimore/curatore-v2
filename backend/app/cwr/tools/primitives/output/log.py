@@ -29,13 +29,13 @@ Example usage in a procedure:
 """
 
 import json
-from typing import Any, Dict, List, Optional
 import logging
+from typing import Any, Dict
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext

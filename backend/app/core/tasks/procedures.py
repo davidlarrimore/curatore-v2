@@ -71,8 +71,8 @@ async def _execute_procedure_async(
     user_id,
 ) -> Dict[str, Any]:
     """Async implementation of procedure execution."""
-    from app.cwr.procedures import procedure_executor
     from app.core.shared.run_service import run_service
+    from app.cwr.procedures import procedure_executor
 
     async with database_service.get_session() as session:
         # Start the run
@@ -181,10 +181,11 @@ async def _execute_pipeline_async(
     resume_from_stage: int,
 ) -> Dict[str, Any]:
     """Async implementation of pipeline execution."""
-    from app.cwr.pipelines import pipeline_executor
-    from app.core.shared.run_service import run_service
-    from app.core.database.procedures import PipelineRun
     from sqlalchemy import select
+
+    from app.core.database.procedures import PipelineRun
+    from app.core.shared.run_service import run_service
+    from app.cwr.pipelines import pipeline_executor
 
     async with database_service.get_session() as session:
         # Start the run
@@ -245,9 +246,10 @@ async def _execute_pipeline_async(
 
 async def _fail_pipeline_run(run_id, pipeline_run_id, error: str) -> None:
     """Mark a pipeline run as failed."""
-    from app.core.shared.run_service import run_service
-    from app.core.database.procedures import PipelineRun
     from sqlalchemy import select
+
+    from app.core.database.procedures import PipelineRun
+    from app.core.shared.run_service import run_service
 
     async with database_service.get_session() as session:
         # Update pipeline run

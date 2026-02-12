@@ -17,35 +17,32 @@ Usage:
     )
 """
 
-import hashlib
 import logging
 import tempfile
 import time
 from io import BytesIO
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Any, Dict
 from uuid import UUID
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database.models import Asset, Run, ExtractionResult
+from app.config import settings
 from app.core.shared.asset_service import asset_service
-from app.core.shared.run_service import run_service
-from .extraction_result_service import extraction_result_service
+from app.core.shared.config_loader import config_loader
+from app.core.shared.document_service import document_service
 from app.core.shared.run_log_service import run_log_service
+from app.core.shared.run_service import run_service
 from app.core.storage.minio_service import get_minio_service
 from app.core.storage.storage_path_service import storage_paths
-from app.core.shared.document_service import document_service
-from app.core.shared.config_loader import config_loader
-from .triage_service import triage_service, ExtractionPlan
-from app.core.models import OCRSettings, ProcessingOptions
-from app.config import settings
+
 from .extraction import (
-    ExtractionEngineFactory,
-    ExtractionServiceEngine,
     DoclingEngine,
+    ExtractionServiceEngine,
     FastPdfEngine,
 )
+from .extraction_result_service import extraction_result_service
+from .triage_service import ExtractionPlan, triage_service
 
 
 class UnsupportedFileTypeError(Exception):

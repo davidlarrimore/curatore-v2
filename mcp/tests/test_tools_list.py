@@ -1,10 +1,10 @@
 # Tools List Handler Tests
 """Tests for MCP tools/list handler."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
 
-from app.handlers.tools_list import handle_tools_list, clear_cache
+import pytest
+from app.handlers.tools_list import clear_cache, handle_tools_list
 
 
 class TestToolsList:

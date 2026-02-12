@@ -24,8 +24,8 @@ Revises: phase4_scraping
 Create Date: 2026-01-28 20:00:00.000000
 
 """
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 from sqlalchemy import text
 
 # revision identifiers, used by Alembic.

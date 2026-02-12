@@ -11,7 +11,6 @@ Create Date: 2026-02-09
 import sqlalchemy as sa
 from alembic import op
 
-
 # revision identifiers
 revision = "sharepoint_site_name"
 down_revision = "run_trace_fields"

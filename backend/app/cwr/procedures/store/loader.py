@@ -9,12 +9,11 @@ Supports:
 """
 
 import json
-import os
 import logging
 from pathlib import Path
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 
-from jinja2 import Environment, BaseLoader
+from jinja2 import BaseLoader, Environment
 
 from .definitions import ProcedureDefinition, StepDefinition
 

@@ -13,15 +13,13 @@ Note: PDFs and images are handled by other engines:
 - Images: Docling service with OCR
 """
 
-import os
 import logging
+import os
+import shutil
 import subprocess
 import tempfile
-import shutil
 from pathlib import Path
-from typing import Tuple, Optional
-
-from ..config import settings
+from typing import Optional, Tuple
 
 # Configure logging with more detail
 logging.basicConfig(

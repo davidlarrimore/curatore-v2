@@ -8,30 +8,28 @@ Provides endpoints for:
 - Executing functions directly (for testing/debugging)
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
 import logging
+from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
-from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import APIRouter, Depends, HTTPException, Query
 
-from app.core.shared.database_service import database_service
-from app.dependencies import get_current_user, get_current_user_optional
-from app.core.database.models import User
-from app.cwr.tools import (
-    fn,
-    FunctionContext,
-    FunctionCategory,
-    initialize_functions,
-)
 from app.api.v1.cwr.schemas import (
-    FunctionSchema,
-    FunctionListResponse,
     CategoryListResponse,
     ExecuteFunctionRequest,
     ExecuteFunctionResponse,
+    FunctionListResponse,
+    FunctionSchema,
     meta_to_function_schema,
 )
+from app.core.database.models import User
+from app.core.shared.database_service import database_service
+from app.cwr.tools import (
+    FunctionCategory,
+    FunctionContext,
+    fn,
+    initialize_functions,
+)
+from app.dependencies import get_current_user
 
 logger = logging.getLogger("curatore.api.functions")
 

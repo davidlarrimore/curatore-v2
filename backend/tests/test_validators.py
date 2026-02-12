@@ -7,11 +7,11 @@ validation of UUID document ID formats.
 
 import pytest
 from app.core.utils.validators import (
-    is_valid_uuid,
-    is_valid_document_id,
-    validate_document_id,
-    generate_document_id,
     extract_document_id_from_artifact_key,
+    generate_document_id,
+    is_valid_document_id,
+    is_valid_uuid,
+    validate_document_id,
 )
 
 

@@ -16,7 +16,6 @@ import copy
 from dataclasses import dataclass, fields
 from typing import Any, Dict, List
 
-
 # Mapping from legacy type strings to JSON Schema types.
 # Used by the migration script and param_type_to_json_schema().
 TYPE_MAP: Dict[str, Dict[str, Any]] = {

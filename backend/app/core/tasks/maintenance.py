@@ -16,7 +16,6 @@ from celery import shared_task
 from app.celery_app import app as celery_app
 from app.core.shared.database_service import database_service
 
-
 # Logger for tasks
 logger = logging.getLogger("curatore.tasks")
 
@@ -235,10 +234,11 @@ async def _check_scheduled_tasks() -> Dict[str, Any]:
     Returns:
         Dict with check results
     """
-    from app.core.ops.scheduled_task_service import scheduled_task_service
-    from app.core.database.models import Run, RunLogEvent, Organization
-    from app.config import settings
     from sqlalchemy import select
+
+    from app.config import settings
+    from app.core.database.models import Organization, Run, RunLogEvent
+    from app.core.ops.scheduled_task_service import scheduled_task_service
 
     now = datetime.utcnow()
     triggered_tasks = []
@@ -413,11 +413,12 @@ async def _execute_scheduled_task(
     Returns:
         Dict with execution results
     """
+    from sqlalchemy import select
+
+    from app.core.database.models import Run, RunLogEvent
+    from app.core.ops.maintenance_handlers import MAINTENANCE_HANDLERS
     from app.core.ops.scheduled_task_service import scheduled_task_service
     from app.core.shared.lock_service import lock_service
-    from app.core.ops.maintenance_handlers import MAINTENANCE_HANDLERS
-    from app.core.database.models import Run, RunLogEvent, ScheduledTask
-    from sqlalchemy import select
 
     start_time = datetime.utcnow()
     logger = logging.getLogger("curatore.tasks.scheduled")

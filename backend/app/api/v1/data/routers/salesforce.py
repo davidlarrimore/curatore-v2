@@ -43,22 +43,20 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, status
-from pydantic import BaseModel, Field
-from sqlalchemy import select
+from pydantic import BaseModel
 
-from app.core.tasks import salesforce_import_task
-from app.core.shared.run_service import run_service
-from app.core.storage.minio_service import get_minio_service
+from app.connectors.salesforce.salesforce_service import salesforce_service
 from app.core.database.models import (
-    Run,
     SalesforceAccount,
     SalesforceContact,
     SalesforceOpportunity,
     User,
 )
-from app.dependencies import get_current_user
 from app.core.shared.database_service import database_service
-from app.connectors.salesforce.salesforce_service import salesforce_service
+from app.core.shared.run_service import run_service
+from app.core.storage.minio_service import get_minio_service
+from app.core.tasks import salesforce_import_task
+from app.dependencies import get_current_user
 
 # Initialize router
 router = APIRouter(prefix="/salesforce", tags=["Salesforce"])

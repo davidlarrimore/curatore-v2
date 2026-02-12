@@ -1,12 +1,7 @@
 # OpenAI-Compatible Endpoint Tests
 """Tests for OpenAI-compatible tool endpoints."""
 
-import pytest
 from unittest.mock import AsyncMock, patch
-
-from fastapi.testclient import TestClient
-from app.main import app
-from app.config import settings
 
 
 class TestOpenAIToolsList:

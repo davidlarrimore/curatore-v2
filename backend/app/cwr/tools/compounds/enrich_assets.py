@@ -5,17 +5,17 @@ Enrich Assets function - Auto-enrich assets with metadata.
 Rules-only V1 implementation. ML-based enrichment deferred.
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
-import re
 import logging
+import re
+from typing import Any, Dict, List
+from uuid import UUID
 
 from sqlalchemy import select
 
 from ..base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ..context import FunctionContext

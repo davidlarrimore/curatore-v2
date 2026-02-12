@@ -12,7 +12,6 @@ from typing import Any, Dict, Optional
 
 from celery import shared_task
 
-from app.celery_app import app as celery_app
 from app.core.shared.database_service import database_service
 
 
@@ -37,7 +36,6 @@ def forecast_sync_task(
     Returns:
         Dict containing pull statistics
     """
-    from app.core.shared.forecast_sync_service import forecast_sync_service
 
     logger = logging.getLogger("curatore.forecast")
     logger.info(f"Starting forecast sync task for sync {sync_id}" + (f" (run_id={run_id})" if run_id else ""))
@@ -75,12 +73,12 @@ async def _execute_forecast_sync_async(
     Returns:
         Dict with sync statistics
     """
-    from app.core.shared.run_service import run_service
-    from app.core.shared.forecast_sync_service import forecast_sync_service
-    from app.connectors.gsa_gateway.ag_pull_service import ag_pull_service
     from app.connectors.dhs_apfs.apfs_pull_service import apfs_pull_service
+    from app.connectors.gsa_gateway.ag_pull_service import ag_pull_service
     from app.connectors.state_forecast.state_pull_service import state_pull_service
     from app.core.database.models import Run
+    from app.core.shared.forecast_sync_service import forecast_sync_service
+    from app.core.shared.run_service import run_service
 
     async with database_service.get_session() as session:
         # Get sync config

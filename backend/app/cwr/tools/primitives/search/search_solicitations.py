@@ -6,21 +6,21 @@ Search and filter SAM.gov solicitations using hybrid search (keyword + semantic)
 Returns results as ContentItem instances for unified handling.
 """
 
-from typing import Any, Dict, List, Optional
-from uuid import UUID
-from datetime import datetime, timedelta
 import logging
+from datetime import datetime, timedelta
+from typing import List, Optional
+from uuid import UUID
 
-from sqlalchemy import select, and_, or_, func, desc
+from sqlalchemy import and_, desc, or_, select
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
-from ...context import FunctionContext
 from ...content import ContentItem
+from ...context import FunctionContext
 
 logger = logging.getLogger("curatore.functions.search.search_solicitations")
 
@@ -277,8 +277,9 @@ class SearchSolicitationsFunction(BaseFunction):
         try:
             # Resolve search_name to search_id (case-insensitive)
             if search_name and not search_id:
-                from app.core.database.models import SamSearch
                 from sqlalchemy import func as sqla_func
+
+                from app.core.database.models import SamSearch
 
                 result = await ctx.session.execute(
                     select(SamSearch.id)

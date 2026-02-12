@@ -43,20 +43,18 @@ Usage:
 import logging
 import re
 from datetime import datetime
-from typing import Dict, List, Optional, Any, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 from uuid import UUID
 
-from sqlalchemy import select, and_, func, or_
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.core.database.models import (
     ScrapeCollection,
-    ScrapeSource,
     ScrapedAsset,
-    Asset,
-    Run,
+    ScrapeSource,
 )
 
 logger = logging.getLogger("curatore.scrape_service")

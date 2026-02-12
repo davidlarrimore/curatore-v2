@@ -1,12 +1,13 @@
 'use client'
 
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { forecastsApi, ForecastSync, Forecast } from '@/lib/api'
 import { useActiveJobs } from '@/lib/context-shims'
-import { useUnifiedJobs } from '@/lib/unified-jobs-context'
+import { useJobProgress } from '@/lib/useJobProgress'
+import { JobProgressPanel } from '@/components/ui/JobProgressPanel'
 import { Button } from '@/components/ui/Button'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import {
@@ -68,8 +69,7 @@ function SyncDetailContent() {
   const router = useRouter()
   const params = useParams()
   const syncId = params.id as string
-  const { addJob, getJobsForResource } = useActiveJobs()
-  const { getJobsByType } = useUnifiedJobs()
+  const { addJob } = useActiveJobs()
 
   const [sync, setSync] = useState<ForecastSync | null>(null)
   const [forecasts, setForecasts] = useState<Forecast[]>([])
@@ -79,10 +79,6 @@ function SyncDetailContent() {
   const [deleting, setDeleting] = useState(false)
   const [clearing, setClearing] = useState(false)
   const [showClearConfirm, setShowClearConfirm] = useState(false)
-
-  // Track jobs for this specific sync via WebSocket
-  const syncJobs = getJobsForResource('forecast_sync', syncId)
-  const prevJobCountRef = useRef(syncJobs.length)
 
   const loadData = useCallback(async (silent = false) => {
     if (!token || !syncId) return
@@ -109,22 +105,14 @@ function SyncDetailContent() {
     }
   }, [token, syncId])
 
+  // Track jobs for this sync and auto-refresh on completion
+  const { isActive: isSyncJobActive } = useJobProgress('forecast_sync', syncId, {
+    onComplete: () => loadData(true),
+  })
+
   useEffect(() => {
     loadData()
   }, [loadData])
-
-  // Refresh data when a job for this sync completes (via WebSocket)
-  useEffect(() => {
-    const currentCount = syncJobs.length
-    const prevCount = prevJobCountRef.current
-
-    // If job count decreased, a job completed - refresh data
-    if (currentCount < prevCount) {
-      loadData(true)
-    }
-
-    prevJobCountRef.current = currentCount
-  }, [syncJobs.length, loadData])
 
   const handleTriggerSync = async () => {
     if (!token || !sync || triggeringSync) return
@@ -219,7 +207,7 @@ function SyncDetailContent() {
 
   const config = sourceTypeConfig[sync.source_type]
   // Include WebSocket-tracked jobs for immediate UI feedback
-  const isSyncing = sync.is_syncing || triggeringSync || syncJobs.length > 0
+  const isSyncing = sync.is_syncing || triggeringSync || isSyncJobActive
 
   return (
     <div className="space-y-8">
@@ -324,6 +312,13 @@ function SyncDetailContent() {
           </Button>
         </div>
       </div>
+
+      {/* Job Progress */}
+      <JobProgressPanel
+        resourceType="forecast_sync"
+        resourceId={syncId}
+        variant="default"
+      />
 
       {/* Clear Confirmation Dialog */}
       {showClearConfirm && (

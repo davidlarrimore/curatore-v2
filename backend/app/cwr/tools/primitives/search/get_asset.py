@@ -5,16 +5,15 @@ Get Asset function - Retrieve a single asset by UUID.
 Gets asset metadata and optionally its content (markdown or source file).
 """
 
-from typing import Any, Dict, Optional
-from uuid import UUID
 import logging
+from uuid import UUID
 
 from sqlalchemy import select
 
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext

@@ -1,11 +1,10 @@
 # MCP SDK Server Tests
 """Tests for MCP SDK server handlers."""
 
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
+from unittest.mock import MagicMock, patch
 
-from app.server import sdk_list_tools, sdk_call_tool, sdk_list_resources
-from app.server import ctx_org_id, ctx_api_key, ctx_correlation_id
+import pytest
+from app.server import ctx_api_key, ctx_correlation_id, ctx_org_id, sdk_call_tool, sdk_list_resources, sdk_list_tools
 
 
 class TestSDKListTools:

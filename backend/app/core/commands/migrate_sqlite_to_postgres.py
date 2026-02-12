@@ -37,17 +37,13 @@ import asyncio
 import logging
 import os
 import sys
-from pathlib import Path
 from datetime import datetime
-from typing import Any, Dict, List
+from pathlib import Path
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from sqlalchemy import create_engine, text, MetaData, Table, inspect
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy import create_engine, inspect, text
 
 # Configure logging
 logging.basicConfig(

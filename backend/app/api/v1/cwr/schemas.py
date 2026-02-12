@@ -3,11 +3,10 @@ CWR (Content Workflow Runtime) namespace Pydantic schemas.
 
 Functions, procedures, and pipeline API models.
 """
-from typing import Optional, List, Dict, Any
 from datetime import datetime
-from uuid import UUID
-from pydantic import BaseModel, Field
+from typing import Any, Dict, List, Optional
 
+from pydantic import BaseModel, Field
 
 # =============================================================================
 # FUNCTION SCHEMAS

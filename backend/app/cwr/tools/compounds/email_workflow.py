@@ -9,17 +9,15 @@ The primitive send_email remains available for procedures that don't
 need the two-step confirmation flow.
 """
 
-import hashlib
-import json
+import logging
 import secrets
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional
-import logging
+from typing import Any, Dict
 
 from ..base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ..context import FunctionContext

@@ -1,13 +1,12 @@
 # Policy Service Tests
 """Tests for policy loading and enforcement."""
 
-import pytest
-import tempfile
 import os
-import yaml
+import tempfile
 
+import yaml
+from app.models.policy import ClampConfig, Policy
 from app.services.policy_service import PolicyService
-from app.models.policy import Policy, ClampConfig
 
 
 class TestPolicyServiceV2:

@@ -47,15 +47,14 @@ WebSocket Integration:
 import asyncio
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import select, and_, or_, func
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.core.database.models import Run, Asset, ExtractionResult
-from app.config import settings
+from app.core.database.models import Run
 
 logger = logging.getLogger("curatore.run_service")
 

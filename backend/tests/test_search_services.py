@@ -5,13 +5,11 @@ Tests the embedding, chunking, indexing, and search functionality
 that replaced OpenSearch.
 """
 
+from unittest.mock import MagicMock, patch
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
-
 from app.core.search.chunking_service import ChunkingService, DocumentChunk
-from app.core.search.embedding_service import EmbeddingService, EMBEDDING_DIMENSIONS
-
+from app.core.search.embedding_service import EMBEDDING_DIMENSIONS, EmbeddingService
 
 # =============================================================================
 # Embedding Dimensions Config Tests

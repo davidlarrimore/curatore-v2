@@ -10,10 +10,10 @@ Usage:
     python -m app.commands.validate_config --skip-connectivity
 """
 
-import sys
-import os
 import argparse
 import logging
+import os
+import sys
 from pathlib import Path
 from typing import List, Tuple
 
@@ -21,8 +21,8 @@ from typing import List, Tuple
 backend_dir = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(backend_dir))
 
-from app.core.shared.config_loader import ConfigLoader
 from app.core.models.config_models import AppConfig
+from app.core.shared.config_loader import ConfigLoader
 
 # Configure logging
 logging.basicConfig(
@@ -144,7 +144,6 @@ def validate_env_vars(config_path: str) -> Tuple[bool, List[str]]:
     Returns:
         Tuple of (success, errors)
     """
-    import yaml
     import re
 
     errors = []
@@ -285,9 +284,9 @@ def main():
             print_error(error)
         # Can't continue if file doesn't exist
         print(f"\n{Colors.BOLD}Validation failed!{Colors.END}")
-        print(f"\nTo create a configuration file:")
-        print(f"  cp config.yml.example config.yml")
-        print(f"  # Edit config.yml with your settings")
+        print("\nTo create a configuration file:")
+        print("  cp config.yml.example config.yml")
+        print("  # Edit config.yml with your settings")
         sys.exit(1)
 
     # Step 2: Validate YAML syntax
@@ -326,7 +325,7 @@ def main():
             enabled_services = [s.name for s in config.extraction.services if s.enabled]
             print(f"  Extraction: {', '.join(enabled_services)}")
         if config.microsoft_graph and config.microsoft_graph.enabled:
-            print(f"  Microsoft Graph: Enabled")
+            print("  Microsoft Graph: Enabled")
         if config.email:
             print(f"  Email: {config.email.backend}")
         print(f"  Storage: Hierarchical={config.storage.hierarchical}, Dedup={config.storage.deduplication.enabled}")

@@ -1,18 +1,15 @@
 """Tests for the Tool Contract Pack."""
 
 import json
-import pytest
-from unittest.mock import patch, MagicMock
-from dataclasses import dataclass, field as dc_field
-from typing import List, Optional, Dict, Any
+from dataclasses import dataclass
+from dataclasses import field as dc_field
+from typing import Any, Dict, List, Optional
+from unittest.mock import MagicMock, patch
 
+from app.cwr.contracts.contract_pack import ToolContractPack, get_tool_contract_pack
 from app.cwr.governance.generation_profiles import (
     get_profile,
-    GenerationProfileName,
-    GENERATION_PROFILES,
 )
-from app.cwr.contracts.contract_pack import ToolContractPack, get_tool_contract_pack
-
 
 # ---------------------------------------------------------------------------
 # Helpers

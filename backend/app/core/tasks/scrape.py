@@ -11,9 +11,7 @@ from typing import Any, Dict, Optional
 from celery import shared_task
 from sqlalchemy import select
 
-from app.celery_app import app as celery_app
 from app.core.shared.database_service import database_service
-
 
 # ============================================================================
 # WEB SCRAPING TASKS
@@ -88,11 +86,11 @@ async def _scrape_crawl_async(
     - Post-crawl procedure triggers via group completion events
     """
     from app.connectors.scrape.crawl_service import crawl_service
-    from app.core.shared.run_service import run_service
-    from app.core.shared.run_log_service import run_log_service
-    from app.core.shared.run_group_service import run_group_service
-    from app.core.ops.heartbeat_service import heartbeat_service
     from app.core.database.models import ScrapeCollection
+    from app.core.ops.heartbeat_service import heartbeat_service
+    from app.core.shared.run_group_service import run_group_service
+    from app.core.shared.run_log_service import run_log_service
+    from app.core.shared.run_service import run_service
 
     logger = logging.getLogger("curatore.tasks.scrape_crawl")
 
@@ -283,17 +281,24 @@ async def _async_delete_scrape_collection(
     """
     Async implementation of scrape collection deletion.
     """
-    from app.connectors.scrape.scrape_service import scrape_service
-    from app.core.shared.run_service import run_service
-    from app.core.shared.run_log_service import run_log_service
-    from app.core.shared.asset_service import asset_service
-    from app.core.search.pg_index_service import pg_index_service
-    from app.core.storage.minio_service import get_minio_service
     from sqlalchemy import delete as sql_delete
+
+    from app.connectors.scrape.scrape_service import scrape_service
     from app.core.database.models import (
-        Asset, AssetVersion, ExtractionResult, Run, RunLogEvent,
-        ScrapeCollection, ScrapedAsset, ScrapeSource
+        Asset,
+        AssetVersion,
+        ExtractionResult,
+        Run,
+        RunLogEvent,
+        ScrapeCollection,
+        ScrapedAsset,
+        ScrapeSource,
     )
+    from app.core.search.pg_index_service import pg_index_service
+    from app.core.shared.asset_service import asset_service
+    from app.core.shared.run_log_service import run_log_service
+    from app.core.shared.run_service import run_service
+    from app.core.storage.minio_service import get_minio_service
 
     logger = logging.getLogger("curatore.tasks.scrape_delete")
 

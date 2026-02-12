@@ -15,8 +15,8 @@ Also removes legacy enhancement fields from assets table since enhancement
 is now integrated into the triage-based extraction flow.
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic
 revision = '20260201_2100'

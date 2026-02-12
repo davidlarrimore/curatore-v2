@@ -37,11 +37,12 @@ from uuid import UUID
 import httpx
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from .state_forecast_service import state_forecast_service
+from app.connectors.scrape.playwright_client import PlaywrightClient, PlaywrightError
+from app.core.search.pg_index_service import pg_index_service
 from app.core.shared.forecast_sync_service import forecast_sync_service
 from app.core.shared.run_log_service import run_log_service
-from app.core.search.pg_index_service import pg_index_service
-from app.connectors.scrape.playwright_client import PlaywrightClient, PlaywrightError
+
+from .state_forecast_service import state_forecast_service
 
 logger = logging.getLogger("curatore.state_pull_service")
 

@@ -5,24 +5,21 @@ Tests the document analysis and extraction engine routing functionality
 for PDFs, Office files, text files, images, and unknown file types.
 """
 
-import pytest
 import sys
-import tempfile
-from pathlib import Path
-from unittest.mock import MagicMock, patch, AsyncMock
+from unittest.mock import MagicMock, patch
 
+import pytest
 from app.core.ingestion.triage_service import (
-    TriageService,
-    ExtractionPlan,
-    ExtractionEngine,
-    DocumentComplexity,
-    PDF_EXTENSIONS,
-    OFFICE_EXTENSIONS,
     IMAGE_EXTENSIONS,
+    OFFICE_EXTENSIONS,
+    PDF_EXTENSIONS,
     TEXT_EXTENSIONS,
+    DocumentComplexity,
+    ExtractionEngine,
+    ExtractionPlan,
+    TriageService,
     triage_service,
 )
-
 
 # =============================================================================
 # Fixtures

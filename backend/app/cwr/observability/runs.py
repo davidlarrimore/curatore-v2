@@ -6,10 +6,10 @@ Wraps the shared run_service with CWR-specific filters and projections.
 """
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
 
-from sqlalchemy import select, and_, func, desc
+from sqlalchemy import and_, desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database.models import Run

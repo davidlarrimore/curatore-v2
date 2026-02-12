@@ -31,10 +31,10 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 
 from croniter import croniter
-from sqlalchemy import select, update, and_
+from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database.models import ScheduledTask, Run, RunLogEvent
+from app.core.database.models import Run, RunLogEvent, ScheduledTask
 
 logger = logging.getLogger("curatore.services.scheduled_task")
 
@@ -620,7 +620,6 @@ class ScheduledTaskService:
         Returns:
             List of Run objects
         """
-        from sqlalchemy import func, cast, String
 
         task = await self.get_task(session, task_id)
         if not task:

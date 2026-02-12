@@ -16,21 +16,22 @@ automatically chunks the document and uses a map-reduce approach:
 """
 
 import asyncio
-from typing import Any, Dict, List, Optional
 import logging
+from typing import Any, List, Optional
 
 from jinja2 import Template
 
+from app.core.models.llm_models import LLMTaskType
+from app.core.search.document_chunker import document_chunker
+from app.core.shared.config_loader import config_loader
+
 from ...base import (
     BaseFunction,
-    FunctionMeta,
     FunctionCategory,
+    FunctionMeta,
     FunctionResult,
 )
 from ...context import FunctionContext
-from app.core.models.llm_models import LLMTaskType
-from app.core.shared.config_loader import config_loader
-from app.core.search.document_chunker import document_chunker
 
 logger = logging.getLogger("curatore.functions.llm.summarize")
 
@@ -61,13 +62,13 @@ class SummarizeFunction(BaseFunction):
     meta = FunctionMeta(
         name="llm_summarize",
         category=FunctionCategory.LLM,
-        description="Summarize text content using an LLM",
+        description="Summarize text content using an LLM. Pass the text directly — use get_content first to fetch document content by asset ID.",
         input_schema={
             "type": "object",
             "properties": {
                 "text": {
                     "type": "string",
-                    "description": "The text to summarize",
+                    "description": "The text content to summarize. For documents, first call get_content with the asset ID, then pass the returned text here.",
                 },
                 "style": {
                     "type": "string",
@@ -95,21 +96,25 @@ class SummarizeFunction(BaseFunction):
                     "type": "boolean",
                     "description": "Automatically chunk large documents that exceed context window (default: True)",
                     "default": True,
+                    "x-procedure-only": True,
                 },
                 "chunk_size": {
                     "type": "integer",
                     "description": "Target tokens per chunk for large document processing (default: 8000)",
                     "default": 8000,
+                    "x-procedure-only": True,
                 },
                 "map_model": {
                     "type": "string",
                     "description": "Model to use for map phase (chunk summaries). Uses BULK task type if not specified.",
                     "default": None,
+                    "x-procedure-only": True,
                 },
                 "reduce_model": {
                     "type": "string",
                     "description": "Model to use for reduce phase (final summary). Uses STANDARD task type if not specified.",
                     "default": None,
+                    "x-procedure-only": True,
                 },
                 "items": {
                     "type": "array",
@@ -117,6 +122,7 @@ class SummarizeFunction(BaseFunction):
                     "description": "Collection of items to iterate over. When provided, the text is rendered for each item with {{ item.xxx }} placeholders replaced by item data.",
                     "default": None,
                     "examples": [[{"content": "Text 1"}, {"content": "Text 2"}]],
+                    "x-procedure-only": True,
                 },
             },
             "required": ["text"],

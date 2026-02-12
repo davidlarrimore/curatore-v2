@@ -3,6 +3,8 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useActiveJobs } from '@/lib/context-shims'
+import { JobProgressPanelByType } from '@/components/ui/JobProgressPanel'
+import { useJobProgressByType } from '@/lib/useJobProgress'
 import { scheduledTasksApi, ScheduledTask, MaintenanceStats, TaskRun } from '@/lib/api'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
@@ -61,6 +63,9 @@ const ALL_DATA_SOURCES = [
 export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabProps) {
   const { token } = useAuth()
   const { addJob } = useActiveJobs()
+  const { isActive: hasRunningTasks } = useJobProgressByType('system_maintenance', {
+    onComplete: () => loadData(),
+  })
   const [tasks, setTasks] = useState<ScheduledTask[]>([])
   const [stats, setStats] = useState<MaintenanceStats | null>(null)
   const [isLoading, setIsLoading] = useState(true)
@@ -342,6 +347,13 @@ export default function SystemMaintenanceTab({ onError }: SystemMaintenanceTabPr
           </div>
         </div>
       )}
+
+      {/* Active maintenance jobs */}
+      <JobProgressPanelByType
+        jobType="system_maintenance"
+        variant="compact"
+        className="space-y-2"
+      />
 
       {/* Tasks List */}
       <div>

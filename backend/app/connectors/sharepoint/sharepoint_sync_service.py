@@ -53,9 +53,8 @@ def _to_naive_utc(dt: Optional[datetime]) -> Optional[datetime]:
         return dt.astimezone(timezone.utc).replace(tzinfo=None)
     return dt
 
-from sqlalchemy import select, and_, func
+from sqlalchemy import and_, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from app.core.database.models import (
     Asset,
@@ -65,7 +64,6 @@ from app.core.database.models import (
     SharePointSyncConfig,
     SharePointSyncedDocument,
 )
-from app.config import settings
 from app.core.storage.storage_path_service import storage_paths
 
 logger = logging.getLogger("curatore.sharepoint_sync")
@@ -131,9 +129,9 @@ async def _download_file_with_retry(
         Exception if all retries fail
     """
     from .sharepoint_service import (
+        TokenManager,
         _get_sharepoint_credentials,
         _graph_base_url,
-        TokenManager,
     )
 
     credentials = await _get_sharepoint_credentials(organization_id, session)
@@ -719,11 +717,12 @@ class SharePointSyncService:
         Returns:
             Dict with cleanup statistics
         """
-        from app.core.shared.asset_service import asset_service
+        from sqlalchemy import delete as sql_delete
+        from sqlalchemy import func
+
+        from app.core.database.models import AssetVersion, ExtractionResult
         from app.core.search.pg_index_service import pg_index_service
         from app.core.storage.minio_service import get_minio_service
-        from sqlalchemy import delete as sql_delete, func
-        from app.core.database.models import ExtractionResult, AssetVersion
 
         config = await self.get_sync_config(session, sync_config_id)
         if not config:
@@ -794,7 +793,7 @@ class SharePointSyncService:
                         try:
                             minio.delete_object(extraction.extracted_bucket, extraction.extracted_object_key)
                             stats["files_deleted"] += 1
-                        except Exception as e:
+                        except Exception:
                             pass  # Don't fail on extraction cleanup
 
                 # Delete extraction results
@@ -1093,9 +1092,10 @@ class SharePointSyncService:
         Returns:
             Sync result dict with statistics
         """
-        from .sharepoint_service import sharepoint_inventory_stream, sharepoint_delta_query, DeltaTokenExpiredError
-        from app.core.shared.run_service import run_service
         from app.core.shared.run_log_service import run_log_service
+        from app.core.shared.run_service import run_service
+
+        from .sharepoint_service import DeltaTokenExpiredError, sharepoint_inventory_stream
 
         # =================================================================
         # PHASE 1: INITIALIZATION
@@ -1789,9 +1789,10 @@ class SharePointSyncService:
         Returns:
             Sync result dict with statistics
         """
-        from .sharepoint_service import sharepoint_delta_query
-        from app.core.shared.run_service import run_service
         from app.core.shared.run_log_service import run_log_service
+        from app.core.shared.run_service import run_service
+
+        from .sharepoint_service import sharepoint_delta_query
 
         # Log delta sync start
         await run_service.update_run_progress(
@@ -2083,8 +2084,9 @@ class SharePointSyncService:
         This establishes the baseline for future delta syncs by making
         an initial delta query and storing the returned delta link.
         """
-        from .sharepoint_service import sharepoint_delta_query
         from app.core.shared.run_log_service import run_log_service
+
+        from .sharepoint_service import sharepoint_delta_query
 
         if not config.folder_drive_id or not config.folder_item_id:
             logger.warning(f"Cannot capture delta token: missing drive_id or item_id for {config.name}")
@@ -2246,6 +2248,7 @@ class SharePointSyncService:
         """
         import fnmatch
         from pathlib import Path
+
         from dateutil.parser import parse as parse_date
 
         # Skip folders
@@ -2533,7 +2536,7 @@ class SharePointSyncService:
         """Download a new file and create an asset with comprehensive metadata."""
         from app.core.shared.asset_service import asset_service
         from app.core.storage.minio_service import get_minio_service
-        from .sharepoint_service import sharepoint_download
+
 
         minio_service = get_minio_service()
         if not minio_service:
@@ -3059,11 +3062,12 @@ class SharePointSyncService:
         Returns:
             Cleanup result with counts
         """
+        from sqlalchemy import delete as sql_delete
+
+        from app.core.database.models import AssetVersion, ExtractionResult
+        from app.core.search.pg_index_service import pg_index_service
         from app.core.shared.asset_service import asset_service
         from app.core.storage.minio_service import get_minio_service
-        from app.core.search.pg_index_service import pg_index_service
-        from sqlalchemy import delete as sql_delete
-        from app.core.database.models import ExtractionResult, AssetVersion
 
         deleted_docs = await self.get_deleted_documents(session, sync_config_id)
         minio = get_minio_service()
@@ -3172,11 +3176,12 @@ class SharePointSyncService:
                 "storage_freed_bytes": int,
             }
         """
+        from sqlalchemy import delete as sql_delete
+
+        from app.core.database.models import AssetVersion, ExtractionResult
+        from app.core.search.pg_index_service import pg_index_service
         from app.core.shared.asset_service import asset_service
         from app.core.storage.minio_service import get_minio_service
-        from app.core.search.pg_index_service import pg_index_service
-        from sqlalchemy import delete as sql_delete
-        from app.core.database.models import ExtractionResult, AssetVersion
 
         # Get all synced documents (not just deleted ones)
         docs_result = await session.execute(
@@ -3303,11 +3308,12 @@ class SharePointSyncService:
                 "files_deleted": int,
             }
         """
+        from sqlalchemy import delete as sql_delete
+
+        from app.core.database.models import AssetVersion, ExtractionResult
+        from app.core.search.pg_index_service import pg_index_service
         from app.core.shared.asset_service import asset_service
         from app.core.storage.minio_service import get_minio_service
-        from app.core.search.pg_index_service import pg_index_service
-        from sqlalchemy import delete as sql_delete
-        from app.core.database.models import ExtractionResult, AssetVersion
 
         # Get documents matching the item IDs
         docs_result = await session.execute(
@@ -3421,12 +3427,11 @@ class SharePointSyncService:
         Returns:
             Dict with cleanup statistics
         """
-        from app.core.shared.asset_service import asset_service
-        from app.core.storage.minio_service import get_minio_service
-        from app.core.search.pg_index_service import pg_index_service
         from sqlalchemy import delete as sql_delete
-        from sqlalchemy.orm import load_only
-        from app.core.database.models import Asset, ExtractionResult, AssetVersion
+
+        from app.core.database.models import Asset, AssetVersion, ExtractionResult
+        from app.core.search.pg_index_service import pg_index_service
+        from app.core.storage.minio_service import get_minio_service
 
         minio = get_minio_service() if delete_files else None
 

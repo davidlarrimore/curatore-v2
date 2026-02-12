@@ -16,9 +16,9 @@ This migration adds tables for the procedures/pipelines framework:
 Also adds procedure tracking columns to the runs table.
 """
 
-from alembic import op
 import sqlalchemy as sa
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+from alembic import op
+from sqlalchemy.dialects.postgresql import JSONB, UUID
 
 # revision identifiers, used by Alembic
 revision = '20260203_add_procedures'

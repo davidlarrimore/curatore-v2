@@ -5,14 +5,13 @@ Tests JWT token management, API key generation/validation, and password hashing
 for user authentication and authorization.
 """
 
-import pytest
 from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock
-import jwt
-import bcrypt
+from unittest.mock import patch
 
-from app.core.auth.auth_service import AuthService, auth_service
+import jwt
+import pytest
 from app.config import settings
+from app.core.auth.auth_service import AuthService, auth_service
 
 
 @pytest.fixture

@@ -16,14 +16,13 @@ Also cleans up stale system pipelines where the source file no longer exists.
 
 import logging
 import os
-from typing import Dict, List, Optional
-from uuid import UUID
 from datetime import datetime
+from typing import Dict
+from uuid import UUID
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from ..runtime.definitions import PipelineDefinition
 from .loader import pipeline_loader
 
 logger = logging.getLogger("curatore.pipelines.discovery")
@@ -98,7 +97,13 @@ class PipelineDiscoveryService:
                         results["updated"] += 1
                         logger.info(f"Updated pipeline: {slug}")
                     else:
-                        results["unchanged"] += 1
+                        # Reconcile metadata not tracked in the definition dict
+                        if existing.is_system != definition.is_system:
+                            existing.is_system = definition.is_system
+                            results["updated"] += 1
+                            logger.info(f"Reconciled is_system for pipeline: {slug}")
+                        else:
+                            results["unchanged"] += 1
                 else:
                     # Create new pipeline
                     pipeline = Pipeline(

@@ -21,20 +21,18 @@ Usage:
     POST /api/v1/render/links
 """
 
-from datetime import datetime
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field, HttpUrl
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel, Field
 
 from app.config import settings
-from app.dependencies import get_current_user
 from app.connectors.scrape.playwright_client import (
     PlaywrightClient,
     PlaywrightError,
-    RenderResponse,
     get_playwright_client,
 )
+from app.dependencies import get_current_user
 
 router = APIRouter(
     prefix="/render",

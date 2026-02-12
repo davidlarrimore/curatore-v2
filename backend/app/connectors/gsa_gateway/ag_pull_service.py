@@ -33,16 +33,17 @@ Usage:
 import asyncio
 import logging
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 import httpx
 
-from .ag_forecast_service import ag_forecast_service
+from app.core.search.pg_index_service import pg_index_service
 from app.core.shared.forecast_sync_service import forecast_sync_service
 from app.core.shared.run_log_service import run_log_service
-from app.core.search.pg_index_service import pg_index_service
 from app.core.utils.text_utils import html_to_text
+
+from .ag_forecast_service import ag_forecast_service
 
 logger = logging.getLogger("curatore.ag_pull_service")
 

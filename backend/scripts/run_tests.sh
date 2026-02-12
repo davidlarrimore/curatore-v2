@@ -170,7 +170,8 @@ run() {
   local code=0
   (
     cd "$ROOT_DIR" && \
-    PYTHONPATH="backend${PYTHONPATH:+:$PYTHONPATH}" "$venv/bin/python" -m pytest -q
+    PYTHONPATH="backend${PYTHONPATH:+:$PYTHONPATH}" "$venv/bin/python" -m pytest -q \
+      --cov=app --cov-report=term-missing --cov-report=html:"$REPORT_DIR/backend_coverage_html"
   ) >"$test_log" 2>&1 || code=$?
   print_pytest_summary "$test_log"
   if [[ $code -eq 0 ]]; then

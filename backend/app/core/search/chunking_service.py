@@ -37,7 +37,7 @@ Version: 2.0.0
 
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Optional
 
 logger = logging.getLogger("curatore.chunking_service")

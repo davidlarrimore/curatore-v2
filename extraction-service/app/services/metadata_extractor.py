@@ -5,10 +5,10 @@ Extracts metadata from Office documents, text files, and emails.
 Note: PDF and image metadata is extracted by fast_pdf/Docling engines.
 """
 
-import os
 import logging
-from typing import Dict, Any, Optional
+import os
 from datetime import datetime
+from typing import Any, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -91,8 +91,8 @@ def _extract_office_metadata(path: str, ext: str) -> Dict[str, Any]:
     metadata = {}
 
     try:
-        from zipfile import ZipFile
         import xml.etree.ElementTree as ET
+        from zipfile import ZipFile
 
         with ZipFile(path, "r") as zip_file:
             # Try to read core properties

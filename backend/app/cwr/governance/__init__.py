@@ -7,16 +7,16 @@ Modules:
     approvals: Side-effect approval checks against organization policy
 """
 
-from .capability_profiles import (
-    check_exposure,
-    get_available_tools,
-    get_restricted_tools,
-)
 from .approvals import (
     ApprovalResult,
     SideEffectPolicy,
     check_side_effects,
     get_side_effect_functions,
+)
+from .capability_profiles import (
+    check_exposure,
+    get_available_tools,
+    get_restricted_tools,
 )
 
 __all__ = [

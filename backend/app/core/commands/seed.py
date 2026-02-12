@@ -47,8 +47,8 @@ from sqlalchemy import select
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from app.config import settings
-from app.core.database.models import Organization, User
 from app.core.auth.auth_service import auth_service
+from app.core.database.models import Organization, User
 from app.core.shared.database_service import database_service
 
 # Configure logging
@@ -169,7 +169,7 @@ async def create_admin_user(organization: Organization) -> User:
 
         logger.info(f"✅ Created admin user: {admin.email} (id: {admin.id})")
         logger.warning(
-            f"⚠️  IMPORTANT: Change the default admin password immediately after first login!"
+            "⚠️  IMPORTANT: Change the default admin password immediately after first login!"
         )
         return admin
 
@@ -183,7 +183,6 @@ async def seed_scheduled_tasks() -> list:
     Returns:
         list: List of created task names
     """
-    from app.core.database.models import ScheduledTask
 
     logger.info("Seeding default scheduled tasks...")
 

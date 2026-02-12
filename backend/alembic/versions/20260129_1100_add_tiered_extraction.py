@@ -10,8 +10,8 @@ Adds fields to support tiered extraction:
 - enhancement_queued_at: When enhancement was queued
 """
 
-from alembic import op
 import sqlalchemy as sa
+from alembic import op
 
 # revision identifiers, used by Alembic
 revision = 'add_tiered_extraction'

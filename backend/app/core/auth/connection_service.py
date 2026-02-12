@@ -51,7 +51,7 @@ Version: 2.0.0
 import logging
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Type, Literal
+from typing import Any, Dict, List, Literal, Optional
 from uuid import UUID
 
 import httpx
@@ -61,7 +61,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
 from app.core.database.models import Connection
-
 
 # =========================================================================
 # CONNECTION TYPE BASE CLASS
@@ -463,7 +462,7 @@ class LLMConnectionType(BaseConnectionType):
                     return ConnectionTestResult(
                         success=False,
                         status="unhealthy",
-                        message=f"LLM API returned error",
+                        message="LLM API returned error",
                         error=f"HTTP {response.status_code}: {response.text[:200]}"
                     )
 
@@ -993,7 +992,7 @@ class SamGovConnectionType(BaseConnectionType):
                     return ConnectionTestResult(
                         success=False,
                         status="unhealthy",
-                        message=f"SAM.gov API returned error",
+                        message="SAM.gov API returned error",
                         error=f"HTTP {response.status_code}: {response.text[:200]}"
                     )
 
@@ -1232,9 +1231,11 @@ async def sync_default_connections_from_env(
     """
     import os
     from datetime import datetime
+
     from sqlalchemy import select
-    from app.core.database.models import Connection
+
     from app.config import settings
+    from app.core.database.models import Connection
     from app.core.shared.config_loader import config_loader
 
     logger = logging.getLogger("curatore.connection_sync")
@@ -1383,7 +1384,9 @@ async def sync_default_connections_from_env(
         if extraction_config is None:
             try:
                 import os
+
                 import yaml
+
                 from app.core.models.config_models import ExtractionConfig
 
                 def _resolve_extraction_env(obj: Any) -> Any:

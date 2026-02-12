@@ -8,20 +8,20 @@ with pgvector for hybrid keyword + semantic search.
 
 import logging
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from typing import Any, Dict, List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from app.core.database.models import User
-from app.dependencies import get_current_user, require_org_admin
-from app.core.search.pg_search_service import pg_search_service
-from app.core.search.pg_index_service import pg_index_service
-from app.core.shared.database_service import database_service
-from app.core.shared.config_loader import config_loader
 from app.config import settings
+from app.core.database.models import User
+from app.core.search.pg_index_service import pg_index_service
+from app.core.search.pg_search_service import pg_search_service
+from app.core.shared.config_loader import config_loader
+from app.core.shared.database_service import database_service
 from app.core.tasks import reindex_organization_task
+from app.dependencies import get_current_user, require_org_admin
 
 logger = logging.getLogger("curatore.api.search")
 

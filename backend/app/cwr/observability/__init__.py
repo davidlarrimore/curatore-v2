@@ -8,17 +8,17 @@ Modules:
     metrics: Aggregate execution statistics and function usage
 """
 
+from .metrics import (
+    get_function_usage,
+    get_procedure_stats,
+)
 from .runs import (
-    get_procedure_runs,
     get_pipeline_runs,
+    get_procedure_runs,
 )
 from .traces import (
     TraceNode,
     get_trace_tree,
-)
-from .metrics import (
-    get_procedure_stats,
-    get_function_usage,
 )
 
 __all__ = [

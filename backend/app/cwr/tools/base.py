@@ -12,13 +12,12 @@ Key Classes:
     - FunctionMeta: Metadata about a function for discovery/documentation
 """
 
+import logging
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from enum import Enum
-from typing import Any, Dict, List, Optional, Type, TypeVar, Generic, Union
-from uuid import UUID
-import logging
+from typing import Any, Dict, List, Optional, TypeVar
 
 logger = logging.getLogger("curatore.functions")
 
@@ -490,6 +489,7 @@ class BaseFunction(ABC):
 # Import FunctionContext here to avoid circular imports
 # This will be defined in context.py
 from typing import TYPE_CHECKING
+
 if TYPE_CHECKING:
     from .context import FunctionContext
     from .schema_utils import ContractView

@@ -16,6 +16,15 @@ const config = {
       },
     }],
   },
+  collectCoverageFrom: [
+    'app/**/*.{ts,tsx}',
+    'lib/**/*.{ts,tsx}',
+    'components/**/*.{ts,tsx}',
+    '!**/*.d.ts',
+    '!**/node_modules/**',
+  ],
+  coverageReporters: ['text', 'text-summary', 'html'],
+  coverageDirectory: '<rootDir>/coverage',
 }
 
 module.exports = config

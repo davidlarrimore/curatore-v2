@@ -6,21 +6,19 @@ organization reindexing, and tiered extraction enhancement.
 """
 import asyncio
 import logging
-import os
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from celery import shared_task
-from sqlalchemy import select, and_
+from sqlalchemy import and_, select
 
 from app.celery_app import app as celery_app
-from app.core.shared.database_service import database_service
+from app.config import settings
 from app.core.ingestion.extraction_orchestrator import extraction_orchestrator
 from app.core.shared.config_loader import config_loader
-from app.config import settings
-
+from app.core.shared.database_service import database_service
 
 # Logger for tasks
 logger = logging.getLogger("curatore.tasks")
@@ -168,9 +166,9 @@ async def _recover_orphaned_extractions_async(
 
     Uses queue service for proper capacity management instead of direct Celery submission.
     """
-    from app.core.database.models import Run, ExtractionResult, Asset
+
+    from app.core.database.models import Asset, ExtractionResult, Run
     from app.core.ingestion.extraction_queue_service import extraction_queue_service
-    from sqlalchemy import or_
 
     logger = logging.getLogger("curatore.tasks.recovery")
     now = datetime.utcnow()
@@ -241,7 +239,7 @@ async def _recover_orphaned_extractions_async(
 
                     # Update associated asset
                     if run.input_asset_ids:
-                        asset = await session.get(Asset, UUID(run.input_asset_ids[0]))
+                        asset = await session.get(Asset, uuid.UUID(run.input_asset_ids[0]))
                         if asset and asset.status == "pending":
                             asset.status = "failed"
                 else:
@@ -588,9 +586,10 @@ async def _reindex_organization_async(
         # Update stored embedding config after successful reindex
         if result.get("indexed", 0) > 0:
             try:
-                from app.core.shared.config_loader import config_loader
-                from app.core.database.models import Organization
                 from sqlalchemy.orm.attributes import flag_modified
+
+                from app.core.database.models import Organization
+                from app.core.shared.config_loader import config_loader
                 org = (await session.execute(
                     select(Organization).where(Organization.id == organization_id)
                 )).scalar_one_or_none()
@@ -617,7 +616,6 @@ ENHANCEMENT_ELIGIBLE_EXTENSIONS = {
 
 def is_enhancement_eligible(filename: str) -> bool:
     """Check if file type is eligible for Docling enhancement."""
-    from pathlib import Path
     ext = Path(filename).suffix.lower()
     return ext in ENHANCEMENT_ELIGIBLE_EXTENSIONS
 
@@ -688,15 +686,14 @@ async def _enhance_extraction_async(
     5. Update asset.extraction_tier to "enhanced"
     """
     from io import BytesIO
-    from pathlib import Path
 
-    from app.core.database.models import Asset, ExtractionResult, Run
-    from app.core.shared.asset_service import asset_service
-    from app.core.shared.run_service import run_service
+    from app.core.database.models import ExtractionResult
     from app.core.ingestion.extraction_result_service import extraction_result_service
-    from app.core.shared.run_log_service import run_log_service
-    from app.core.storage.minio_service import get_minio_service
+    from app.core.shared.asset_service import asset_service
     from app.core.shared.document_service import document_service
+    from app.core.shared.run_log_service import run_log_service
+    from app.core.shared.run_service import run_service
+    from app.core.storage.minio_service import get_minio_service
     from app.core.storage.storage_path_service import storage_paths
 
     logger = logging.getLogger("curatore.tasks.enhancement")
@@ -739,7 +736,7 @@ async def _enhance_extraction_async(
             return {"status": "failed", "error": "MinIO service unavailable"}
 
         # Find the latest successful basic extraction
-        from sqlalchemy import select, and_
+        from sqlalchemy import and_, select
         basic_extraction_result = await session.execute(
             select(ExtractionResult)
             .where(and_(
@@ -784,8 +781,8 @@ async def _enhance_extraction_async(
         )
 
         # Download asset to temp file for Docling processing
-        import tempfile
         import shutil
+        import tempfile
         import time
 
         temp_dir = Path(tempfile.mkdtemp(prefix="curatore_enhance_"))
@@ -812,7 +809,7 @@ async def _enhance_extraction_async(
                                 break
 
                 if not docling_engine_name:
-                    logger.warning(f"No enabled Docling engine found in config, skipping enhancement")
+                    logger.warning("No enabled Docling engine found in config, skipping enhancement")
                     await extraction_result_service.record_extraction_failure(
                         session=session,
                         extraction_id=extraction_id,

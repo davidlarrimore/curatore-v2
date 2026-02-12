@@ -823,6 +823,170 @@ class MetadataRegistryService:
         }
 
     # =========================================================================
+    # Export to YAML Baseline
+    # =========================================================================
+
+    async def export_facets_to_yaml(self, session: AsyncSession) -> Dict[str, Any]:
+        """
+        Export global facet definitions from DB back to ``registry/facets.yaml``.
+
+        Reads all global (organization_id=NULL) facet definitions and their
+        mappings, then writes them in the same YAML structure the file uses.
+
+        ``has_reference_data`` is inferred from whether the facet has any
+        active entries in ``facet_reference_values``.
+
+        Returns summary: ``{facets_exported, mappings_exported}``.
+        """
+        from ..database.models import FacetDefinition, FacetMapping, FacetReferenceValue
+
+        # Fetch global facet definitions
+        result = await session.execute(
+            select(FacetDefinition).where(
+                FacetDefinition.organization_id.is_(None),
+                FacetDefinition.status == "active",
+            ).order_by(FacetDefinition.facet_name)
+        )
+        facet_records = result.scalars().all()
+
+        if not facet_records:
+            return {"facets_exported": 0, "mappings_exported": 0}
+
+        # Batch-fetch all mappings
+        facet_ids = [f.id for f in facet_records]
+        mapping_result = await session.execute(
+            select(FacetMapping).where(
+                FacetMapping.facet_definition_id.in_(facet_ids)
+            ).order_by(FacetMapping.content_type)
+        )
+        all_mappings = mapping_result.scalars().all()
+
+        mappings_by_facet: Dict[str, List] = {}
+        for m in all_mappings:
+            mappings_by_facet.setdefault(str(m.facet_definition_id), []).append(m)
+
+        # Determine which facets have reference data
+        ref_result = await session.execute(
+            select(FacetReferenceValue.facet_name).where(
+                FacetReferenceValue.status == "active",
+            ).distinct()
+        )
+        facets_with_ref_data = {row[0] for row in ref_result}
+
+        # Build YAML structure
+        facets_dict: Dict[str, Any] = {}
+        total_mappings = 0
+
+        for facet in facet_records:
+            entry: Dict[str, Any] = {}
+            entry["display_name"] = facet.display_name or facet.facet_name
+            entry["data_type"] = facet.data_type
+            if facet.description:
+                entry["description"] = facet.description
+            if facet.facet_name in facets_with_ref_data:
+                entry["has_reference_data"] = True
+            entry["operators"] = facet.operators or ["eq", "in"]
+
+            facet_mappings = mappings_by_facet.get(str(facet.id), [])
+            if facet_mappings:
+                entry["mappings"] = {
+                    m.content_type: m.json_path for m in facet_mappings
+                }
+                total_mappings += len(facet_mappings)
+
+            facets_dict[facet.facet_name] = entry
+
+        # Write YAML
+        yaml_path = _REGISTRY_DIR / "facets.yaml"
+        output = {"facets": facets_dict}
+
+        with open(yaml_path, "w") as f:
+            f.write("# ============================================================================\n")
+            f.write("# Cross-Domain Facet Definitions — Curatore Data Core\n")
+            f.write("# ============================================================================\n")
+            f.write("#\n")
+            f.write("# Auto-exported from database by Sync to YAML.\n")
+            f.write("# See MetadataRegistryService.export_facets_to_yaml() for details.\n")
+            f.write("#\n\n")
+            yaml.dump(
+                output,
+                f,
+                default_flow_style=False,
+                allow_unicode=True,
+                sort_keys=False,
+                width=120,
+            )
+
+        # Force reload so in-memory state picks up the new file
+        self._loaded = False
+
+        logger.info(
+            f"Exported facets to YAML: {len(facets_dict)} facets, "
+            f"{total_mappings} mappings"
+        )
+
+        return {
+            "facets_exported": len(facets_dict),
+            "mappings_exported": total_mappings,
+        }
+
+    # =========================================================================
+    # Flush and Rebuild from YAML
+    # =========================================================================
+
+    async def rebuild_from_yaml(self, session: AsyncSession) -> Dict[str, Any]:
+        """
+        Flush and rebuild the entire metadata catalog in DB from YAML files.
+
+        1. Force-reloads all YAML files from disk.
+        2. Deletes and re-inserts global field and facet definitions
+           (via ``load_baseline``).
+        3. Deletes and re-seeds global facet reference data.
+
+        Org-level overrides are untouched.
+
+        Returns combined summary dict.
+
+        .. todo:: Gate this endpoint behind an ``org_admin`` (or stricter)
+           role check once role-based access control is implemented.
+        """
+        from .facet_reference_service import facet_reference_service
+
+        # Step 1: Force-reload YAML files from disk
+        self.reload_yaml()
+        facet_reference_service._yaml_loaded = False
+        facet_reference_service._ensure_yaml_loaded()
+
+        # Step 2: Re-sync field + facet definitions (delete-and-reinsert)
+        registry_counts = await self.load_baseline(session)
+
+        # Step 3: Flush global reference values + aliases, then re-seed
+        await session.execute(
+            text(
+                "DELETE FROM facet_reference_aliases "
+                "WHERE reference_value_id IN ("
+                "  SELECT id FROM facet_reference_values "
+                "  WHERE organization_id IS NULL"
+                ")"
+            )
+        )
+        await session.execute(
+            text("DELETE FROM facet_reference_values WHERE organization_id IS NULL")
+        )
+        await session.flush()
+        facet_reference_service.invalidate_cache()
+
+        ref_counts = await facet_reference_service.load_baseline(session)
+
+        return {
+            "fields_synced": registry_counts.get("fields", 0),
+            "facets_synced": registry_counts.get("facets", 0),
+            "mappings_synced": registry_counts.get("mappings", 0),
+            "reference_values_seeded": ref_counts.get("values", 0),
+            "reference_aliases_seeded": ref_counts.get("aliases", 0),
+        }
+
+    # =========================================================================
     # Cache Management
     # =========================================================================
 

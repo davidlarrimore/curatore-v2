@@ -38,14 +38,22 @@ import asyncio
 import logging
 import sys
 from pathlib import Path
-from typing import List, Optional
+from typing import Optional
 from uuid import UUID
 
 # Add parent directory to path
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from sqlalchemy import select, delete
-from app.core.database.models import Artifact, Asset, ScrapedAsset, ScrapeSource, ScrapeCollection, ExtractionResult, Run
+from sqlalchemy import delete, select
+
+from app.core.database.models import (
+    Artifact,
+    Asset,
+    ExtractionResult,
+    Run,
+    ScrapeCollection,
+    ScrapedAsset,
+)
 from app.core.shared.database_service import database_service
 from app.core.storage.minio_service import get_minio_service
 
@@ -64,7 +72,7 @@ def confirm_cleanup(org_id: Optional[UUID] = None, bucket: Optional[str] = None,
     elif org_id:
         print(f"  Scope: Organization {org_id}")
     else:
-        print(f"  Scope: ALL organizations and buckets")
+        print("  Scope: ALL organizations and buckets")
 
     print("\n  This will DELETE:")
     print("    • All objects in MinIO/S3 storage (within scope)")
@@ -451,9 +459,10 @@ async def recreate_storage_structure(minio, org_id: Optional[UUID] = None, dry_r
     elif not dry_run:
         # Get default organization if no org_id specified
         try:
+            from sqlalchemy import select
+
             from app.config import settings
             from app.core.database.models import Organization
-            from sqlalchemy import select
 
             async with database_service.get_session() as session:
                 # Try to get default organization

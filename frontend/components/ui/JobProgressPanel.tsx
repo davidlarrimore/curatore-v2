@@ -1,27 +1,26 @@
 'use client'
 
 /**
- * Running Job Banner Component
+ * Job Progress Panel
  *
- * Reusable banner for displaying active parent jobs with progress,
- * child job counts, and links to the job manager.
+ * Unified component for displaying active job progress. Drop it on any page
+ * with resourceType + resourceId and it handles everything: auto-show/hide,
+ * progress bar, phase label, child jobs, View Job link.
+ *
+ * Two variants:
+ *   - default: Full card for detail pages (rich display)
+ *   - compact: Slim banner for list pages (one line per job)
  */
 
+import { ReactNode } from 'react'
 import { Loader2, ExternalLink } from 'lucide-react'
 import Link from 'next/link'
-import { ActiveJob, JobProgress } from '@/lib/context-shims'
+import { useJobProgress, useJobProgressByType } from '@/lib/useJobProgress'
 import { JOB_TYPE_CONFIG, JobType } from '@/lib/job-type-config'
+import { UnifiedJob } from '@/lib/unified-jobs-context'
 import { formatTimeAgo } from '@/lib/date-utils'
 
-interface RunningJobBannerProps {
-  job: ActiveJob
-  variant?: 'default' | 'compact'
-  showProgress?: boolean
-  showChildJobs?: boolean
-  onViewJob?: () => void
-}
-
-// Color class mappings for Tailwind (to ensure classes are included in build)
+// Color class mappings (explicit to ensure Tailwind includes them in build)
 const colorClasses: Record<string, { bg: string; border: string; text: string; progressBg: string }> = {
   purple: {
     bg: 'bg-purple-50 dark:bg-purple-900/20',
@@ -65,16 +64,103 @@ const colorClasses: Record<string, { bg: string; border: string; text: string; p
     text: 'text-red-600 dark:text-red-400',
     progressBg: 'bg-red-500',
   },
+  gray: {
+    bg: 'bg-gray-50 dark:bg-gray-900/20',
+    border: 'border-gray-200 dark:border-gray-700',
+    text: 'text-gray-600 dark:text-gray-400',
+    progressBg: 'bg-gray-500',
+  },
 }
 
-export function RunningJobBanner({
-  job,
+// ============================================================================
+// Resource-scoped panel (detail pages)
+// ============================================================================
+
+interface JobProgressPanelProps {
+  resourceType: string
+  resourceId: string | undefined
+  onComplete?: () => void
+  variant?: 'default' | 'compact'
+  className?: string
+  /** Optional: inject page-specific stats below the progress bar */
+  renderStats?: (job: UnifiedJob) => ReactNode
+}
+
+export function JobProgressPanel({
+  resourceType,
+  resourceId,
+  onComplete,
   variant = 'default',
-  showProgress = true,
-  showChildJobs = true,
-  onViewJob,
-}: RunningJobBannerProps) {
-  const config = JOB_TYPE_CONFIG[job.jobType]
+  className = '',
+  renderStats,
+}: JobProgressPanelProps) {
+  const { jobs, isActive } = useJobProgress(resourceType, resourceId, { onComplete })
+
+  if (!isActive) return null
+
+  return (
+    <div className={className}>
+      {jobs.map(job => (
+        <JobCard key={job.runId} job={job} variant={variant} renderStats={renderStats} />
+      ))}
+    </div>
+  )
+}
+
+// ============================================================================
+// Type-scoped panel (list pages — renders per-resource)
+// ============================================================================
+
+interface JobProgressPanelByTypeProps {
+  jobType: JobType
+  /** Filter to a specific resource */
+  resourceId?: string
+  onComplete?: () => void
+  variant?: 'default' | 'compact'
+  className?: string
+}
+
+export function JobProgressPanelByType({
+  jobType,
+  resourceId,
+  onComplete,
+  variant = 'compact',
+  className = '',
+}: JobProgressPanelByTypeProps) {
+  const { jobs, isActive } = useJobProgressByType(jobType, { onComplete })
+
+  const filtered = resourceId
+    ? jobs.filter(j => j.resourceId === resourceId)
+    : jobs
+
+  if (filtered.length === 0) return null
+
+  return (
+    <div className={className}>
+      {filtered.map(job => (
+        <JobCard key={job.runId} job={job} variant={variant} />
+      ))}
+    </div>
+  )
+}
+
+// ============================================================================
+// Internal: Job Card rendering
+// ============================================================================
+
+interface JobCardProps {
+  job: UnifiedJob
+  variant: 'default' | 'compact'
+  renderStats?: (job: UnifiedJob) => ReactNode
+}
+
+function JobCard({ job, variant, renderStats }: JobCardProps) {
+  const jobType = job.jobType as JobType
+  const config = JOB_TYPE_CONFIG[jobType]
+
+  // Fallback for unknown job types (e.g. deletion)
+  if (!config) return null
+
   const Icon = config.icon
   const colors = colorClasses[config.color] || colorClasses.blue
 
@@ -82,7 +168,7 @@ export function RunningJobBanner({
   const progressPercent =
     job.progress?.total && job.progress?.current
       ? Math.round((job.progress.current / job.progress.total) * 100)
-      : null
+      : job.progress?.percent ?? null
 
   // Calculate child job progress
   const childJobsPercent =
@@ -95,31 +181,41 @@ export function RunningJobBanner({
         )
       : null
 
+  // ── Compact variant ──────────────────────────────────────────────────
   if (variant === 'compact') {
     return (
-      <div
-        className={`flex items-center gap-3 px-4 py-2 rounded-lg ${colors.bg} border ${colors.border}`}
-      >
+      <div className={`flex items-center gap-3 px-4 py-2 rounded-lg ${colors.bg} border ${colors.border}`}>
         <Loader2 className={`w-4 h-4 animate-spin ${colors.text}`} />
-        <span className="text-sm font-medium text-gray-700 dark:text-gray-300">
+        <Icon className={`w-4 h-4 ${colors.text}`} />
+        <span className="text-sm font-medium text-gray-700 dark:text-gray-300 truncate">
           {config.label}: {job.displayName}
         </span>
+        {job.progress?.phase && (
+          <span className="text-xs text-gray-500 dark:text-gray-400 capitalize hidden sm:inline">
+            {job.progress.phase}
+          </span>
+        )}
         {progressPercent !== null && (
-          <span className="text-xs text-gray-500 dark:text-gray-400">
+          <span className="text-xs font-medium text-gray-500 dark:text-gray-400">
             {progressPercent}%
+          </span>
+        )}
+        {job.progress?.current !== undefined && job.progress?.total !== undefined && (
+          <span className="text-xs text-gray-500 dark:text-gray-400 hidden md:inline">
+            {job.progress.current}/{job.progress.total}
           </span>
         )}
         <Link
           href={`/admin/queue/${job.runId}`}
-          className={`text-xs ${colors.text} hover:underline ml-auto`}
-          onClick={onViewJob}
+          className={`text-xs ${colors.text} hover:underline ml-auto flex-shrink-0`}
         >
-          View
+          View Job
         </Link>
       </div>
     )
   }
 
+  // ── Default variant ──────────────────────────────────────────────────
   return (
     <div className={`rounded-xl ${colors.bg} border ${colors.border} p-4`}>
       {/* Header row */}
@@ -136,6 +232,11 @@ export function RunningJobBanner({
               <span className="text-sm font-medium text-gray-900 dark:text-white">
                 {config.label}
               </span>
+              {progressPercent !== null && (
+                <span className="text-sm font-medium text-gray-500 dark:text-gray-400">
+                  {progressPercent}%
+                </span>
+              )}
             </div>
             <p className="text-sm text-gray-700 dark:text-gray-300 font-medium">
               {job.displayName}
@@ -153,8 +254,7 @@ export function RunningJobBanner({
 
         <Link
           href={`/admin/queue/${job.runId}`}
-          className={`flex items-center gap-1 text-sm ${colors.text} hover:underline`}
-          onClick={onViewJob}
+          className={`flex items-center gap-1 text-sm ${colors.text} hover:underline flex-shrink-0`}
         >
           View Job
           <ExternalLink className="w-3.5 h-3.5" />
@@ -162,12 +262,13 @@ export function RunningJobBanner({
       </div>
 
       {/* Progress bar */}
-      {showProgress && progressPercent !== null && (
+      {progressPercent !== null && (
         <div className="mt-4">
           <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
             <span>
-              {job.progress?.current?.toLocaleString()} /{' '}
-              {job.progress?.total?.toLocaleString()} items
+              {job.progress?.current !== undefined && job.progress?.total !== undefined
+                ? `${job.progress.current.toLocaleString()} / ${job.progress.total.toLocaleString()} items`
+                : ''}
             </span>
             <span>{progressPercent}%</span>
           </div>
@@ -180,8 +281,15 @@ export function RunningJobBanner({
         </div>
       )}
 
+      {/* Current item */}
+      {job.progress?.currentItem && (
+        <p className="mt-3 text-xs text-gray-500 dark:text-gray-400 truncate">
+          Processing: <span className="font-mono">{job.progress.currentItem}</span>
+        </p>
+      )}
+
       {/* Child jobs grid */}
-      {showChildJobs && config.hasChildJobs && job.progress?.childJobsTotal !== undefined && (
+      {config.hasChildJobs && job.progress?.childJobsTotal !== undefined && (
         <div className="mt-4 grid grid-cols-3 gap-3">
           <div className="text-center p-2 rounded-lg bg-white/50 dark:bg-gray-800/50">
             <p className="text-lg font-bold text-gray-900 dark:text-white">
@@ -205,7 +313,7 @@ export function RunningJobBanner({
       )}
 
       {/* Child jobs progress bar */}
-      {showChildJobs && childJobsPercent !== null && childJobsPercent < 100 && (
+      {childJobsPercent !== null && childJobsPercent < 100 && (
         <div className="mt-3">
           <div className="flex items-center justify-between text-xs text-gray-600 dark:text-gray-400 mb-1">
             <span>Child jobs progress</span>
@@ -220,14 +328,10 @@ export function RunningJobBanner({
         </div>
       )}
 
-      {/* Current item */}
-      {job.progress?.currentItem && (
-        <p className="mt-3 text-xs text-gray-500 dark:text-gray-400 truncate">
-          Processing: <span className="font-mono">{job.progress.currentItem}</span>
-        </p>
-      )}
+      {/* Optional page-specific stats */}
+      {renderStats && renderStats(job)}
     </div>
   )
 }
 
-export default RunningJobBanner
+export default JobProgressPanel

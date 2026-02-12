@@ -1,11 +1,10 @@
 # Tools Call Handler Tests
 """Tests for MCP tools/call handler."""
 
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import pytest
 from app.handlers.tools_call import handle_tools_call
-from app.models.mcp import MCPToolsCallResponse
 
 
 def _make_v2_policy_mock():
@@ -210,6 +209,28 @@ class TestToolsCall:
                     assert result.isError is True
                     assert "Unknown facets" in result.content[0].text
                     assert "invalid_facet" in result.content[0].text
+
+    @pytest.mark.asyncio
+    async def test_null_arguments_stripped(self, sample_contract, sample_execution_result):
+        """Test that explicit null values are stripped before validation."""
+        with patch("app.handlers.tools_call.policy_service") as mock_policy:
+            with patch("app.handlers.tools_call.backend_client") as mock_client:
+                mock_policy.is_allowed.return_value = True
+                mock_policy.policy.is_v2 = True
+                mock_policy.block_side_effects = True
+                mock_policy.validate_facets = False
+                mock_policy.apply_clamps.return_value = {"query": "test"}
+                mock_client.get_contract = AsyncMock(return_value=sample_contract)
+                mock_client.execute_function = AsyncMock(return_value=sample_execution_result)
+
+                # Send null values alongside valid required params — should not
+                # fail validation (null is stripped before schema check).
+                result = await handle_tools_call(
+                    "search_assets",
+                    {"query": "test", "limit": None, "focus": None},
+                )
+
+                assert result.isError is False
 
     @pytest.mark.asyncio
     async def test_v1_legacy_mode_skips_exposure_check(self, sample_contract, sample_execution_result):

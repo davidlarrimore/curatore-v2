@@ -2,11 +2,10 @@ import os
 import shutil
 import tempfile
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
 from fastapi.testclient import TestClient
-
 
 # Configure a writable temp directory for tests before importing app modules.
 # Use the system temp directory to avoid cluttering the repo tree.

@@ -24,11 +24,10 @@ import asyncio
 import logging
 import sys
 from collections import defaultdict
-from datetime import datetime
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 from uuid import UUID
 
-from sqlalchemy import select, and_, func, text
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 # Setup path for imports
@@ -232,8 +231,8 @@ async def cleanup_duplicates(
         logger.info(f"Duplicate groups found: {stats['duplicate_groups']}")
         logger.info(f"Assets to delete: {stats['assets_to_delete']}")
         if dry_run:
-            logger.info(f"[DRY RUN] No actual deletions performed")
-            logger.info(f"Run with --delete flag to actually delete duplicates")
+            logger.info("[DRY RUN] No actual deletions performed")
+            logger.info("Run with --delete flag to actually delete duplicates")
         else:
             logger.info(f"Assets deleted: {stats['assets_deleted']}")
             logger.info(f"Errors: {stats['errors']}")
