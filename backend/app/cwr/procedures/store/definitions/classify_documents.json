@@ -11,17 +11,17 @@
       "name": "find_unclassified_documents",
       "function": "search_assets",
       "params": {
+        "limit": 500,
         "query": "*",
-        "site_name": "Growth",
-        "folder_path": "sharepoint/growth-sharepoint/reuse-material/past-performances",
-        "folder_match_mode": "prefix",
-        "limit": 200,
         "where": [
           {
-            "field": "file.document_type",
-            "op": "is_empty"
+            "op": "is_empty",
+            "field": "file.document_type"
           }
-        ]
+        ],
+        "site_name": "Growth",
+        "folder_path": "sharepoint/growth-sharepoint/reuse-material/past-performances",
+        "folder_match_mode": "prefix"
       },
       "on_error": "fail",
       "condition": null,
@@ -33,9 +33,9 @@
       "name": "log_found_documents",
       "function": "log",
       "params": {
-        "message": "Found {{ steps.find_unclassified_documents | length }} unclassified documents in Past Performances folder",
+        "label": "document_count",
         "level": "INFO",
-        "label": "document_count"
+        "message": "Found {{ steps.find_unclassified_documents | length }} unclassified documents in Past Performances folder"
       },
       "on_error": "fail",
       "condition": null,
@@ -60,8 +60,8 @@
             "name": "classify_document",
             "function": "classify_document",
             "params": {
-              "asset_id": "{{ item.id }}",
-              "persist": true
+              "persist": true,
+              "asset_id": "{{ item.id }}"
             },
             "on_error": "continue",
             "condition": null,
@@ -76,10 +76,10 @@
       "name": "filter_successful_classifications",
       "function": "log",
       "params": {
-        "message": "Successfully classified {{ steps.classify_each_document | compact | length }} documents",
         "data": "{{ steps.classify_each_document | compact }}",
+        "label": "classification_results",
         "level": "INFO",
-        "label": "classification_results"
+        "message": "Successfully classified {{ steps.classify_each_document | compact | length }} documents"
       },
       "on_error": "fail",
       "condition": null,

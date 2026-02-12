@@ -34,7 +34,7 @@ from sqlalchemy import (
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import backref, relationship
 
 from .base import Base
 
@@ -151,6 +151,7 @@ class Procedure(Base):
         "ProcedureTrigger",
         back_populates="procedure",
         cascade="all, delete-orphan",
+        passive_deletes=True,
     )
 
     # Indexes
@@ -207,7 +208,7 @@ class ProcedureVersion(Base):
 
     # Relationships
     organization = relationship("Organization")
-    procedure = relationship("Procedure", backref="versions")
+    procedure = relationship("Procedure", backref=backref("versions", cascade="all, delete-orphan", passive_deletes=True))
     user = relationship("User")
 
     __table_args__ = (

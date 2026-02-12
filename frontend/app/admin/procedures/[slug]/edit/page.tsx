@@ -4,7 +4,8 @@ import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import { useRouter, useParams } from 'next/navigation'
 import YAML from 'yaml'
 import { useAuth } from '@/lib/auth-context'
-import { useActiveJobs } from '@/lib/context-shims'
+import { useUnifiedJobs } from '@/lib/unified-jobs-context'
+import { useJobProgress } from '@/lib/useJobProgress'
 import {
   proceduresApi,
   functionsApi,
@@ -37,6 +38,7 @@ import {
   Box,
 } from 'lucide-react'
 import { AIGeneratorPanel, type AIGeneratorPanelHandle } from '@/components/procedures/AIGeneratorPanel'
+import { JobProgressPanel } from '@/components/ui/JobProgressPanel'
 
 export default function EditProcedurePage() {
   return (
@@ -51,7 +53,10 @@ function ProcedureEditor() {
   const params = useParams()
   const slug = params.slug as string
   const { token } = useAuth()
-  const { addJob } = useActiveJobs()
+  const { addJob } = useUnifiedJobs()
+  const { isActive: isProcedureRunning } = useJobProgress('procedure', slug, {
+    onComplete: () => loadProcedure(),
+  })
 
   // Procedure state
   const [procedure, setProcedure] = useState<Procedure | null>(null)
@@ -65,7 +70,6 @@ function ProcedureEditor() {
 
   // UI state
   const [isSaving, setIsSaving] = useState(false)
-  const [isRunning, setIsRunning] = useState(false)
   const [isValidating, setIsValidating] = useState(false)
   const [isDeleting, setIsDeleting] = useState(false)
   const [isConverting, setIsConverting] = useState(false)
@@ -93,27 +97,26 @@ function ProcedureEditor() {
   const [expandedFunctions, setExpandedFunctions] = useState<Set<string>>(new Set())
 
   // Load procedure
-  useEffect(() => {
+  const loadProcedure = useCallback(async () => {
     if (!token || !slug) return
+    try {
+      const proc = await proceduresApi.getProcedure(token, slug)
+      setProcedure(proc)
 
-    const loadProcedure = async () => {
-      try {
-        const proc = await proceduresApi.getProcedure(token, slug)
-        setProcedure(proc)
-
-        // Convert definition to YAML
-        const yaml = YAML.stringify(proc.definition)
-        setYamlContent(yaml)
-        setSavedYaml(yaml)
-      } catch (err: any) {
-        setLoadError(err.message || 'Failed to load procedure')
-      } finally {
-        setIsLoading(false)
-      }
+      // Convert definition to YAML
+      const yaml = YAML.stringify(proc.definition)
+      setYamlContent(yaml)
+      setSavedYaml(yaml)
+    } catch (err: any) {
+      setLoadError(err.message || 'Failed to load procedure')
+    } finally {
+      setIsLoading(false)
     }
-
-    loadProcedure()
   }, [token, slug])
+
+  useEffect(() => {
+    loadProcedure()
+  }, [loadProcedure])
 
   // Load functions
   useEffect(() => {
@@ -267,7 +270,6 @@ function ProcedureEditor() {
   const handleRun = async () => {
     if (!token || !procedure) return
 
-    setIsRunning(true)
     try {
       const result = await proceduresApi.runProcedure(token, procedure.slug, {}, false, true)
       if (result.run_id) {
@@ -284,8 +286,6 @@ function ProcedureEditor() {
     } catch (err: any) {
       setErrorMessage(err.message || 'Failed to run procedure')
       setTimeout(() => setErrorMessage(''), 5000)
-    } finally {
-      setIsRunning(false)
     }
   }
 
@@ -576,16 +576,16 @@ function ProcedureEditor() {
               <Button
                 variant="secondary"
                 onClick={handleRun}
-                disabled={isRunning || isDirty}
+                disabled={isProcedureRunning || isDirty}
                 className="gap-2"
-                title={isDirty ? 'Save changes before running' : undefined}
+                title={isDirty ? 'Save changes before running' : isProcedureRunning ? 'Procedure is already running' : undefined}
               >
-                {isRunning ? (
+                {isProcedureRunning ? (
                   <Loader2 className="w-4 h-4 animate-spin" />
                 ) : (
                   <Play className="w-4 h-4" />
                 )}
-                Run
+                {isProcedureRunning ? 'Running' : 'Run'}
               </Button>
               <Button
                 variant="primary"
@@ -668,6 +668,16 @@ function ProcedureEditor() {
           </div>
         </div>
       )}
+
+      {/* Job progress banner */}
+      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 pt-4">
+        <JobProgressPanel
+          resourceType="procedure"
+          resourceId={slug}
+          variant="default"
+          className="space-y-3"
+        />
+      </div>
 
       {/* Main content - two panels */}
       <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-6">

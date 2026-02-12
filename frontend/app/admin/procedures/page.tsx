@@ -608,18 +608,25 @@ function ProceduresContent() {
                         Run
                       </button>
 
-                      <button
-                        onClick={() => setConfirmDelete(procedure)}
-                        disabled={deletingProcedure === procedure.slug}
-                        title="Delete procedure"
-                        className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-red-500 dark:text-red-400 border border-red-200 dark:border-red-800/50 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 hover:border-red-300 dark:hover:border-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                      >
-                        {deletingProcedure === procedure.slug ? (
-                          <Loader2 className="w-4 h-4 animate-spin" />
-                        ) : (
-                          <Trash2 className="w-4 h-4" />
+                      <div className="relative group/delete">
+                        <button
+                          onClick={() => setConfirmDelete(procedure)}
+                          disabled={deletingProcedure === procedure.slug || procedure.is_system}
+                          title={procedure.is_system ? "" : "Delete procedure"}
+                          className="inline-flex items-center justify-center w-9 h-9 rounded-lg text-red-500 dark:text-red-400 border border-red-200 dark:border-red-800/50 bg-red-50 dark:bg-red-900/20 hover:bg-red-100 dark:hover:bg-red-900/40 hover:border-red-300 dark:hover:border-red-700 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                          {deletingProcedure === procedure.slug ? (
+                            <Loader2 className="w-4 h-4 animate-spin" />
+                          ) : (
+                            <Trash2 className="w-4 h-4" />
+                          )}
+                        </button>
+                        {procedure.is_system && (
+                          <div className="absolute bottom-full right-0 mb-2 w-56 px-3 py-2 text-xs text-gray-700 dark:text-gray-200 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg opacity-0 pointer-events-none group-hover/delete:opacity-100 transition-opacity z-50">
+                            System procedures are managed by administrators and cannot be deleted from the UI.
+                          </div>
                         )}
-                      </button>
+                      </div>
                     </div>
                   </div>
 
