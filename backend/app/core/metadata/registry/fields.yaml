@@ -468,6 +468,22 @@ fields:
       applicable_content_types: [asset]
       description: "File description from source system"
 
+    extraction_status:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [asset]
+      description: "Document extraction pipeline status"
+      examples: ["pending", "ready", "failed"]
+
+    extraction_tier:
+      data_type: string
+      indexed: true
+      facetable: true
+      applicable_content_types: [asset]
+      description: "Extraction quality tier — basic (fast engines) or enhanced (Docling)"
+      examples: ["basic", "enhanced"]
+
     document_type:
       data_type: string
       indexed: true

@@ -601,6 +601,13 @@ class AssetService:
         asset.status = status
         asset.updated_at = datetime.utcnow()
 
+        # Propagate extraction_status to source_metadata for search indexing
+        sm = dict(asset.source_metadata or {})
+        file_ns = dict(sm.get("file", {}))
+        file_ns["extraction_status"] = status
+        sm["file"] = file_ns
+        asset.source_metadata = sm
+
         await session.commit()
         await session.refresh(asset)
 

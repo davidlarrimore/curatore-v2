@@ -225,3 +225,19 @@ facets:
     operators: [eq, in]
     mappings:
       asset: "file.document_type"
+
+  extraction_status:
+    display_name: "Extraction Status"
+    data_type: string
+    description: "Document extraction pipeline status — pending, ready, or failed"
+    operators: [eq, in]
+    mappings:
+      asset: "file.extraction_status"
+
+  extraction_tier:
+    display_name: "Extraction Tier"
+    data_type: string
+    description: "Extraction quality tier — basic (fast engines) or enhanced (Docling)"
+    operators: [eq, in]
+    mappings:
+      asset: "file.extraction_tier"

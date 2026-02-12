@@ -408,6 +408,13 @@ class ExtractionOrchestrator:
                 extraction.extraction_tier = "basic"
                 asset.extraction_tier = "basic"
 
+            # Write extraction_tier to source_metadata for search indexing
+            sm = dict(asset.source_metadata or {})
+            file_ns = dict(sm.get("file", {}))
+            file_ns["extraction_tier"] = asset.extraction_tier
+            sm["file"] = file_ns
+            asset.source_metadata = sm
+
             # Update Asset status to ready
             await asset_service.update_asset_status(session, asset_id, "ready")
 

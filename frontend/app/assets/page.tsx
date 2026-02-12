@@ -1,7 +1,7 @@
 'use client'
 
 import { useState, useEffect, useCallback } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { useAuth } from '@/lib/auth-context'
 import { assetsApi, type CollectionHealth } from '@/lib/api'
@@ -54,6 +54,7 @@ export default function AssetsPage() {
 
 function AssetsContent() {
   const router = useRouter()
+  const searchParams = useSearchParams()
   const { token } = useAuth()
 
   const [assets, setAssets] = useState<Asset[]>([])
@@ -62,7 +63,7 @@ function AssetsContent() {
   const [error, setError] = useState('')
   const [successMessage, setSuccessMessage] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
-  const [statusFilter, setStatusFilter] = useState<string>('all')
+  const [statusFilter, setStatusFilter] = useState<string>(searchParams.get('status') || 'all')
   const [sourceTypeFilter, setSourceTypeFilter] = useState<string>('all')
   const [page, setPage] = useState(1)
   const [limit] = useState(20)

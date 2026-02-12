@@ -98,7 +98,7 @@ async def _check_redis() -> Dict[str, Any]:
 async def _check_celery() -> Dict[str, Any]:
     """Check Celery worker health."""
     try:
-        insp = celery_app.control.inspect(timeout=2.0)
+        insp = celery_app.control.inspect(timeout=5.0)
         ping_result = insp.ping() or {}
         worker_count = len(ping_result)
 
@@ -171,7 +171,7 @@ async def _check_docling() -> Dict[str, Any]:
         }
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             health_url = f"{docling_url}/health"
             try:
                 resp = await client.get(health_url)
@@ -288,7 +288,7 @@ async def _check_playwright() -> Dict[str, Any]:
     try:
         import httpx
 
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             health_url = f"{playwright_url}/health"
             try:
                 resp = await client.get(health_url)

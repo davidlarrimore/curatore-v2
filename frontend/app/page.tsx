@@ -3,12 +3,13 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useRouter } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
-import { systemApi, runsApi, objectStorageApi, assetsApi } from '@/lib/api'
+import { systemApi, runsApi, objectStorageApi, assetsApi, type CollectionHealth } from '@/lib/api'
 import {
   SystemHealthCard,
   StorageOverviewCard,
   QuickActionsCard,
   RecentActivityCard,
+  AssetHealthCard,
 } from '@/components/dashboard'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import { LayoutDashboard, RefreshCw, Loader2 } from 'lucide-react'
@@ -89,12 +90,14 @@ function DashboardContent() {
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null)
   const [assetCount, setAssetCount] = useState<number | null>(null)
   const [recentRuns, setRecentRuns] = useState<Run[]>([])
+  const [assetHealth, setAssetHealth] = useState<CollectionHealth | null>(null)
 
   // Loading states
   const [isLoadingHealth, setIsLoadingHealth] = useState(true)
   const [isLoadingStats, setIsLoadingStats] = useState(true)
   const [isLoadingStorage, setIsLoadingStorage] = useState(true)
   const [isLoadingRuns, setIsLoadingRuns] = useState(true)
+  const [isLoadingAssetHealth, setIsLoadingAssetHealth] = useState(true)
   const [isRefreshing, setIsRefreshing] = useState(false)
 
   // Fetch health data
@@ -120,6 +123,18 @@ function DashboardContent() {
       setRecentRuns(runsData.items || [])
     } catch (error) {
       console.error('Failed to fetch run stats:', error)
+    }
+  }, [token])
+
+  // Fetch asset health
+  const fetchAssetHealth = useCallback(async () => {
+    if (!token) return
+
+    try {
+      const health = await assetsApi.getCollectionHealth(token)
+      setAssetHealth(health)
+    } catch (error) {
+      console.error('Failed to fetch asset health:', error)
     }
   }, [token])
 
@@ -154,13 +169,14 @@ function DashboardContent() {
           setIsLoadingRuns(false)
         }),
         fetchStorageHealth().finally(() => setIsLoadingStorage(false)),
+        fetchAssetHealth().finally(() => setIsLoadingAssetHealth(false)),
       ])
     }
 
     if (isAuthenticated && token) {
       loadAll()
     }
-  }, [isAuthenticated, token, fetchHealthData, fetchRunStats, fetchStorageHealth])
+  }, [isAuthenticated, token, fetchHealthData, fetchRunStats, fetchStorageHealth, fetchAssetHealth])
 
   // Refresh all data
   const handleRefreshAll = async () => {
@@ -169,6 +185,7 @@ function DashboardContent() {
       fetchHealthData(),
       fetchRunStats(),
       fetchStorageHealth(),
+      fetchAssetHealth(),
     ])
     setIsRefreshing(false)
   }
@@ -236,6 +253,12 @@ function DashboardContent() {
                 <span className="font-medium">{successRate}%</span>
                 <span>success rate</span>
               </div>
+              {assetHealth && assetHealth.total_assets > 0 && (
+                <div className="flex items-center gap-2 px-3 py-1.5 rounded-full bg-purple-50 dark:bg-purple-900/20 text-purple-700 dark:text-purple-400">
+                  <span className="font-medium">{assetHealth.extraction_coverage}%</span>
+                  <span>extraction coverage</span>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -263,6 +286,14 @@ function DashboardContent() {
               storageStats={storageStats}
               assetCount={assetCount}
               isLoading={isLoadingStorage}
+            />
+          </div>
+
+          {/* Asset Health */}
+          <div>
+            <AssetHealthCard
+              health={assetHealth}
+              isLoading={isLoadingAssetHealth}
             />
           </div>
 

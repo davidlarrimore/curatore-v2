@@ -140,7 +140,7 @@ class DocumentService:
                 # Docling commonly exposes /health; attempt /health then fallback to /v1/health or /healthz
                 url = f"{base}/health"
                 try:
-                    async with httpx.AsyncClient(timeout=5.0, verify=getattr(settings, 'docling_verify_ssl', True)) as client:
+                    async with httpx.AsyncClient(timeout=10.0, verify=getattr(settings, 'docling_verify_ssl', True)) as client:
                         resp = await client.get(url)
                         if resp.status_code >= 400:
                             # Try alternate health paths
@@ -176,7 +176,7 @@ class DocumentService:
                 if not base:
                     return {"engine": engine, "connected": False, "endpoint": None, "error": "not_configured"}
                 url = f"{base}/api/v1/system/health"
-                async with httpx.AsyncClient(timeout=5.0, verify=getattr(settings, 'extraction_service_verify_ssl', True)) as client:
+                async with httpx.AsyncClient(timeout=10.0, verify=getattr(settings, 'extraction_service_verify_ssl', True)) as client:
                     resp = await client.get(url)
                     ok = resp.status_code == 200
                     data = resp.json() if ok else {"status_code": resp.status_code}
@@ -215,7 +215,7 @@ class DocumentService:
             base = getattr(self, 'extract_base', '')
             if base:
                 default_url = f"{base}/api/v1/system/health"
-                async with httpx.AsyncClient(timeout=5.0, verify=getattr(settings, 'extraction_service_verify_ssl', True)) as client:
+                async with httpx.AsyncClient(timeout=10.0, verify=getattr(settings, 'extraction_service_verify_ssl', True)) as client:
                     resp = await client.get(default_url)
                     default_ok = resp.status_code == 200
         except Exception:
@@ -231,7 +231,7 @@ class DocumentService:
                 for path in ("/health", "/v1/health", "/healthz"):
                     try:
                         candidate = f"{base}{path}"
-                        async with httpx.AsyncClient(timeout=5.0, verify=getattr(settings, 'docling_verify_ssl', True)) as client:
+                        async with httpx.AsyncClient(timeout=10.0, verify=getattr(settings, 'docling_verify_ssl', True)) as client:
                             resp = await client.get(candidate)
                             if resp.status_code == 200:
                                 docling_url = candidate

@@ -202,6 +202,7 @@ class FunctionRegistry:
         try:
             from .primitives.output.bulk_update_metadata import BulkUpdateMetadataFunction
             from .primitives.output.create_artifact import CreateArtifactFunction
+            from .primitives.output.extract_asset import ExtractAssetFunction
             from .primitives.output.generate_document import GenerateDocumentFunction
             from .primitives.output.log import LogFunction
             from .primitives.output.update_metadata import UpdateMetadataFunction
@@ -209,6 +210,7 @@ class FunctionRegistry:
             self.register(UpdateMetadataFunction)
             self.register(BulkUpdateMetadataFunction)
             self.register(CreateArtifactFunction)
+            self.register(ExtractAssetFunction)
             self.register(GenerateDocumentFunction)
             self.register(LogFunction)
             self.register(UpdateSourceMetadataFunction)

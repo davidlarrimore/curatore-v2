@@ -51,6 +51,7 @@ const componentConfig: Record<string, { name: string; icon: React.ComponentType<
   extraction_service: { name: 'Extraction', icon: Zap },
   llm: { name: 'LLM', icon: Zap },
   object_storage: { name: 'Storage', icon: HardDrive },
+  playwright: { name: 'Playwright', icon: Cloud },
 }
 
 export function SystemHealthCard({ healthData, isLoading, onRefresh }: SystemHealthCardProps) {
@@ -97,7 +98,7 @@ export function SystemHealthCard({ healthData, isLoading, onRefresh }: SystemHea
   }
 
   // Filter components to show only the important ones
-  const displayComponents = ['backend', 'database', 'redis', 'celery_worker', 'llm', 'object_storage']
+  const displayComponents = ['backend', 'database', 'redis', 'celery_worker', 'llm', 'object_storage', 'extraction_service', 'playwright']
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700 overflow-hidden hover:shadow-lg hover:shadow-gray-200/50 dark:hover:shadow-gray-900/50 transition-all duration-200">

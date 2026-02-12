@@ -176,21 +176,18 @@ class LLMAdapter(ServiceAdapter):
             )
 
         try:
+            # Use models.list() for a lightweight connectivity check instead of
+            # an inference call, which is slow and can easily timeout.
             def _sync_test():
-                return self._client.chat.completions.create(
-                    model=settings.openai_model,
-                    messages=[{"role": "user", "content": "Hello, respond with just 'OK'"}],
-                    max_tokens=10,
-                    temperature=0
-                )
+                return self._client.models.list()
 
-            resp = await asyncio.to_thread(_sync_test)
+            models_resp = await asyncio.to_thread(_sync_test)
 
             return LLMConnectionStatus(
                 connected=True,
                 endpoint=settings.openai_base_url,
                 model=settings.openai_model,
-                response=resp.choices[0].message.content.strip(),
+                response="OK",
                 ssl_verify=settings.openai_verify_ssl,
                 timeout=settings.openai_timeout
             )
