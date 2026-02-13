@@ -12,6 +12,7 @@ need the two-step confirmation flow.
 import logging
 import secrets
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Any, Dict
 
 from ..base import (
@@ -46,6 +47,57 @@ def _cleanup_expired():
 def _generate_token() -> str:
     """Generate a secure confirmation token."""
     return secrets.token_urlsafe(32)
+
+
+def _process_email_body(body: str, format: str, subject: str) -> tuple:
+    """
+    Convert body to final HTML based on format.
+
+    Returns (processed_body, is_html) tuple.
+
+    Formats:
+        - "template" (default): Convert markdown to HTML, wrap in branded template
+        - "html": Pass through as-is
+        - "text": Send as plain text
+    """
+    if format == "html":
+        return body, True
+
+    if format == "text":
+        return body, False
+
+    # Default: template — markdown → HTML → branded wrapper
+    from ..context import _markdown_to_html
+
+    html_content = _markdown_to_html(body)
+
+    # Resolve frontend_base_url for footer link
+    frontend_base_url = None
+    try:
+        from app.core.auth.email_service import email_service
+        frontend_base_url = email_service.frontend_base_url
+    except Exception:
+        pass
+
+    # Load template from CWR templates directory
+    try:
+        from jinja2 import Environment, FileSystemLoader, select_autoescape
+
+        template_dir = Path(__file__).resolve().parent.parent.parent / "templates" / "email"
+        env = Environment(
+            loader=FileSystemLoader(str(template_dir)),
+            autoescape=select_autoescape(["html", "xml"]),
+        )
+        template = env.get_template("email_base.html")
+        wrapped = template.render(
+            subject=subject,
+            content=html_content,
+            frontend_base_url=frontend_base_url,
+        )
+        return wrapped, True
+    except Exception as e:
+        logger.warning(f"Failed to render email template, using raw content: {e}")
+        return html_content, True
 
 
 async def _resolve_attachments(
@@ -157,12 +209,13 @@ class PrepareEmailFunction(BaseFunction):
                 },
                 "body": {
                     "type": "string",
-                    "description": "Email body content (plain text or HTML)",
+                    "description": "Email body content. Write naturally using markdown formatting (headings, bold, lists, tables). The system automatically styles this into a professional HTML email.",
                 },
-                "html": {
-                    "type": "boolean",
-                    "description": "Whether body is HTML formatted",
-                    "default": False,
+                "format": {
+                    "type": "string",
+                    "enum": ["template", "html", "text"],
+                    "default": "template",
+                    "description": "Body format. 'template' (default) converts markdown to a branded HTML email. 'html' sends body as raw HTML. 'text' sends as plain text.",
                 },
                 "cc": {
                     "type": "array",
@@ -235,7 +288,7 @@ class PrepareEmailFunction(BaseFunction):
         to = params["to"]
         subject = params["subject"]
         body = params["body"]
-        html = params.get("html", False)
+        email_format = params.get("format", "template")
         cc = params.get("cc") or []
         attachments = params.get("attachments") or []
 
@@ -251,6 +304,9 @@ class PrepareEmailFunction(BaseFunction):
                 message="At least one recipient email is required",
             )
 
+        # Process body through template wrapping
+        processed_body, is_html = _process_email_body(body, email_format, subject)
+
         # Generate token and store pending email
         token = _generate_token()
         expires_at = datetime.utcnow() + timedelta(minutes=TOKEN_EXPIRATION_MINUTES)
@@ -258,8 +314,8 @@ class PrepareEmailFunction(BaseFunction):
         email_data = {
             "to": to,
             "subject": subject,
-            "body": body,
-            "html": html,
+            "body": processed_body,
+            "html": is_html,
             "cc": cc,
             "attachments": attachments,
             "organization_id": str(ctx.organization_id) if ctx.organization_id else None,
@@ -272,14 +328,14 @@ class PrepareEmailFunction(BaseFunction):
             "expires_at": expires_at,
         }
 
-        # Create preview
+        # Create preview using original markdown body for readability
         body_preview = body[:500] + "..." if len(body) > 500 else body
         preview = {
             "to": to,
             "cc": cc if cc else None,
             "subject": subject,
             "body_preview": body_preview,
-            "is_html": html,
+            "format": email_format,
             "recipient_count": len(to) + len(cc),
             "attachments_count": len(attachments),
             "attachment_filenames": [a.get("filename", "unknown") for a in attachments] if attachments else [],
@@ -414,12 +470,15 @@ class ConfirmEmailFunction(BaseFunction):
             from ..primitives.notify.send_email import SendEmailFunction
 
             send_fn = SendEmailFunction()
+            # Body is already processed by prepare_email, pass format
+            # matching stored is_html to avoid double-processing
+            stored_format = "text" if not email_data.get("html", True) else "html"
             result = await send_fn.execute(
                 ctx,
                 to=email_data["to"],
                 subject=email_data["subject"],
                 body=email_data["body"],
-                html=email_data.get("html", False),
+                format=stored_format,
                 cc=email_data.get("cc"),
                 attachments=resolved_attachments if resolved_attachments else None,
             )

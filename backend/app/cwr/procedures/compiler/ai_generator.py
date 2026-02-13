@@ -69,9 +69,13 @@ class GenerationDiagnostics:
     planning_tool_calls: int = 0
     planning_tools_used: List[str] = field(default_factory=list)
     planning_results_summary: List[Dict[str, str]] = field(default_factory=list)
+    # Prompt caching diagnostics
+    prompt_caching_enabled: bool = False
+    cached_tokens: int = 0
+    total_prompt_tokens: int = 0
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        result = {
             "profile_used": self.profile_used,
             "tools_available": self.tools_available,
             "tools_referenced": self.tools_referenced,
@@ -84,6 +88,13 @@ class GenerationDiagnostics:
             "planning_tools_used": self.planning_tools_used,
             "planning_results_summary": self.planning_results_summary,
         }
+        if self.prompt_caching_enabled:
+            result["prompt_caching"] = {
+                "enabled": True,
+                "cached_tokens": self.cached_tokens,
+                "total_prompt_tokens": self.total_prompt_tokens,
+            }
+        return result
 
 
 class ProcedureGeneratorService:
@@ -411,6 +422,7 @@ class ProcedureGeneratorService:
                 response = await self._call_llm(
                     messages,
                     tools=tools_param,
+                    diagnostics=diagnostics,
                 )
             except Exception as e:
                 logger.error(f"LLM call failed: {e}")
@@ -517,9 +529,15 @@ class ProcedureGeneratorService:
         self,
         messages: List[Dict[str, Any]],
         tools: Optional[List[Dict[str, Any]]] = None,
+        diagnostics: Optional[GenerationDiagnostics] = None,
     ) -> Any:
         """
         Call the LLM with the given messages and optional tools.
+
+        Applies cache_control breakpoints to the system message and the last
+        tool definition so Bedrock / Anthropic can cache the static prefix
+        across calls (90% input-token discount on cache hits).  Providers
+        that don't support cache_control simply ignore the extra key.
 
         Returns:
             Raw response object from the OpenAI-compatible client.
@@ -531,6 +549,13 @@ class ProcedureGeneratorService:
         model = task_config.model
         temperature = task_config.temperature if task_config.temperature is not None else 0.2
 
+        # Apply cache_control breakpoints so the LLM provider can cache the
+        # static prefix (system prompt + tool schemas) across calls.
+        # Providers that don't support cache_control simply ignore the extra key.
+        messages = self._apply_prompt_caching(messages)
+        if diagnostics:
+            diagnostics.prompt_caching_enabled = True
+
         kwargs: Dict[str, Any] = {
             "model": model,
             "messages": messages,
@@ -539,13 +564,84 @@ class ProcedureGeneratorService:
         }
 
         if tools is not None and len(tools) > 0:
-            kwargs["tools"] = tools
+            kwargs["tools"] = self._apply_tools_caching(tools)
             kwargs["tool_choice"] = "auto"
 
         def _sync_call():
             return llm_service._client.chat.completions.create(**kwargs)
 
-        return await asyncio.to_thread(_sync_call)
+        response = await asyncio.to_thread(_sync_call)
+
+        # Track cache hit metrics from the response
+        if diagnostics and response.usage:
+            diagnostics.total_prompt_tokens += response.usage.prompt_tokens or 0
+            # LiteLLM/Bedrock report cached tokens in prompt_tokens_details
+            details = getattr(response.usage, "prompt_tokens_details", None)
+            if details:
+                diagnostics.cached_tokens += getattr(details, "cached_tokens", 0) or 0
+
+        return response
+
+    # ------------------------------------------------------------------
+    # Prompt Caching Helpers
+    # ------------------------------------------------------------------
+
+    def _apply_prompt_caching(
+        self, messages: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Convert system messages to content-block format with cache_control.
+
+        Transforms:
+            {"role": "system", "content": "..."}
+        Into:
+            {"role": "system", "content": [
+                {"type": "text", "text": "...", "cache_control": {"type": "ephemeral"}}
+            ]}
+
+        Only modifies system messages; other messages pass through unchanged.
+        Returns a shallow copy to avoid mutating the caller's list.
+        """
+        result = []
+        for msg in messages:
+            if msg.get("role") == "system" and isinstance(msg.get("content"), str):
+                result.append({
+                    "role": "system",
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": msg["content"],
+                            "cache_control": {"type": "ephemeral"},
+                        }
+                    ],
+                })
+            else:
+                result.append(msg)
+        return result
+
+    def _apply_tools_caching(
+        self, tools: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """
+        Add cache_control to the last tool definition.
+
+        Providers that support explicit caching (Bedrock, Anthropic) cache
+        the prefix up to and including the last cache_control breakpoint.
+        By marking the final tool, the entire tools array becomes part of
+        the cached prefix.  Providers with automatic caching (OpenAI)
+        ignore this key and cache based on prefix matching instead.
+
+        Returns a shallow copy with the last tool modified.
+        """
+        if not tools:
+            return tools
+        tools = list(tools)  # shallow copy
+        last_tool = dict(tools[-1])  # copy last tool
+        last_fn = dict(last_tool.get("function", {}))
+        last_fn["cache_control"] = {"type": "ephemeral"}
+        last_tool["function"] = last_fn
+        tools[-1] = last_tool
+        return tools
 
     # ------------------------------------------------------------------
     # JSON Parsing

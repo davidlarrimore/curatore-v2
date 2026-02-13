@@ -221,7 +221,7 @@ class TestProcedureGeneratorService:
         valid_plan = _valid_plan_json()
         call_count = 0
 
-        async def mock_call_llm(messages, tools=None):
+        async def mock_call_llm(messages, tools=None, diagnostics=None):
             nonlocal call_count
             call_count += 1
             if call_count == 1:

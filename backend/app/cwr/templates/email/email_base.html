@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <title>{{ subject }}</title>
+    <!--[if mso]>
+    <noscript>
+        <xml>
+            <o:OfficeDocumentSettings>
+                <o:PixelsPerInch>96</o:PixelsPerInch>
+            </o:OfficeDocumentSettings>
+        </xml>
+    </noscript>
+    <![endif]-->
+    <style>
+        /* Reset */
+        body, table, td, p, a, li { -webkit-text-size-adjust: 100%; -ms-text-size-adjust: 100%; }
+        table, td { mso-table-lspace: 0pt; mso-table-rspace: 0pt; }
+        img { -ms-interpolation-mode: bicubic; border: 0; outline: none; text-decoration: none; }
+
+        body {
+            margin: 0;
+            padding: 0;
+            width: 100% !important;
+            height: 100% !important;
+            background-color: #f1f5f9;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            line-height: 1.6;
+            color: #334155;
+            -webkit-font-smoothing: antialiased;
+        }
+
+        /* Wrapper */
+        .email-wrapper {
+            width: 100%;
+            background-color: #f1f5f9;
+            padding: 32px 0;
+        }
+        .email-container {
+            max-width: 640px;
+            margin: 0 auto;
+        }
+
+        /* Header — Amivero */
+        .header {
+            background-color: #111827;
+            padding: 20px 32px;
+            text-align: center;
+            border-radius: 8px 8px 0 0;
+        }
+        .header img {
+            height: 32px;
+            width: auto;
+        }
+
+        /* Accent bar */
+        .accent-bar {
+            height: 3px;
+            background: linear-gradient(90deg, #2563eb, #6366f1, #2563eb);
+        }
+        /* Fallback for email clients that don't support gradients */
+        .accent-bar-fallback {
+            height: 3px;
+            background-color: #2563eb;
+        }
+
+        /* Content card */
+        .content {
+            background-color: #ffffff;
+            padding: 32px;
+        }
+
+        /* Typography */
+        .content h1 {
+            color: #0f172a;
+            font-size: 24px;
+            font-weight: 700;
+            line-height: 1.3;
+            margin: 0 0 16px 0;
+            padding-bottom: 12px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+        .content h2 {
+            color: #1e293b;
+            font-size: 20px;
+            font-weight: 600;
+            line-height: 1.3;
+            margin: 28px 0 12px 0;
+        }
+        .content h3 {
+            color: #334155;
+            font-size: 16px;
+            font-weight: 600;
+            line-height: 1.4;
+            margin: 24px 0 8px 0;
+        }
+        .content h4 {
+            color: #475569;
+            font-size: 14px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 20px 0 8px 0;
+        }
+        .content p {
+            margin: 12px 0;
+            color: #334155;
+            font-size: 15px;
+            line-height: 1.7;
+        }
+        .content strong {
+            color: #0f172a;
+            font-weight: 600;
+        }
+        .content em {
+            color: #475569;
+        }
+
+        /* Links */
+        .content a {
+            color: #2563eb;
+            text-decoration: none;
+            border-bottom: 1px solid #bfdbfe;
+            transition: border-color 0.15s;
+        }
+        .content a:hover {
+            border-bottom-color: #2563eb;
+        }
+
+        /* Lists */
+        .content ul, .content ol {
+            padding-left: 24px;
+            margin: 14px 0;
+        }
+        .content li {
+            margin: 6px 0;
+            font-size: 15px;
+            line-height: 1.6;
+            color: #334155;
+        }
+        .content li::marker {
+            color: #2563eb;
+        }
+
+        /* Blockquotes / callout panels */
+        .content blockquote {
+            margin: 20px 0;
+            padding: 16px 20px;
+            background-color: #f0f4ff;
+            border-left: 4px solid #2563eb;
+            border-radius: 0 6px 6px 0;
+            color: #1e3a5f;
+        }
+        .content blockquote p {
+            margin: 4px 0;
+            color: #1e3a5f;
+            font-size: 14px;
+        }
+
+        /* Tables */
+        .content table {
+            border-collapse: separate;
+            border-spacing: 0;
+            width: 100%;
+            margin: 20px 0;
+            border: 1px solid #e2e8f0;
+            border-radius: 6px;
+            overflow: hidden;
+            font-size: 14px;
+        }
+        .content thead th {
+            background-color: #1e293b;
+            color: #ffffff;
+            padding: 10px 14px;
+            text-align: left;
+            font-weight: 600;
+            font-size: 13px;
+            text-transform: uppercase;
+            letter-spacing: 0.3px;
+            border: none;
+        }
+        .content thead th:first-child {
+            border-radius: 5px 0 0 0;
+        }
+        .content thead th:last-child {
+            border-radius: 0 5px 0 0;
+        }
+        .content tbody td {
+            padding: 10px 14px;
+            border-bottom: 1px solid #e2e8f0;
+            color: #334155;
+        }
+        .content tbody tr:last-child td {
+            border-bottom: none;
+        }
+        .content tbody tr:nth-child(even) {
+            background-color: #f8fafc;
+        }
+        .content tbody tr:hover {
+            background-color: #f1f5f9;
+        }
+
+        /* Code */
+        .content code {
+            background-color: #f1f5f9;
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: 'SFMono-Regular', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+            font-size: 13px;
+            color: #1e293b;
+            border: 1px solid #e2e8f0;
+        }
+        .content pre {
+            background-color: #1e293b;
+            color: #e2e8f0;
+            padding: 18px;
+            border-radius: 6px;
+            overflow-x: auto;
+            margin: 20px 0;
+            font-size: 13px;
+            line-height: 1.5;
+        }
+        .content pre code {
+            background: none;
+            padding: 0;
+            border: none;
+            border-radius: 0;
+            color: inherit;
+            font-size: inherit;
+        }
+
+        /* Horizontal rule */
+        .content hr {
+            border: none;
+            border-top: 1px solid #e2e8f0;
+            margin: 28px 0;
+        }
+
+        /* Images in content */
+        .content img {
+            max-width: 100%;
+            height: auto;
+            border-radius: 6px;
+        }
+
+        /* Footer — Curatore */
+        .footer {
+            background-color: #f8fafc;
+            padding: 20px 32px;
+            text-align: center;
+            border-top: 1px solid #e2e8f0;
+            border-radius: 0 0 8px 8px;
+        }
+        .footer-brand {
+            font-size: 14px;
+            font-weight: 600;
+            color: #475569;
+            margin: 0 0 4px 0;
+        }
+        .footer-tagline {
+            font-size: 12px;
+            color: #94a3b8;
+            margin: 0 0 8px 0;
+        }
+        .footer a {
+            color: #2563eb;
+            text-decoration: none;
+            font-size: 12px;
+        }
+        .footer a:hover {
+            text-decoration: underline;
+        }
+
+        /* Responsive */
+        @media only screen and (max-width: 680px) {
+            .email-wrapper { padding: 16px 0 !important; }
+            .header { padding: 16px 20px !important; border-radius: 0 !important; }
+            .content { padding: 24px 20px !important; }
+            .footer { padding: 16px 20px !important; border-radius: 0 !important; }
+            .content h1 { font-size: 22px !important; }
+            .content h2 { font-size: 18px !important; }
+            .content table { font-size: 13px !important; }
+            .content thead th, .content tbody td { padding: 8px 10px !important; }
+        }
+    </style>
+</head>
+<body>
+    <div class="email-wrapper">
+        <table role="presentation" cellspacing="0" cellpadding="0" border="0" align="center" class="email-container" width="640" style="max-width:640px;margin:0 auto;">
+            <!-- Header: Amivero -->
+            <tr>
+                <td class="header" style="background-color:#111827;padding:20px 32px;text-align:center;border-radius:8px 8px 0 0;">
+                    <img src="https://amivero-media.s3.us-east-1.amazonaws.com/images/amivero-logo-tagline-white.webp" alt="Amivero" height="32" style="height:32px;width:auto;">
+                </td>
+            </tr>
+            <!-- Accent bar -->
+            <tr>
+                <td class="accent-bar-fallback" style="height:3px;background-color:#2563eb;font-size:0;line-height:0;">&nbsp;</td>
+            </tr>
+            <!-- Content -->
+            <tr>
+                <td class="content" style="background-color:#ffffff;padding:32px;">
+                    {{ content|safe }}
+                </td>
+            </tr>
+            <!-- Footer: Curatore -->
+            <tr>
+                <td class="footer" style="background-color:#f8fafc;padding:20px 32px;text-align:center;border-top:1px solid #e2e8f0;border-radius:0 0 8px 8px;">
+                    <p class="footer-brand" style="font-size:14px;font-weight:600;color:#475569;margin:0 0 4px 0;">Curatore</p>
+                    <p class="footer-tagline" style="font-size:12px;color:#94a3b8;margin:0 0 8px 0;">Document Processing &amp; Curation Platform</p>
+                    {% if frontend_base_url %}
+                    <a href="{{ frontend_base_url }}" style="color:#2563eb;text-decoration:none;font-size:12px;">Open Curatore</a>
+                    {% endif %}
+                </td>
+            </tr>
+        </table>
+    </div>
+</body>
+</html>

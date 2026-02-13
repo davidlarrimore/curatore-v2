@@ -345,6 +345,16 @@ async def _check_scheduled_tasks() -> Dict[str, Any]:
                 logging.getLogger("curatore.tasks.scheduled").error(
                     f"Failed to trigger task {task.name}: {e}"
                 )
+                # Mark the orphaned run as failed so it doesn't stay pending forever
+                try:
+                    if run and run.id:
+                        from datetime import datetime as dt_err
+                        run.status = "failed"
+                        run.completed_at = dt_err.utcnow()
+                        run.error_message = f"Celery submission failed: {e}"
+                        await session.commit()
+                except Exception:
+                    pass  # Best-effort cleanup
 
         await session.commit()
 

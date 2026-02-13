@@ -459,26 +459,35 @@ class ScheduledTaskService:
         # Import here to avoid circular imports
         from app.core.tasks import execute_scheduled_task_async
 
-        # Use apply_async with explicit queue for reliable routing
-        celery_task = execute_scheduled_task_async.apply_async(
-            kwargs={
-                "task_id": str(task.id),
-                "run_id": str(run.id),
-            },
-            queue="maintenance",
-        )
+        try:
+            # Use apply_async with explicit queue for reliable routing
+            celery_task = execute_scheduled_task_async.apply_async(
+                kwargs={
+                    "task_id": str(task.id),
+                    "run_id": str(run.id),
+                },
+                queue="maintenance",
+            )
 
-        # Update run with Celery task info (same pattern as extraction tasks)
-        now = datetime.utcnow()
-        run.status = "submitted"
-        run.celery_task_id = celery_task.id
-        run.submitted_to_celery_at = now
-        run.last_activity_at = now
-        await session.commit()
+            # Update run with Celery task info (same pattern as extraction tasks)
+            now = datetime.utcnow()
+            run.status = "submitted"
+            run.celery_task_id = celery_task.id
+            run.submitted_to_celery_at = now
+            run.last_activity_at = now
+            await session.commit()
 
-        logger.info(
-            f"Submitted maintenance run {run.id} to Celery: task_id={celery_task.id}"
-        )
+            logger.info(
+                f"Submitted maintenance run {run.id} to Celery: task_id={celery_task.id}"
+            )
+        except Exception as e:
+            # Mark run as failed so it doesn't stay pending forever
+            logger.error(f"Celery submission failed for run {run.id}: {e}")
+            run.status = "failed"
+            run.completed_at = datetime.utcnow()
+            run.error_message = f"Celery submission failed: {e}"
+            await session.commit()
+            raise
 
         return run
 

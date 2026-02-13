@@ -365,7 +365,7 @@ class TestMaintenanceQueue:
 
         assert queue.queue_type == "maintenance"
         assert queue.celery_queue == "maintenance"
-        assert queue.can_cancel is False
+        assert queue.can_cancel is True
         assert queue.can_retry is False
         assert queue.default_max_concurrent == 4  # Allow concurrent different task types (locks prevent same-task overlap)
         assert "system_maintenance" in queue.run_type_aliases
@@ -441,14 +441,10 @@ class TestQueueCapabilityMatrix:
 
     def test_cancellable_queues(self, registry):
         """Test which queues support cancellation."""
-        cancellable = ["extraction", "scrape", "sharepoint", "sam"]
-        non_cancellable = ["maintenance"]
+        cancellable = ["extraction", "scrape", "sharepoint", "sam", "maintenance"]
 
         for qt in cancellable:
             assert registry.can_cancel(qt), f"{qt} should be cancellable"
-
-        for qt in non_cancellable:
-            assert not registry.can_cancel(qt), f"{qt} should not be cancellable"
 
     def test_retryable_queues(self, registry):
         """Test which queues support retry."""
@@ -531,13 +527,13 @@ class TestConfigurationOverrides:
         registry = QueueRegistry()
         registry.initialize({
             "maintenance": {
-                "can_cancel": True,  # Should be ignored
+                "can_cancel": False,  # Should be ignored — capabilities are code-defined
             },
         })
 
         maintenance = registry.get("maintenance")
-        # Capabilities should remain as defined in code
-        assert maintenance.can_cancel is False
+        # Capabilities should remain as defined in code (can_cancel=True)
+        assert maintenance.can_cancel is True
 
 
 # =============================================================================

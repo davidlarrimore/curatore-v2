@@ -118,16 +118,32 @@ async def backfill_extraction_metadata(
             f"skipped {skipped} (already current), {errors} errors"
         )
 
-        # Trigger reindex if requested
+        # Trigger reindex if requested — throttled to avoid overwhelming
+        # Postgres and the embedding API with concurrent writes.
         if reindex and not dry_run and updated_ids:
-            logger.info(f"Triggering reindex for {len(updated_ids)} updated assets...")
+            reindex_batch = 50  # Max tasks in flight before pausing
+            reindex_delay = 5   # Seconds between batches
+            logger.info(
+                f"Triggering throttled reindex for {len(updated_ids)} assets "
+                f"({reindex_batch} per batch, {reindex_delay}s between batches)..."
+            )
             try:
                 from app.core.tasks import index_asset_task
 
                 queued = 0
-                for asset_id in updated_ids:
-                    index_asset_task.delay(asset_id=str(asset_id))
-                    queued += 1
+                for i in range(0, len(updated_ids), reindex_batch):
+                    batch = updated_ids[i : i + reindex_batch]
+                    for asset_id in batch:
+                        index_asset_task.delay(asset_id=str(asset_id))
+                        queued += 1
+
+                    logger.info(
+                        f"Reindex progress: {queued}/{len(updated_ids)} queued"
+                    )
+
+                    # Pause between batches to let workers drain
+                    if i + reindex_batch < len(updated_ids):
+                        await asyncio.sleep(reindex_delay)
 
                 logger.info(f"Queued {queued} assets for reindexing")
             except Exception as e:

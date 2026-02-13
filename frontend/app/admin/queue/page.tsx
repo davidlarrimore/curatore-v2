@@ -202,6 +202,7 @@ function JobManagerContent() {
 
   // Actions in progress
   const [cancellingIds, setCancellingIds] = useState<Set<string>>(new Set())
+  const [forceKillingIds, setForceKillingIds] = useState<Set<string>>(new Set())
 
   // Request ID to prevent stale responses
   const requestIdRef = useRef(0)
@@ -420,6 +421,29 @@ function JobManagerContent() {
       setTimeout(() => setError(''), 5000)
     } finally {
       setCancellingIds(prev => {
+        const next = new Set(prev)
+        next.delete(runId)
+        return next
+      })
+    }
+  }
+
+  // Force kill a stuck job
+  const handleForceKill = async (runId: string) => {
+    if (!token) return
+    if (!confirm('Force kill this job? This will terminate database connections and revoke the Celery task. Use this only for stuck jobs that cannot be cancelled normally.')) return
+
+    setForceKillingIds(prev => new Set(prev).add(runId))
+    try {
+      await queueAdminApi.forceKillJob(token, runId)
+      setSuccessMessage('Job force-killed')
+      await loadData(true)
+      setTimeout(() => setSuccessMessage(''), 3000)
+    } catch (err: any) {
+      setError(err.message || 'Failed to force kill job')
+      setTimeout(() => setError(''), 5000)
+    } finally {
+      setForceKillingIds(prev => {
         const next = new Set(prev)
         next.delete(runId)
         return next
@@ -948,6 +972,20 @@ function JobManagerContent() {
                                   <Loader2 className="w-4 h-4 animate-spin" />
                                 ) : (
                                   <XCircle className="w-4 h-4" />
+                                )}
+                              </button>
+                            )}
+                            {['pending', 'submitted', 'running', 'stale'].includes(job.status) && (
+                              <button
+                                onClick={() => handleForceKill(job.run_id)}
+                                disabled={forceKillingIds.has(job.run_id)}
+                                className="p-1.5 rounded-lg text-orange-600 dark:text-orange-400 hover:bg-orange-50 dark:hover:bg-orange-900/20 transition-colors disabled:opacity-50"
+                                title="Force kill job"
+                              >
+                                {forceKillingIds.has(job.run_id) ? (
+                                  <Loader2 className="w-4 h-4 animate-spin" />
+                                ) : (
+                                  <Zap className="w-4 h-4" />
                                 )}
                               </button>
                             )}

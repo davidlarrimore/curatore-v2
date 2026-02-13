@@ -263,6 +263,62 @@ async def _recover_orphaned_extractions_async(
                 errors.append({"run_id": str(run.id), "error": str(e)})
 
         # =========================================================================
+        # Phase 1b: Recover stuck MAINTENANCE runs
+        # =========================================================================
+        # Maintenance runs stuck in pending/submitted indicate Celery submission
+        # failure or worker crash. The normal cleanup_stale handler is itself a
+        # maintenance task, creating a circular dependency. This phase breaks that
+        # cycle by running from the extraction Beat schedule (every 15 min).
+
+        maintenance_stale_cutoff = now - timedelta(minutes=30)
+        maintenance_recovered = 0
+
+        try:
+            stuck_maintenance = await session.execute(
+                select(Run)
+                .where(
+                    and_(
+                        Run.run_type == "system_maintenance",
+                        Run.status.in_(["pending", "submitted"]),
+                        Run.created_at < maintenance_stale_cutoff,
+                        Run.created_at >= cutoff,
+                    )
+                )
+                .limit(50)
+            )
+            stuck_maintenance_runs = list(stuck_maintenance.scalars().all())
+
+            if stuck_maintenance_runs:
+                logger.info(
+                    f"Found {len(stuck_maintenance_runs)} stuck maintenance runs "
+                    f"(older than 30 min)"
+                )
+
+            for maint_run in stuck_maintenance_runs:
+                try:
+                    old_status = maint_run.status
+                    maint_run.status = "timed_out"
+                    maint_run.completed_at = now
+                    maint_run.error_message = (
+                        f"Timed out: stuck in '{old_status}' for >30 minutes "
+                        f"(recovered by orphan recovery)"
+                    )
+                    maintenance_recovered += 1
+                    logger.info(
+                        f"Marked maintenance run {maint_run.id} as timed_out "
+                        f"(was {old_status})"
+                    )
+                except Exception as e:
+                    logger.error(
+                        f"Failed to recover maintenance run {maint_run.id}: {e}"
+                    )
+                    errors.append(
+                        {"run_id": str(maint_run.id), "error": str(e)}
+                    )
+        except Exception as e:
+            logger.error(f"Maintenance run recovery phase failed: {e}")
+
+        # =========================================================================
         # Phase 2: Recover orphaned EXTRACTION RESULTS (no active run)
         # =========================================================================
 
@@ -333,6 +389,7 @@ async def _recover_orphaned_extractions_async(
         "status": "success",
         "recovered_runs": recovered_runs,
         "recovered_extractions": recovered_extractions,
+        "recovered_maintenance_runs": maintenance_recovered,
         "skipped": skipped,
         "errors": len(errors),
         "error_details": errors[:10],

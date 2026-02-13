@@ -51,12 +51,13 @@ class SendEmailFunction(BaseFunction):
                 },
                 "body": {
                     "type": "string",
-                    "description": "Email body (plain text or HTML)",
+                    "description": "Email body content. Write naturally using markdown formatting (headings, bold, lists, tables). The system automatically styles this into a professional HTML email.",
                 },
-                "html": {
-                    "type": "boolean",
-                    "description": "Whether body is HTML",
-                    "default": False,
+                "format": {
+                    "type": "string",
+                    "enum": ["template", "html", "text"],
+                    "default": "template",
+                    "description": "Body format. 'template' (default) converts markdown to a branded HTML email. 'html' sends body as raw HTML. 'text' sends as plain text.",
                 },
                 "cc": {
                     "type": "array",
@@ -114,20 +115,20 @@ class SendEmailFunction(BaseFunction):
         payload_profile="full",
         examples=[
             {
-                "description": "Simple email",
+                "description": "Simple email (auto-styled via template)",
                 "params": {
                     "to": ["user@example.com"],
                     "subject": "Test Email",
-                    "body": "This is a test email.",
+                    "body": "# Hello\n\nThis is a test email with **bold** text.",
                 },
             },
             {
-                "description": "HTML formatted email",
+                "description": "Raw HTML email",
                 "params": {
                     "to": ["user@example.com"],
                     "subject": "Weekly Report",
                     "body": "<html><body><h1>Report</h1><p>Content here...</p></body></html>",
-                    "html": True,
+                    "format": "html",
                 },
             },
         ],
@@ -180,9 +181,14 @@ class SendEmailFunction(BaseFunction):
         to = self._normalize_recipients(params["to"])
         subject = params["subject"]
         body = params["body"]
-        html = params.get("html", False)
+        email_format = params.get("format", "template")
         cc = self._normalize_recipients(params.get("cc"))
         attachments = params.get("attachments") or []
+
+        # Process body through template wrapping
+        from ...compounds.email_workflow import _process_email_body
+
+        body, html = _process_email_body(body, email_format, subject)
 
         if not to:
             return FunctionResult.failed_result(

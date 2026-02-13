@@ -292,7 +292,7 @@ class MaintenanceQueue(QueueDefinition):
             queue_type="maintenance",
             celery_queue="maintenance",
             run_type_aliases=["system_maintenance"],
-            can_cancel=False,
+            can_cancel=True,
             can_retry=False,
             label="Maintenance",
             description="System maintenance and cleanup tasks",

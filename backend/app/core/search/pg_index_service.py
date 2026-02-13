@@ -129,6 +129,11 @@ class PgIndexService:
                             extraction.extracted_object_key,
                         )
                         content = content_bytes.getvalue().decode("utf-8")
+                        # Remove null bytes - they're invalid in PostgreSQL TEXT columns
+                        # but can appear in some PDF extractions
+                        if "\x00" in content:
+                            logger.debug(f"Removing null bytes from content for {asset_id}")
+                            content = content.replace("\x00", "")
                         logger.debug(
                             f"Downloaded {len(content)} chars of content for {asset_id}"
                         )
@@ -674,6 +679,18 @@ class PgIndexService:
     ) -> None:
         """Insert a single chunk into search_chunks table."""
         import json
+
+        # Sanitize text fields — PostgreSQL rejects null bytes (\x00) in TEXT columns.
+        # These can appear in content extracted from corrupted PDFs.
+        def _sanitize(val: str | None) -> str | None:
+            if val and "\x00" in val:
+                return val.replace("\x00", "")
+            return val
+
+        content = _sanitize(content)
+        title = _sanitize(title)
+        filename = _sanitize(filename)
+        url = _sanitize(url)
 
         # Detect unmapped facet values (non-blocking, first chunk only)
         if metadata and chunk_index == 0:

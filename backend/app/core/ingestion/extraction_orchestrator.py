@@ -327,6 +327,11 @@ class ExtractionOrchestrator:
                 raise ValueError("Extraction produced no markdown content")
 
             markdown_content = extraction_result["markdown"]
+            # Sanitize null bytes — some PDF engines emit \x00 which is
+            # invalid in PostgreSQL TEXT columns and breaks search indexing.
+            if "\x00" in markdown_content:
+                markdown_content = markdown_content.replace("\x00", "")
+                logger.info(f"Stripped null bytes from extracted content for asset {asset_id}")
             warnings = extraction_result.get("warnings", [])
             extraction_info = extraction_result.get("extraction_info", {})
 

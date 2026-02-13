@@ -179,7 +179,7 @@ export function LeftSidebar({
       gradient: 'from-indigo-500 to-purple-600'
     },
     {
-      name: 'Metadata',
+      name: 'Metadata Catalog',
       href: '/admin/metadata',
       icon: Tags,
       current: pathname === '/admin/metadata',
