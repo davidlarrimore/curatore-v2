@@ -34,8 +34,8 @@ interface User {
   username: string
   full_name?: string
   role: string
-  organization_id: string
-  organization_name: string
+  organization_id: string | null  // null for system admins
+  organization_name: string | null  // null for system admins
   is_active: boolean
 }
 
@@ -45,6 +45,7 @@ interface AuthContextType {
   accessToken: string | null
   isLoading: boolean
   isAuthenticated: boolean
+  isAdmin: boolean  // true if user has system admin role
   login: (emailOrUsername: string, password: string) => Promise<void>
   logout: (reason?: string) => void
   refreshUserData: () => Promise<void>
@@ -461,6 +462,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     accessToken: token,
     isLoading,
     isAuthenticated: !!user && !!token,
+    isAdmin: user?.role === 'admin',
     login,
     logout,
     refreshUserData,

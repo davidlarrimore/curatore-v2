@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, FormEvent } from 'react'
+import { useState, useEffect, FormEvent } from 'react'
 import { useAuth } from '@/lib/auth-context'
-import { usersApi } from '@/lib/api'
+import { usersApi, rolesApi, Role } from '@/lib/api'
 import { Button } from '../ui/Button'
 
 interface UserInviteFormProps {
@@ -11,7 +11,7 @@ interface UserInviteFormProps {
 }
 
 export default function UserInviteForm({ onSuccess, onCancel }: UserInviteFormProps) {
-  const { token } = useAuth()
+  const { token, isAdmin } = useAuth()
   const [email, setEmail] = useState('')
   const [fullName, setFullName] = useState('')
   const [role, setRole] = useState('member')
@@ -19,6 +19,24 @@ export default function UserInviteForm({ onSuccess, onCancel }: UserInviteFormPr
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
   const [temporaryPassword, setTemporaryPassword] = useState('')
+  const [roles, setRoles] = useState<Role[]>([])
+  const [rolesLoading, setRolesLoading] = useState(true)
+
+  // Fetch available roles on mount
+  useEffect(() => {
+    const fetchRoles = async () => {
+      if (!token) return
+      try {
+        const response = await rolesApi.listRoles(token)
+        setRoles(response.roles)
+      } catch (err) {
+        console.error('Failed to fetch roles:', err)
+      } finally {
+        setRolesLoading(false)
+      }
+    }
+    fetchRoles()
+  }, [token])
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -29,8 +47,10 @@ export default function UserInviteForm({ onSuccess, onCancel }: UserInviteFormPr
     setTemporaryPassword('')
 
     try {
+      const username = email.split('@')[0]
       const response = await usersApi.inviteUser(token, {
         email,
+        username,
         full_name: fullName || undefined,
         role,
         send_email: sendEmail,
@@ -112,15 +132,24 @@ export default function UserInviteForm({ onSuccess, onCancel }: UserInviteFormPr
             id="role"
             value={role}
             onChange={(e) => setRole(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+            disabled={rolesLoading}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white disabled:opacity-50"
           >
-            <option value="viewer">Viewer</option>
-            <option value="member">Member</option>
-            <option value="org_admin">Admin</option>
+            {rolesLoading ? (
+              <option>Loading roles...</option>
+            ) : (
+              roles.map((r) => (
+                <option key={r.name} value={r.name}>
+                  {r.display_name}{r.is_system_role ? ' (no organization)' : ''}
+                </option>
+              ))
+            )}
           </select>
-          <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-            Admins can manage users, connections, and organization settings
-          </p>
+          {!rolesLoading && (
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {roles.find(r => r.name === role)?.description || 'Select a role for the user.'}
+            </p>
+          )}
         </div>
 
         <div>

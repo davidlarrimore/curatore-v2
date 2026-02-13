@@ -18,6 +18,7 @@ import { validateDocumentId, DocumentIdError } from './validators'
 export const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
 export const API_PATH_VERSION = 'v1' as const
 const ACCESS_TOKEN_KEY = 'curatore_access_token'
+const ORG_CONTEXT_KEY = 'curatore_org_context'
 
 const jsonHeaders: HeadersInit = { 'Content-Type': 'application/json' }
 
@@ -31,9 +32,40 @@ function getAccessToken(): string | null {
   return localStorage.getItem(ACCESS_TOKEN_KEY)
 }
 
-function authHeaders(token?: string): HeadersInit {
+/**
+ * Get the current organization context from localStorage.
+ * Returns the org ID if in org mode, or null if in system mode.
+ */
+function getOrganizationContext(): string | null {
+  if (typeof window === 'undefined') return null
+  const context = localStorage.getItem(ORG_CONTEXT_KEY)
+  // 'system' means system context (no org selected)
+  // Any other value is an org ID
+  if (!context || context === 'system') return null
+  return context
+}
+
+/**
+ * Build auth headers with optional organization context.
+ * Includes X-Organization-Id header for org-scoped requests.
+ */
+function authHeaders(token?: string, includeOrgContext = true): HeadersInit {
   const resolvedToken = token || getAccessToken()
-  return resolvedToken ? { Authorization: `Bearer ${resolvedToken}` } : {}
+  const headers: Record<string, string> = {}
+
+  if (resolvedToken) {
+    headers['Authorization'] = `Bearer ${resolvedToken}`
+  }
+
+  // Include org context header for org-scoped API calls
+  if (includeOrgContext) {
+    const orgId = getOrganizationContext()
+    if (orgId) {
+      headers['X-Organization-Id'] = orgId
+    }
+  }
+
+  return headers
 }
 
 function httpError(res: Response, message?: string, detail?: any): never {
@@ -192,7 +224,7 @@ export const systemApi = {
     return handleJson(res)
   },
 
-  async getComponentHealth(component: 'backend' | 'database' | 'redis' | 'celery' | 'extraction' | 'docling' | 'llm' | 'sharepoint'): Promise<any> {
+  async getComponentHealth(component: 'backend' | 'database' | 'redis' | 'celery' | 'extraction' | 'llm' | 'sharepoint'): Promise<any> {
     const res = await fetch(apiUrl(`/admin/system/health/${component}`), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
@@ -321,18 +353,31 @@ export const fileApi = {
 // -------------------- Processing API --------------------
 // REMOVED: processingApi was deprecated. Use assetsApi for extraction workflows.
 
+// -------------------- Organization Types --------------------
+export interface Organization {
+  id: string
+  name: string
+  display_name: string
+  slug: string
+  is_active: boolean
+  settings?: Record<string, any>
+  created_at?: string
+  updated_at?: string
+}
+
+export interface OrganizationAdmin extends Organization {
+  user_count: number
+  enabled_connections_count: number
+}
+
+export interface OrganizationListResponse {
+  organizations: OrganizationAdmin[]
+  total: number
+}
+
 // -------------------- Organizations API --------------------
 export const organizationsApi = {
-  async getCurrentOrganization(token?: string): Promise<{
-    id: string
-    name: string
-    display_name: string
-    slug: string
-    is_active: boolean
-    settings: Record<string, any>
-    created_at: string
-    updated_at: string
-  }> {
+  async getCurrentOrganization(token?: string): Promise<Organization> {
     const res = await fetch(apiUrl('/admin/organizations/me'), {
       cache: 'no-store',
       headers: authHeaders(token)
@@ -340,17 +385,74 @@ export const organizationsApi = {
     return handleJson(res)
   },
 
-  async updateOrganization(token: string, data: { display_name?: string; slug?: string }): Promise<{
-    id: string
+  async updateOrganization(token: string, data: { display_name?: string; slug?: string }): Promise<Organization> {
+    const res = await fetch(apiUrl('/admin/organizations/me'), {
+      method: 'PUT',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  // Get organization by slug (for URL-based routing)
+  async getOrganizationBySlug(token: string, slug: string): Promise<Organization> {
+    const res = await fetch(apiUrl(`/admin/organizations/by-slug/${encodeURIComponent(slug)}`), {
+      cache: 'no-store',
+      headers: authHeaders(token, false) // Don't include org context - we're looking up by slug
+    })
+    return handleJson(res)
+  },
+
+  // Admin-only: List all organizations
+  async listOrganizations(token: string, params?: {
+    is_active?: boolean
+    search?: string
+    skip?: number
+    limit?: number
+  }): Promise<OrganizationListResponse> {
+    const url = new URL(apiUrl('/admin/organizations'))
+    if (params?.is_active !== undefined) url.searchParams.set('is_active', String(params.is_active))
+    if (params?.search) url.searchParams.set('search', params.search)
+    if (params?.skip !== undefined) url.searchParams.set('skip', String(params.skip))
+    if (params?.limit !== undefined) url.searchParams.set('limit', String(params.limit))
+
+    const res = await fetch(url.toString(), {
+      cache: 'no-store',
+      headers: authHeaders(token)
+    })
+    return handleJson(res)
+  },
+
+  // Admin-only: Get organization by ID
+  async getOrganization(token: string, orgId: string): Promise<OrganizationAdmin> {
+    const res = await fetch(apiUrl(`/admin/organizations/${orgId}`), {
+      cache: 'no-store',
+      headers: authHeaders(token)
+    })
+    return handleJson(res)
+  },
+
+  // Admin-only: Create organization
+  async createOrganization(token: string, data: {
     name: string
     display_name: string
     slug: string
-    is_active: boolean
-    settings: Record<string, any>
-    created_at: string
-    updated_at: string
-  }> {
-    const res = await fetch(apiUrl('/admin/organizations/me'), {
+    settings?: Record<string, any>
+  }): Promise<OrganizationAdmin> {
+    const res = await fetch(apiUrl('/admin/organizations'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  // Admin-only: Update organization by ID
+  async updateOrganizationById(token: string, orgId: string, data: {
+    display_name?: string
+    slug?: string
+  }): Promise<OrganizationAdmin> {
+    const res = await fetch(apiUrl(`/admin/organizations/${orgId}`), {
       method: 'PUT',
       headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
@@ -1078,6 +1180,30 @@ export const authApi = {
     })
     return handleJson(res)
   },
+  async forgotPassword(email: string): Promise<{ message: string }> {
+    const res = await fetch(apiUrl('/admin/auth/forgot-password'), {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ email }),
+    })
+    return handleJson(res)
+  },
+
+  async validateResetToken(token: string): Promise<{ valid: boolean; email?: string }> {
+    const res = await fetch(apiUrl(`/admin/auth/validate-reset-token?token=${encodeURIComponent(token)}`), {
+      headers: jsonHeaders,
+    })
+    return handleJson(res)
+  },
+
+  async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
+    const res = await fetch(apiUrl('/admin/auth/reset-password'), {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify({ token, new_password: newPassword }),
+    })
+    return handleJson(res)
+  },
 }
 
 // -------------------- Connections API --------------------
@@ -1694,6 +1820,7 @@ export const usersApi = {
 
   async inviteUser(token: string, data: {
     email: string
+    username: string
     role?: string
     full_name?: string
     send_email?: boolean
@@ -1745,6 +1872,39 @@ export const usersApi = {
       method: 'PUT',
       headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify({ new_password: newPassword }),
+    })
+    return handleJson(res)
+  },
+}
+
+// -------------------- Roles API --------------------
+export interface Role {
+  id: number
+  name: string
+  display_name: string
+  description: string | null
+  is_system_role: boolean
+  can_manage_users: boolean
+  can_manage_org: boolean
+  can_manage_system: boolean
+}
+
+export const rolesApi = {
+  async listRoles(token: string): Promise<{
+    roles: Role[]
+    total: number
+  }> {
+    const res = await fetch(apiUrl('/admin/roles'), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+
+  async getRole(token: string, roleName: string): Promise<Role> {
+    const res = await fetch(apiUrl(`/admin/roles/${roleName}`), {
+      headers: { Authorization: `Bearer ${token}` },
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -6000,6 +6160,266 @@ export const forecastsApi = {
   },
 }
 
+// -------------------- Services API (Admin-only) --------------------
+export interface Service {
+  id: string
+  name: string
+  service_type: string
+  description?: string
+  config: Record<string, any>
+  is_active: boolean
+  last_tested_at?: string
+  test_status?: string
+  test_result?: Record<string, any>
+  created_at: string
+  updated_at: string
+}
+
+export interface ServiceListResponse {
+  services: Service[]
+  total: number
+}
+
+export const servicesApi = {
+  async list(token: string, params?: {
+    service_type?: string
+    is_active?: boolean
+    skip?: number
+    limit?: number
+  }): Promise<ServiceListResponse> {
+    const url = new URL(apiUrl('/admin/services'))
+    if (params?.service_type) url.searchParams.set('service_type', params.service_type)
+    if (params?.is_active !== undefined) url.searchParams.set('is_active', String(params.is_active))
+    if (params?.skip !== undefined) url.searchParams.set('skip', String(params.skip))
+    if (params?.limit !== undefined) url.searchParams.set('limit', String(params.limit))
+
+    const res = await fetch(url.toString(), {
+      cache: 'no-store',
+      headers: authHeaders(token)
+    })
+    return handleJson(res)
+  },
+
+  async get(token: string, serviceId: string): Promise<Service> {
+    const res = await fetch(apiUrl(`/admin/services/${serviceId}`), {
+      cache: 'no-store',
+      headers: authHeaders(token)
+    })
+    return handleJson(res)
+  },
+
+  async create(token: string, data: {
+    name: string
+    service_type: string
+    description?: string
+    config?: Record<string, any>
+    is_active?: boolean
+  }): Promise<Service> {
+    const res = await fetch(apiUrl('/admin/services'), {
+      method: 'POST',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async update(token: string, serviceId: string, data: {
+    description?: string
+    config?: Record<string, any>
+    is_active?: boolean
+  }): Promise<Service> {
+    const res = await fetch(apiUrl(`/admin/services/${serviceId}`), {
+      method: 'PUT',
+      headers: { ...jsonHeaders, ...authHeaders(token) },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async delete(token: string, serviceId: string): Promise<void> {
+    const res = await fetch(apiUrl(`/admin/services/${serviceId}`), {
+      method: 'DELETE',
+      headers: authHeaders(token),
+    })
+    if (!res.ok) {
+      httpError(res)
+    }
+  },
+}
+
+// -------------------- Service Accounts API --------------------
+export interface ServiceAccount {
+  id: string
+  name: string
+  description?: string
+  organization_id: string
+  organization_name?: string
+  role: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+  last_used_at?: string
+}
+
+export interface ServiceAccountListResponse {
+  service_accounts: ServiceAccount[]
+  total: number
+}
+
+export interface ServiceAccountApiKeyCreate {
+  id: string
+  name: string
+  key: string
+  prefix: string
+  service_account_id: string
+  service_account_name: string
+  created_at: string
+  expires_at?: string
+}
+
+export const serviceAccountsApi = {
+  async list(token: string, orgHeader?: string, params?: {
+    is_active?: boolean
+    skip?: number
+    limit?: number
+  }): Promise<ServiceAccountListResponse> {
+    const url = new URL(apiUrl('/admin/service-accounts'))
+    if (params?.is_active !== undefined) url.searchParams.set('is_active', String(params.is_active))
+    if (params?.skip !== undefined) url.searchParams.set('skip', String(params.skip))
+    if (params?.limit !== undefined) url.searchParams.set('limit', String(params.limit))
+
+    const headers: HeadersInit = authHeaders(token)
+    if (orgHeader) {
+      (headers as Record<string, string>)['X-Organization-Id'] = orgHeader
+    }
+
+    const res = await fetch(url.toString(), {
+      cache: 'no-store',
+      headers,
+    })
+    return handleJson(res)
+  },
+
+  async get(token: string, serviceAccountId: string, orgHeader?: string): Promise<ServiceAccount> {
+    const headers: HeadersInit = authHeaders(token)
+    if (orgHeader) {
+      (headers as Record<string, string>)['X-Organization-Id'] = orgHeader
+    }
+
+    const res = await fetch(apiUrl(`/admin/service-accounts/${serviceAccountId}`), {
+      cache: 'no-store',
+      headers,
+    })
+    return handleJson(res)
+  },
+
+  async create(token: string, orgHeader: string, data: {
+    name: string
+    description?: string
+    role?: string
+  }): Promise<ServiceAccount> {
+    const res = await fetch(apiUrl('/admin/service-accounts'), {
+      method: 'POST',
+      headers: {
+        ...jsonHeaders,
+        ...authHeaders(token),
+        'X-Organization-Id': orgHeader,
+      },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async update(token: string, serviceAccountId: string, orgHeader: string, data: {
+    name?: string
+    description?: string
+    role?: string
+    is_active?: boolean
+  }): Promise<ServiceAccount> {
+    const res = await fetch(apiUrl(`/admin/service-accounts/${serviceAccountId}`), {
+      method: 'PUT',
+      headers: {
+        ...jsonHeaders,
+        ...authHeaders(token),
+        'X-Organization-Id': orgHeader,
+      },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async delete(token: string, serviceAccountId: string, orgHeader: string): Promise<void> {
+    const res = await fetch(apiUrl(`/admin/service-accounts/${serviceAccountId}`), {
+      method: 'DELETE',
+      headers: {
+        ...authHeaders(token),
+        'X-Organization-Id': orgHeader,
+      },
+    })
+    if (!res.ok) {
+      httpError(res)
+    }
+  },
+
+  async listApiKeys(token: string, serviceAccountId: string, orgHeader: string): Promise<{
+    keys: Array<{
+      id: string
+      name: string
+      prefix: string
+      is_active: boolean
+      created_at: string
+      last_used_at?: string
+      expires_at?: string
+    }>
+    total: number
+  }> {
+    const res = await fetch(apiUrl(`/admin/service-accounts/${serviceAccountId}/api-keys`), {
+      cache: 'no-store',
+      headers: {
+        ...authHeaders(token),
+        'X-Organization-Id': orgHeader,
+      },
+    })
+    return handleJson(res)
+  },
+
+  async createApiKey(
+    token: string,
+    serviceAccountId: string,
+    orgHeader: string,
+    data: { name: string; expires_days?: number }
+  ): Promise<ServiceAccountApiKeyCreate> {
+    const res = await fetch(apiUrl(`/admin/service-accounts/${serviceAccountId}/api-keys`), {
+      method: 'POST',
+      headers: {
+        ...jsonHeaders,
+        ...authHeaders(token),
+        'X-Organization-Id': orgHeader,
+      },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteApiKey(
+    token: string,
+    serviceAccountId: string,
+    apiKeyId: string,
+    orgHeader: string
+  ): Promise<void> {
+    const res = await fetch(apiUrl(`/admin/service-accounts/${serviceAccountId}/api-keys/${apiKeyId}`), {
+      method: 'DELETE',
+      headers: {
+        ...authHeaders(token),
+        'X-Organization-Id': orgHeader,
+      },
+    })
+    if (!res.ok) {
+      httpError(res)
+    }
+  },
+}
+
 // -------------------- Metrics API --------------------
 export const metricsApi = {
   async getProcedureMetrics(token?: string, days: number = 7): Promise<{
@@ -6046,5 +6466,7 @@ export default {
   pipelinesApi,
   metadataApi,
   metricsApi,
+  servicesApi,
+  serviceAccountsApi,
   utils,
 }

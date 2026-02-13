@@ -42,7 +42,7 @@ class ConnectionInfo:
 
     websocket: WebSocket
     user_id: UUID
-    organization_id: UUID
+    organization_id: Optional[UUID]
     connected_at: datetime = field(default_factory=datetime.utcnow)
 
 
@@ -70,7 +70,7 @@ class WebSocketManager:
     async def connect(
         self,
         websocket: WebSocket,
-        organization_id: UUID,
+        organization_id: Optional[UUID],
         user_id: UUID,
     ) -> None:
         """
@@ -85,12 +85,11 @@ class WebSocketManager:
             The WebSocket should already be accepted before calling this method.
         """
         async with self._lock:
-            # Initialize org connection set if needed
-            if organization_id not in self._connections:
-                self._connections[organization_id] = set()
-
-            # Add connection to org's set
-            self._connections[organization_id].add(websocket)
+            # Add to org connection pool (skip for system admins with no org)
+            if organization_id is not None:
+                if organization_id not in self._connections:
+                    self._connections[organization_id] = set()
+                self._connections[organization_id].add(websocket)
 
             # Store connection info
             self._connection_info[websocket] = ConnectionInfo(
@@ -99,9 +98,10 @@ class WebSocketManager:
                 organization_id=organization_id,
             )
 
+            org_count = len(self._connections.get(organization_id, set())) if organization_id else 0
             logger.info(
                 f"WebSocket connected: user={user_id}, org={organization_id}, "
-                f"total_org_connections={len(self._connections[organization_id])}"
+                f"total_org_connections={org_count}"
             )
 
     async def disconnect(
@@ -128,7 +128,7 @@ class WebSocketManager:
             info = self._connection_info.pop(websocket, None)
 
             # Remove from org's connection set
-            if organization_id and organization_id in self._connections:
+            if organization_id is not None and organization_id in self._connections:
                 self._connections[organization_id].discard(websocket)
 
                 # Clean up empty org sets

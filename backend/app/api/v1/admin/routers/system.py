@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 
 from app.celery_app import app as celery_app
 from app.config import settings
+from app.connectors.adapters.document_service_adapter import document_service_adapter
 from app.core.llm.llm_service import llm_service
 from app.core.shared.config_loader import config_loader
 from app.core.shared.database_service import database_service
@@ -125,79 +126,42 @@ async def _check_celery() -> Dict[str, Any]:
 
 
 async def _check_extraction() -> Dict[str, Any]:
-    """Check extraction service health."""
+    """Check document service health."""
     try:
-        extractor_status = await document_service.extractor_health()
-        is_connected = extractor_status.get("connected", False)
+        health_data = await document_service_adapter.health()
+        is_healthy = health_data.get("status") == "ok"
 
-        if is_connected:
-            return {
+        circuit = document_service_adapter.get_circuit_status()
+
+        if is_healthy:
+            result = {
                 "status": "healthy",
-                "message": "Extraction service is responding",
-                "url": extractor_status.get("endpoint"),
-                "engine": extractor_status.get("engine", "default"),
-                "response": extractor_status.get("response", {}),
+                "message": "Document service is responding",
+                "url": document_service_adapter.base_url,
+                "engine": "document-service",
+                "response": health_data,
             }
-        elif extractor_status.get("error") == "not_configured":
-            return {
+        elif not document_service_adapter.is_available:
+            result = {
                 "status": "not_configured",
-                "message": "Extraction service not configured",
-                "engine": extractor_status.get("engine", "default"),
+                "message": "Document service not configured",
+                "engine": "document-service",
             }
         else:
-            error_msg = extractor_status.get("error", "Service check failed")
-            return {
+            error_msg = health_data.get("error", "Service check failed")
+            result = {
                 "status": "unhealthy",
-                "message": f"Extraction service unreachable: {error_msg}",
-                "url": extractor_status.get("endpoint"),
-                "engine": extractor_status.get("engine", "default"),
+                "message": f"Document service unreachable: {error_msg}",
+                "url": document_service_adapter.base_url,
+                "engine": "document-service",
             }
+
+        result["circuit_breaker"] = circuit
+        return result
     except Exception as e:
         return {
             "status": "unhealthy",
-            "message": f"Extraction service error: {str(e)}",
-        }
-
-
-async def _check_docling() -> Dict[str, Any]:
-    """Check Docling service health."""
-    import httpx
-
-    docling_url = (getattr(settings, "docling_service_url", None) or "").rstrip("/")
-    if not docling_url:
-        return {
-            "status": "not_configured",
-            "message": "Docling service not configured",
-        }
-
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            health_url = f"{docling_url}/health"
-            try:
-                resp = await client.get(health_url)
-                if resp.status_code == 200:
-                    return {
-                        "status": "healthy",
-                        "message": "Docling service is responding",
-                        "url": docling_url,
-                    }
-                else:
-                    return {
-                        "status": "degraded",
-                        "message": f"Docling returned status {resp.status_code}",
-                        "url": docling_url,
-                    }
-            except httpx.HTTPStatusError:
-                return {
-                    "status": "unknown",
-                    "message": "Docling service configured but health endpoint not available",
-                    "url": docling_url,
-                }
-    except Exception as e:
-        return {
-            "status": "unhealthy",
-            "message": f"Docling service error: {str(e)}",
-            "url": docling_url,
+            "message": f"Document service error: {str(e)}",
         }
 
 
@@ -451,14 +415,8 @@ async def health_check_celery() -> Dict[str, Any]:
 
 @router.get("/system/health/extraction", tags=["System"])
 async def health_check_extraction() -> Dict[str, Any]:
-    """Health check for extraction service component."""
+    """Health check for document service component."""
     return await _check_extraction()
-
-
-@router.get("/system/health/docling", tags=["System"])
-async def health_check_docling() -> Dict[str, Any]:
-    """Health check for Docling service component."""
-    return await _check_docling()
 
 
 @router.get("/system/health/storage", tags=["System"])
@@ -499,7 +457,6 @@ async def comprehensive_health() -> Dict[str, Any]:
         _check_redis(),
         _check_celery(),
         _check_extraction(),
-        _check_docling(),
         _check_storage(),
         _check_llm(),
         _check_playwright(),
@@ -509,7 +466,7 @@ async def comprehensive_health() -> Dict[str, Any]:
 
     component_keys = [
         "backend", "database", "redis", "celery_worker",
-        "extraction_service", "docling", "object_storage",
+        "extraction_service", "object_storage",
         "llm", "playwright", "sharepoint",
     ]
 
@@ -641,26 +598,13 @@ async def reset_system():
 @router.get("/config/supported-formats", tags=["Configuration"])
 async def get_supported_formats():
     """Get list of supported file formats."""
-    from app.core.ingestion.extraction import file_type_registry
+    formats_data = await document_service_adapter.supported_formats()
 
     return {
-        "supported_extensions": document_service.get_supported_extensions(),
+        "supported_extensions": formats_data.get("extensions", document_service.get_supported_extensions()),
         "max_file_size": settings.max_file_size,
-        "engines": file_type_registry.get_all_engines(),
-        "format_matrix": file_type_registry.get_format_matrix(),
     }
 
-
-@router.get("/config/file-type-registry", tags=["Configuration"])
-async def get_file_type_registry():
-    """Get detailed file type support information by extraction engine."""
-    from app.core.ingestion.extraction import file_type_registry
-
-    return {
-        "all_supported_formats": sorted(file_type_registry.get_all_supported_formats()),
-        "engines": file_type_registry.get_all_engines(),
-        "format_matrix": file_type_registry.get_format_matrix(),
-    }
 
 @router.get("/config/defaults", tags=["Configuration"])
 async def get_default_config():
@@ -686,41 +630,44 @@ async def get_extraction_services() -> Dict[str, Any]:
     try:
         return await document_service.available_extraction_services()
     except Exception as e:
-        if getattr(document_service, 'extract_base', ''):
-            active = "extraction-service"
-        elif getattr(document_service, 'docling_base', ''):
-            active = "docling"
-        else:
-            active = None
-        return {"active": active, "services": [], "error": str(e)}
+        return {"active": None, "services": [], "error": str(e)}
 
 @router.get("/config/extraction-engines", tags=["Configuration"])
 async def get_extraction_engines() -> Dict[str, Any]:
-    """List extraction engines configured in config.yml."""
+    """List extraction engines available via the document service."""
     try:
-        enabled_engines = config_loader.get_enabled_extraction_engines()
-        default_engine = config_loader.get_default_extraction_engine()
+        caps = await document_service_adapter.capabilities()
+        engines_list = [
+            {
+                "id": "document-service",
+                "name": "document-service",
+                "display_name": "Document Service",
+                "description": "Curatore Document Service with automatic triage",
+                "engine_type": "document-service",
+                "service_url": document_service_adapter.base_url,
+                "timeout": document_service_adapter.timeout,
+                "is_default": True,
+                "is_system": True,
+            }
+        ]
 
-        engines_list = []
-        for engine in enabled_engines:
-            is_default = (default_engine and engine.name.lower() == default_engine.name.lower())
-
+        if caps.get("docling_available"):
             engines_list.append({
-                "id": engine.name,
-                "name": engine.name,
-                "display_name": engine.display_name,
-                "description": engine.description,
-                "engine_type": engine.engine_type,
-                "service_url": engine.service_url,
-                "timeout": engine.timeout,
-                "is_default": is_default,
-                "is_system": True
+                "id": "docling",
+                "name": "docling",
+                "display_name": "Docling (via Document Service)",
+                "description": "IBM Docling for complex PDFs and OCR, proxied through document service",
+                "engine_type": "docling",
+                "service_url": document_service_adapter.base_url,
+                "timeout": document_service_adapter.timeout,
+                "is_default": False,
+                "is_system": True,
             })
 
         return {
             "engines": engines_list,
-            "default_engine": default_engine.name if default_engine else None,
-            "default_engine_source": "config.yml" if config_loader.has_default_engine_in_config() else None
+            "default_engine": "document-service",
+            "default_engine_source": "document-service",
         }
     except Exception as e:
         return {

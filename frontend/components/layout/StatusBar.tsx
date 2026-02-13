@@ -2,10 +2,11 @@
 'use client'
 
 import { useState, useEffect, useRef, useMemo } from 'react'
-import { useRouter } from 'next/navigation'
+import { useRouter, usePathname } from 'next/navigation'
 import { Activity, Clock, ChevronRight, CheckCircle, XCircle, Layers, Play, AlertCircle } from 'lucide-react'
 import { API_PATH_VERSION } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
+import { useOrganization } from '@/lib/organization-context'
 import { useQueue } from '@/lib/context-shims'
 import { useUnifiedJobs } from '@/lib/unified-jobs-context'
 import { formatCurrentTime, DISPLAY_TIMEZONE_ABBR } from '@/lib/date-utils'
@@ -28,10 +29,42 @@ interface StatusBarProps {
 
 export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
   const router = useRouter()
-  const { isAuthenticated } = useAuth()
+  const pathname = usePathname()
+  const { isAdmin } = useAuth()
+  const { mode, currentOrganization } = useOrganization()
   // Use both legacy and unified context during migration
   const { stats: legacyStats, activeCount: legacyActiveCount } = useQueue()
-  const { queueStats, activeCount: unifiedActiveCount, connectionStatus, hasActiveJobs, jobs } = useUnifiedJobs()
+  const { queueStats, activeCount: unifiedActiveCount, connectionStatus, jobs: allJobs } = useUnifiedJobs()
+
+  // Determine if we're in system mode
+  const isSystemMode = isAdmin && mode === 'system'
+
+  // Get org slug from URL or context
+  const orgSlugMatch = pathname?.match(/^\/orgs\/([^\/]+)/)
+  const urlOrgSlug = orgSlugMatch ? orgSlugMatch[1] : null
+  const activeOrgSlug = urlOrgSlug || currentOrganization?.slug
+
+  // Helper to build org-scoped URLs - requires org context
+  const getJobsUrl = () => {
+    if (isSystemMode) {
+      return '/system/jobs'
+    }
+    if (activeOrgSlug) {
+      return `/orgs/${activeOrgSlug}/jobs`
+    }
+    // No org context - this shouldn't happen in normal use
+    return '/orgs'
+  }
+
+  // Filter jobs by organization (show all in system mode)
+  const jobs = useMemo(() => {
+    if (isSystemMode) return allJobs
+    if (!currentOrganization) return allJobs
+    // Filter to jobs that belong to current organization
+    // Jobs have resourceId which may contain org info, but typically we'd need org_id on the job
+    // For now, show all jobs - the backend should filter by org via the WebSocket/API
+    return allJobs
+  }, [allJobs, isSystemMode, currentOrganization])
 
   // Prefer unified context stats, fall back to legacy
   const stats = queueStats || legacyStats
@@ -183,9 +216,9 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
         {/* Divider */}
         <div className="hidden lg:block w-px h-4 bg-gray-200 dark:bg-gray-700"></div>
 
-        {/* Jobs Status - Links to Queue Admin */}
+        {/* Jobs Status - Links to Job Manager */}
         <button
-          onClick={() => router.push('/admin/queue')}
+          onClick={() => router.push(getJobsUrl())}
           className={clsx(
             "hidden lg:flex items-center gap-2 px-3 py-1.5 rounded-lg transition-all group",
             "hover:bg-gray-100 dark:hover:bg-gray-800",

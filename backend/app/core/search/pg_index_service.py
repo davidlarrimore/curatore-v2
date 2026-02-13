@@ -933,7 +933,7 @@ class PgIndexService:
             # Map source_type to internal source_type
             internal_source_type = f"{source_type}_forecast" if source_type else "forecast"
 
-            builder = metadata_builder_registry.get("forecast")
+            builder = metadata_builder_registry.get(internal_source_type)
             content = builder.build_content(
                 title=title, description=description,
                 agency_name=agency_name, naics_codes=naics_codes,
@@ -997,7 +997,7 @@ class PgIndexService:
             )
             metadata = builder.build_metadata(
                 salesforce_id=salesforce_id, account_type=account_type,
-                industry=industry, website=website,
+                industry=industry, website=website, account_name=name,
             )
             if embedding is None:
                 embedding = await embedding_service.get_embedding(content)

@@ -9,6 +9,8 @@ interface FolderBreadcrumbProps {
   onNavigate: (path: string) => void
   /** Map of raw segment values to display labels (e.g., org UUID → slug) */
   segmentLabelMap?: Record<string, string>
+  /** Segments to hide from the breadcrumb (e.g., org UUID when in org context) */
+  hideSegments?: string[]
 }
 
 export default function FolderBreadcrumb({
@@ -17,18 +19,28 @@ export default function FolderBreadcrumb({
   prefix,
   onNavigate,
   segmentLabelMap,
+  hideSegments,
 }: FolderBreadcrumbProps) {
-  // Parse prefix into path segments
-  const segments = prefix
+  // Parse prefix into path segments, filtering out hidden segments
+  const allSegments = prefix
     .split('/')
     .filter((s) => s.length > 0)
 
+  const segments = hideSegments
+    ? allSegments.filter((s) => !hideSegments.includes(s))
+    : allSegments
+
   // Build breadcrumb items from prefix segments only (bucket is shown in the dropdown)
-  const items = segments.map((segment, index) => ({
-    label: segmentLabelMap?.[segment] ?? segment,
-    path: segments.slice(0, index + 1).join('/') + '/',
-    isRoot: index === 0,
-  }))
+  // Recalculate paths to include hidden segments in the actual path
+  const items = segments.map((segment, index) => {
+    // Find the actual index in allSegments to build the correct path
+    const actualIndex = allSegments.indexOf(segment)
+    return {
+      label: segmentLabelMap?.[segment] ?? segment,
+      path: allSegments.slice(0, actualIndex + 1).join('/') + '/',
+      isRoot: index === 0,
+    }
+  })
 
   // If no prefix segments, show a single root item for the bucket
   if (items.length === 0) {

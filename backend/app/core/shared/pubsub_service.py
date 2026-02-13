@@ -228,6 +228,48 @@ class PubSubService:
             await subscriber.close()
             logger.info(f"Unsubscribed from channel: {channel}")
 
+    async def subscribe_all_org_channels(
+        self,
+    ) -> AsyncGenerator[Dict[str, Any], None]:
+        """
+        Subscribe to job updates for ALL organizations using a pattern subscription.
+
+        Used by system admins who need visibility across all orgs.
+
+        Yields:
+            Parsed message dictionaries with type, timestamp, and data fields
+        """
+        pattern = "curatore:org:*:jobs"
+
+        subscriber = redis.from_url(
+            self._redis_url,
+            encoding="utf-8",
+            decode_responses=True,
+        )
+
+        try:
+            pubsub = subscriber.pubsub()
+            await pubsub.psubscribe(pattern)
+
+            logger.info(f"Subscribed to pattern: {pattern}")
+
+            async for message in pubsub.listen():
+                if message["type"] == "pmessage":
+                    try:
+                        data = json.loads(message["data"])
+                        yield data
+                    except json.JSONDecodeError as e:
+                        logger.warning(f"Failed to parse message: {e}")
+                        continue
+
+        except asyncio.CancelledError:
+            logger.info(f"Pattern subscription cancelled: {pattern}")
+            raise
+        finally:
+            await pubsub.punsubscribe(pattern)
+            await subscriber.close()
+            logger.info(f"Unsubscribed from pattern: {pattern}")
+
     async def close(self) -> None:
         """Close the publisher connection."""
         async with self._lock:

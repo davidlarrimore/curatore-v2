@@ -9,31 +9,42 @@ Key Dependencies:
     - get_current_user_from_jwt: Validate JWT Bearer token
     - get_current_user_from_api_key: Validate X-API-Key header
     - get_current_user: Flexible auth (JWT or API key)
-    - require_org_admin: Ensure user has admin role
+    - get_current_principal: Get User or ServiceAccount from API key
+    - require_admin: Ensure user has system admin role
+    - require_org_admin: Ensure user has org admin role
+    - require_org_admin_or_above: Ensure user has org_admin or admin role
+    - get_effective_org_id: Get org context (supports X-Organization-Id header for admins)
+    - require_org_context: Require organization context (not system mode)
     - get_current_organization: Get user's organization
 
 Usage:
     from fastapi import Depends
-    from app.dependencies import get_current_user, require_org_admin
+    from app.dependencies import get_current_user, require_org_admin, require_admin
     from app.core.database.models import User
 
     @router.get("/protected")
     async def protected_endpoint(user: User = Depends(get_current_user)):
         return {"user_id": str(user.id)}
 
-    @router.post("/admin-only")
-    async def admin_endpoint(user: User = Depends(require_org_admin)):
-        return {"message": "Admin access granted"}
+    @router.post("/org-admin-only")
+    async def org_admin_endpoint(user: User = Depends(require_org_admin)):
+        return {"message": "Org admin access granted"}
+
+    @router.post("/system-admin-only")
+    async def system_admin_endpoint(user: User = Depends(require_admin)):
+        return {"message": "System admin access granted"}
 
 Security:
     - All dependencies check if user is_active
     - JWT tokens are validated for signature and expiration
     - API keys are validated against bcrypt hash
     - Multi-tenant isolation: users can only access their org's data
+    - System admins can access any org via X-Organization-Id header
 """
 
 import logging
-from typing import Optional
+from typing import Optional, Union
+from uuid import UUID as UUID_TYPE
 
 import jwt
 from fastapi import Depends, Header, HTTPException, status
@@ -42,8 +53,11 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.core.auth.auth_service import auth_service
-from app.core.database.models import ApiKey, Organization, User
+from app.core.database.models import ApiKey, Organization, ServiceAccount, User
 from app.core.shared.database_service import database_service
+
+# Type alias for authenticated principals (User or ServiceAccount)
+Principal = Union[User, ServiceAccount]
 
 # Initialize logger
 logger = logging.getLogger("curatore.dependencies")
@@ -174,6 +188,9 @@ async def get_current_user_from_api_key(
     Validates the API key from X-API-Key header, fetches the associated user
     from database. Returns 401 if key is invalid, expired, or inactive.
 
+    Note: This function only returns User objects. For service account support,
+    use get_current_principal_from_api_key() instead.
+
     Args:
         x_api_key: API key from X-API-Key header
 
@@ -182,6 +199,7 @@ async def get_current_user_from_api_key(
 
     Raises:
         HTTPException: 401 if API key is invalid, expired, or inactive
+        HTTPException: 403 if API key belongs to a service account
 
     Example:
         @router.get("/api/endpoint")
@@ -193,6 +211,50 @@ async def get_current_user_from_api_key(
         - Checks key is not expired
         - Checks key and user are active
         - Updates last_used_at timestamp
+    """
+    principal = await get_current_principal_from_api_key(x_api_key)
+
+    # If service account, reject (use get_current_principal_from_api_key for that)
+    if isinstance(principal, ServiceAccount):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Service accounts cannot use this endpoint. Use a user API key.",
+        )
+
+    return principal
+
+
+async def get_current_principal_from_api_key(
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+) -> Principal:
+    """
+    Extract and validate principal (User or ServiceAccount) from API key.
+
+    Validates the API key from X-API-Key header, fetches the associated
+    principal from database. Returns 401 if key is invalid, expired, or inactive.
+
+    Args:
+        x_api_key: API key from X-API-Key header
+
+    Returns:
+        Principal: User or ServiceAccount associated with the API key
+
+    Raises:
+        HTTPException: 401 if API key is invalid, expired, or inactive
+
+    Example:
+        @router.get("/api/endpoint")
+        async def api_endpoint(principal: Principal = Depends(get_current_principal_from_api_key)):
+            if isinstance(principal, User):
+                return {"user_id": str(principal.id)}
+            else:
+                return {"service_account_id": str(principal.id)}
+
+    Security:
+        - Validates API key against bcrypt hash
+        - Checks key is not expired
+        - Checks key and principal are active
+        - Updates last_used_at timestamp on both API key and service account
     """
     if not x_api_key:
         raise HTTPException(
@@ -249,33 +311,71 @@ async def get_current_user_from_api_key(
                         headers={"WWW-Authenticate": 'ApiKey realm="API Key Required"'},
                     )
 
-            # Fetch associated user
-            result = await session.execute(
-                select(User).where(User.id == api_key.user_id)
-            )
-            user = result.scalar_one_or_none()
-
-            if not user:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="User not found",
-                    headers={"WWW-Authenticate": 'ApiKey realm="API Key Required"'},
-                )
-
-            if not user.is_active:
-                raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="User account is inactive",
-                    headers={"WWW-Authenticate": 'ApiKey realm="API Key Required"'},
-                )
-
-            # Update last_used_at timestamp
+            # Update last_used_at timestamp on API key
             from datetime import datetime
             api_key.last_used_at = datetime.utcnow()
-            await session.commit()
 
-            logger.debug(f"User authenticated via API key: {user.email} (key: {key_prefix})")
-            return user
+            # Determine if this is a user or service account key
+            if api_key.user_id:
+                # User key
+                result = await session.execute(
+                    select(User).where(User.id == api_key.user_id)
+                )
+                user = result.scalar_one_or_none()
+
+                if not user:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="User not found",
+                        headers={"WWW-Authenticate": 'ApiKey realm="API Key Required"'},
+                    )
+
+                if not user.is_active:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="User account is inactive",
+                        headers={"WWW-Authenticate": 'ApiKey realm="API Key Required"'},
+                    )
+
+                await session.commit()
+                logger.debug(f"User authenticated via API key: {user.email} (key: {key_prefix})")
+                return user
+
+            elif api_key.service_account_id:
+                # Service account key
+                result = await session.execute(
+                    select(ServiceAccount).where(ServiceAccount.id == api_key.service_account_id)
+                )
+                service_account = result.scalar_one_or_none()
+
+                if not service_account:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Service account not found",
+                        headers={"WWW-Authenticate": 'ApiKey realm="API Key Required"'},
+                    )
+
+                if not service_account.is_active:
+                    raise HTTPException(
+                        status_code=status.HTTP_401_UNAUTHORIZED,
+                        detail="Service account is inactive",
+                        headers={"WWW-Authenticate": 'ApiKey realm="API Key Required"'},
+                    )
+
+                # Update service account's last_used_at
+                service_account.last_used_at = datetime.utcnow()
+                await session.commit()
+                logger.debug(f"Service account authenticated via API key: {service_account.name} (key: {key_prefix})")
+                return service_account
+
+            else:
+                # Neither user_id nor service_account_id set (should not happen due to CHECK constraint)
+                logger.error(f"API key {api_key.id} has neither user_id nor service_account_id")
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail="Invalid API key configuration",
+                    headers={"WWW-Authenticate": 'ApiKey realm="API Key Required"'},
+                )
 
     except HTTPException:
         raise
@@ -374,6 +474,7 @@ async def require_org_admin(user: User = Depends(get_current_user)) -> User:
     Ensure the current user has organization admin role.
 
     Dependency that requires user to be authenticated AND have org_admin role.
+    System admins (role='admin') are NOT allowed - they should use require_org_admin_or_above.
     Returns 403 if user doesn't have sufficient permissions.
 
     Args:
@@ -409,15 +510,106 @@ async def require_org_admin(user: User = Depends(get_current_user)) -> User:
     return user
 
 
+async def require_admin(user: User = Depends(get_current_user)) -> User:
+    """
+    Ensure the current user has system admin role.
+
+    Dependency that requires user to be authenticated AND have 'admin' role.
+    System admins have access to all organizations and system-level configuration.
+
+    Args:
+        user: Current authenticated user (from get_current_user)
+
+    Returns:
+        User: Current authenticated user (guaranteed to be admin)
+
+    Raises:
+        HTTPException: 403 if user is not a system admin
+
+    Example:
+        @router.get("/system/organizations")
+        async def list_all_organizations(user: User = Depends(require_admin)):
+            # Only system admins can list all organizations
+            return await list_orgs()
+
+    Note:
+        Admin users have organization_id=NULL and can access any org via
+        the X-Organization-Id header.
+    """
+    if user.role != "admin":
+        logger.warning(f"Permission denied: user {user.email} (role: {user.role}) attempted system admin action")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="System admin role required",
+        )
+
+    return user
+
+
+async def require_org_admin_or_above(
+    user: User = Depends(get_current_user),
+    org_id: Optional[UUID_TYPE] = None,
+) -> User:
+    """
+    Ensure the current user has org_admin or admin role.
+
+    For system admins, any organization is allowed. For org_admins, they must
+    be accessing their own organization. If org_id is provided, validates
+    the user has access to that specific organization.
+
+    Args:
+        user: Current authenticated user
+        org_id: Optional organization ID to validate access to
+
+    Returns:
+        User: Current authenticated user (guaranteed to be org_admin or admin)
+
+    Raises:
+        HTTPException: 403 if user doesn't have sufficient permissions
+
+    Example:
+        @router.put("/organizations/{org_id}/settings")
+        async def update_org_settings(
+            org_id: UUID,
+            settings: dict,
+            user: User = Depends(require_org_admin_or_above),
+        ):
+            # Both org_admin (of this org) and system admin can update
+            return {"message": "Settings updated"}
+    """
+    # System admin can access anything
+    if user.role == "admin":
+        return user
+
+    # Org admin can only access their own org
+    if user.role == "org_admin":
+        if org_id and str(user.organization_id) != str(org_id):
+            logger.warning(
+                f"Permission denied: org_admin {user.email} attempted to access org {org_id}"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Cannot access other organizations",
+            )
+        return user
+
+    # Neither admin nor org_admin
+    logger.warning(f"Permission denied: user {user.email} (role: {user.role}) attempted org admin action")
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="Organization admin or system admin role required",
+    )
+
+
 async def require_member_or_admin(user: User = Depends(get_current_user)) -> User:
     """
-    Ensure the current user has at least member role (member or org_admin).
+    Ensure the current user has at least member role (member, org_admin, or admin).
 
     Args:
         user: Current authenticated user
 
     Returns:
-        User: Current authenticated user (guaranteed to be member or org_admin)
+        User: Current authenticated user (guaranteed to be member, org_admin, or admin)
 
     Raises:
         HTTPException: 403 if user is only a viewer
@@ -431,7 +623,7 @@ async def require_member_or_admin(user: User = Depends(get_current_user)) -> Use
             # Viewers cannot upload
             return {"message": "Document uploaded"}
     """
-    if user.role not in ["org_admin", "member"]:
+    if user.role not in ["admin", "org_admin", "member"]:
         logger.warning(f"Permission denied: user {user.email} (role: {user.role}) attempted member action")
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -446,20 +638,142 @@ async def require_member_or_admin(user: User = Depends(get_current_user)) -> Use
 # =========================================================================
 
 
-async def get_current_organization(user: User = Depends(get_current_user)) -> Organization:
+async def get_effective_org_id(
+    user: User = Depends(get_current_user),
+    x_organization_id: Optional[str] = Header(None, alias="X-Organization-Id"),
+) -> Optional[UUID_TYPE]:
     """
-    Get the organization for the current user.
+    Get effective organization context.
 
-    Fetches the organization associated with the authenticated user.
+    For system admins:
+        - If X-Organization-Id header is provided, use that org (after validation)
+        - If no header, return None (system context)
+
+    For non-admin users:
+        - Always use user.organization_id (header is ignored)
 
     Args:
         user: Current authenticated user
+        x_organization_id: Optional X-Organization-Id header (admin only)
 
     Returns:
-        Organization: User's organization
+        Optional[UUID]: Organization ID for org context, None for system context
+
+    Raises:
+        HTTPException: 404 if specified organization not found or inactive
+
+    Example:
+        @router.get("/assets")
+        async def list_assets(
+            org_id: Optional[UUID] = Depends(get_effective_org_id),
+        ):
+            if org_id:
+                # Org context: filter by org
+                return await list_assets_for_org(org_id)
+            else:
+                # System context: return all assets (admin only)
+                return await list_all_assets()
+
+    Note:
+        System context (None) is only possible for admin users.
+        Non-admin users always have an org context.
+    """
+    # Non-admin users: always use their organization
+    if user.role != "admin":
+        return user.organization_id
+
+    # Admin users: use header if provided, otherwise system context (None)
+    if x_organization_id:
+        try:
+            org_id = UUID_TYPE(x_organization_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid organization ID format",
+            )
+
+        # Validate org exists and is active
+        async with database_service.get_session() as session:
+            result = await session.execute(
+                select(Organization).where(Organization.id == org_id)
+            )
+            org = result.scalar_one_or_none()
+
+            if not org:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organization not found",
+                )
+
+            if not org.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Organization is inactive",
+                )
+
+            logger.debug(f"Admin {user.email} using org context: {org.name}")
+            return org_id
+
+    # No header: system context
+    logger.debug(f"Admin {user.email} using system context")
+    return None
+
+
+async def require_org_context(
+    org_id: Optional[UUID_TYPE] = Depends(get_effective_org_id),
+) -> UUID_TYPE:
+    """
+    Require an organization context (not system context).
+
+    Use this dependency for endpoints that require an organization context.
+    System admins must provide X-Organization-Id header to access these endpoints.
+
+    Args:
+        org_id: Organization ID from get_effective_org_id
+
+    Returns:
+        UUID: Organization ID (guaranteed to be set)
+
+    Raises:
+        HTTPException: 400 if no organization context is set
+
+    Example:
+        @router.get("/assets")
+        async def list_assets(
+            org_id: UUID = Depends(require_org_context),
+        ):
+            # org_id is guaranteed to be set
+            return await list_assets_for_org(org_id)
+    """
+    if org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Organization context required. Provide X-Organization-Id header.",
+        )
+
+    return org_id
+
+
+async def get_current_organization(
+    user: User = Depends(get_current_user),
+    x_organization_id: Optional[str] = Header(None, alias="X-Organization-Id"),
+) -> Organization:
+    """
+    Get the organization for the current context.
+
+    For regular users, returns their organization.
+    For admin users, uses X-Organization-Id header if provided, otherwise raises error.
+
+    Args:
+        user: Current authenticated user
+        x_organization_id: Optional org ID header (for admins)
+
+    Returns:
+        Organization: Organization for current context
 
     Raises:
         HTTPException: 404 if organization not found
+        HTTPException: 400 if admin user without X-Organization-Id header
 
     Example:
         @router.get("/org/settings")
@@ -468,14 +782,31 @@ async def get_current_organization(user: User = Depends(get_current_user)) -> Or
         ):
             return {"org_name": org.name, "settings": org.settings}
     """
+    # Determine which org ID to use
+    if user.role == "admin":
+        if not x_organization_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Admin users must provide X-Organization-Id header",
+            )
+        try:
+            org_id = UUID_TYPE(x_organization_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid organization ID format",
+            )
+    else:
+        org_id = user.organization_id
+
     async with database_service.get_session() as session:
         result = await session.execute(
-            select(Organization).where(Organization.id == user.organization_id)
+            select(Organization).where(Organization.id == org_id)
         )
         org = result.scalar_one_or_none()
 
         if not org:
-            logger.error(f"Organization {user.organization_id} not found for user {user.email}")
+            logger.error(f"Organization {org_id} not found for user {user.email}")
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Organization not found",
@@ -536,20 +867,24 @@ async def get_current_user_optional(
 
 
 async def get_current_org_id(
-    user: User = Depends(get_current_user),
-) -> "UUID":
+    org_id: Optional[UUID_TYPE] = Depends(get_effective_org_id),
+) -> UUID_TYPE:
     """
-    Get the organization ID for the current user.
+    Get the organization ID for the current context.
 
-    A convenience dependency that extracts just the organization ID from
-    the authenticated user. Useful when endpoints only need the org_id
-    for queries.
+    A convenience dependency that extracts the organization ID from the context.
+    For regular users, this is their organization_id.
+    For admin users with X-Organization-Id header, this is the specified org.
+    For admin users without the header, this raises an error.
 
     Args:
-        user: Current authenticated user
+        org_id: Organization ID from get_effective_org_id
 
     Returns:
-        UUID: User's organization ID
+        UUID: Organization ID for current context
+
+    Raises:
+        HTTPException: 400 if no organization context
 
     Example:
         @router.get("/org-data")
@@ -558,9 +893,18 @@ async def get_current_org_id(
         ):
             # Query using org_id
             return {"org_id": str(org_id)}
+
+    Note:
+        This dependency requires an org context. Admin users must provide
+        X-Organization-Id header. Use get_effective_org_id directly if you
+        want to allow system context (None) for admins.
     """
-    from uuid import UUID as UUID_TYPE
-    return UUID_TYPE(str(user.organization_id))
+    if org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Organization context required. Provide X-Organization-Id header.",
+        )
+    return org_id
 
 
 # Alias for backwards compatibility

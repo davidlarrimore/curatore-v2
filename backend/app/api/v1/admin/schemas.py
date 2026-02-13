@@ -320,12 +320,20 @@ class UserResponse(BaseModel):
         }
 
 
+class UserInviteResponse(BaseModel):
+    """Response from user invitation."""
+    message: str = Field(..., description="Status message")
+    user: UserResponse = Field(..., description="Created user details")
+    temporary_password: Optional[str] = Field(None, description="Temporary password (only when send_email=False)")
+
+
 class UserInviteRequest(BaseModel):
     """Request to invite a new user to the organization."""
     email: EmailStr = Field(..., description="Email address")
     username: str = Field(..., min_length=3, max_length=100, description="Username")
     full_name: Optional[str] = Field(None, max_length=255, description="Full name")
     role: str = Field(default="member", description="Role (org_admin, member, viewer)")
+    send_email: bool = Field(default=False, description="Send invitation email to user")
 
     class Config:
         json_schema_extra = {
@@ -333,7 +341,8 @@ class UserInviteRequest(BaseModel):
                 "email": "newuser@example.com",
                 "username": "newuser",
                 "full_name": "New User",
-                "role": "member"
+                "role": "member",
+                "send_email": True
             }
         }
 
@@ -478,6 +487,274 @@ class ApiKeyListResponse(BaseModel):
         }
 
 
+# =========================================================================
+# SERVICE MODELS (System-Scoped Infrastructure)
+# =========================================================================
+
+
+class ServiceResponse(BaseModel):
+    """System service details response."""
+    id: str = Field(..., description="Service UUID")
+    name: str = Field(..., description="Service name (unique)")
+    service_type: str = Field(..., description="Service type (llm, extraction, browser)")
+    description: Optional[str] = Field(None, description="Service description")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Service configuration")
+    is_active: bool = Field(..., description="Whether service is active")
+    last_tested_at: Optional[datetime] = Field(None, description="Last test timestamp")
+    test_status: Optional[str] = Field(None, description="Test status (healthy, unhealthy, not_tested)")
+    test_result: Optional[Dict[str, Any]] = Field(None, description="Detailed test results")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "name": "llm",
+                "service_type": "llm",
+                "description": "Primary LLM service",
+                "config": {
+                    "api_key": "***REDACTED***",
+                    "model": "gpt-4",
+                    "base_url": "https://api.openai.com/v1"
+                },
+                "is_active": True,
+                "last_tested_at": "2026-01-13T01:00:00",
+                "test_status": "healthy",
+                "created_at": "2026-01-01T00:00:00",
+                "updated_at": "2026-01-13T01:00:00"
+            }
+        }
+
+
+class ServiceCreateRequest(BaseModel):
+    """Request to create a new system service."""
+    name: str = Field(..., min_length=1, max_length=100, description="Service name (unique)")
+    service_type: str = Field(..., description="Service type (llm, extraction, browser)")
+    description: Optional[str] = Field(None, max_length=500, description="Service description")
+    config: Dict[str, Any] = Field(default_factory=dict, description="Type-specific configuration")
+    is_active: bool = Field(default=True, description="Whether service is active")
+
+
+class ServiceUpdateRequest(BaseModel):
+    """Request to update a system service."""
+    description: Optional[str] = Field(None, max_length=500, description="Service description")
+    config: Optional[Dict[str, Any]] = Field(None, description="Type-specific configuration")
+    is_active: Optional[bool] = Field(None, description="Whether service is active")
+
+
+class ServiceListResponse(BaseModel):
+    """List of services response."""
+    services: List[ServiceResponse] = Field(..., description="List of services")
+    total: int = Field(..., description="Total number of services")
+
+
+# =========================================================================
+# ORGANIZATION CONNECTION MODELS (Per-Org Enablement)
+# =========================================================================
+
+
+class OrganizationConnectionResponse(BaseModel):
+    """Organization-connection enablement details."""
+    id: str = Field(..., description="Enablement UUID")
+    organization_id: str = Field(..., description="Organization UUID")
+    organization_name: Optional[str] = Field(None, description="Organization name")
+    connection_id: str = Field(..., description="Connection UUID")
+    connection_name: Optional[str] = Field(None, description="Connection name")
+    connection_type: Optional[str] = Field(None, description="Connection type")
+    is_enabled: bool = Field(..., description="Whether connection is enabled for this org")
+    enabled_at: Optional[datetime] = Field(None, description="When connection was enabled")
+    config_overrides: Dict[str, Any] = Field(default_factory=dict, description="Org-specific config overrides")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+
+
+class OrganizationConnectionEnableRequest(BaseModel):
+    """Request to enable a connection for an organization."""
+    config_overrides: Dict[str, Any] = Field(default_factory=dict, description="Org-specific config overrides")
+
+
+class OrganizationConnectionListResponse(BaseModel):
+    """List of organization-connection enablements."""
+    connections: List[OrganizationConnectionResponse] = Field(..., description="List of enablements")
+    total: int = Field(..., description="Total number of enablements")
+
+
+# =========================================================================
+# SERVICE ACCOUNT MODELS
+# =========================================================================
+
+
+class ServiceAccountResponse(BaseModel):
+    """Service account details response."""
+    id: str = Field(..., description="Service account UUID")
+    name: str = Field(..., description="Service account name")
+    description: Optional[str] = Field(None, description="Description")
+    organization_id: str = Field(..., description="Organization UUID")
+    organization_name: Optional[str] = Field(None, description="Organization name")
+    role: str = Field(..., description="Role (member, viewer)")
+    is_active: bool = Field(..., description="Whether account is active")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+    last_used_at: Optional[datetime] = Field(None, description="Last API usage timestamp")
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "id": "123e4567-e89b-12d3-a456-426614174000",
+                "name": "CI Pipeline",
+                "description": "Automated CI/CD pipeline",
+                "organization_id": "987fcdeb-51a2-43f7-8b6a-123456789abc",
+                "organization_name": "Acme Corp",
+                "role": "member",
+                "is_active": True,
+                "created_at": "2024-01-01T00:00:00",
+                "updated_at": "2024-01-12T15:30:00",
+                "last_used_at": "2024-01-12T16:00:00"
+            }
+        }
+
+
+class ServiceAccountCreateRequest(BaseModel):
+    """Request to create a new service account."""
+    name: str = Field(..., min_length=1, max_length=255, description="Service account name")
+    description: Optional[str] = Field(None, max_length=500, description="Description")
+    role: str = Field(default="member", description="Role (member, viewer)")
+
+
+class ServiceAccountUpdateRequest(BaseModel):
+    """Request to update a service account."""
+    name: Optional[str] = Field(None, min_length=1, max_length=255, description="Service account name")
+    description: Optional[str] = Field(None, max_length=500, description="Description")
+    role: Optional[str] = Field(None, description="Role (member, viewer)")
+    is_active: Optional[bool] = Field(None, description="Whether account is active")
+
+
+class ServiceAccountListResponse(BaseModel):
+    """List of service accounts response."""
+    service_accounts: List[ServiceAccountResponse] = Field(..., description="List of service accounts")
+    total: int = Field(..., description="Total number of service accounts")
+
+
+class ServiceAccountApiKeyCreateResponse(BaseModel):
+    """Response when creating an API key for a service account."""
+    id: str = Field(..., description="API key UUID")
+    name: str = Field(..., description="Key name")
+    key: str = Field(..., description="Full API key (SAVE THIS - shown only once!)")
+    prefix: str = Field(..., description="Key prefix for identification")
+    service_account_id: str = Field(..., description="Service account UUID")
+    service_account_name: str = Field(..., description="Service account name")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    expires_at: Optional[datetime] = Field(None, description="Expiration timestamp")
+
+
+# =========================================================================
+# EXTENDED ORGANIZATION MODELS (Admin Access)
+# =========================================================================
+
+
+class OrganizationCreateRequest(BaseModel):
+    """Request to create a new organization (admin only)."""
+    name: str = Field(..., min_length=1, max_length=255, description="Organization name (unique)")
+    display_name: str = Field(..., min_length=1, max_length=255, description="Display name")
+    slug: str = Field(..., min_length=2, max_length=100, pattern=r'^[a-z0-9]+(?:-[a-z0-9]+)*$', description="URL-friendly slug")
+    settings: Dict[str, Any] = Field(default_factory=dict, description="Initial settings")
+
+
+class OrganizationAdminResponse(BaseModel):
+    """Organization details for admin view (includes extra metadata)."""
+    id: str = Field(..., description="Organization UUID")
+    name: str = Field(..., description="Organization name")
+    display_name: str = Field(..., description="Display name")
+    slug: str = Field(..., description="URL-friendly slug")
+    is_active: bool = Field(..., description="Whether organization is active")
+    settings: Dict[str, Any] = Field(default_factory=dict, description="Organization settings")
+    user_count: int = Field(default=0, description="Number of users")
+    enabled_connections_count: int = Field(default=0, description="Number of enabled connections")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    updated_at: datetime = Field(..., description="Last update timestamp")
+
+
+class OrganizationAdminListResponse(BaseModel):
+    """List of organizations for admin view."""
+    organizations: List[OrganizationAdminResponse] = Field(..., description="List of organizations")
+    total: int = Field(..., description="Total number of organizations")
+
+
+# =========================================================================
+# EXTENDED USER MODELS (Admin/Cross-Org Access)
+# =========================================================================
+
+
+class UserAdminResponse(BaseModel):
+    """User details for admin view (includes organization info)."""
+    id: str = Field(..., description="User UUID")
+    email: str = Field(..., description="Email address")
+    username: str = Field(..., description="Username")
+    full_name: Optional[str] = Field(None, description="Full name")
+    role: str = Field(..., description="Role (admin, org_admin, member, viewer)")
+    organization_id: Optional[str] = Field(None, description="Organization UUID (null for admins)")
+    organization_name: Optional[str] = Field(None, description="Organization name")
+    is_active: bool = Field(..., description="Whether user is active")
+    is_verified: bool = Field(..., description="Whether email is verified")
+    created_at: datetime = Field(..., description="Creation timestamp")
+    last_login_at: Optional[datetime] = Field(None, description="Last login timestamp")
+
+
+class UserAdminListResponse(BaseModel):
+    """List of users for admin view (cross-org)."""
+    users: List[UserAdminResponse] = Field(..., description="List of users")
+    total: int = Field(..., description="Total number of users")
+
+
+class UserAdminCreateRequest(BaseModel):
+    """Request to create a user (admin - can specify organization)."""
+    email: EmailStr = Field(..., description="Email address")
+    username: str = Field(..., min_length=3, max_length=100, description="Username")
+    full_name: Optional[str] = Field(None, max_length=255, description="Full name")
+    role: str = Field(default="member", description="Role (admin, org_admin, member, viewer)")
+    organization_id: Optional[str] = Field(None, description="Organization UUID (required for non-admin users)")
+    send_email: bool = Field(default=False, description="Send invitation email")
+
+
+# =========================================================================
+# ROLE MODELS
+# =========================================================================
+
+
+class RoleResponse(BaseModel):
+    """Role details response."""
+    id: int = Field(..., description="Role ID")
+    name: str = Field(..., description="Role identifier (admin, org_admin, member, viewer)")
+    display_name: str = Field(..., description="Human-readable role name")
+    description: Optional[str] = Field(None, description="Role description")
+    is_system_role: bool = Field(..., description="True for system-wide roles (admin)")
+    can_manage_users: bool = Field(..., description="Permission to manage users")
+    can_manage_org: bool = Field(..., description="Permission to manage organization settings")
+    can_manage_system: bool = Field(..., description="Permission to manage system settings")
+
+    class Config:
+        from_attributes = True
+        json_schema_extra = {
+            "example": {
+                "id": 1,
+                "name": "org_admin",
+                "display_name": "Org Admin",
+                "description": "Organization administrator",
+                "is_system_role": False,
+                "can_manage_users": True,
+                "can_manage_org": True,
+                "can_manage_system": False
+            }
+        }
+
+
+class RoleListResponse(BaseModel):
+    """List of roles response."""
+    roles: List[RoleResponse] = Field(..., description="List of available roles")
+    total: int = Field(..., description="Total number of roles")
+
+
 __all__ = [
     # Connection models
     "ConnectionResponse",
@@ -492,17 +769,42 @@ __all__ = [
     "OrganizationUpdateRequest",
     "OrganizationSettingsResponse",
     "OrganizationSettingsUpdateRequest",
+    "OrganizationCreateRequest",
+    "OrganizationAdminResponse",
+    "OrganizationAdminListResponse",
     # User management models
     "UserResponse",
     "UserInviteRequest",
+    "UserInviteResponse",
     "UserUpdateRequest",
     "UserListResponse",
+    "UserAdminResponse",
+    "UserAdminListResponse",
+    "UserAdminCreateRequest",
     # API key models
     "ApiKeyResponse",
     "ApiKeyCreateRequest",
     "ApiKeyCreateResponse",
     "ApiKeyUpdateRequest",
     "ApiKeyListResponse",
+    # Service models
+    "ServiceResponse",
+    "ServiceCreateRequest",
+    "ServiceUpdateRequest",
+    "ServiceListResponse",
+    # Organization Connection models
+    "OrganizationConnectionResponse",
+    "OrganizationConnectionEnableRequest",
+    "OrganizationConnectionListResponse",
+    # Service Account models
+    "ServiceAccountResponse",
+    "ServiceAccountCreateRequest",
+    "ServiceAccountUpdateRequest",
+    "ServiceAccountListResponse",
+    "ServiceAccountApiKeyCreateResponse",
+    # Role models
+    "RoleResponse",
+    "RoleListResponse",
     # System/health models (re-exported from app.core.models)
     "HealthStatus",
     "LLMConnectionStatus",

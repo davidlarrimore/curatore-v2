@@ -77,7 +77,7 @@ from app.core.database.models import (
 from app.core.shared.database_service import database_service
 from app.core.shared.run_service import run_service
 from app.core.tasks import sam_pull_task, sam_refresh_notice_task, sam_refresh_solicitation_task
-from app.dependencies import get_current_user, require_org_admin
+from app.dependencies import get_current_user, require_org_admin_or_above
 
 # Initialize router
 router = APIRouter(prefix="/sam", tags=["SAM.gov"])
@@ -731,7 +731,7 @@ async def get_dashboard_stats(
     status_code=202,
 )
 async def reindex_sam_data(
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ):
     """
     Trigger reindexing of all SAM.gov data to search index.
@@ -975,7 +975,7 @@ async def list_searches(
 )
 async def create_search(
     request: SamSearchCreateRequest,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ) -> SamSearchResponse:
     """Create a new SAM search."""
     async with database_service.get_session() as session:
@@ -1040,7 +1040,7 @@ async def get_search(
 async def update_search(
     search_id: UUID,
     request: SamSearchUpdateRequest,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ) -> SamSearchResponse:
     """Update SAM search."""
     from sqlalchemy import select
@@ -1090,7 +1090,7 @@ async def update_search(
 )
 async def delete_search(
     search_id: UUID,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ):
     """Archive SAM search."""
     async with database_service.get_session() as session:
@@ -1121,7 +1121,7 @@ async def pull_search(
     search_id: UUID,
     request: PullRequest,
     background_tasks: BackgroundTasks,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ) -> PullResponse:
     """Pull opportunities from SAM.gov.
 
@@ -2221,7 +2221,7 @@ async def get_summary(
 )
 async def promote_summary(
     summary_id: UUID,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ) -> SamSummaryResponse:
     """Promote summary to canonical."""
     async with database_service.get_session() as session:
@@ -2253,7 +2253,7 @@ async def promote_summary(
 )
 async def delete_summary(
     summary_id: UUID,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ):
     """Delete experimental summary."""
     async with database_service.get_session() as session:

@@ -290,7 +290,7 @@ fields:
       data_type: string
       indexed: true
       facetable: true
-      applicable_content_types: [salesforce_contact, salesforce_opportunity]
+      applicable_content_types: [salesforce_account, salesforce_contact, salesforce_opportunity]
       description: "Associated account name"
 
     stage_name:

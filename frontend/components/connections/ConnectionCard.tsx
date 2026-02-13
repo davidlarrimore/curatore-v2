@@ -154,27 +154,16 @@ export default function ConnectionCard({
     }
 
     if (connection_type === 'extraction') {
-      // Determine engine type label
       const engineType = config.engine_type || 'unknown'
-      const engineLabel = engineType === 'extraction-service'
-        ? 'Internal Service'
-        : engineType === 'docling'
-        ? 'Docling'
-        : engineType === 'tika'
-        ? 'Apache Tika'
+      const engineLabel = engineType === 'extraction-service' || engineType === 'document-service'
+        ? 'Document Service'
         : engineType.charAt(0).toUpperCase() + engineType.slice(1)
-
-      const doclingVersion = connection.test_result?.details?.docling_api_version
 
       const summary: SummaryItem[] = [
         { label: 'Engine', value: engineLabel },
         { label: 'URL', value: config.service_url?.replace(/^https?:\/\//, '') || 'Not set' },
         { label: 'Timeout', value: `${config.timeout || 30}s` }
       ]
-
-      if (engineType === 'docling' && doclingVersion) {
-        summary.push({ label: 'Docling API', value: doclingVersion, hint: 'Detected from Docling openapi.json' })
-      }
 
       return summary
     }

@@ -15,10 +15,13 @@
 import { ReactNode } from 'react'
 import { Loader2, ExternalLink } from 'lucide-react'
 import Link from 'next/link'
+import { usePathname } from 'next/navigation'
 import { useJobProgress, useJobProgressByType } from '@/lib/useJobProgress'
 import { JOB_TYPE_CONFIG, JobType } from '@/lib/job-type-config'
 import { UnifiedJob } from '@/lib/unified-jobs-context'
 import { formatTimeAgo } from '@/lib/date-utils'
+import { useAuth } from '@/lib/auth-context'
+import { useOrganization } from '@/lib/organization-context'
 
 // Color class mappings (explicit to ensure Tailwind includes them in build)
 const colorClasses: Record<string, { bg: string; border: string; text: string; progressBg: string }> = {
@@ -127,7 +130,7 @@ export function JobProgressPanelByType({
   variant = 'compact',
   className = '',
 }: JobProgressPanelByTypeProps) {
-  const { jobs, isActive } = useJobProgressByType(jobType, { onComplete })
+  const { jobs } = useJobProgressByType(jobType, { onComplete })
 
   const filtered = resourceId
     ? jobs.filter(j => j.resourceId === resourceId)
@@ -155,6 +158,30 @@ interface JobCardProps {
 }
 
 function JobCard({ job, variant, renderStats }: JobCardProps) {
+  const pathname = usePathname()
+  const { isAdmin } = useAuth()
+  const { mode, currentOrganization } = useOrganization()
+
+  // Determine if we're in system mode
+  const isSystemMode = isAdmin && mode === 'system'
+
+  // Get org slug from URL or context
+  const orgSlugMatch = pathname?.match(/^\/orgs\/([^\/]+)/)
+  const urlOrgSlug = orgSlugMatch ? orgSlugMatch[1] : null
+  const activeOrgSlug = urlOrgSlug || currentOrganization?.slug
+
+  // Build job detail URL - requires org context
+  const getJobUrl = (runId: string) => {
+    if (isSystemMode) {
+      return `/system/jobs/${runId}`
+    }
+    if (activeOrgSlug) {
+      return `/orgs/${activeOrgSlug}/jobs/${runId}`
+    }
+    // No org context - link to org selection
+    return '/orgs'
+  }
+
   const jobType = job.jobType as JobType
   const config = JOB_TYPE_CONFIG[jobType]
 
@@ -206,7 +233,7 @@ function JobCard({ job, variant, renderStats }: JobCardProps) {
           </span>
         )}
         <Link
-          href={`/admin/queue/${job.runId}`}
+          href={getJobUrl(job.runId)}
           className={`text-xs ${colors.text} hover:underline ml-auto flex-shrink-0`}
         >
           View Job
@@ -253,7 +280,7 @@ function JobCard({ job, variant, renderStats }: JobCardProps) {
         </div>
 
         <Link
-          href={`/admin/queue/${job.runId}`}
+          href={getJobUrl(job.runId)}
           className={`flex items-center gap-1 text-sm ${colors.text} hover:underline flex-shrink-0`}
         >
           View Job

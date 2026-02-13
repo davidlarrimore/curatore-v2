@@ -38,7 +38,7 @@ import { useAuth } from '@/lib/auth-context'
 
 interface ProtectedRouteProps {
   children: React.ReactNode
-  requiredRole?: 'org_admin' | 'member' | 'viewer'
+  requiredRole?: 'admin' | 'org_admin' | 'member' | 'viewer'
 }
 
 const RETURN_URL_KEY = 'auth_return_url'
@@ -89,14 +89,21 @@ export default function ProtectedRoute({ children, requiredRole }: ProtectedRout
    * - Loading is complete
    * - User is authenticated
    * - A required role is specified
-   * - User doesn't have the required role (and isn't an org_admin)
+   * - User doesn't have the required role
+   *
+   * Role hierarchy: admin > org_admin > member > viewer
+   * admin can access everything, org_admin can access org_admin/member/viewer pages
    *
    * It will redirect to the home page with insufficient permissions.
    */
   useEffect(() => {
     if (!isLoading && isAuthenticated && requiredRole) {
-      // org_admin can access everything
-      const hasAccess = user?.role === requiredRole || user?.role === 'org_admin'
+      // admin can access everything
+      // org_admin can access org_admin, member, viewer pages
+      const hasAccess =
+        user?.role === 'admin' ||
+        user?.role === requiredRole ||
+        (user?.role === 'org_admin' && requiredRole !== 'admin')
 
       if (!hasAccess) {
         console.log('ProtectedRoute: Insufficient permissions, redirecting to home')

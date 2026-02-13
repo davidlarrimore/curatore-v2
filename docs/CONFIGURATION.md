@@ -88,25 +88,25 @@ llm:
 
 ---
 
-### Extraction Service
+### Document Service
 
-Configure document extraction engines.
+Configure the standalone Document Service for document extraction.
 
-**Required:**
-- `extraction.engines`: List of extraction engine configs
+The backend delegates all extraction to the Document Service, which handles triage and engine selection internally (fast_pdf, markitdown, docling). The backend connects via the `DocumentServiceAdapter` using 3-tier config resolution: DB Connection → config.yml → environment variables.
 
 **Engine Configuration:**
 - `name`: Engine identifier
-- `engine_type`: `extraction-service` or `docling`
-- `service_url`: Service endpoint URL
-- `enabled`: Enable/disable engine (default: true)
+- `engine_type`: `extraction-service`
+- `service_url`: Document Service endpoint URL
+- `enabled`: Enable/disable (default: true)
 - `timeout`: Request timeout in seconds (default: 300)
 - `verify_ssl`: Verify SSL certificates (default: true)
 
-**Docling OCR Settings:**
-- `docling_ocr_enabled`: Toggle OCR for Docling (maps to Docling `enable_ocr`)
-- `options.ocr_engine`: `auto`, `tesseract`, or `easyocr` (use `auto` for detection)
-- Docling endpoints are auto-detected (`/v1/convert/file` vs `/v1alpha/convert/file`)
+**Environment Variables (fallback):**
+- `EXTRACTION_SERVICE_URL`: Document Service URL (e.g., `http://extraction:8010`)
+- `EXTRACTION_SERVICE_API_KEY`: API key (optional)
+- `EXTRACTION_SERVICE_TIMEOUT`: Request timeout in seconds (default: 300)
+- `EXTRACTION_SERVICE_VERIFY_SSL`: Verify SSL (default: true)
 
 **Example:**
 ```yaml
@@ -117,15 +117,9 @@ extraction:
       service_url: http://extraction:8010
       timeout: 300
       enabled: true
-    - name: docling
-      engine_type: docling
-      service_url: http://docling:5001
-      timeout: 600
-      enabled: false  # Enable if using Docling
-      docling_ocr_enabled: true
-      options:
-        ocr_engine: auto
 ```
+
+> **Note:** Docling is configured inside the Document Service itself (via `DOCLING_SERVICE_URL`), not in the backend. The backend no longer communicates with Docling directly.
 
 ---
 
@@ -472,9 +466,10 @@ llm:
   max_retries: 3
 
 extraction:
-  services:
+  engines:
     - name: extraction-service
-      url: http://extraction:8010
+      engine_type: extraction-service
+      service_url: http://extraction:8010
       timeout: 300
       enabled: true
 

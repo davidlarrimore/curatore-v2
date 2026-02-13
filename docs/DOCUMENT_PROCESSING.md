@@ -1,243 +1,54 @@
 # Document Processing Pipeline
 
-This document describes how Curatore processes documents from upload through search indexing using the intelligent **triage-based extraction system**.
+This document describes how Curatore processes documents from upload through search indexing using the standalone **Document Service**.
 
 ## Overview
 
-Curatore uses an intelligent **triage → route** architecture that analyzes each document before extraction to select the optimal extraction engine. This approach:
-- **Maximizes speed** for simple documents (local extraction, no service calls)
-- **Maximizes quality** for complex documents (advanced OCR and layout analysis)
-- **Eliminates redundant processing** (no separate enhancement phase)
+Curatore delegates all document extraction to an external **Document Service** (running at port 8010). The Document Service handles triage (engine selection), extraction, and returns Markdown content. The backend acts as a thin orchestrator — it uploads files, stores results, and triggers search indexing.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────────────────┐
 │                              DOCUMENT PROCESSING PIPELINE                                │
 ├─────────────────────────────────────────────────────────────────────────────────────────┤
 │                                                                                          │
-│  ┌──────────┐    ┌───────────────┐    ┌─────────────────┐    ┌──────────────────────┐  │
-│  │  UPLOAD  │───▶│    TRIAGE     │───▶│   EXTRACTION    │───▶│      INDEXING        │  │
-│  │          │    │  (< 100ms)    │    │ (engine-routed) │    │     (pgvector)       │  │
-│  └──────────┘    └───────────────┘    └─────────────────┘    └──────────────────────┘  │
-│       │                 │                     │                        │               │
-│       │                 │                     │                        │               │
-│       ▼                 ▼                     ▼                        ▼               │
-│   Asset created    Analyze doc,         Markdown in              Searchable           │
-│   status=pending   select engine        MinIO bucket             in pgvector          │
-│                                         triage_engine set        indexed_at set       │
-│                                                                                        │
-└─────────────────────────────────────────────────────────────────────────────────────────┘
-```
-
-## Triage System
-
-The triage phase performs lightweight document analysis (typically < 100ms) to determine the optimal extraction engine.
-
-### Triage Decision Flow
-
-```
-┌─────────────────────────────────────────────────────────────────────────────────────────┐
-│                                   TRIAGE DECISION                                        │
-├─────────────────────────────────────────────────────────────────────────────────────────┤
-│                                                                                          │
-│                              Document arrives for extraction                             │
-│                                          │                                               │
-│                                          ▼                                               │
-│                              ┌─────────────────────┐                                    │
-│                              │  Detect file type   │                                    │
-│                              └─────────────────────┘                                    │
-│                                          │                                               │
-│            ┌─────────────────┬───────────┼───────────┬─────────────────┐                │
-│            ▼                 ▼           ▼           ▼                 ▼                │
-│       ┌─────────┐      ┌─────────┐  ┌─────────┐  ┌─────────┐    ┌─────────┐            │
-│       │   PDF   │      │  Office │  │  Image  │  │  Text   │    │ Unknown │            │
-│       └─────────┘      └─────────┘  └─────────┘  └─────────┘    └─────────┘            │
-│            │                │            │            │              │                  │
-│            ▼                ▼            ▼            ▼              ▼                  │
-│    ┌───────────────┐  ┌──────────┐  ┌──────────┐  ┌──────────┐   ┌──────────┐          │
-│    │ Analyze with  │  │ Check    │  │UNSUPPORTED│ │extraction│   │extraction│          │
-│    │  PyMuPDF:     │  │ file     │  │(standalone│ │-service  │   │-service  │          │
-│    │ - text layer? │  │ size     │  │ images    │ │(MarkIt   │   │(fallback)│          │
-│    │ - complexity? │  └──────────┘  │ not       │ │Down)     │   └──────────┘          │
-│    └───────────────┘       │        │ supported)│ └──────────┘                          │
-│         │    │             │        └──────────┘                                        │
-│   Simple │    │ Complex    │                                                            │
-│   text   │    │ or scanned │ < 5MB      >= 5MB                                          │
-│         ▼    ▼            ▼            ▼                                                │
-│    ┌─────────┐  ┌─────────┐  ┌──────────┐  ┌─────────┐                                 │
-│    │fast_pdf │  │ docling │  │extraction│  │ docling │                                 │
-│    │(PyMuPDF)│  │(OCR/    │  │-service  │  │(layout) │                                 │
-│    └─────────┘  │layout)  │  │(MarkIt   │  └─────────┘                                 │
-│                 └─────────┘  │Down)     │                                               │
-│                              └──────────┘                                               │
+│  ┌──────────┐    ┌───────────────────────────┐    ┌──────────────────────┐              │
+│  │  UPLOAD  │───▶│   DOCUMENT SERVICE        │───▶│      INDEXING        │              │
+│  │          │    │  (triage + extraction)     │    │     (pgvector)       │              │
+│  └──────────┘    └───────────────────────────┘    └──────────────────────┘              │
+│       │                     │                              │                             │
+│       ▼                     ▼                              ▼                             │
+│   Asset created        Markdown in                    Searchable                         │
+│   status=pending       MinIO bucket                   in pgvector                        │
+│                        triage_engine set               indexed_at set                    │
 │                                                                                          │
 └─────────────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-### PDF Triage Analysis
+## Architecture
 
-For PDFs, PyMuPDF analyzes the first 3 pages to determine:
+### Backend (curatore-v2)
 
-| Check | Threshold | Result |
-|-------|-----------|--------|
-| Text per page | < 100 chars | Needs OCR → `docling` |
-| Blocks per page | > 50 | Complex layout → `docling` |
-| Images per page | > 3 | Image-heavy → `docling` |
-| Tables detected | > 20 drawing lines | Has tables → `docling` |
-| None of above | - | Simple text → `fast_pdf` |
+The backend is a thin orchestrator:
 
-### Office File Triage
+1. **`DocumentServiceAdapter`** (`connectors/adapters/document_service_adapter.py`) — HTTP client that POSTs files to the Document Service via `POST /api/v1/extract`. Follows the `ServiceAdapter` ABC pattern with 3-tier config resolution (DB Connection → config.yml → ENV vars).
 
-For Office documents, file size is used as a complexity proxy:
+2. **`ExtractionOrchestrator`** (`core/ingestion/extraction_orchestrator.py`) — Coordinates extraction runs: downloads file from MinIO, sends to Document Service via adapter, stores result in MinIO and database.
 
-| File Size | Engine | Reason |
-|-----------|--------|--------|
-| < 5 MB | `extraction-service` | Simple document, MarkItDown handles well |
-| >= 5 MB | `docling` | Large file likely has complex content |
+3. **`DocumentService`** (`core/shared/document_service.py`) — Higher-level document operations (content extraction, health checks, format support). Delegates to the adapter.
 
-## Extraction Engines
+### Document Service (standalone)
 
-Curatore uses four extraction engines, each optimized for specific document types:
+The Document Service (`curatore-document-service` repo, port 8010) handles all extraction internally:
 
-### 1. fast_pdf (PyMuPDF)
+- **Triage**: Analyzes documents to select the optimal engine
+- **Engines**: `fast_pdf` (PyMuPDF), `markitdown` (MarkItDown + LibreOffice), `docling` (IBM Docling for OCR/layout)
+- **API**: `POST /api/v1/extract`, `GET /api/v1/system/health`, `GET /api/v1/system/capabilities`, `GET /api/v1/system/supported-formats`
 
-**Purpose**: Fast local extraction for simple, text-based PDFs
+The Document Service connects to Docling (port 5001) when complex extraction is needed. The backend never communicates with Docling directly.
 
-**Technology**: PyMuPDF (fitz) - direct text extraction without external service calls
+## Extraction Flow
 
-**Supported Extensions**:
-| Extension | MIME Type |
-|-----------|-----------|
-| `.pdf` | application/pdf |
-
-**When Used**:
-- PDF has extractable text layer (not scanned)
-- Simple layout (< 50 blocks/page)
-- Few images (< 3 images/page)
-- No complex tables
-
-**Characteristics**:
-- Very fast (local processing)
-- No network latency
-- Good for reports, articles, simple documents
-
-### 2. extraction-service (MarkItDown)
-
-**Purpose**: Document conversion for Office files, text files, and emails
-
-**Technology**: MarkItDown + LibreOffice (for legacy format conversion)
-
-**Supported Extensions**:
-| Extension | MIME Type | Notes |
-|-----------|-----------|-------|
-| `.docx` | application/vnd.openxmlformats-officedocument.wordprocessingml.document | Word documents |
-| `.doc` | application/msword | Legacy Word (via LibreOffice) |
-| `.pptx` | application/vnd.openxmlformats-officedocument.presentationml.presentation | PowerPoint |
-| `.ppt` | application/vnd.ms-powerpoint | Legacy PowerPoint (via LibreOffice) |
-| `.xlsx` | application/vnd.openxmlformats-officedocument.spreadsheetml.sheet | Excel |
-| `.xls` | application/vnd.ms-excel | Legacy Excel (via LibreOffice) |
-| `.xlsb` | application/vnd.ms-excel.sheet.binary.macroEnabled.12 | Excel Binary (via LibreOffice) |
-| `.txt` | text/plain | Plain text |
-| `.md` | text/markdown | Markdown |
-| `.csv` | text/csv | CSV files |
-| `.msg` | application/vnd.ms-outlook | Outlook emails |
-| `.eml` | message/rfc822 | Email files |
-
-**When Used**:
-- All Office documents (simple, < 5MB)
-- All text-based files
-- All email files
-- Unknown file types (fallback)
-
-**Characteristics**:
-- Good balance of speed and quality
-- Handles most common document types
-- LibreOffice converts legacy formats
-
-### 3. docling (IBM Docling)
-
-**Purpose**: Advanced extraction for complex documents requiring OCR or layout analysis
-
-**Technology**: IBM Docling with optional Tesseract OCR
-
-**Supported Extensions**:
-| Extension | MIME Type | Use Case |
-|-----------|-----------|----------|
-| `.pdf` | application/pdf | Scanned PDFs, complex layouts |
-| `.docx` | application/vnd.openxmlformats-officedocument.wordprocessingml.document | Large/complex documents |
-| `.doc` | application/msword | Large/complex legacy Word |
-| `.pptx` | application/vnd.openxmlformats-officedocument.presentationml.presentation | Large presentations |
-| `.ppt` | application/vnd.ms-powerpoint | Large legacy PowerPoint |
-| `.xlsx` | application/vnd.openxmlformats-officedocument.spreadsheetml.sheet | Large spreadsheets |
-| `.xls` | application/vnd.ms-excel | Large legacy Excel |
-
-**When Used**:
-- Scanned PDFs (little/no text layer)
-- Complex PDF layouts (many blocks, images, tables)
-- Large Office files (>= 5MB)
-- Documents requiring OCR
-
-**Characteristics**:
-- Highest quality extraction
-- Advanced table recognition
-- OCR for scanned content
-- Slower but more accurate
-
-### Unsupported File Types
-
-The following file types are **not supported** for extraction:
-
-| Type | Extensions | Reason |
-|------|------------|--------|
-| Images | `.png`, `.jpg`, `.jpeg`, `.gif`, `.bmp`, `.tiff`, `.tif`, `.webp`, `.heic` | Standalone image files are not processed. Image OCR is only performed within documents (e.g., scanned PDFs) via the Docling engine. |
-
-## Engine Selection Summary
-
-| Document Type | Condition | Engine | Service |
-|--------------|-----------|--------|---------|
-| PDF | Simple text-based | `fast_pdf` | Local (PyMuPDF) |
-| PDF | Scanned or complex | `docling` | Docling service |
-| DOCX, PPTX, XLSX | < 5MB | `extraction-service` | Extraction service (MarkItDown) |
-| DOCX, PPTX, XLSX | >= 5MB | `docling` | Docling service |
-| DOC, PPT, XLS | < 5MB | `extraction-service` | Extraction service (LibreOffice + MarkItDown) |
-| DOC, PPT, XLS | >= 5MB | `docling` | Docling service |
-| TXT, MD, CSV, HTML | Always | `extraction-service` | Extraction service |
-| MSG, EML | Always | `extraction-service` | Extraction service |
-| Images | Always | `unsupported` | N/A - standalone images not supported |
-| Unknown | Always | `extraction-service` | Extraction service (fallback) |
-
-## Extraction Result Fields
-
-After extraction, the `ExtractionResult` record stores triage decisions:
-
-```python
-ExtractionResult {
-    # Core fields
-    status: "completed"
-    extraction_tier: "basic" | "enhanced"  # For backwards compatibility
-
-    # Triage fields (new)
-    triage_engine: "fast_pdf" | "extraction-service" | "docling" | "unsupported"
-    triage_needs_ocr: bool       # Whether OCR was required
-    triage_needs_layout: bool    # Whether complex layout handling was needed
-    triage_complexity: "low" | "medium" | "high"
-    triage_duration_ms: int      # Time spent in triage phase
-}
-```
-
-### Tier Mapping
-
-For backwards compatibility, `extraction_tier` is computed from `triage_engine`:
-
-| Triage Engine | Extraction Tier |
-|--------------|-----------------|
-| `fast_pdf` | `basic` |
-| `extraction-service` | `basic` |
-| `docling` | `enhanced` |
-| `unsupported` | N/A (extraction fails) |
-
-## Stage-by-Stage Processing
-
-### Stage 1: Upload / Ingestion
+### 1. Upload / Ingestion
 
 Documents enter Curatore through multiple sources:
 
@@ -254,29 +65,21 @@ Documents enter Curatore through multiple sources:
 3. `Run` record created with `run_type=extraction`
 4. Extraction task queued to Celery
 
-### Stage 2: Triage
+### 2. Extraction (via Document Service)
 
-The triage service analyzes the document:
+The `ExtractionOrchestrator` sends the file to the Document Service:
 
-1. Detect file type from extension and MIME type
-2. For PDFs: Analyze with PyMuPDF (text layer, complexity)
-3. For Office files: Check file size
-4. Select optimal engine
-5. Record triage decision
+1. Download file from MinIO to temp path
+2. `POST /api/v1/extract` with multipart file upload to Document Service
+3. Document Service performs triage internally (engine selection)
+4. Document Service extracts content and returns JSON with:
+   - `content_markdown` — extracted text in Markdown
+   - `method` — engine used (`fast_pdf`, `markitdown`, `docling`)
+   - `triage` block — triage metadata (engine, needs_ocr, complexity, duration_ms)
+5. Backend uploads Markdown to `curatore-processed` bucket
+6. Backend updates `ExtractionResult` with triage fields
 
-**Triage Duration**: Typically < 100ms
-
-### Stage 3: Extraction
-
-The selected engine extracts content:
-
-1. Download file from MinIO
-2. Execute engine-specific extraction
-3. Convert to Markdown format
-4. Upload to `curatore-processed` bucket
-5. Update `ExtractionResult` with triage fields
-
-### Stage 4: Search Indexing
+### 3. Search Indexing
 
 After extraction completes:
 
@@ -286,23 +89,80 @@ After extraction completes:
 4. Insert into `search_chunks` table (PostgreSQL + pgvector)
 5. Set `indexed_at` timestamp on Asset
 
+## Extraction Engines (inside Document Service)
+
+The Document Service uses three extraction engines internally:
+
+### 1. fast_pdf (PyMuPDF)
+- Fast local extraction for simple, text-based PDFs
+- Used when PDF has extractable text layer, simple layout
+
+### 2. markitdown (MarkItDown)
+- Document conversion for Office files, text files, and emails
+- Supports: `.docx`, `.doc`, `.pptx`, `.ppt`, `.xlsx`, `.xls`, `.xlsb`, `.txt`, `.md`, `.csv`, `.msg`, `.eml`, `.html`, `.htm`, `.xml`, `.json`
+
+### 3. docling (IBM Docling)
+- Advanced extraction for complex documents requiring OCR or layout analysis
+- Used for scanned PDFs, complex layouts, large Office files
+- Connected via `DOCLING_SERVICE_URL` in the Document Service
+
+## Extraction Result Fields
+
+After extraction, the `ExtractionResult` record stores triage decisions:
+
+```python
+ExtractionResult {
+    # Core fields
+    status: "completed"
+    extraction_tier: "basic" | "enhanced"
+
+    # Triage fields (from Document Service response)
+    triage_engine: "fast_pdf" | "markitdown" | "docling"
+    triage_needs_ocr: bool
+    triage_needs_layout: bool
+    triage_complexity: "low" | "medium" | "high"
+    triage_duration_ms: int
+}
+```
+
+### Tier Mapping
+
+| Triage Engine | Extraction Tier |
+|--------------|-----------------|
+| `fast_pdf` | `basic` |
+| `markitdown` | `basic` |
+| `docling` | `enhanced` |
+
 ## Configuration
 
-### Enable/Disable Docling
+### Document Service Connection
 
-In `config.yml`:
+The backend connects to the Document Service via the `DocumentServiceAdapter`. Configuration follows the 3-tier resolution pattern:
+
+1. **DB Connection** (per-org): Connection record with `connection_type=extraction`
+2. **config.yml**: `extraction.engines` section
+3. **Environment variables**: `EXTRACTION_SERVICE_URL`, `EXTRACTION_SERVICE_API_KEY`, `EXTRACTION_SERVICE_TIMEOUT`, `EXTRACTION_SERVICE_VERIFY_SSL`
+
+### config.yml Example
+
 ```yaml
 extraction:
   engines:
-    - name: docling
-      engine_type: docling
-      enabled: true  # Set to false to use fast engines only
-      service_url: http://docling:8012
+    - name: extraction-service
+      engine_type: extraction-service
+      service_url: http://extraction:8010
+      timeout: 300
+      enabled: true
 ```
 
-When Docling is disabled:
-- PDFs use `fast_pdf` (may have lower quality for complex documents)
-- Large Office files use `extraction-service` instead
+### docker-compose.yml
+
+The backend connects to the Document Service container via `curatore-network`:
+
+```yaml
+environment:
+  - EXTRACTION_SERVICE_URL=http://extraction:8010
+```
 
 ### Enable/Disable Search Indexing
 
@@ -312,6 +172,19 @@ search:
 ```
 
 ## Monitoring
+
+### Health Check
+
+```bash
+# Comprehensive health (includes Document Service)
+curl http://localhost:8000/api/v1/admin/system/health/comprehensive
+
+# Document Service direct
+curl http://localhost:8010/api/v1/system/health
+
+# Document Service capabilities (shows docling availability)
+curl http://localhost:8010/api/v1/system/capabilities
+```
 
 ### API Response
 
@@ -334,14 +207,6 @@ search:
   }
 }
 ```
-
-### Frontend Display
-
-The asset detail page shows:
-- **Engine**: Badge showing which engine was used (Fast PDF, MarkItDown, Docling, OCR)
-- **OCR**: Badge if OCR was used
-- **Complexity**: Badge if document was complex
-- **Indexed**: Shows "Indexed" with timestamp
 
 ### SQL Queries
 
@@ -373,7 +238,7 @@ WHERE er.triage_needs_ocr = true;
 curl -X POST http://localhost:8000/api/v1/assets/{id}/reextract
 ```
 
-This creates a new extraction Run and re-processes through triage.
+This creates a new extraction Run and sends the file to the Document Service again.
 
 ### Bulk Re-extraction
 

@@ -7,7 +7,7 @@
 # - Runs linting (Ruff for Python, ESLint for frontend)
 # - Runs dependency vulnerability scanning (pip-audit, npm audit)
 # - Sets up per-service test environments (Python venvs, Node deps) as needed
-# - Runs backend pytest, extraction-service pytest, mcp pytest, and frontend npm test
+# - Runs backend pytest, mcp pytest, and frontend npm test
 # - Summarizes PASS/WARN/FAIL per service and exits nonzero on failures
 #
 # Env overrides:
@@ -224,10 +224,10 @@ run_python_lint() {
     return 0
   }
 
-  log_note "Running Ruff on backend/, extraction-service/, mcp/ …"
+  log_note "Running Ruff on backend/, mcp/ …"
   local code=0
   "$venv/bin/python" -m ruff check \
-    "$ROOT_DIR/backend/" "$ROOT_DIR/extraction-service/" "$ROOT_DIR/mcp/" \
+    "$ROOT_DIR/backend/" "$ROOT_DIR/mcp/" \
     --config "$ROOT_DIR/ruff.toml" >"$log" 2>&1 || code=$?
 
   if [[ $code -eq 0 ]]; then
@@ -292,7 +292,7 @@ run_dependency_scan() {
 
     if "$venv/bin/python" -m pip_audit --version >/dev/null 2>&1; then
       log_note "Scanning Python dependencies (pip-audit) …"
-      for req_file in backend/requirements.txt extraction-service/requirements.txt mcp/requirements.txt; do
+      for req_file in backend/requirements.txt mcp/requirements.txt; do
         local full_path="$ROOT_DIR/$req_file"
         if [[ -f "$full_path" ]]; then
           echo "--- $req_file ---" >>"$log"
@@ -357,32 +357,7 @@ run_backend_tests() {
   fi
 }
 
-run_extraction_service_tests() {
-  local svc="extraction-service"
-  local subdir="$REPORT_DIR/$svc"
-  mkdir -p "$subdir"
-  if [[ ! -d "$ROOT_DIR/extraction-service" ]]; then
-    log_note "[WARN] $svc: directory not found"
-    record_result "$svc" "WARN" "directory not found"
-    return 0
-  fi
-  log_note "Running $svc via extraction-service/scripts/run_tests.sh …"
-  (
-    REPORT_DIR="$subdir" RECREATE_VENV="${RECREATE_VENV:-1}" USE_DOCKER="${USE_DOCKER_EXTRACTION:-0}" \
-    bash "$ROOT_DIR/extraction-service/scripts/run_tests.sh"
-  ) | tee -a "$SUMMARY_FILE"
-  local code=${PIPESTATUS[0]}
-  # Surface concise results from the service log into the parent summary
-  if [[ -f "$subdir/${svc}.log" ]]; then
-    res_line=$(grep -E "^Results: total=.*" "$subdir/${svc}.log" | tail -n 1 || true)
-    [[ -n "$res_line" ]] && echo "$res_line" | tee -a "$SUMMARY_FILE"
-  fi
-  if [[ $code -eq 0 ]]; then
-    record_result "$svc" "PASS"
-  else
-    record_result "$svc" "FAIL" "exit $code"
-  fi
-}
+# extraction-service tests removed — extraction now handled by curatore-document-service
 
 run_mcp_tests() {
   local svc="mcp"
@@ -531,7 +506,6 @@ run_dependency_scan
 
 # Then tests
 run_backend_tests
-run_extraction_service_tests
 run_mcp_tests
 run_frontend_tests
 

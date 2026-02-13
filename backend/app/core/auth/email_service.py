@@ -705,7 +705,7 @@ class EmailService:
 
     def _create_jinja_env(self) -> Environment:
         """Create Jinja2 environment for email templates."""
-        template_dir = Path(__file__).parent.parent / "templates" / "emails"
+        template_dir = Path(__file__).parent.parent.parent / "templates" / "emails"
         template_dir.mkdir(parents=True, exist_ok=True)
 
         env = Environment(

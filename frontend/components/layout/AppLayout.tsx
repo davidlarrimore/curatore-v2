@@ -29,6 +29,7 @@ import { LeftSidebar } from './LeftSidebar'
 import { StatusBar } from './StatusBar'
 import { systemApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
+import { OrganizationProvider } from '@/lib/organization-context'
 import { useUnifiedJobs } from '@/lib/unified-jobs-context'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import toast, { Toaster } from 'react-hot-toast'
@@ -70,7 +71,8 @@ export function AppLayout({ children }: AppLayoutProps) {
    * All other pages show full navigation (ProtectedRoute handles auth).
    * This provides a clean, minimal experience for the login page only.
    */
-  const showNavigation = pathname !== '/login'
+  const publicPages = ['/login', '/reset-password', '/set-password', '/forgot-password']
+  const showNavigation = !publicPages.includes(pathname)
 
   // System is unavailable only when:
   // 1. Health check failed AND we're not connected via WebSocket
@@ -140,6 +142,19 @@ export function AppLayout({ children }: AppLayoutProps) {
         return
       }
 
+      // Helper to get org-scoped URL based on current path
+      const getOrgUrl = (path: string) => {
+        const orgMatch = window.location.pathname.match(/^\/orgs\/([^\/]+)/)
+        if (orgMatch) {
+          return `/orgs/${orgMatch[1]}${path}`
+        }
+        // Check for system mode
+        if (window.location.pathname.startsWith('/system')) {
+          return `/system${path}`
+        }
+        return path
+      }
+
       if (e.metaKey || e.ctrlKey) {
         switch (e.key) {
           case 'b':
@@ -148,13 +163,13 @@ export function AppLayout({ children }: AppLayoutProps) {
             break
           case 'j':
             e.preventDefault()
-            // Navigate to assets page
-            window.location.href = '/assets'
+            // Navigate to storage page (org-scoped)
+            window.location.href = getOrgUrl('/storage')
             break
           case 'p':
             e.preventDefault()
-            // Navigate to queue admin page
-            window.location.href = '/admin/queue'
+            // Navigate to jobs page (org-scoped)
+            window.location.href = getOrgUrl('/jobs')
             break
           case 'k':
             e.preventDefault()
@@ -163,7 +178,7 @@ export function AppLayout({ children }: AppLayoutProps) {
             break
         }
       }
-      
+
       // ESC to close mobile sidebar
       if (e.key === 'Escape') {
         setSidebarOpen(false)
@@ -255,9 +270,10 @@ export function AppLayout({ children }: AppLayoutProps) {
    */
   return (
     <ProtectedRoute>
-      <div className="h-full flex flex-col" style={{
-        '--sidebar-width': sidebarCollapsed ? '4rem' : '16rem'
-      } as React.CSSProperties}>
+      <OrganizationProvider>
+        <div className="h-full flex flex-col" style={{
+          '--sidebar-width': sidebarCollapsed ? '4rem' : '16rem'
+        } as React.CSSProperties}>
         {/* Toast notifications with custom styling */}
         <Toaster
           position="top-right"
@@ -326,7 +342,8 @@ export function AppLayout({ children }: AppLayoutProps) {
         />
 
         <HealthUnavailableOverlay isVisible={isSystemUnavailable} />
-      </div>
+        </div>
+      </OrganizationProvider>
     </ProtectedRoute>
   )
 }

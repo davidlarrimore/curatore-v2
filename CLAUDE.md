@@ -25,7 +25,7 @@ Curatore v2 is a document processing and curation platform that converts documen
 ### Tech Stack
 - **Backend**: FastAPI (Python 3.12+), Celery workers, SQLAlchemy
 - **Frontend**: Next.js 15.5, TypeScript, React 19, Tailwind CSS
-- **Services**: Redis, MinIO/S3, Playwright, Extraction Service
+- **Services**: Redis, MinIO/S3, Playwright, Document Service
 - **Database**: PostgreSQL 16 with pgvector (required)
 
 ### Architecture Principles
@@ -70,7 +70,7 @@ docker exec curatore-backend python -m app.core.commands.seed --create-admin
 | 3000 | Frontend |
 | 5432 | PostgreSQL (with pgvector) |
 | 8000 | Backend API |
-| 8010 | Extraction Service |
+| 8010 | Document Service |
 | 8011 | Playwright Service |
 | 8020 | MCP Gateway (AI tool server) |
 | 6379 | Redis |
@@ -125,7 +125,7 @@ backend/
 │   │   ├── storage/                 # Object storage (MinIO/S3, paths, zip)
 │   │   ├── search/                  # pg_search, pg_index, embeddings, chunking
 │   │   ├── llm/                     # LLM service, routing, doc generation
-│   │   ├── ingestion/               # Extraction orchestrator, triage, queue, engines
+│   │   ├── ingestion/               # Extraction orchestrator, queue service
 │   │   ├── ops/                     # Queue registry, scheduling, heartbeat
 │   │   ├── shared/                  # Assets, runs, events, config, database, forecast shared services
 │   │   ├── tasks/                   # Celery tasks (modular)
@@ -143,7 +143,8 @@ backend/
 │   │   ├── adapters/                # Service adapter base + implementations
 │   │   │   ├── base.py              # ServiceAdapter ABC — 3-tier config resolution
 │   │   │   ├── playwright_adapter.py # Playwright rendering service adapter
-│   │   │   └── llm_adapter.py       # LLM (OpenAI-compatible) service adapter
+│   │   │   ├── llm_adapter.py       # LLM (OpenAI-compatible) service adapter
+│   │   │   └── document_service_adapter.py # Document extraction service adapter
 │   │   ├── sam_gov/                 # SAM.gov API integration
 │   │   ├── gsa_gateway/             # GSA Acquisition Gateway forecasts
 │   │   ├── dhs_apfs/                # DHS APFS forecasts
@@ -190,7 +191,6 @@ frontend/
     ├── unified-jobs-context.tsx      # WebSocket-based job tracking
     └── job-type-config.ts            # Job type configuration
 
-extraction-service/                  # Document conversion microservice
 playwright-service/                  # Browser rendering microservice
 
 mcp/                                 # MCP Gateway (AI tool server)
@@ -265,11 +265,9 @@ Services are organized into domain-specific subdirectories under `backend/app/co
 ### Ingestion (`core/ingestion/`)
 | Service | Purpose |
 |---------|---------|
-| `extraction_orchestrator.py` | Extraction coordination with triage |
+| `extraction_orchestrator.py` | Extraction coordination via Document Service |
 | `extraction_queue_service.py` | Extraction queue throttling and management |
-| `extraction_client.py` | Client for extraction service |
 | `extraction_result_service.py` | Result processing and storage |
-| `triage_service.py` | Document type detection and engine selection |
 | `bulk_upload_service.py` | Batch file uploads |
 | `upload_integration_service.py` | Upload workflow integration |
 
@@ -345,6 +343,7 @@ CWR code is consolidated under `backend/app/cwr/`. See the project structure abo
 | `adapters/` | `base.py` | ServiceAdapter ABC — 3-tier config resolution |
 | `adapters/` | `playwright_adapter.py` | Playwright rendering service adapter |
 | `adapters/` | `llm_adapter.py` | LLM (OpenAI-compatible) service adapter |
+| `adapters/` | `document_service_adapter.py` | Document extraction service adapter |
 | `sam_gov/` | `sam_service.py` | SAM.gov API integration |
 | `sam_gov/` | `sam_pull_service.py` | SAM.gov data pull orchestration |
 | `sam_gov/` | `sam_summarization_service.py` | SAM notice AI summarization |
@@ -501,18 +500,17 @@ Indexed content types: assets, SAM solicitations/notices, forecasts, scraped pag
 ## Data Flow
 
 ```
-Upload → Asset Created → Triage → Extraction → Indexing → Search Ready
-                           ↓          ↓
-                   Select Engine   Run (tracks execution)
-                                       ↓
-                                  RunLogEvent (logs)
+Upload → Asset Created → Extraction (via Document Service) → Indexing → Search Ready
+                                    ↓
+                             Run (tracks execution)
+                                    ↓
+                             RunLogEvent (logs)
 ```
 
 1. **Upload**: `POST /api/v1/data/storage/upload/proxy` creates Asset
-2. **Triage**: Analyzes document to select optimal engine (< 100ms)
-3. **Extraction**: Routes to fast_pdf, extraction-service, or docling
-4. **Indexing**: Chunks content, generates embeddings, indexes to search
-5. **Access**: `GET /api/v1/data/assets/{id}` returns asset with extraction
+2. **Extraction**: Backend POSTs file to Document Service, which handles triage + engine selection internally (fast_pdf, markitdown, or docling)
+3. **Indexing**: Chunks content, generates embeddings, indexes to search
+4. **Access**: `GET /api/v1/data/assets/{id}` returns asset with extraction
 
 ### Run Tracing
 
@@ -552,7 +550,7 @@ curatore-temp/{org_id}/                  # Temporary files
    - **Connectors** (external data integrations) → `backend/app/connectors/`
    - **Other services** → `backend/app/core/` subdirectory:
      - `auth/` — Authentication, authorization, identity
-     - `ingestion/` — Document upload, extraction, triage
+     - `ingestion/` — Document upload, extraction orchestration
      - `llm/` — LLM calls, routing, document generation
      - `ops/` — Queue management, scheduling, monitoring
      - `search/` — Search, indexing, embeddings, chunking

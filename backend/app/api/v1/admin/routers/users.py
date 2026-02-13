@@ -22,7 +22,7 @@ Security:
 
 import logging
 import secrets
-from datetime import datetime
+from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
@@ -30,12 +30,13 @@ from sqlalchemy import func, select
 
 from app.api.v1.admin.schemas import (
     UserInviteRequest,
+    UserInviteResponse,
     UserListResponse,
     UserResponse,
     UserUpdateRequest,
 )
 from app.core.auth.auth_service import auth_service
-from app.core.database.models import User
+from app.core.database.models import Organization, PasswordResetToken, User
 from app.core.shared.database_service import database_service
 from app.dependencies import require_org_admin
 
@@ -136,7 +137,7 @@ async def list_organization_users(
 
 @router.post(
     "",
-    response_model=UserResponse,
+    response_model=UserInviteResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Invite new user",
     description="Invite a new user to the organization. Requires org_admin role.",
@@ -144,7 +145,7 @@ async def list_organization_users(
 async def invite_user(
     request: UserInviteRequest,
     current_user: User = Depends(require_org_admin),
-) -> UserResponse:
+) -> UserInviteResponse:
     """
     Invite new user to organization.
 
@@ -181,9 +182,17 @@ async def invite_user(
     """
     logger.info(f"User invite requested by {current_user.email} for {request.email}")
 
-    # Validate role
+    # Validate role - admin role requires current user to be admin
     valid_roles = ["org_admin", "member", "viewer"]
+    if current_user.role == "admin":
+        valid_roles.append("admin")
+
     if request.role not in valid_roles:
+        if request.role == "admin":
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Only system admins can create admin users",
+            )
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}",
@@ -210,10 +219,14 @@ async def invite_user(
         temp_password = secrets.token_urlsafe(15)
         password_hash = await auth_service.hash_password(temp_password)
 
+        # Admin users have no organization (system-wide access)
+        # Other users belong to the current user's organization
+        user_org_id = None if request.role == "admin" else current_user.organization_id
+
         # Create user
         new_user = User(
             id=uuid4(),
-            organization_id=current_user.organization_id,
+            organization_id=user_org_id,
             email=request.email,
             username=request.username,
             password_hash=password_hash,
@@ -224,13 +237,21 @@ async def invite_user(
         )
 
         session.add(new_user)
+
+        if request.send_email:
+            # Generate a password reset token the user can use to set their password
+            invitation_token = secrets.token_urlsafe(32)
+            reset_token = PasswordResetToken(
+                user_id=new_user.id,
+                token=invitation_token,
+                expires_at=datetime.utcnow() + timedelta(hours=72),
+            )
+            session.add(reset_token)
+
         await session.commit()
         await session.refresh(new_user)
 
-        logger.info(f"User created: {new_user.email} (id: {new_user.id}, temp password: {temp_password})")
-        logger.warning(f"TODO: Send email to {new_user.email} with password reset link")
-
-        return UserResponse(
+        user_response = UserResponse(
             id=str(new_user.id),
             email=new_user.email,
             username=new_user.username,
@@ -241,6 +262,42 @@ async def invite_user(
             created_at=new_user.created_at,
             last_login_at=new_user.last_login_at,
         )
+
+        if request.send_email:
+            # Get organization name for the email
+            org_result = await session.execute(
+                select(Organization).where(Organization.id == current_user.organization_id)
+            )
+            org = org_result.scalar_one_or_none()
+            org_name = org.display_name or org.name if org else "Curatore"
+
+            # Queue invitation email via Celery
+            from app.core.tasks import send_invitation_email_task
+
+            try:
+                send_invitation_email_task.delay(
+                    user_email=new_user.email,
+                    user_name=new_user.full_name or new_user.username,
+                    invitation_token=invitation_token,
+                    invited_by=current_user.full_name or current_user.username,
+                    organization_name=org_name,
+                )
+                logger.info(f"Invitation email queued for {new_user.email}")
+            except Exception as e:
+                logger.error(f"Failed to queue invitation email for {new_user.email}: {e}")
+
+            logger.info(f"User created with email invitation: {new_user.email} (id: {new_user.id})")
+            return UserInviteResponse(
+                message="User invited successfully. An invitation email has been sent.",
+                user=user_response,
+            )
+        else:
+            logger.info(f"User created with temp password: {new_user.email} (id: {new_user.id})")
+            return UserInviteResponse(
+                message="User created successfully.",
+                user=user_response,
+                temporary_password=temp_password,
+            )
 
 
 @router.get(
@@ -344,27 +401,41 @@ async def update_user(
     """
     logger.info(f"User update requested for {user_id} by {current_user.email}")
 
-    # Validate role if provided
+    # Validate role if provided - admin role requires current user to be admin
     if request.role:
         valid_roles = ["org_admin", "member", "viewer"]
+        if current_user.role == "admin":
+            valid_roles.append("admin")
+
         if request.role not in valid_roles:
+            if request.role == "admin":
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Only system admins can assign the admin role",
+                )
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"Invalid role. Must be one of: {', '.join(valid_roles)}",
             )
 
     async with database_service.get_session() as session:
-        result = await session.execute(
-            select(User)
-            .where(User.id == UUID(user_id))
-            .where(User.organization_id == current_user.organization_id)
-        )
+        # Admin users can access any user; org_admins can only access their org's users
+        if current_user.role == "admin":
+            result = await session.execute(
+                select(User).where(User.id == UUID(user_id))
+            )
+        else:
+            result = await session.execute(
+                select(User)
+                .where(User.id == UUID(user_id))
+                .where(User.organization_id == current_user.organization_id)
+            )
         user = result.scalar_one_or_none()
 
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found in your organization",
+                detail="User not found" if current_user.role == "admin" else "User not found in your organization",
             )
 
         # Prevent changing own role (avoid lockout)
@@ -382,6 +453,9 @@ async def update_user(
         if request.role is not None:
             old_role = user.role
             user.role = request.role
+            # Admin users have no organization
+            if request.role == "admin":
+                user.organization_id = None
             logger.info(f"Updated role from {old_role} to {request.role}")
 
         user.updated_at = datetime.utcnow()

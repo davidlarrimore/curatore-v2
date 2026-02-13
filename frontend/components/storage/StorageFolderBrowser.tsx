@@ -9,18 +9,17 @@ import {
   AlertCircle,
   HardDrive,
   ChevronDown,
-  Plus,
   Trash2,
   Download,
   Eye,
   FolderPlus,
-  MoreHorizontal,
   Upload,
   Copy,
   Check,
 } from 'lucide-react'
-import { objectStorageApi, organizationsApi, utils } from '@/lib/api'
+import { objectStorageApi, utils } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
+import { useOrgUrl } from '@/lib/org-url-context'
 import FolderBreadcrumb from '../shared/FolderBreadcrumb'
 import toast from 'react-hot-toast'
 
@@ -59,8 +58,9 @@ export default function StorageFolderBrowser({
   onFileDownload,
   onFileUpload,
 }: StorageFolderBrowserProps) {
-  // Auth
+  // Auth and org context
   const { token } = useAuth()
+  const { organization } = useOrgUrl()
 
   // State - bucket list (for dropdown), content listing, UI state
   const [buckets, setBuckets] = useState<Bucket[]>([])
@@ -78,8 +78,26 @@ export default function StorageFolderBrowser({
   const [deletingFile, setDeletingFile] = useState<string | null>(null)
   const [copiedPath, setCopiedPath] = useState<string | null>(null)
 
-  // Organization data for folder name mapping
-  const [currentOrganization, setCurrentOrganization] = useState<{ id: string; name: string; display_name: string; slug: string } | null>(null)
+  // Use organization from URL context - memoized to prevent dependency issues
+  const currentOrganization = React.useMemo(() => {
+    if (!organization) return null
+    return {
+      id: organization.id,
+      name: organization.name,
+      display_name: organization.display_name,
+      slug: organization.slug,
+    }
+  }, [organization])
+
+  // Auto-scope prefix to current organization when at root
+  const orgScopedPrefix = React.useMemo(() => {
+    if (!currentOrganization) return prefix
+    // If prefix is empty (at bucket root), scope to org folder
+    if (prefix === '') {
+      return currentOrganization.id + '/'
+    }
+    return prefix
+  }, [prefix, currentOrganization])
 
   // Get current bucket display name
   const currentBucketDisplay = buckets.find(b => b.name === bucket)?.display_name || bucket
@@ -88,22 +106,6 @@ export default function StorageFolderBrowser({
   const isUUID = (str: string): boolean => {
     const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
     return uuidRegex.test(str)
-  }
-
-  // Helper function to get display name for a folder
-  const getFolderDisplayName = (folderName: string): string => {
-    // Check if at root level and folder name is a UUID (organization folder)
-    if (prefix === '' && isUUID(folderName) && currentOrganization) {
-      // Check if this UUID matches the current organization
-      if (folderName.toLowerCase() === currentOrganization.id.toLowerCase()) {
-        return currentOrganization.display_name || currentOrganization.name
-      }
-      // For other org UUIDs, we could fetch them, but for now just show "Organization"
-      return `Organization (${folderName.substring(0, 8)}...)`
-    }
-
-    // Return the folder name as-is for non-org folders
-    return folderName
   }
 
   // Strip the org_id prefix (first path segment) from a storage path
@@ -125,41 +127,18 @@ export default function StorageFolderBrowser({
     setTimeout(() => setCopiedPath(null), 2000)
   }
 
-  // Load current organization on mount
-  useEffect(() => {
-    if (token) {
-      loadCurrentOrganization()
-    }
-  }, [token])
-
   // Load buckets on mount
   useEffect(() => {
     loadBuckets()
   }, [])
 
   // Load bucket contents when bucket or prefix changes (driven by URL)
+  // Use orgScopedPrefix to auto-navigate into org folder
   useEffect(() => {
-    if (bucket) {
-      loadContents(bucket, prefix)
+    if (bucket && currentOrganization) {
+      loadContents(bucket, orgScopedPrefix)
     }
-  }, [bucket, prefix])
-
-  const loadCurrentOrganization = async () => {
-    if (!token) return
-
-    try {
-      const org = await organizationsApi.getCurrentOrganization(token)
-      setCurrentOrganization({
-        id: org.id,
-        name: org.name,
-        display_name: org.display_name,
-        slug: org.slug,
-      })
-    } catch (err: any) {
-      console.warn('Failed to load organization:', err)
-      // Not critical - just won't have org name mapping
-    }
-  }
+  }, [bucket, orgScopedPrefix, currentOrganization])
 
   const loadBuckets = async () => {
     try {
@@ -190,17 +169,29 @@ export default function StorageFolderBrowser({
     }
   }
 
+  // Get the minimum prefix (org folder) - can't navigate above this
+  const orgFolderPrefix = currentOrganization ? currentOrganization.id + '/' : ''
+
+  // Check if we can navigate up (not at or below org root)
+  const canNavigateUp = parentPath !== null &&
+    currentOrganization &&
+    parentPath.startsWith(currentOrganization.id + '/')
+
   // Navigation handlers — all delegate to onNavigate which updates the URL
   const handleNavigateToFolder = (folderName: string) => {
-    onNavigate(bucket, prefix + folderName + '/')
+    onNavigate(bucket, orgScopedPrefix + folderName + '/')
   }
 
   const handleNavigateToPath = (path: string) => {
+    // Don't allow navigating above org folder
+    if (currentOrganization && !path.startsWith(currentOrganization.id + '/') && path !== '') {
+      return
+    }
     onNavigate(bucket, path)
   }
 
   const handleNavigateUp = () => {
-    if (parentPath !== null) {
+    if (canNavigateUp && parentPath !== null) {
       onNavigate(bucket, parentPath)
     }
   }
@@ -226,25 +217,19 @@ export default function StorageFolderBrowser({
 
     setIsCreatingFolder(true)
     try {
-      // Build folder path: prefix + folderName (backend adds trailing /)
-      const folderPath = prefix + trimmedName
-
-      console.log('Creating folder:', {
-        bucket: bucket,
-        prefix: prefix,
-        folderName: trimmedName,
-        fullPath: folderPath
-      })
+      // Build folder path: orgScopedPrefix + folderName (backend adds trailing /)
+      const folderPath = orgScopedPrefix + trimmedName
 
       await objectStorageApi.createFolder(bucket, folderPath)
       toast.success(`Folder "${trimmedName}" created`)
       setShowCreateFolderModal(false)
       setNewFolderName('')
       // Reload current folder
-      await loadContents(bucket, prefix)
-    } catch (err: any) {
+      await loadContents(bucket, orgScopedPrefix)
+    } catch (err: unknown) {
       console.error('Failed to create folder:', err)
-      toast.error(`Failed to create folder: ${err.message}`)
+      const message = err instanceof Error ? err.message : 'Unknown error'
+      toast.error(`Failed to create folder: ${message}`)
     } finally {
       setIsCreatingFolder(false)
     }
@@ -263,14 +248,15 @@ export default function StorageFolderBrowser({
 
     setDeletingFolder(folderName)
     try {
-      const folderPath = prefix + folderName
+      const folderPath = orgScopedPrefix + folderName
       await objectStorageApi.deleteFolder(bucket, folderPath, true)
       toast.success(`Folder "${folderName}" deleted`)
       // Reload current folder
-      await loadContents(bucket, prefix)
-    } catch (err: any) {
+      await loadContents(bucket, orgScopedPrefix)
+    } catch (err: unknown) {
       console.error('Failed to delete folder:', err)
-      toast.error(`Failed to delete folder: ${err.message}`)
+      const message = err instanceof Error ? err.message : 'Unknown error'
+      toast.error(`Failed to delete folder: ${message}`)
     } finally {
       setDeletingFolder(null)
     }
@@ -292,10 +278,11 @@ export default function StorageFolderBrowser({
       await objectStorageApi.deleteFile(bucket, file.key, token ?? undefined)
       toast.success(`File "${file.filename}" deleted`)
       // Reload current folder
-      await loadContents(bucket, prefix)
-    } catch (err: any) {
+      await loadContents(bucket, orgScopedPrefix)
+    } catch (err: unknown) {
       console.error('Failed to delete file:', err)
-      toast.error(`Failed to delete file: ${err.message}`)
+      const message = err instanceof Error ? err.message : 'Unknown error'
+      toast.error(`Failed to delete file: ${message}`)
     } finally {
       setDeletingFile(null)
     }
@@ -412,22 +399,22 @@ export default function StorageFolderBrowser({
             )}
           </div>
 
-          {/* Breadcrumb Navigation */}
+          {/* Breadcrumb Navigation - strip org prefix for display */}
           <div className="flex-1 overflow-hidden flex items-center gap-2">
             <FolderBreadcrumb
               bucket={bucket}
               bucketDisplayName={currentBucketDisplay}
-              prefix={prefix}
+              prefix={orgScopedPrefix}
               onNavigate={handleNavigateToPath}
-              segmentLabelMap={currentOrganization ? { [currentOrganization.id]: currentOrganization.slug } : undefined}
+              hideSegments={currentOrganization ? [currentOrganization.id] : undefined}
             />
-            {prefix && (
+            {orgScopedPrefix !== orgFolderPrefix && (
               <button
-                onClick={() => handleCopyPath(prefix)}
+                onClick={() => handleCopyPath(orgScopedPrefix)}
                 className="flex-shrink-0 p-1.5 text-gray-400 hover:text-indigo-600 dark:hover:text-indigo-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 rounded-md transition-colors"
                 title="Copy folder path"
               >
-                {copiedPath === prefix ? (
+                {copiedPath === orgScopedPrefix ? (
                   <Check className="w-3.5 h-3.5 text-emerald-500" />
                 ) : (
                   <Copy className="w-3.5 h-3.5" />
@@ -440,7 +427,7 @@ export default function StorageFolderBrowser({
           {!isProtected && (
             <div className="flex items-center gap-2">
               <button
-                onClick={() => onFileUpload?.(bucket, prefix)}
+                onClick={() => onFileUpload?.(bucket, orgScopedPrefix)}
                 className="flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium rounded-lg transition-colors shadow-sm"
               >
                 <Upload className="w-4 h-4" />
@@ -490,8 +477,8 @@ export default function StorageFolderBrowser({
 
             {/* Table Body */}
             <div className="divide-y divide-gray-100 dark:divide-gray-700">
-              {/* Navigate up button */}
-              {parentPath !== null && (
+              {/* Navigate up button - only show if we can go up within org folder */}
+              {canNavigateUp && (
                 <button
                   onClick={handleNavigateUp}
                   className="w-full px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
@@ -509,9 +496,7 @@ export default function StorageFolderBrowser({
               )}
 
               {/* Folders */}
-              {folders.map(folder => {
-                const displayName = getFolderDisplayName(folder)
-                return (
+              {folders.map(folder => (
                   <div
                     key={folder}
                     className="px-4 py-3 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors group"
@@ -524,16 +509,9 @@ export default function StorageFolderBrowser({
                         <div className="w-8 h-8 rounded-lg bg-indigo-100 dark:bg-indigo-900/30 flex items-center justify-center flex-shrink-0">
                           <Folder className="w-4 h-4 text-indigo-600 dark:text-indigo-400" />
                         </div>
-                        <div className="flex flex-col min-w-0">
-                          <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
-                            {displayName}
-                          </span>
-                          {displayName !== folder && (
-                            <span className="text-xs text-gray-500 dark:text-gray-400 font-mono truncate">
-                              {folder}
-                            </span>
-                          )}
-                        </div>
+                        <span className="text-sm font-medium text-gray-900 dark:text-white truncate">
+                          {folder}
+                        </span>
                       </button>
                     <div className="col-span-2 text-sm text-gray-500 dark:text-gray-400">
                       Folder
@@ -548,12 +526,12 @@ export default function StorageFolderBrowser({
                       <button
                         onClick={(e) => {
                           e.stopPropagation()
-                          handleCopyPath(prefix + folder + '/')
+                          handleCopyPath(orgScopedPrefix + folder + '/')
                         }}
                         className="opacity-0 group-hover:opacity-100 p-2 text-gray-600 dark:text-gray-400 hover:bg-indigo-50 dark:hover:bg-indigo-900/20 hover:text-indigo-600 dark:hover:text-indigo-400 rounded-lg transition-all"
                         title="Copy folder path"
                       >
-                        {copiedPath === prefix + folder + '/' ? (
+                        {copiedPath === orgScopedPrefix + folder + '/' ? (
                           <Check className="w-4 h-4 text-emerald-500" />
                         ) : (
                           <Copy className="w-4 h-4" />
@@ -576,8 +554,7 @@ export default function StorageFolderBrowser({
                     </div>
                   </div>
                 </div>
-              )
-              })}
+              ))}
 
               {/* Files */}
               {files.map(file => {
@@ -590,7 +567,7 @@ export default function StorageFolderBrowser({
                   <div className="grid grid-cols-12 gap-4 items-center">
                     {assetId ? (
                       <a
-                        href={`/assets/${assetId}`}
+                        href={currentOrganization ? `/orgs/${currentOrganization.slug}/assets/${assetId}` : `/assets/${assetId}`}
                         className="col-span-5 flex items-center gap-3 min-w-0"
                       >
                         <div className="w-8 h-8 rounded-lg bg-indigo-50 dark:bg-indigo-900/20 flex items-center justify-center flex-shrink-0">
@@ -668,7 +645,7 @@ export default function StorageFolderBrowser({
                   {!isProtected && (
                     <div className="flex items-center gap-3 mt-6">
                       <button
-                        onClick={() => onFileUpload?.(bucket, prefix)}
+                        onClick={() => onFileUpload?.(bucket, orgScopedPrefix)}
                         className="inline-flex items-center gap-2 px-4 py-2 text-sm font-medium text-emerald-600 dark:text-emerald-400 hover:bg-emerald-50 dark:hover:bg-emerald-900/20 rounded-lg transition-colors"
                       >
                         <Upload className="w-4 h-4" />
@@ -733,7 +710,7 @@ export default function StorageFolderBrowser({
                   <strong>Current location:</strong>
                 </p>
                 <p className="mt-1 font-mono text-xs bg-gray-50 dark:bg-gray-900 px-3 py-2 rounded">
-                  {bucket}/{prefix || '(root)'}
+                  {bucket}/{stripOrgPrefix(orgScopedPrefix) || '(organization root)'}
                 </p>
               </div>
             </div>

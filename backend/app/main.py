@@ -241,11 +241,10 @@ async def startup_event() -> None:
     print(f"   MINIO_BUCKET_UPLOADS: {getattr(settings, 'minio_bucket_uploads', 'curatore-uploads')}")
     print(f"   MINIO_BUCKET_PROCESSED: {getattr(settings, 'minio_bucket_processed', 'curatore-processed')}")
 
-    # Extraction engine summary
+    # Document service summary
     try:
-        print("🔧 Extraction Engine Configuration:")
+        print("🔧 Document Service Configuration:")
         print(f"   EXTRACTION_SERVICE_URL: {settings.extraction_service_url}")
-        print(f"   DOCLING_SERVICE_URL: {getattr(settings, 'docling_service_url', None)}")
     except Exception:
         pass
 

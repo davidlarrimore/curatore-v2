@@ -373,15 +373,18 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
     })
 
     // Show notification after state update (outside of render)
+    // Use toast IDs based on run_id + status to prevent duplicate toasts
+    // (e.g., from React Strict Mode double-running effects or WebSocket replays)
     if (notificationToShow) {
       // Use setTimeout to ensure we're outside of React's render phase
       setTimeout(() => {
+        const toastId = `job-${notificationToShow!.type}-${data.run_id}`
         if (notificationToShow!.type === 'completed') {
-          notificationService.jobCompleted(notificationToShow!.jobType as any, notificationToShow!.displayName)
+          notificationService.jobCompleted(notificationToShow!.jobType as any, notificationToShow!.displayName, toastId)
         } else if (notificationToShow!.type === 'failed') {
-          notificationService.jobFailed(notificationToShow!.jobType as any, notificationToShow!.displayName, notificationToShow!.error)
+          notificationService.jobFailed(notificationToShow!.jobType as any, notificationToShow!.displayName, notificationToShow!.error, toastId)
         } else if (notificationToShow!.type === 'cancelled') {
-          notificationService.jobCancelled(notificationToShow!.jobType as any, notificationToShow!.displayName)
+          notificationService.jobCancelled(notificationToShow!.jobType as any, notificationToShow!.displayName, toastId)
         }
       }, 0)
     }
@@ -484,12 +487,13 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
               try {
                 // Fetch the final run status to determine if it completed or failed
                 const run = await runsApi.getRun(job.runId, token!)
+                const toastId = `job-${run.status}-${job.runId}`
                 if (run.status === 'completed') {
-                  notificationService.jobCompleted(job.jobType as any, job.displayName)
+                  notificationService.jobCompleted(job.jobType as any, job.displayName, toastId)
                 } else if (run.status === 'failed' || run.status === 'timed_out') {
-                  notificationService.jobFailed(job.jobType as any, job.displayName, run.error_message || undefined)
+                  notificationService.jobFailed(job.jobType as any, job.displayName, run.error_message || undefined, toastId)
                 } else if (run.status === 'cancelled') {
-                  notificationService.jobCancelled(job.jobType as any, job.displayName)
+                  notificationService.jobCancelled(job.jobType as any, job.displayName, toastId)
                 }
               } catch (err) {
                 // Run doesn't exist or can't be fetched - job was likely removed
@@ -710,8 +714,8 @@ export function UnifiedJobsProvider({ children }: { children: ReactNode }) {
       return [...prev, newJob]
     })
 
-    // Show start toast
-    notificationService.jobStarted(job.jobType, job.displayName)
+    // Show start toast (use runId as dedup key to prevent duplicates)
+    notificationService.jobStarted(job.jobType, job.displayName, `job-started-${job.runId}`)
   }, [])
 
   // Update a job

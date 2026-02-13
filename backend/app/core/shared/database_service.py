@@ -140,6 +140,12 @@ class DatabaseService:
                     "server_settings": {
                         "application_name": "curatore-worker",
                         "jit": "off",
+                        # TCP keepalive: prevent silent connection death through
+                        # Docker networking during long-running tasks. Sends probes
+                        # after 30s idle, every 10s, gives up after 3 failures.
+                        "tcp_keepalives_idle": "30",
+                        "tcp_keepalives_interval": "10",
+                        "tcp_keepalives_count": "3",
                     }
                 },
             )

@@ -21,6 +21,7 @@ from pydantic import BaseModel
 from sqlalchemy import and_, func, select, text
 
 from app.api.v1.admin.routers.auth import get_current_user
+from app.dependencies import get_effective_org_id
 from app.api.v1.ops.schemas import (
     CeleryQueuesInfo,
     ExtractionQueueInfo,
@@ -710,10 +711,12 @@ async def get_queue_registry(
     "/jobs",
     response_model=ActiveJobsResponse,
     summary="List all active jobs",
-    description="List all active jobs across all queue types for the unified Job Manager.",
+    description="List all active jobs across all queue types for the unified Job Manager. "
+                "System admins can view all jobs across all orgs (system context) or filter by org (with X-Organization-Id header).",
 )
 async def list_active_jobs(
     current_user: User = Depends(get_current_user),
+    effective_org_id: Optional[UUID] = Depends(get_effective_org_id),
     run_type: Optional[str] = Query(None, description="Filter by run_type (extraction, sam_pull, scrape, sharepoint_sync, system_maintenance)"),
     status_filter: Optional[str] = Query(None, description="Filter by status (pending, submitted, running, completed, failed, timed_out)"),
     include_completed: bool = Query(False, description="Include recently completed jobs"),
@@ -725,6 +728,11 @@ async def list_active_jobs(
     Unlike /active (which only lists extractions), this endpoint returns
     jobs of all types: extractions, SAM pulls, web scrapes, SharePoint syncs,
     and maintenance tasks.
+
+    Organization context:
+    - Regular users: Only see jobs from their organization
+    - Admin users with X-Organization-Id header: See jobs from that org
+    - Admin users without header (system context): See ALL jobs across all orgs
 
     Supports filtering by:
     - run_type: Show only specific job type
@@ -753,19 +761,29 @@ async def list_active_jobs(
             if include_completed:
                 statuses.extend(["completed", "failed", "timed_out", "cancelled"])
 
+        # Build organization filter
+        # effective_org_id is None for admins in system context (show all jobs)
+        # effective_org_id is set for regular users or admins with X-Organization-Id header
+        org_context_str = str(effective_org_id) if effective_org_id else "ALL (system context)"
         logger.debug(
-            f"Listing active jobs for org={current_user.organization_id}, "
+            f"Listing active jobs for org={org_context_str}, "
             f"run_types={run_types}, statuses={statuses}, limit={limit}"
         )
+
+        # Build base query conditions
+        base_conditions = [
+            Run.run_type.in_(run_types),
+            Run.status.in_(statuses),
+        ]
+
+        # Add org filter only if we have a specific org context
+        if effective_org_id is not None:
+            base_conditions.append(Run.organization_id == effective_org_id)
 
         # Query runs
         result = await session.execute(
             select(Run)
-            .where(and_(
-                Run.run_type.in_(run_types),
-                Run.organization_id == current_user.organization_id,
-                Run.status.in_(statuses),
-            ))
+            .where(and_(*base_conditions))
             .order_by(Run.queue_priority.desc(), Run.created_at.desc())
             .limit(limit)
         )
@@ -1009,14 +1027,17 @@ async def list_active_jobs(
                 child_stats=child_stats_obj,
             ))
 
-        # Get total count
+        # Get total count (using same org filter conditions)
+        count_conditions = [
+            Run.run_type.in_(run_types),
+            Run.status.in_(statuses),
+        ]
+        if effective_org_id is not None:
+            count_conditions.append(Run.organization_id == effective_org_id)
+
         count_result = await session.execute(
             select(func.count(Run.id))
-            .where(and_(
-                Run.run_type.in_(run_types),
-                Run.organization_id == current_user.organization_id,
-                Run.status.in_(statuses),
-            ))
+            .where(and_(*count_conditions))
         )
         total = count_result.scalar() or 0
 

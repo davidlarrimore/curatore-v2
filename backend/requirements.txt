@@ -63,8 +63,5 @@ markdown>=3.5.0  # Markdown to HTML conversion
 weasyprint>=60.0  # HTML to PDF conversion
 python-docx>=1.1.0  # DOCX generation
 
-# Document Extraction Engines (Triage System)
-pymupdf>=1.24.0  # Fast PDF text extraction and analysis
-
 # Excel Parsing (State Dept forecast sync)
 openpyxl>=3.1.0  # Excel .xlsx file parsing

@@ -198,7 +198,7 @@ function LoginContent() {
             </div>
           </div>
 
-          <div>
+          <div className="space-y-3">
             <Button
               type="submit"
               disabled={isLoading}
@@ -206,6 +206,11 @@ function LoginContent() {
             >
               {loginStage === 'finalizing' ? 'Finishing...' : isLoading ? 'Signing in...' : 'Sign in'}
             </Button>
+            <div className="text-center">
+              <a href="/forgot-password" className="text-sm text-blue-600 dark:text-blue-400 hover:underline">
+                Forgot your password?
+              </a>
+            </div>
           </div>
 
           <div className="mt-6 p-4 bg-blue-50 dark:bg-blue-900/20 rounded-lg border border-blue-200 dark:border-blue-800">

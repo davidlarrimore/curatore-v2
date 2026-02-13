@@ -51,11 +51,12 @@ export const notificationService = {
    * Show a toast when a job starts.
    * Format: "{Type} started: {Name}"
    */
-  jobStarted(jobType: JobType | 'deletion', displayName: string): void {
+  jobStarted(jobType: JobType | 'deletion', displayName: string, id?: string): void {
     const label = getJobTypeLabel(jobType)
     toast.success(`${label} started: ${displayName}`, {
       ...baseOptions,
       duration: DURATIONS.info,
+      ...(id && { id }),
     })
   },
 
@@ -63,18 +64,20 @@ export const notificationService = {
    * Show a toast when a job completes successfully.
    * Format: "{Type} completed: {Name}"
    */
-  jobCompleted(jobType: JobType | 'deletion', displayName: string): void {
+  jobCompleted(jobType: JobType | 'deletion', displayName: string, id?: string): void {
     if (jobType === 'deletion') {
       // Special format for deletions
       toast.success(`"${displayName}" deleted`, {
         ...baseOptions,
         duration: DURATIONS.success,
+        ...(id && { id }),
       })
     } else {
       const label = getJobTypeLabel(jobType)
       toast.success(`${label} completed: ${displayName}`, {
         ...baseOptions,
         duration: DURATIONS.success,
+        ...(id && { id }),
       })
     }
   },
@@ -83,7 +86,7 @@ export const notificationService = {
    * Show a toast when a job fails.
    * Format: "{Type} failed: {Name}" or "{Type} failed: {Name} - {Error}"
    */
-  jobFailed(jobType: JobType | 'deletion', displayName: string, error?: string): void {
+  jobFailed(jobType: JobType | 'deletion', displayName: string, error?: string, id?: string): void {
     const label = getJobTypeLabel(jobType)
     const message = error
       ? `${label} failed: ${displayName} - ${error}`
@@ -92,6 +95,7 @@ export const notificationService = {
     toast.error(message, {
       ...baseOptions,
       duration: DURATIONS.error,
+      ...(id && { id }),
     })
   },
 
@@ -99,11 +103,12 @@ export const notificationService = {
    * Show a toast when a job is cancelled.
    * Format: "{Type} cancelled: {Name}"
    */
-  jobCancelled(jobType: JobType | 'deletion', displayName: string): void {
+  jobCancelled(jobType: JobType | 'deletion', displayName: string, id?: string): void {
     const label = getJobTypeLabel(jobType)
     toast.error(`${label} cancelled: ${displayName}`, {
       ...baseOptions,
       duration: DURATIONS.warning,
+      ...(id && { id }),
     })
   },
 

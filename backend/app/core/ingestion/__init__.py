@@ -1,1 +1,1 @@
-"""Ingestion services — extraction, triage, upload, document processing."""
+"""Ingestion services — extraction orchestration, upload, document processing."""

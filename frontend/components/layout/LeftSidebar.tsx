@@ -7,7 +7,6 @@ import { Dialog, Transition } from '@headlessui/react'
 import Link from 'next/link'
 import {
   X,
-  FileText,
   PanelLeftOpen,
   PanelLeftClose,
   Shield,
@@ -26,8 +25,15 @@ import {
   Database,
   TrendingUp,
   Tags,
+  Settings,
+  Users,
+  Plug,
+  Server,
+  Wrench,
+  Calendar,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
+import { useOrganization } from '@/lib/organization-context'
 import clsx from 'clsx'
 
 interface SystemStatus {
@@ -65,132 +71,233 @@ export function LeftSidebar({
   onStatusRefresh
 }: LeftSidebarProps) {
   const pathname = usePathname()
-  const { user, isAuthenticated } = useAuth()
+  const { user, isAuthenticated, isAdmin } = useAuth()
+  const { mode, currentOrganization } = useOrganization()
+
+  // Determine if we're in system mode (admin with no org selected)
+  const isSystemMode = isAdmin && mode === 'system'
+
+  // Check if we're in a URL-based org route (/orgs/[orgSlug]/...)
+  const orgSlugMatch = pathname?.match(/^\/orgs\/([^\/]+)/)
+  const urlOrgSlug = orgSlugMatch ? orgSlugMatch[1] : null
+
+  // Use URL-based org slug if available, otherwise fall back to context org slug
+  const activeOrgSlug = urlOrgSlug || currentOrganization?.slug
+
+  // Helper to generate org-scoped URLs
+  const orgUrl = (path: string) => {
+    if (isSystemMode) return path // System mode uses flat URLs
+    if (activeOrgSlug) return `/orgs/${activeOrgSlug}${path}`
+    return path // Fallback to flat URLs
+  }
+
+  // Check if path matches considering both old and new URL structures
+  const isCurrentPath = (path: string, startsWithMatch = false) => {
+    if (!pathname) return false
+    // For org routes, we need to check both old and new URL patterns
+    const normalizedPath = path.replace(/^\/orgs\/[^\/]+/, '')
+    const normalizedPathname = pathname.replace(/^\/orgs\/[^\/]+/, '')
+    if (startsWithMatch) {
+      return normalizedPathname.startsWith(normalizedPath)
+    }
+    return normalizedPathname === normalizedPath || pathname === path
+  }
 
   // Navigation items with gradients for active states
   const navigation: NavItem[] = [
     {
       name: 'Dashboard',
-      href: '/',
+      href: orgUrl(''),
       icon: LayoutDashboard,
-      current: pathname === '/',
+      current: isCurrentPath('') || isCurrentPath('/'),
       gradient: 'from-indigo-500 to-purple-600'
     },
     ...(isAuthenticated ? [
       {
-        name: 'Assets',
-        href: '/assets',
-        icon: FileText,
-        current: pathname?.startsWith('/assets'),
-        gradient: 'from-indigo-500 to-blue-600'
-      }
-    ] : []),
-    ...(isAuthenticated && user?.role === 'org_admin' ? [
-      {
-        name: 'Storage',
-        href: '/storage',
+        name: 'Storage Browser',
+        href: orgUrl('/storage'),
         icon: HardDrive,
-        current: pathname?.startsWith('/storage'),
+        current: isCurrentPath('/storage', true),
         gradient: 'from-emerald-500 to-teal-500'
-      }
-    ] : []),
-    ...(isAuthenticated ? [
+      },
       {
         name: 'Search',
-        href: '/search',
+        href: orgUrl('/search'),
         icon: Search,
-        current: pathname?.startsWith('/search'),
+        current: isCurrentPath('/search', true),
         gradient: 'from-amber-500 to-orange-500'
       }
     ] : [])
   ]
 
-  // Acquire section items
+  // Acquire section items (syncs in URL-based routing)
   const acquireNavigation: NavItem[] = isAuthenticated ? [
     {
       name: 'SharePoint Sync',
-      href: '/sharepoint-sync',
+      href: orgUrl('/syncs/sharepoint'),
       icon: FolderSync,
-      current: pathname?.startsWith('/sharepoint-sync'),
+      current: isCurrentPath('/syncs/sharepoint', true) || isCurrentPath('/sharepoint-sync', true),
       gradient: 'from-teal-500 to-cyan-600'
     },
     {
       name: 'Web Scraping',
-      href: '/scrape',
+      href: orgUrl('/syncs/scrape'),
       icon: Globe,
-      current: pathname?.startsWith('/scrape'),
+      current: isCurrentPath('/syncs/scrape', true) || isCurrentPath('/scrape', true),
       gradient: 'from-indigo-500 to-purple-600'
     },
     {
       name: 'SAM.gov',
-      href: '/sam',
+      href: orgUrl('/syncs/sam'),
       icon: Building2,
-      current: pathname?.startsWith('/sam'),
+      current: isCurrentPath('/syncs/sam', true) || isCurrentPath('/sam', true),
       gradient: 'from-blue-500 to-indigo-600'
     },
     {
       name: 'Acquisition Forecasts',
-      href: '/forecasts',
+      href: orgUrl('/syncs/forecasts'),
       icon: TrendingUp,
-      current: pathname?.startsWith('/forecasts'),
+      current: isCurrentPath('/syncs/forecasts', true) || isCurrentPath('/forecasts', true),
       gradient: 'from-emerald-500 to-teal-600'
     },
     {
       name: 'Salesforce CRM',
-      href: '/salesforce',
+      href: orgUrl('/syncs/salesforce'),
       icon: Database,
-      current: pathname?.startsWith('/salesforce'),
+      current: isCurrentPath('/syncs/salesforce', true) || isCurrentPath('/salesforce', true),
       gradient: 'from-cyan-500 to-blue-600'
     }
   ] : []
 
-  // Build section items
-  const buildNavigation: NavItem[] = isAuthenticated && user?.role === 'org_admin' ? [
+  // Build section items (org context only)
+  const buildNavigation: NavItem[] = isAuthenticated && (user?.role === 'org_admin' || isAdmin) && !isSystemMode ? [
     {
       name: 'Functions',
-      href: '/admin/functions',
+      href: orgUrl('/admin/functions'),
       icon: Code,
-      current: pathname === '/admin/functions',
+      current: isCurrentPath('/admin/functions', true),
       gradient: 'from-purple-500 to-indigo-600'
     },
     {
       name: 'Procedures',
-      href: '/admin/procedures',
+      href: orgUrl('/admin/procedures'),
       icon: Workflow,
-      current: pathname === '/admin/procedures',
+      current: isCurrentPath('/admin/procedures', true),
       gradient: 'from-emerald-500 to-teal-600'
     },
     {
       name: 'Pipelines',
-      href: '/admin/pipelines',
+      href: orgUrl('/admin/pipelines'),
       icon: GitBranch,
-      current: pathname === '/admin/pipelines',
+      current: isCurrentPath('/admin/pipelines', true),
       gradient: 'from-blue-500 to-indigo-600'
     }
   ] : []
 
-  // Admin section items
-  const adminNavigation: NavItem[] = isAuthenticated && user?.role === 'org_admin' ? [
+  // Admin section items (org context)
+  const adminNavigation: NavItem[] = isAuthenticated && (user?.role === 'org_admin' || isAdmin) && !isSystemMode ? [
     {
       name: 'Job Manager',
-      href: '/admin/queue',
+      href: orgUrl('/jobs'),
       icon: Activity,
-      current: pathname === '/admin/queue',
+      current: isCurrentPath('/jobs', true),
       gradient: 'from-indigo-500 to-purple-600'
     },
     {
       name: 'Metadata Catalog',
-      href: '/admin/metadata',
+      href: orgUrl('/admin/metadata'),
       icon: Tags,
-      current: pathname === '/admin/metadata',
+      current: isCurrentPath('/admin/metadata', true),
       gradient: 'from-teal-500 to-emerald-600'
     },
     {
-      name: 'Admin Settings',
+      name: 'Users',
+      href: orgUrl('/admin/users'),
+      icon: Users,
+      current: isCurrentPath('/admin/users', true),
+      gradient: 'from-blue-500 to-indigo-600'
+    },
+    {
+      name: 'Org Settings',
       href: '/settings-admin',
       icon: Shield,
       current: pathname === '/settings-admin',
       gradient: 'from-red-500 to-rose-600'
+    }
+  ] : []
+
+  // System navigation (admin only, system mode)
+  const systemNavigation: NavItem[] = isSystemMode ? [
+    {
+      name: 'System Dashboard',
+      href: '/system',
+      icon: LayoutDashboard,
+      current: pathname === '/system',
+      gradient: 'from-amber-500 to-orange-600'
+    },
+    {
+      name: 'Organizations',
+      href: '/system/organizations',
+      icon: Building2,
+      current: pathname?.startsWith('/system/organizations'),
+      gradient: 'from-amber-500 to-orange-600'
+    },
+    {
+      name: 'Job Manager',
+      href: '/system/jobs',
+      icon: Activity,
+      current: pathname?.startsWith('/system/jobs'),
+      gradient: 'from-amber-500 to-orange-600'
+    }
+  ] : []
+
+  // System services navigation
+  const systemServicesNavigation: NavItem[] = isSystemMode ? [
+    {
+      name: 'Services',
+      href: '/system/services',
+      icon: Server,
+      current: pathname?.startsWith('/system/services'),
+      gradient: 'from-amber-500 to-orange-600'
+    },
+    {
+      name: 'Connections',
+      href: '/system/connections',
+      icon: Plug,
+      current: pathname?.startsWith('/system/connections'),
+      gradient: 'from-amber-500 to-orange-600'
+    }
+  ] : []
+
+  // System admin navigation
+  const systemAdminNavigation: NavItem[] = isSystemMode ? [
+    {
+      name: 'Maintenance',
+      href: '/system/maintenance',
+      icon: Wrench,
+      current: pathname?.startsWith('/system/maintenance'),
+      gradient: 'from-amber-500 to-orange-600'
+    },
+    {
+      name: 'Scheduled Tasks',
+      href: '/system/scheduled-tasks',
+      icon: Calendar,
+      current: pathname?.startsWith('/system/scheduled-tasks'),
+      gradient: 'from-amber-500 to-orange-600'
+    },
+    {
+      name: 'All Users',
+      href: '/system/users',
+      icon: Users,
+      current: pathname?.startsWith('/system/users'),
+      gradient: 'from-amber-500 to-orange-600'
+    },
+    {
+      name: 'System Settings',
+      href: '/system/settings',
+      icon: Settings,
+      current: pathname?.startsWith('/system/settings'),
+      gradient: 'from-amber-500 to-orange-600'
     }
   ] : []
 
@@ -233,20 +340,40 @@ export function LeftSidebar({
 
   // Sidebar content (shared between mobile and desktop)
   const SidebarContent = ({ isMobile = false }: { isMobile?: boolean }) => (
-    <div className="flex grow flex-col h-full bg-white dark:bg-gray-900">
+    <div className={clsx(
+      "flex grow flex-col h-full",
+      isSystemMode ? "bg-amber-50 dark:bg-amber-950/20" : "bg-white dark:bg-gray-900"
+    )}>
       {/* Header */}
       <div className={clsx(
-        "flex shrink-0 items-center justify-between px-4 border-b border-gray-100 dark:border-gray-800",
+        "flex shrink-0 items-center justify-between px-4 border-b",
+        isSystemMode ? "border-amber-200 dark:border-amber-800/50" : "border-gray-100 dark:border-gray-800",
         collapsed && !isMobile ? "h-16 justify-center" : "h-16"
       )}>
         {(!collapsed || isMobile) && (
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-600 flex items-center justify-center shadow-lg shadow-indigo-500/25">
-              <Zap className="w-4 h-4 text-white" />
+            <div className={clsx(
+              "w-8 h-8 rounded-xl flex items-center justify-center shadow-lg",
+              isSystemMode
+                ? "bg-gradient-to-br from-amber-500 to-orange-600 shadow-amber-500/25"
+                : "bg-gradient-to-br from-indigo-500 to-purple-600 shadow-indigo-500/25"
+            )}>
+              {isSystemMode ? (
+                <Settings className="w-4 h-4 text-white" />
+              ) : (
+                <Zap className="w-4 h-4 text-white" />
+              )}
             </div>
             <div>
-              <h1 className="text-base font-bold text-gray-900 dark:text-white">Curatorè</h1>
-              <p className="text-[10px] text-gray-500 dark:text-gray-400 -mt-0.5">Data Platform</p>
+              <h1 className="text-base font-bold text-gray-900 dark:text-white">
+                {isSystemMode ? 'System' : 'Curatorè'}
+              </h1>
+              <p className={clsx(
+                "text-[10px] -mt-0.5",
+                isSystemMode ? "text-amber-600 dark:text-amber-400" : "text-gray-500 dark:text-gray-400"
+              )}>
+                {isSystemMode ? 'Administration' : (currentOrganization?.display_name || 'Data Platform')}
+              </p>
             </div>
           </div>
         )}
@@ -254,7 +381,10 @@ export function LeftSidebar({
           <button
             onClick={() => onCollapsedChange(!collapsed)}
             className={clsx(
-              "p-1.5 rounded-lg text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors",
+              "p-1.5 rounded-lg transition-colors",
+              isSystemMode
+                ? "text-amber-500 hover:text-amber-700 hover:bg-amber-100 dark:hover:bg-amber-900/30"
+                : "text-gray-400 hover:text-gray-600 dark:hover:text-gray-300 hover:bg-gray-100 dark:hover:bg-gray-800",
               collapsed && "mx-auto"
             )}
             title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
@@ -270,54 +400,104 @@ export function LeftSidebar({
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto py-4 px-3">
-        {(!collapsed || isMobile) && (
-          <p className="px-3 mb-2 text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-            Navigation
-          </p>
-        )}
-        <ul className="space-y-1">
-          {navigation.map((item) => (
-            <li key={item.name}>
-              <NavLink item={item} isMobile={isMobile} />
-            </li>
-          ))}
-        </ul>
-
-        {/* Acquire section */}
-        {isAuthenticated && acquireNavigation.length > 0 && (
-          <div className="mt-4 space-y-1">
+        {/* System Mode Navigation */}
+        {isSystemMode ? (
+          <>
+            {/* System navigation */}
             {(!collapsed || isMobile) && (
-              <p className="px-3 mb-2 text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-                Acquire
+              <p className="px-3 mb-2 text-[10px] font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider">
+                System
               </p>
             )}
-            {acquireNavigation.map((item) => (
-              <NavLink key={item.name} item={item} isMobile={isMobile} />
-            ))}
-          </div>
-        )}
+            <ul className="space-y-1">
+              {systemNavigation.map((item) => (
+                <li key={item.name}>
+                  <NavLink item={item} isMobile={isMobile} />
+                </li>
+              ))}
+            </ul>
 
-        {/* Build section */}
-        {buildNavigation.length > 0 && (
-          <div className="mt-4 space-y-1">
+            {/* Services section */}
+            {systemServicesNavigation.length > 0 && (
+              <div className="mt-4 space-y-1">
+                {(!collapsed || isMobile) && (
+                  <p className="px-3 mb-2 text-[10px] font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider">
+                    Infrastructure
+                  </p>
+                )}
+                {systemServicesNavigation.map((item) => (
+                  <NavLink key={item.name} item={item} isMobile={isMobile} />
+                ))}
+              </div>
+            )}
+
+            {/* System Admin section */}
+            {systemAdminNavigation.length > 0 && (
+              <div className="mt-4 space-y-1">
+                {(!collapsed || isMobile) && (
+                  <p className="px-3 mb-2 text-[10px] font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider">
+                    Administration
+                  </p>
+                )}
+                {systemAdminNavigation.map((item) => (
+                  <NavLink key={item.name} item={item} isMobile={isMobile} />
+                ))}
+              </div>
+            )}
+          </>
+        ) : (
+          <>
+            {/* Organization Mode Navigation */}
             {(!collapsed || isMobile) && (
               <p className="px-3 mb-2 text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-                Build
+                Navigation
               </p>
             )}
-            {buildNavigation.map((item) => (
-              <NavLink key={item.name} item={item} isMobile={isMobile} />
-            ))}
-          </div>
+            <ul className="space-y-1">
+              {navigation.map((item) => (
+                <li key={item.name}>
+                  <NavLink item={item} isMobile={isMobile} />
+                </li>
+              ))}
+            </ul>
+
+            {/* Acquire section */}
+            {isAuthenticated && acquireNavigation.length > 0 && (
+              <div className="mt-4 space-y-1">
+                {(!collapsed || isMobile) && (
+                  <p className="px-3 mb-2 text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
+                    Acquire
+                  </p>
+                )}
+                {acquireNavigation.map((item) => (
+                  <NavLink key={item.name} item={item} isMobile={isMobile} />
+                ))}
+              </div>
+            )}
+
+            {/* Build section */}
+            {buildNavigation.length > 0 && (
+              <div className="mt-4 space-y-1">
+                {(!collapsed || isMobile) && (
+                  <p className="px-3 mb-2 text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
+                    Build
+                  </p>
+                )}
+                {buildNavigation.map((item) => (
+                  <NavLink key={item.name} item={item} isMobile={isMobile} />
+                ))}
+              </div>
+            )}
+          </>
         )}
       </nav>
 
-      {/* Bottom section - Admin */}
-      {adminNavigation.length > 0 && (
+      {/* Bottom section - Admin (org context only) */}
+      {!isSystemMode && adminNavigation.length > 0 && (
         <div className="mt-auto border-t border-gray-100 dark:border-gray-800 p-3 space-y-2">
           {(!collapsed || isMobile) && (
             <p className="px-3 mb-1 text-[10px] font-semibold text-gray-400 dark:text-gray-500 uppercase tracking-wider">
-              Admin
+              Org Admin
             </p>
           )}
           {adminNavigation.map((item) => (
@@ -389,7 +569,8 @@ export function LeftSidebar({
   // Desktop sidebar
   const DesktopSidebar = () => (
     <div className={clsx(
-      "hidden lg:fixed lg:inset-y-0 lg:z-10 lg:flex lg:flex-col transition-all duration-300 border-r border-gray-200 dark:border-gray-800",
+      "hidden lg:fixed lg:inset-y-0 lg:z-10 lg:flex lg:flex-col transition-all duration-300 border-r",
+      isSystemMode ? "border-amber-200 dark:border-amber-800/50" : "border-gray-200 dark:border-gray-800",
       collapsed ? "lg:w-16" : "lg:w-64"
     )}>
       <SidebarContent isMobile={false} />

@@ -129,7 +129,7 @@ class UserProfileResponse(BaseModel):
     role: str = Field(..., description="User role (org_admin, member, viewer)")
     is_active: bool = Field(..., description="Whether user account is active")
     is_verified: bool = Field(..., description="Whether email is verified")
-    organization_id: str = Field(..., description="Organization UUID")
+    organization_id: Optional[str] = Field(None, description="Organization UUID (null for system admins)")
     created_at: datetime = Field(..., description="Account creation timestamp")
     last_login_at: Optional[datetime] = Field(None, description="Last login timestamp")
 
@@ -346,7 +346,7 @@ async def register(request: UserRegisterRequest) -> UserProfileResponse:
             role=new_user.role,
             is_active=new_user.is_active,
             is_verified=new_user.is_verified,
-            organization_id=str(new_user.organization_id),
+            organization_id=str(new_user.organization_id) if new_user.organization_id else None,
             created_at=new_user.created_at,
             last_login_at=new_user.last_login_at,
         )
@@ -414,15 +414,16 @@ async def login(request: UserLoginRequest) -> TokenResponse:
         await session.commit()
 
         # Generate tokens
+        org_id_str = str(user.organization_id) if user.organization_id else None
         access_token = auth_service.create_access_token(
             user_id=str(user.id),
-            organization_id=str(user.organization_id),
+            organization_id=org_id_str,
             role=user.role,
         )
 
         refresh_token = auth_service.create_refresh_token(
             user_id=str(user.id),
-            organization_id=str(user.organization_id),
+            organization_id=org_id_str,
         )
 
         logger.info(f"Login successful: {user.email}")
@@ -469,11 +470,10 @@ async def refresh_token(request: TokenRefreshRequest) -> TokenResponse:
                 detail="Invalid token type. Expected refresh token.",
             )
 
-        # Extract user_id and org_id
+        # Extract user_id (org_id may be None for system admins)
         user_id = payload.get("sub")
-        org_id = payload.get("org_id")
 
-        if not user_id or not org_id:
+        if not user_id:
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid token payload",
@@ -491,15 +491,16 @@ async def refresh_token(request: TokenRefreshRequest) -> TokenResponse:
                 )
 
             # Generate new tokens
+            org_id_str = str(user.organization_id) if user.organization_id else None
             access_token = auth_service.create_access_token(
                 user_id=str(user.id),
-                organization_id=str(user.organization_id),
+                organization_id=org_id_str,
                 role=user.role,
             )
 
             refresh_token = auth_service.create_refresh_token(
                 user_id=str(user.id),
-                organization_id=str(user.organization_id),
+                organization_id=org_id_str,
             )
 
             logger.info(f"Token refreshed for user: {user.email}")
@@ -537,15 +538,16 @@ async def extend_session(user: User = Depends(get_current_user)) -> TokenRespons
     Returns:
         TokenResponse: New JWT tokens
     """
+    org_id_str = str(user.organization_id) if user.organization_id else None
     access_token = auth_service.create_access_token(
         user_id=str(user.id),
-        organization_id=str(user.organization_id),
+        organization_id=org_id_str,
         role=user.role,
     )
 
     refresh_token = auth_service.create_refresh_token(
         user_id=str(user.id),
-        organization_id=str(user.organization_id),
+        organization_id=org_id_str,
     )
 
     logger.info(f"Session extended for user: {user.email}")
@@ -629,7 +631,7 @@ async def get_current_user_profile(user: User = Depends(get_current_user)) -> Us
         role=user.role,
         is_active=user.is_active,
         is_verified=user.is_verified,
-        organization_id=str(user.organization_id),
+        organization_id=str(user.organization_id) if user.organization_id else None,
         created_at=user.created_at,
         last_login_at=user.last_login_at,
     )
@@ -694,7 +696,7 @@ async def verify_email(request: VerifyEmailRequest) -> UserProfileResponse:
             role=user.role,
             is_active=user.is_active,
             is_verified=user.is_verified,
-            organization_id=str(user.organization_id),
+            organization_id=str(user.organization_id) if user.organization_id else None,
             created_at=user.created_at,
             last_login_at=user.last_login_at,
         )

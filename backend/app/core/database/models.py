@@ -136,30 +136,92 @@ class Organization(Base):
         return f"<Organization(id={self.id}, name={self.name}, slug={self.slug})>"
 
 
+class Role(Base):
+    """
+    Role lookup table for user roles.
+
+    Defines valid roles that can be assigned to users, along with their
+    permissions and metadata. Using a lookup table instead of free-text
+    ensures data integrity and makes it easy to add new roles.
+
+    Attributes:
+        id: Auto-incrementing primary key
+        name: Unique role identifier (admin, org_admin, member, viewer)
+        display_name: Human-readable role name
+        description: Role description
+        is_system_role: True for system-wide roles (admin)
+        can_manage_users: Permission to manage users
+        can_manage_org: Permission to manage organization settings
+        can_manage_system: Permission to manage system settings
+        created_at: Timestamp when role was created
+        updated_at: Timestamp of last update
+
+    Default Roles:
+        - admin: System-wide administrator (is_system_role=True)
+        - org_admin: Organization administrator
+        - member: Standard organization member
+        - viewer: Read-only organization member
+    """
+
+    __tablename__ = "roles"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    name = Column(String(50), unique=True, nullable=False, index=True)
+    display_name = Column(String(100), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Permission flags
+    is_system_role = Column(Boolean, nullable=False, default=False, server_default="false")
+    can_manage_users = Column(Boolean, nullable=False, default=False, server_default="false")
+    can_manage_org = Column(Boolean, nullable=False, default=False, server_default="false")
+    can_manage_system = Column(Boolean, nullable=False, default=False, server_default="false")
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    users = relationship("User", back_populates="role_ref", foreign_keys="User.role")
+
+    def __repr__(self) -> str:
+        return f"<Role(name={self.name}, display_name={self.display_name})>"
+
+
 class User(Base):
     """
     User model with authentication and organization membership.
 
-    Users belong to exactly one organization and have a role that determines
-    their permissions within that organization.
+    Regular users belong to exactly one organization and have a role that
+    determines their permissions within that organization.
+
+    Admin users (role='admin') have system-wide access and their organization_id
+    is NULL. They can access all organizations via the X-Organization-Id header.
 
     Attributes:
         id: Unique user identifier
-        organization_id: Organization this user belongs to
+        organization_id: Organization this user belongs to (NULL for admin users)
         email: User's email address (unique, used for login)
         username: User's username (unique, used for login)
         password_hash: Bcrypt hashed password
         full_name: User's full name (optional)
         is_active: Whether user account is active
         is_verified: Whether user's email is verified
-        role: User's role (org_admin, member, viewer)
+        role: User's role (admin, org_admin, member, viewer)
         settings: JSONB field for user-specific settings overrides
         created_at: Timestamp when user was created
         updated_at: Timestamp of last update
         last_login_at: Timestamp of last successful login
 
+    Roles:
+        - admin: System-wide admin, organization_id is NULL
+        - org_admin: Org-level admin, manages org settings and users
+        - member: Standard org member, can create/manage data
+        - viewer: Read-only org member
+
     Relationships:
-        organization: Organization this user belongs to
+        organization: Organization this user belongs to (NULL for admins)
         api_keys: API keys created by this user
         created_connections: Connections created by this user
     """
@@ -168,7 +230,7 @@ class User(Base):
 
     id = Column(UUID(), primary_key=True, default=uuid.uuid4)
     organization_id = Column(
-        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=True, index=True
     )
 
     # Authentication
@@ -181,8 +243,14 @@ class User(Base):
     is_active = Column(Boolean, default=True, nullable=False, index=True)
     is_verified = Column(Boolean, default=False, nullable=False)
 
-    # Role: org_admin, member, viewer
-    role = Column(String(50), nullable=False, default="member", index=True)
+    # Role: admin, org_admin, member, viewer (FK to roles table)
+    role = Column(
+        String(50),
+        ForeignKey("roles.name", onupdate="CASCADE", ondelete="RESTRICT"),
+        nullable=False,
+        default="member",
+        index=True
+    )
 
     # User-specific settings (optional overrides)
     settings = Column(JSON, nullable=False, default=dict, server_default="{}")
@@ -198,6 +266,7 @@ class User(Base):
     organization = relationship(
         "Organization", back_populates="users", foreign_keys=[organization_id]
     )
+    role_ref = relationship("Role", back_populates="users", foreign_keys=[role])
     api_keys = relationship("ApiKey", back_populates="user", cascade="all, delete-orphan")
     created_connections = relationship(
         "Connection",
@@ -288,12 +357,14 @@ class ApiKey(Base):
     API Key model for headless/backend authentication.
 
     API keys provide programmatic access to the API without requiring
-    user login. Each key is scoped to an organization and optionally a user.
+    user login. Each key is scoped to an organization and owned by either
+    a user OR a service account (exactly one must be set).
 
     Attributes:
         id: Unique API key identifier
         organization_id: Organization this key belongs to
-        user_id: User who created this key (nullable for org-wide keys)
+        user_id: User who owns this key (mutually exclusive with service_account_id)
+        service_account_id: Service account that owns this key (mutually exclusive with user_id)
         name: Human-readable name for the key
         key_hash: Bcrypt hashed API key (actual key shown only once on creation)
         prefix: First 12 characters of key for display (e.g., "cur_abcd1234")
@@ -306,7 +377,11 @@ class ApiKey(Base):
 
     Relationships:
         organization: Organization this key belongs to
-        user: User who created this key
+        user: User who owns this key (if user-owned)
+        service_account: Service account that owns this key (if service account-owned)
+
+    Constraints:
+        - Exactly one of user_id or service_account_id must be set (CHECK constraint)
     """
 
     __tablename__ = "api_keys"
@@ -317,6 +392,9 @@ class ApiKey(Base):
     )
     user_id = Column(
         UUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True
+    )
+    service_account_id = Column(
+        UUID(), ForeignKey("service_accounts.id", ondelete="CASCADE"), nullable=True, index=True
     )
 
     # Key details
@@ -341,6 +419,9 @@ class ApiKey(Base):
     # Relationships
     organization = relationship("Organization", back_populates="api_keys")
     user = relationship("User", back_populates="api_keys")
+    service_account = relationship("ServiceAccount", back_populates="api_keys")
+
+    # Note: CHECK constraint (user_id XOR service_account_id) enforced via migration
 
     def __repr__(self) -> str:
         return f"<ApiKey(id={self.id}, name={self.name}, prefix={self.prefix})>"
@@ -3925,3 +4006,195 @@ class StateForecast(Base):
 
     def __repr__(self) -> str:
         return f"<StateForecast(id={self.id}, row_hash={self.row_hash[:16]}..., title={self.title[:50] if self.title else ''})>"
+
+
+# ============================================================================
+# Multi-Org Admin Models
+# ============================================================================
+
+
+class Service(Base):
+    """
+    System-scoped service configuration model.
+
+    Services represent system-level infrastructure like LLM providers,
+    extraction services, and browser rendering services. Unlike connections,
+    services are not organization-scoped - they're shared across the system.
+
+    Attributes:
+        id: Unique service identifier
+        name: Unique service name (e.g., 'llm', 'extraction', 'playwright')
+        service_type: Type of service (llm, extraction, browser)
+        description: Human-readable description
+        config: JSONB configuration for the service
+        is_active: Whether service is active
+        last_tested_at: Timestamp of last health check
+        test_status: Health check status (healthy, unhealthy, not_tested)
+        test_result: Detailed test results (JSONB)
+        created_at: Timestamp when service was created
+        updated_at: Timestamp of last update
+
+    Service Types:
+        - llm: Language model providers (OpenAI, Anthropic, local)
+        - extraction: Document extraction services
+        - browser: Browser rendering (Playwright)
+    """
+
+    __tablename__ = "services"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    name = Column(String(100), nullable=False, unique=True, index=True)
+    service_type = Column(String(50), nullable=False, index=True)  # llm, extraction, browser
+    description = Column(Text, nullable=True)
+
+    # Configuration (JSONB for flexibility)
+    config = Column(JSONB, nullable=False, default=dict, server_default="{}")
+
+    # Status
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+
+    # Health check
+    last_tested_at = Column(DateTime, nullable=True)
+    test_status = Column(String(20), nullable=True)  # healthy, unhealthy, not_tested
+    test_result = Column(JSONB, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    def __repr__(self) -> str:
+        return f"<Service(id={self.id}, name={self.name}, type={self.service_type})>"
+
+
+class OrganizationConnection(Base):
+    """
+    Organization-Connection enablement model.
+
+    Controls which system-scoped connections are available to each organization.
+    Admins enable connections for organizations; orgs can then create syncs
+    using those enabled connections.
+
+    Attributes:
+        id: Unique identifier
+        organization_id: Organization this enablement is for
+        connection_id: System-scoped connection being enabled
+        is_enabled: Whether connection is enabled for this org
+        enabled_at: When connection was enabled
+        enabled_by: User who enabled the connection
+        config_overrides: Org-specific configuration overrides
+        created_at: Timestamp when enablement was created
+        updated_at: Timestamp of last update
+
+    Relationships:
+        organization: Organization this enablement is for
+        connection: System-scoped connection being enabled
+        enabled_by_user: User who enabled the connection
+    """
+
+    __tablename__ = "organization_connections"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    connection_id = Column(
+        UUID(), ForeignKey("connections.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+
+    # Enablement status
+    is_enabled = Column(Boolean, default=True, nullable=False, index=True)
+    enabled_at = Column(DateTime, nullable=True)
+    enabled_by = Column(
+        UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Org-specific configuration overrides (merged with connection config)
+    config_overrides = Column(JSONB, nullable=False, default=dict, server_default="{}")
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    organization = relationship("Organization")
+    connection = relationship("Connection")
+    enabled_by_user = relationship("User", foreign_keys=[enabled_by])
+
+    # Unique constraint: one enablement per org/connection pair
+    __table_args__ = (
+        Index("ix_org_connections_org_conn", "organization_id", "connection_id", unique=True),
+    )
+
+    def __repr__(self) -> str:
+        return f"<OrganizationConnection(id={self.id}, org={self.organization_id}, conn={self.connection_id})>"
+
+
+class ServiceAccount(Base):
+    """
+    Service account model for automated API access.
+
+    Service accounts are non-human identities for automated access to the API.
+    Each service account belongs to exactly one organization and has a role
+    that determines its permissions within that organization.
+
+    Attributes:
+        id: Unique identifier
+        name: Human-readable name (unique within org)
+        description: Optional description of purpose
+        organization_id: Organization this account belongs to
+        role: Account role ('member' or 'viewer')
+        is_active: Whether account is active
+        created_by: User who created this account
+        created_at: Timestamp when account was created
+        updated_at: Timestamp of last update
+        last_used_at: Timestamp of last API usage
+
+    Relationships:
+        organization: Organization this account belongs to
+        created_by_user: User who created this account
+        api_keys: API keys for this service account
+
+    Use Cases:
+        - CI/CD pipelines syncing data
+        - External systems querying search
+        - Automation running procedures
+        - MCP server authentication
+    """
+
+    __tablename__ = "service_accounts"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    name = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    role = Column(String(50), nullable=False, default="member")  # member, viewer
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+    created_by = Column(
+        UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True
+    )
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+    last_used_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    organization = relationship("Organization")
+    created_by_user = relationship("User", foreign_keys=[created_by])
+    api_keys = relationship("ApiKey", back_populates="service_account", cascade="all, delete-orphan")
+
+    # Unique constraint: unique name within organization
+    __table_args__ = (
+        Index("ix_service_accounts_org_name", "organization_id", "name", unique=True),
+    )
+
+    def __repr__(self) -> str:
+        return f"<ServiceAccount(id={self.id}, name={self.name}, org={self.organization_id})>"

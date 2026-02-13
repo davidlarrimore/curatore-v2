@@ -137,6 +137,9 @@ app.conf.update(
         "app.tasks.process_extraction_queue_task": {"queue": "maintenance"},
         "app.tasks.check_extraction_timeouts_task": {"queue": "maintenance"},
         "app.tasks.sam_process_queued_requests_task": {"queue": "maintenance"},
+        # Email tasks
+        "app.tasks.send_password_reset_email_task": {"queue": "maintenance"},
+        "app.tasks.send_invitation_email_task": {"queue": "maintenance"},
         # Cleanup tasks
         "app.tasks.cleanup_expired_files_task": {"queue": "maintenance"},
 
@@ -297,8 +300,9 @@ def on_worker_ready(sender, **kwargs):
     from .core.tasks import recover_orphaned_extractions
 
     # Delay recovery by 10 seconds to ensure all services are ready
+    # startup_mode=True uses aggressive thresholds since the worker just restarted
     recover_orphaned_extractions.apply_async(
-        kwargs={"max_age_hours": 24, "limit": 200},
+        kwargs={"max_age_hours": 24, "limit": 200, "startup_mode": True},
         countdown=10,
     )
 

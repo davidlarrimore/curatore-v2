@@ -52,7 +52,10 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.config import settings
 from app.core.database.models import Asset, ExtractionResult, Run
 
-from .extraction.file_type_registry import file_type_registry
+SUPPORTED_EXTENSIONS = {
+    ".pdf", ".doc", ".docx", ".ppt", ".pptx", ".xls", ".xlsx", ".xlsb",
+    ".txt", ".md", ".csv", ".html", ".htm", ".xml", ".json", ".msg", ".eml",
+}
 
 logger = logging.getLogger("curatore.extraction_queue")
 
@@ -282,6 +285,14 @@ class ExtractionQueueService:
         Returns:
             Dict with processing statistics
         """
+        # Check circuit breaker — skip submission if document service is down
+        from app.connectors.adapters.document_service_adapter import document_service_adapter
+
+        circuit_status = document_service_adapter.get_circuit_status()
+        if circuit_status["state"] == "open":
+            logger.info("Document service circuit open — pausing queue submission")
+            return {"status": "circuit_open", "submitted": 0, "circuit_breaker": circuit_status}
+
         # Count currently active extractions (submitted + running)
         active_count = await self._count_active_extractions(session)
 
@@ -1010,7 +1021,7 @@ class ExtractionQueueService:
 
         # Check file extension - skip unsupported file types
         file_ext = Path(asset.original_filename).suffix.lower()
-        is_supported, supporting_engines = file_type_registry.is_supported(file_ext)
+        is_supported = file_ext in SUPPORTED_EXTENSIONS
         if not is_supported:
             logger.info(
                 f"Skipping extraction for unsupported file type: {asset.original_filename} ({file_ext})"

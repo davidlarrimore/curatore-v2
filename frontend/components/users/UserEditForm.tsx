@@ -1,8 +1,8 @@
 'use client'
 
-import { useState, FormEvent } from 'react'
+import { useState, useEffect, FormEvent } from 'react'
 import { useAuth } from '@/lib/auth-context'
-import { usersApi } from '@/lib/api'
+import { usersApi, rolesApi, Role } from '@/lib/api'
 import { Button } from '../ui/Button'
 
 interface User {
@@ -21,7 +21,7 @@ interface UserEditFormProps {
 }
 
 export default function UserEditForm({ user, onSuccess, onCancel }: UserEditFormProps) {
-  const { token } = useAuth()
+  const { token, isAdmin } = useAuth()
   const [email, setEmail] = useState(user.email)
   const [username, setUsername] = useState(user.username)
   const [fullName, setFullName] = useState(user.full_name || '')
@@ -30,6 +30,24 @@ export default function UserEditForm({ user, onSuccess, onCancel }: UserEditForm
   const [newPassword, setNewPassword] = useState('')
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
+  const [roles, setRoles] = useState<Role[]>([])
+  const [rolesLoading, setRolesLoading] = useState(true)
+
+  // Fetch available roles on mount
+  useEffect(() => {
+    const fetchRoles = async () => {
+      if (!token) return
+      try {
+        const response = await rolesApi.listRoles(token)
+        setRoles(response.roles)
+      } catch (err) {
+        console.error('Failed to fetch roles:', err)
+      } finally {
+        setRolesLoading(false)
+      }
+    }
+    fetchRoles()
+  }, [token])
 
   const handleSubmit = async (e: FormEvent) => {
     e.preventDefault()
@@ -129,11 +147,24 @@ export default function UserEditForm({ user, onSuccess, onCancel }: UserEditForm
             id="role"
             value={role}
             onChange={(e) => setRole(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+            disabled={rolesLoading}
+            className="w-full px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-md focus:outline-none focus:ring-blue-500 focus:border-blue-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white disabled:opacity-50"
           >
-            <option value="user">User</option>
-            <option value="admin">Admin</option>
+            {rolesLoading ? (
+              <option>Loading roles...</option>
+            ) : (
+              roles.map((r) => (
+                <option key={r.name} value={r.name}>
+                  {r.display_name}{r.is_system_role ? ' (no organization)' : ''}
+                </option>
+              ))
+            )}
           </select>
+          {!rolesLoading && (
+            <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+              {roles.find(r => r.name === role)?.description || ''}
+            </p>
+          )}
         </div>
 
         <div>

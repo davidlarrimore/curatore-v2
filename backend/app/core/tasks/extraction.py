@@ -16,6 +16,7 @@ from sqlalchemy import and_, select
 
 from app.celery_app import app as celery_app
 from app.config import settings
+from app.connectors.adapters.document_service_adapter import DocumentServiceError
 from app.core.ingestion.extraction_orchestrator import extraction_orchestrator
 from app.core.shared.config_loader import config_loader
 from app.core.shared.database_service import database_service
@@ -36,7 +37,7 @@ def _is_search_enabled() -> bool:
 # PHASE 0: EXTRACTION TASKS
 # ============================================================================
 
-@celery_app.task(bind=True, name="app.tasks.execute_extraction_task", autoretry_for=(Exception,), retry_backoff=True, retry_kwargs={"max_retries": 2})
+@celery_app.task(bind=True, name="app.tasks.execute_extraction_task", autoretry_for=(DocumentServiceError,), retry_backoff=True, retry_kwargs={"max_retries": 2})
 def execute_extraction_task(
     self,
     asset_id: str,
@@ -87,6 +88,15 @@ async def _execute_extraction_async(
     """
     Async wrapper for extraction orchestrator.
 
+    Split into three phases with separate database sessions to prevent
+    connection death during long document service calls:
+
+    Phase 1 (session 1): Setup — read models, validate, start run, download file
+    Phase 2 (no session): Extract — POST to document service (the long part)
+    Phase 3 (session 2): Save — re-read models, save results, update statuses
+
+    No DB connection is held during the document service HTTP call.
+
     Args:
         asset_id: Asset UUID
         run_id: Run UUID
@@ -95,19 +105,106 @@ async def _execute_extraction_async(
     Returns:
         Dict with extraction result
     """
+    from app.connectors.adapters.document_service_adapter import document_service_adapter
     from app.core.ops.heartbeat_service import heartbeat_service
 
-    async with database_service.get_session() as session:
-        # Use auto-heartbeat to signal we're alive every 30 seconds
-        async with heartbeat_service.auto_heartbeat(session, run_id):
-            result = await extraction_orchestrator.execute_extraction(
-                session=session,
-                asset_id=asset_id,
-                run_id=run_id,
-                extraction_id=extraction_id,
-            )
-            await session.commit()
-            return result
+    temp_dir = None
+
+    try:
+        # Phase 1: Setup (short-lived session — commits and closes before HTTP call)
+        async with database_service.get_session() as session:
+            async with heartbeat_service.auto_heartbeat(session, run_id):
+                prep = await extraction_orchestrator.prepare_extraction(
+                    session=session,
+                    asset_id=asset_id,
+                    run_id=run_id,
+                    extraction_id=extraction_id,
+                )
+
+        if prep.get("phase") == "early_return":
+            return prep["result"]
+
+        temp_dir = prep.get("temp_dir")
+
+        # Phase 2: Document service call — NO DB CONNECTION HELD
+        # This is the long part (can take several minutes for docling).
+        # The session from Phase 1 is already committed and closed.
+        doc_result = await document_service_adapter.extract(
+            file_path=Path(prep["temp_file_path"]),
+            request_id=str(run_id),
+        )
+
+        # Phase 3: Save results (fresh session — guaranteed live connection)
+        async with database_service.get_session() as session:
+            async with heartbeat_service.auto_heartbeat(session, run_id):
+                result = await extraction_orchestrator.finalize_extraction(
+                    session=session,
+                    asset_id=asset_id,
+                    run_id=run_id,
+                    extraction_id=extraction_id,
+                    doc_result=doc_result,
+                    start_time=prep["start_time"],
+                )
+                return result
+
+    except DocumentServiceError as e:
+        # Document service failed — save failure state with a fresh session
+        error_message = str(e)
+        logger.error(f"Extraction failed for asset {asset_id}: {error_message}", exc_info=True)
+
+        try:
+            async with database_service.get_session() as session:
+                await extraction_orchestrator._fail_extraction(
+                    session=session,
+                    run_id=run_id,
+                    extraction_id=extraction_id,
+                    asset_id=asset_id,
+                    error_message=error_message,
+                )
+        except Exception as fail_e:
+            logger.error(f"Failed to save failure state: {fail_e}")
+
+        # Re-raise connectivity errors so Celery auto-retry can fire
+        if e.status_code in (502, 503, 504):
+            raise
+
+        return {
+            "status": "failed",
+            "asset_id": str(asset_id),
+            "run_id": str(run_id),
+            "extraction_id": str(extraction_id),
+            "error": error_message,
+        }
+
+    except Exception as e:
+        # Unexpected error — try to save failure state with a fresh session
+        error_message = str(e)
+        logger.error(f"Extraction failed for asset {asset_id}: {error_message}", exc_info=True)
+
+        try:
+            async with database_service.get_session() as session:
+                await extraction_orchestrator._fail_extraction(
+                    session=session,
+                    run_id=run_id,
+                    extraction_id=extraction_id,
+                    asset_id=asset_id,
+                    error_message=error_message,
+                )
+        except Exception as fail_e:
+            logger.error(f"Failed to save failure state: {fail_e}")
+
+        raise
+
+    finally:
+        # Cleanup temp directory (owned by the task, not the orchestrator)
+        if temp_dir:
+            import shutil
+            temp_dir_path = Path(temp_dir) if isinstance(temp_dir, str) else temp_dir
+            if temp_dir_path.exists():
+                try:
+                    shutil.rmtree(temp_dir_path)
+                except Exception as cleanup_e:
+                    logger.warning(f"Failed to cleanup temp directory {temp_dir}: {cleanup_e}")
 
 
 # ============================================================================
@@ -120,6 +217,7 @@ def recover_orphaned_extractions(
     self,
     max_age_hours: int = 24,
     limit: int = 100,
+    startup_mode: bool = False,
 ) -> Dict[str, Any]:
     """
     Recover orphaned extractions after service restart.
@@ -128,24 +226,27 @@ def recover_orphaned_extractions(
     when the service crashed/restarted and re-queues them for processing.
 
     Should be called:
-    1. On worker startup (via celery signal)
-    2. Periodically via scheduled task (as backup)
+    1. On worker startup (via celery signal) with startup_mode=True
+    2. Periodically via scheduled task (as backup) with startup_mode=False
 
     Args:
         max_age_hours: Only recover extractions created within this window
         limit: Maximum number of extractions to recover per invocation
+        startup_mode: If True, use aggressive thresholds (worker just restarted,
+                      so any in-flight job is likely orphaned)
 
     Returns:
         Dict with recovery statistics
     """
     logger = logging.getLogger("curatore.tasks.recovery")
-    logger.info(f"Starting orphaned extraction recovery (max_age={max_age_hours}h, limit={limit})")
+    mode_label = "STARTUP" if startup_mode else "periodic"
+    logger.info(f"Starting orphaned recovery [{mode_label}] (max_age={max_age_hours}h, limit={limit})")
 
     try:
         result = asyncio.run(
-            _recover_orphaned_extractions_async(max_age_hours, limit)
+            _recover_orphaned_extractions_async(max_age_hours, limit, startup_mode)
         )
-        logger.info(f"Recovery complete: {result}")
+        logger.info(f"Recovery complete [{mode_label}]: {result}")
         return result
     except Exception as e:
         logger.error(f"Recovery failed: {e}", exc_info=True)
@@ -155,6 +256,7 @@ def recover_orphaned_extractions(
 async def _recover_orphaned_extractions_async(
     max_age_hours: int,
     limit: int,
+    startup_mode: bool = False,
 ) -> Dict[str, Any]:
     """
     Async implementation of orphaned extraction recovery.
@@ -163,6 +265,10 @@ async def _recover_orphaned_extractions_async(
     1. Runs stuck in "submitted" where Celery task may be lost
     2. Runs stuck in "running" that exceeded timeout
     3. ExtractionResults stuck in pending/running
+    4. Non-extraction runs stuck in submitted/running (startup mode only marks failed)
+
+    In startup_mode, thresholds are aggressive (1-2 min) because the worker
+    just restarted and any in-flight job is likely orphaned.
 
     Uses queue service for proper capacity management instead of direct Celery submission.
     """
@@ -174,10 +280,19 @@ async def _recover_orphaned_extractions_async(
     now = datetime.utcnow()
     cutoff = now - timedelta(hours=max_age_hours)
 
-    # Different timeouts for different statuses
-    submitted_stale_cutoff = now - timedelta(minutes=15)  # Submitted should move to running quickly
-    running_stale_cutoff = now - timedelta(minutes=30)    # Running shouldn't take >30 min usually
-    pending_stale_cutoff = now - timedelta(minutes=10)    # Pending should be picked up quickly
+    if startup_mode:
+        # Aggressive thresholds: worker just restarted, so in-flight jobs are orphaned.
+        # The 10-second startup delay means anything older than ~1 min is definitely stuck.
+        submitted_stale_cutoff = now - timedelta(minutes=1)
+        running_stale_cutoff = now - timedelta(minutes=2)
+        pending_stale_cutoff = now - timedelta(minutes=1)
+        maintenance_stale_threshold = timedelta(minutes=5)
+    else:
+        # Conservative thresholds for periodic recovery (avoid interfering with active jobs)
+        submitted_stale_cutoff = now - timedelta(minutes=15)
+        running_stale_cutoff = now - timedelta(minutes=30)
+        pending_stale_cutoff = now - timedelta(minutes=10)
+        maintenance_stale_threshold = timedelta(minutes=30)
 
     recovered_runs = 0
     recovered_extractions = 0
@@ -270,7 +385,7 @@ async def _recover_orphaned_extractions_async(
         # maintenance task, creating a circular dependency. This phase breaks that
         # cycle by running from the extraction Beat schedule (every 15 min).
 
-        maintenance_stale_cutoff = now - timedelta(minutes=30)
+        maintenance_stale_cutoff = now - maintenance_stale_threshold
         maintenance_recovered = 0
 
         try:
@@ -317,6 +432,89 @@ async def _recover_orphaned_extractions_async(
                     )
         except Exception as e:
             logger.error(f"Maintenance run recovery phase failed: {e}")
+
+        # =========================================================================
+        # Phase 3: Recover non-extraction runs stuck in submitted/running
+        # =========================================================================
+        # Non-extraction runs (SAM, scrape, SharePoint, Salesforce, procedures,
+        # pipelines, forecasts, etc.) can also get stuck when the worker restarts.
+        # Unlike extraction runs, these can't be auto-retried because most don't
+        # store enough config to reconstruct the Celery call. Mark them as failed
+        # with a clear message so users know to retry.
+
+        non_extraction_recovered = 0
+
+        try:
+            # Exclude run types already handled: extraction (Phase 1) and
+            # system_maintenance (Phase 1b)
+            excluded_run_types = {"extraction", "system_maintenance"}
+
+            stuck_other_submitted = await session.execute(
+                select(Run)
+                .where(
+                    and_(
+                        Run.run_type.notin_(excluded_run_types),
+                        Run.status == "submitted",
+                        Run.created_at < submitted_stale_cutoff,
+                        Run.created_at >= cutoff,
+                    )
+                )
+                .limit(limit)
+            )
+            stuck_other_running = await session.execute(
+                select(Run)
+                .where(
+                    and_(
+                        Run.run_type.notin_(excluded_run_types),
+                        Run.status == "running",
+                        Run.created_at < running_stale_cutoff,
+                        Run.created_at >= cutoff,
+                    )
+                )
+                .limit(limit)
+            )
+
+            all_stuck_other = (
+                list(stuck_other_submitted.scalars().all())
+                + list(stuck_other_running.scalars().all())
+            )
+
+            if all_stuck_other:
+                logger.info(
+                    f"Found {len(all_stuck_other)} stuck non-extraction runs to recover"
+                )
+
+            for other_run in all_stuck_other:
+                try:
+                    old_status = other_run.status
+                    other_run.status = "failed"
+                    other_run.completed_at = now
+                    other_run.error_message = (
+                        "Interrupted by service restart \u2014 please retry"
+                    )
+                    non_extraction_recovered += 1
+                    logger.info(
+                        f"Marked {other_run.run_type} run {other_run.id} as failed "
+                        f"(was {old_status})"
+                    )
+
+                    # Update associated asset status if applicable
+                    if other_run.input_asset_ids:
+                        try:
+                            asset = await session.get(
+                                Asset, uuid.UUID(other_run.input_asset_ids[0])
+                            )
+                            if asset and asset.status == "pending":
+                                asset.status = "failed"
+                        except Exception:
+                            pass  # Non-critical; asset may not exist
+                except Exception as e:
+                    logger.error(
+                        f"Failed to recover {other_run.run_type} run {other_run.id}: {e}"
+                    )
+                    errors.append({"run_id": str(other_run.id), "error": str(e)})
+        except Exception as e:
+            logger.error(f"Non-extraction run recovery phase failed: {e}")
 
         # =========================================================================
         # Phase 2: Recover orphaned EXTRACTION RESULTS (no active run)
@@ -387,9 +585,11 @@ async def _recover_orphaned_extractions_async(
 
     return {
         "status": "success",
+        "startup_mode": startup_mode,
         "recovered_runs": recovered_runs,
         "recovered_extractions": recovered_extractions,
         "recovered_maintenance_runs": maintenance_recovered,
+        "recovered_non_extraction_runs": non_extraction_recovered,
         "skipped": skipped,
         "errors": len(errors),
         "error_details": errors[:10],
@@ -849,36 +1049,13 @@ async def _enhance_extraction_async(
             file_data = minio.get_object(asset.raw_bucket, asset.raw_object_key)
             temp_input_file.write_bytes(file_data.getvalue())
 
-            # Extract using Docling specifically
-            # Find the first enabled Docling engine from config
+            # Extract using Docling via the document service
             start_time = time.time()
 
             try:
-                # Get enabled Docling engine name from config
-                docling_engine_name = None
-                extraction_config = config_loader.get_extraction_config()
-                if extraction_config:
-                    engines = getattr(extraction_config, 'engines', [])
-                    for engine in engines:
-                        if hasattr(engine, 'engine_type') and engine.engine_type == 'docling':
-                            if hasattr(engine, 'enabled') and engine.enabled:
-                                docling_engine_name = engine.name
-                                break
-
-                if not docling_engine_name:
-                    logger.warning("No enabled Docling engine found in config, skipping enhancement")
-                    await extraction_result_service.record_extraction_failure(
-                        session=session,
-                        extraction_id=extraction_id,
-                        errors=["No Docling engine configured for enhancement"],
-                    )
-                    await run_service.fail_run(session, run_id, "No Docling engine configured")
-                    await session.commit()
-                    return {"status": "failed", "error": "No Docling engine configured"}
-
                 enhanced_content = await document_service._extract_content(
                     temp_input_file,
-                    engine=docling_engine_name,  # Use actual Docling engine name from config
+                    engine="docling",
                 )
                 enhanced_length = len(enhanced_content) if enhanced_content else 0
             except Exception as e:

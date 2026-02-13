@@ -249,11 +249,11 @@ class SamSolicitationBuilder(MetadataBuilder):
 class ForecastBuilder(MetadataBuilder):
     """Builder for acquisition forecasts (AG, APFS, State)."""
 
-    def __init__(self):
+    def __init__(self, source_type: str = "forecast", display_name: str = "Forecast"):
         super().__init__(
-            source_type="forecast",
+            source_type=source_type,
             namespace="forecast",
-            display_name="Forecast",
+            display_name=display_name,
         )
 
     def get_schema(self) -> Optional[Dict[str, List[str]]]:
@@ -325,7 +325,7 @@ class SalesforceAccountBuilder(MetadataBuilder):
         )
 
     def get_schema(self) -> Optional[Dict[str, List[str]]]:
-        return {"salesforce": ["salesforce_id", "account_type", "industry", "website"]}
+        return {"salesforce": ["salesforce_id", "account_type", "industry", "website", "account_name"]}
 
     def build_content(
         self,
@@ -352,6 +352,7 @@ class SalesforceAccountBuilder(MetadataBuilder):
         account_type: Optional[str] = None,
         industry: Optional[str] = None,
         website: Optional[str] = None,
+        account_name: Optional[str] = None,
         **kwargs,
     ) -> dict:
         return {
@@ -360,6 +361,7 @@ class SalesforceAccountBuilder(MetadataBuilder):
                 "account_type": account_type,
                 "industry": industry,
                 "website": website,
+                "account_name": account_name,
             },
         }
 
@@ -497,10 +499,13 @@ def _register_defaults():
     metadata_builder_registry.register(AssetPassthroughBuilder("asset_web_scrape_document", "Web Scrape Document"))
     metadata_builder_registry.register(AssetPassthroughBuilder("asset_sam_gov", "SAM.gov Attachment"))
     metadata_builder_registry.register(AssetPassthroughBuilder("asset_default", "Asset"))
+    metadata_builder_registry.register(AssetPassthroughBuilder("asset", "Asset"))
     # Entity builders: still produce namespaced metadata from typed model columns
     metadata_builder_registry.register(SamNoticeBuilder())
     metadata_builder_registry.register(SamSolicitationBuilder())
-    metadata_builder_registry.register(ForecastBuilder())
+    metadata_builder_registry.register(ForecastBuilder("ag_forecast", "GSA AG Forecast"))
+    metadata_builder_registry.register(ForecastBuilder("apfs_forecast", "DHS APFS Forecast"))
+    metadata_builder_registry.register(ForecastBuilder("state_forecast", "State Dept Forecast"))
     metadata_builder_registry.register(SalesforceAccountBuilder())
     metadata_builder_registry.register(SalesforceContactBuilder())
     metadata_builder_registry.register(SalesforceOpportunityBuilder())

@@ -125,31 +125,46 @@ def get_display_name_for_run(run) -> str:
 
 async def get_initial_state(
     session: AsyncSession,
-    organization_id: UUID,
+    organization_id: Optional[UUID],
 ) -> Dict[str, Any]:
     """
     Get initial state to send on WebSocket connection.
 
     Includes active runs and current queue stats for the organization.
+    When organization_id is None (system admin), returns active runs across all orgs.
 
     Args:
         session: Database session
-        organization_id: Organization UUID
+        organization_id: Organization UUID, or None for system admins
 
     Returns:
         Initial state dictionary with active_runs and queue_stats
     """
-    # Get active runs for the organization
+    from sqlalchemy import select
+    from app.core.database.models import Run
+
     active_statuses = ["pending", "submitted", "running"]
     active_runs = []
 
-    for status in active_statuses:
-        runs = await run_service.get_runs_by_organization(
-            session=session,
-            organization_id=organization_id,
-            status=status,
-            limit=100,
-        )
+    for run_status in active_statuses:
+        if organization_id:
+            runs = await run_service.get_runs_by_organization(
+                session=session,
+                organization_id=organization_id,
+                status=run_status,
+                limit=100,
+            )
+        else:
+            # System admin: get all active runs across all orgs
+            query = (
+                select(Run)
+                .where(Run.status == run_status)
+                .order_by(Run.created_at.desc())
+                .limit(100)
+            )
+            result = await session.execute(query)
+            runs = list(result.scalars().all())
+
         for run in runs:
             active_runs.append({
                 "run_id": str(run.id),
@@ -163,8 +178,6 @@ async def get_initial_state(
                 "display_name": get_display_name_for_run(run),
             })
 
-    # Queue stats will be sent via the regular polling mechanism
-    # For now, return active runs
     return {
         "active_runs": active_runs,
         "queue_stats": None,  # Will be populated by first queue_stats message
@@ -247,12 +260,13 @@ async def websocket_jobs(
 
     # Extract user and org info from token
     user_id = UUID(payload["sub"])
-    organization_id = UUID(payload["org_id"])
+    org_id_raw = payload.get("org_id")
+    organization_id = UUID(org_id_raw) if org_id_raw else None
 
     # Accept the WebSocket connection
     await websocket.accept()
 
-    # Register the connection
+    # Register the connection (pass None org for system admins)
     await websocket_manager.connect(websocket, organization_id, user_id)
 
     # Create tasks for receiving messages and listening to pubsub
@@ -285,10 +299,15 @@ async def websocket_jobs(
             except Exception as e:
                 logger.warning(f"WebSocket receive error: {e}")
 
-        # Start listening to Redis pubsub for this org
+        # Start listening to Redis pubsub for this org (or all orgs for system admins)
         async def listen_pubsub():
             try:
-                async for message in pubsub_service.subscribe_org_channel(organization_id):
+                if organization_id:
+                    channel = pubsub_service.subscribe_org_channel(organization_id)
+                else:
+                    # System admin: subscribe to all org channels
+                    channel = pubsub_service.subscribe_all_org_channels()
+                async for message in channel:
                     await websocket_manager.send_to_connection(websocket, message)
             except asyncio.CancelledError:
                 pass

@@ -99,7 +99,7 @@ find "${REPO_ROOT}" -type d -name ".pytest_cache" -prune -exec rm -rf {} + || tr
 # Python virtual environments
 rm -rf "${REPO_ROOT}/.venv" || true
 rm -rf "${REPO_ROOT}/backend/.venv" || true
-rm -rf "${REPO_ROOT}/extraction-service/.venv" || true
+# extraction-service removed — extraction now handled by curatore-document-service
 # Catch any others nested in submodules/packages
 find "${REPO_ROOT}" -type d -name ".venv" -prune -exec rm -rf {} + || true
 # Node caches

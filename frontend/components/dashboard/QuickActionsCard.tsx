@@ -5,17 +5,21 @@ import { Plus, Link2, Settings, FolderOpen, FileText, Search } from 'lucide-reac
 
 interface QuickActionsCardProps {
   isAdmin: boolean
+  orgSlug?: string // Optional org slug for URL-based routing
 }
 
-export function QuickActionsCard({ isAdmin }: QuickActionsCardProps) {
+export function QuickActionsCard({ isAdmin, orgSlug }: QuickActionsCardProps) {
   const router = useRouter()
+
+  // Helper to build org-scoped URLs
+  const orgUrl = (path: string) => orgSlug ? `/orgs/${orgSlug}${path}` : path
 
   const actions = [
     {
       name: 'Upload Files',
       description: 'Add documents to process',
       icon: Plus,
-      href: '/assets',
+      href: orgUrl('/assets'),
       gradient: 'from-violet-500 to-purple-600',
       shadowColor: 'shadow-violet-500/25',
       primary: true,
@@ -24,7 +28,7 @@ export function QuickActionsCard({ isAdmin }: QuickActionsCardProps) {
       name: 'Browse Assets',
       description: 'View processed files',
       icon: FileText,
-      href: '/assets',
+      href: orgUrl('/assets'),
       gradient: 'from-emerald-500 to-teal-500',
       shadowColor: 'shadow-emerald-500/25',
     },
@@ -32,7 +36,7 @@ export function QuickActionsCard({ isAdmin }: QuickActionsCardProps) {
       name: 'Browse Storage',
       description: 'View uploaded files',
       icon: FolderOpen,
-      href: '/storage',
+      href: orgUrl('/storage'),
       gradient: 'from-blue-500 to-cyan-500',
       shadowColor: 'shadow-blue-500/25',
       adminOnly: true,
@@ -41,7 +45,7 @@ export function QuickActionsCard({ isAdmin }: QuickActionsCardProps) {
       name: 'Connections',
       description: 'Manage integrations',
       icon: Link2,
-      href: '/connections',
+      href: orgUrl('/connections'),
       gradient: 'from-indigo-500 to-purple-600',
       shadowColor: 'shadow-indigo-500/25',
     },

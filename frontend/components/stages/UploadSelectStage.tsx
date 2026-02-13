@@ -622,14 +622,16 @@ export const UploadSelectStage: FC<UploadSelectStageProps> = ({
                 <span className="absolute left-0 top-full mt-1 z-10 w-max max-w-xs px-2 py-1 text-[11px] rounded bg-gray-900 text-white opacity-0 invisible group-hover:opacity-100 group-hover:visible transition-opacity">Choose which extractor to use for this job. The selected engine is used exclusively.</span>
               </span>
               <select
-                value={processingOptions.extraction_engine ?? 'extraction-service'}
+                value={processingOptions.extraction_engine ?? 'auto'}
                 onChange={(e) => onProcessingOptionsChange({
                   ...processingOptions,
                   extraction_engine: e.target.value
                 })}
                 className="px-3 py-1.5 border border-gray-300 dark:border-gray-600 rounded-lg text-sm bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500"
               >
-                <option value="extraction-service">Extraction Service</option>
+                <option value="auto">Auto (Recommended)</option>
+                <option value="fast_pdf">Fast PDF</option>
+                <option value="markitdown">MarkItDown</option>
                 <option value="docling">Docling</option>
               </select>
             </div>

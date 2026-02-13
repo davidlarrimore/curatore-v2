@@ -19,7 +19,6 @@ type ComponentKey =
   | 'redis'
   | 'celery_worker'
   | 'extraction_service'
-  | 'docling'
   | 'object_storage'
   | 'llm'
   | 'playwright'
@@ -53,12 +52,8 @@ const COMPONENT_MAP: Record<ComponentKey, {
     description: 'Async task processor'
   },
   extraction_service: {
-    displayName: 'Extraction Service',
+    displayName: 'Document Service',
     description: 'Document conversion microservice'
-  },
-  docling: {
-    displayName: 'Docling',
-    description: 'Alternative extraction engine'
   },
   object_storage: {
     displayName: 'Object Storage',
