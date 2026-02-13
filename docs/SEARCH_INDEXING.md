@@ -18,13 +18,15 @@ Curatore v2 provides hybrid full-text + semantic search powered by PostgreSQL wi
 10. [Batch Embedding Optimization](#batch-embedding-optimization)
 11. [API Endpoints](#api-endpoints)
 12. [Configuration](#configuration)
-13. [Monitoring & Health](#monitoring--health)
-14. [Extending Search to New Data Sources](#extending-search-to-new-data-sources)
-15. [Troubleshooting](#troubleshooting)
-16. [Metadata Schema Discovery](#metadata-schema-discovery)
-17. [Metadata Registry (Governance)](#metadata-registry-governance)
-18. [Facet Filtering](#facet-filtering-preferred)
-19. [Raw Metadata Filtering](#raw-metadata-filtering-advanced)
+13. [Search Collections](#search-collections)
+14. [External Vector Store Sync](#external-vector-store-sync)
+15. [Monitoring & Health](#monitoring--health)
+16. [Extending Search to New Data Sources](#extending-search-to-new-data-sources)
+17. [Troubleshooting](#troubleshooting)
+18. [Metadata Schema Discovery](#metadata-schema-discovery)
+19. [Metadata Registry (Governance)](#metadata-registry-governance)
+20. [Facet Filtering](#facet-filtering-preferred)
+21. [Raw Metadata Filtering](#raw-metadata-filtering-advanced)
 
 ---
 
@@ -726,6 +728,10 @@ search:
   batch_size: 50             # Items per bulk indexing batch
   timeout: 30                # Search request timeout (seconds)
 
+  # Optional: dedicated pgvector database for search workload isolation.
+  # When omitted, search shares the primary application database.
+  # database_url: postgresql+asyncpg://user:password@pgvector-host:5432/search_db
+
 llm:
   api_key: ${OPENAI_API_KEY}
   base_url: https://api.openai.com/v1
@@ -734,6 +740,22 @@ llm:
       model: text-embedding-3-small  # 1536 dimensions
 ```
 
+### Dedicated Search Database (optional)
+
+By default, search uses the primary application database. For large-scale deployments you can isolate vector workloads on a separate pgvector instance by setting `search.database_url`:
+
+```yaml
+search:
+  database_url: postgresql+asyncpg://search:password@pgvector-host:5432/search_db
+  enabled: true
+```
+
+When using a dedicated search database:
+- The `search_chunks` table and `pgvector` extension must exist in that database
+- The primary database still stores all application tables (assets, runs, etc.)
+- The `search_chunks` table has no foreign keys — it uses soft references (`source_id` + `source_type`)
+- **Phase 1 (current):** This setting is config-level only and documents the intended architecture; runtime separation (using a second connection pool) is planned for Phase 2
+
 ### Environment Variables
 
 | Variable | Default | Description |
@@ -741,6 +763,178 @@ llm:
 | `OPENAI_API_KEY` | (required) | OpenAI API key for embeddings |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | API endpoint (fallback if not in config.yml) |
 | `SEARCH_ENABLED` | `true` | Enable/disable search functionality |
+
+---
+
+## Search Collections
+
+Search collections are **isolated vector stores** — each collection has its own `collection_chunks` table with independent embeddings, tsvector search, and flat metadata. They are fully separate from the core `search_chunks` index.
+
+### Collection Types
+
+| Type | Description | Use Case |
+|------|-------------|----------|
+| `static` | Manually curated sets of assets | Custom document groups, project-specific collections |
+| `dynamic` | Auto-populated based on saved query/filter config | "All cybersecurity docs", "Recent SAM.gov notices" |
+| `source_bound` | Linked to a data source entity | Scrape collection, SharePoint sync, SAM search |
+
+### Database Schema
+
+```
+search_collections
+├── id (UUID PK)
+├── organization_id (FK → organizations)
+├── name, slug (unique per org)
+├── collection_type (static/dynamic/source_bound)
+├── query_config (JSONB, for dynamic collections)
+├── source_type, source_id (for source_bound)
+├── is_active, item_count
+├── last_synced_at
+└── created_at, updated_at, created_by
+
+collection_chunks                           ← isolated per-collection vector store
+├── id (UUID PK)
+├── collection_id (FK → search_collections, CASCADE)
+├── chunk_index (INTEGER)
+├── content (TEXT)
+├── search_vector (TSVECTOR, trigger-populated)
+├── embedding (vector(1536), HNSW index)
+├── title (TEXT)
+├── source_asset_id (UUID, provenance)
+├── source_chunk_id (UUID, if copied from search_chunks)
+├── metadata (JSONB, flat key/value only)
+└── created_at
+    UNIQUE(collection_id, source_asset_id, chunk_index)
+```
+
+### Population Methods
+
+Collections are populated via two strategies:
+
+| Method | Speed | Embeddings | Use Case |
+|--------|-------|-----------|----------|
+| **Copy from index** (`/populate`) | Fast | Reuses existing | Quick setup, existing indexed assets |
+| **Fresh chunking** (`/populate/fresh`) | Slower (async) | Fresh generation | Custom chunk size/overlap, re-embed |
+
+Both strategies are **store-agnostic** — they resolve the appropriate `CollectionStoreAdapter` and delegate all storage operations through the adapter interface.
+
+### Store Adapter Pattern
+
+```
+                    Population Service
+                    (fetch, chunk, embed)
+                          │
+                ┌─────────┴──────────┐
+                ▼                    ▼
+       PgVectorStore          ExternalVectorStore (future)
+    (collection_chunks)     (Pinecone/OpenSearch via Connection)
+```
+
+- **`CollectionStoreAdapter`** ABC: `upsert_chunks()`, `search()`, `delete_by_assets()`, `clear()`, `count()`
+- **`PgVectorCollectionStore`**: Local pgvector implementation (current default)
+- **External adapters**: Future — will use `CollectionVectorSync` entries to route to Pinecone, OpenSearch, etc.
+
+### API Endpoints
+
+```
+# CRUD
+GET    /api/v1/data/collections              - List collections
+POST   /api/v1/data/collections              - Create collection
+GET    /api/v1/data/collections/{id}         - Get collection
+PUT    /api/v1/data/collections/{id}         - Update collection
+DELETE /api/v1/data/collections/{id}         - Delete collection (cascades chunks)
+
+# Population
+POST   /api/v1/data/collections/{id}/populate       - Copy chunks from core index
+POST   /api/v1/data/collections/{id}/populate/fresh  - Async re-chunk + embed (returns run_id)
+DELETE /api/v1/data/collections/{id}/assets          - Remove specific assets' chunks
+POST   /api/v1/data/collections/{id}/clear           - Remove all chunks
+
+# Vector sync targets
+GET    /api/v1/data/collections/{id}/syncs   - List vector sync targets
+POST   /api/v1/data/collections/{id}/syncs   - Add vector sync target
+DELETE /api/v1/data/collections/{id}/syncs/{sync_id} - Remove sync target
+```
+
+### CWR Functions
+
+- **`search_collection`**: Search within a specific collection by slug or ID (uses store adapter)
+- Collections are discoverable via `discover_data_sources(source_type="search_collection")`
+
+### Discovery Flow
+
+Collections use the two-layer discovery pattern:
+
+| Layer | Location | Content |
+|-------|----------|---------|
+| **Type definition** | `data_sources.yaml` → `search_collection` | What collections ARE, capabilities, which tools |
+| **Live instances** | `search_collections` DB table | Actual collections with name, slug, item_count |
+
+MCP agent workflow:
+1. `discover_data_sources()` → sees `search_collection` type with N instances
+2. Picks a collection by slug
+3. `search_collection(collection="cyber-sows", query="zero trust")` → searches collection_chunks
+4. `get_content(asset_ids=[...])` → reads full document text
+
+### Service
+
+```python
+from app.core.search.collection_service import collection_service
+from app.core.search.collection_population_service import collection_population_service
+
+# Create a collection
+coll = await collection_service.create_collection(
+    session, org_id, name="Federal Procurement", collection_type="static"
+)
+
+# Populate from core index (sync, fast)
+result = await collection_population_service.populate_from_index(
+    session, coll.id, org_id, asset_ids=[uuid1, uuid2]
+)
+
+# Search within a collection (via store adapter)
+from app.core.search.collection_stores import PgVectorCollectionStore
+store = PgVectorCollectionStore(session)
+results = await store.search(coll.id, "cybersecurity", query_embedding, "hybrid", limit=20)
+```
+
+---
+
+## External Vector Store Sync
+
+Collections can be synced to external vector stores (Pinecone, OpenSearch, Weaviate, Qdrant, Milvus) via the `CollectionVectorSync` pattern.
+
+### Architecture
+
+Each collection defaults to local pgvector (`collection_chunks` table). Adding a `CollectionVectorSync` entry enables fan-out to an external store via the Connection pattern.
+
+```
+SearchCollection ──> collection_chunks (local pgvector, default)
+       │
+       └──> CollectionVectorSync ──> Pinecone (via Connection)
+       └──> CollectionVectorSync ──> OpenSearch (via Connection)
+```
+
+### Database Schema
+
+```
+collection_vector_syncs
+├── id (UUID PK)
+├── collection_id (FK → search_collections, CASCADE)
+├── connection_id (FK → connections, CASCADE)
+├── is_enabled, sync_status (pending/syncing/synced/failed)
+├── last_sync_at, last_sync_run_id
+├── error_message, chunks_synced
+├── sync_config (JSONB: index name, namespace, etc.)
+└── created_at, updated_at
+```
+
+### Connection Type
+
+The `vector_store` connection type supports:
+- **Providers**: pinecone, opensearch, weaviate, qdrant, milvus
+- **Config**: endpoint, api_key, index_name, namespace, dimensions, metric
+- Registered in `ConnectionTypeRegistry` alongside llm, extraction, etc.
 
 ---
 

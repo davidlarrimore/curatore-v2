@@ -34,6 +34,7 @@ from sqlalchemy import (
     String,
     Text,
     TypeDecorator,
+    text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -108,7 +109,7 @@ class Organization(Base):
     is_active = Column(Boolean, default=True, nullable=False, index=True)
 
     # Settings stored as JSONB for flexibility
-    # Example: {"quality_thresholds": {...}, "auto_optimize": true, "default_connection_llm": "uuid"}
+    # Example: {"default_connection_llm": "uuid", "max_file_size_mb": 100}
     settings = Column(JSON, nullable=False, default=dict, server_default="{}")
 
     # Timestamps
@@ -4198,3 +4199,231 @@ class ServiceAccount(Base):
 
     def __repr__(self) -> str:
         return f"<ServiceAccount(id={self.id}, name={self.name}, org={self.organization_id})>"
+
+
+# ============================================================================
+# Search Collections & Vector Store Sync
+# ============================================================================
+
+
+class SearchCollection(Base):
+    """
+    Named search collection for grouping indexed content.
+
+    Collections provide a way to organize search chunks into logical groups
+    that can be queried independently. They support three modes:
+
+    - static: Manually curated sets of assets
+    - dynamic: Query-based collections that auto-populate via saved filters
+    - source_bound: Automatically linked to a data source (scrape collection,
+      SharePoint sync, SAM search, etc.)
+
+    Collections are the unit of external vector store sync — each collection
+    can be independently pushed to one or more external vector stores via
+    CollectionVectorSync.
+
+    Attributes:
+        id: Unique collection identifier
+        organization_id: Organization this collection belongs to
+        name: Human-readable collection name
+        slug: URL-friendly identifier (unique within org)
+        description: Optional description
+        collection_type: static, dynamic, or source_bound
+        query_config: For dynamic collections, the saved query/filter definition
+        source_type: For source_bound, the bound source type (e.g., scrape_collection)
+        source_id: For source_bound, the bound source entity ID
+        is_active: Whether collection is active
+        item_count: Denormalized count of chunks in collection
+        last_synced_at: Last time collection was synced to external stores
+        created_at: Timestamp when collection was created
+        updated_at: Timestamp of last update
+        created_by: User who created this collection
+    """
+
+    __tablename__ = "search_collections"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+
+    # Identity
+    name = Column(String(255), nullable=False)
+    slug = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Collection type: static, dynamic, source_bound
+    collection_type = Column(String(50), nullable=False, default="static")
+
+    # Dynamic collection: saved query/filter config
+    # Format: {"source_types": [...], "content_types": [...], "facet_filters": {...}, ...}
+    query_config = Column(JSONB, nullable=True)
+
+    # Source-bound collection: linked to a specific data source
+    source_type = Column(String(50), nullable=True)  # scrape_collection, sharepoint_sync, sam_search, etc.
+    source_id = Column(UUID(), nullable=True)
+
+    # Status
+    is_active = Column(Boolean, default=True, nullable=False, index=True)
+
+    # Statistics (denormalized)
+    item_count = Column(Integer, nullable=False, default=0)
+    last_synced_at = Column(DateTime, nullable=True)
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+    created_by = Column(UUID(), ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+
+    # Relationships
+    organization = relationship("Organization")
+    user = relationship("User", foreign_keys=[created_by])
+    vector_syncs = relationship(
+        "CollectionVectorSync", back_populates="collection",
+        cascade="all, delete-orphan",
+    )
+
+    __table_args__ = (
+        Index("ix_search_collections_org_slug", "organization_id", "slug", unique=True),
+        Index("ix_search_collections_org_type", "organization_id", "collection_type"),
+        Index(
+            "ix_search_collections_source",
+            "source_type", "source_id",
+            postgresql_where=text("source_type IS NOT NULL"),
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<SearchCollection(id={self.id}, slug={self.slug}, type={self.collection_type})>"
+
+
+class CollectionVectorSync(Base):
+    """
+    Links a SearchCollection to an external vector store connection.
+
+    Each row represents a sync target: a collection whose chunks should be
+    pushed to a specific external vector store (Pinecone, OpenSearch, etc.)
+    via the Connection pattern.
+
+    The sync is managed by a Celery task that reads chunks from pgvector
+    and fans them out to the configured external store.
+
+    Attributes:
+        id: Unique sync identifier
+        collection_id: SearchCollection being synced
+        connection_id: Connection to external vector store
+        is_enabled: Whether sync is active
+        sync_status: Current sync state (pending, syncing, synced, failed)
+        last_sync_at: Last successful sync timestamp
+        last_sync_run_id: Run ID of last sync attempt
+        sync_config: Store-specific config overrides (index name, namespace, etc.)
+        error_message: Last error message if sync failed
+        chunks_synced: Number of chunks successfully synced
+        created_at: Timestamp when sync was configured
+        updated_at: Timestamp of last update
+    """
+
+    __tablename__ = "collection_vector_syncs"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    collection_id = Column(
+        UUID(), ForeignKey("search_collections.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    connection_id = Column(
+        UUID(), ForeignKey("connections.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+
+    # Sync state
+    is_enabled = Column(Boolean, default=True, nullable=False)
+    sync_status = Column(String(50), nullable=False, default="pending")  # pending, syncing, synced, failed
+    last_sync_at = Column(DateTime, nullable=True)
+    last_sync_run_id = Column(UUID(), ForeignKey("runs.id", ondelete="SET NULL"), nullable=True)
+    error_message = Column(Text, nullable=True)
+    chunks_synced = Column(Integer, nullable=False, default=0)
+
+    # Store-specific config (index name, namespace, metadata mapping, etc.)
+    sync_config = Column(JSONB, nullable=False, default=dict, server_default="{}")
+
+    # Timestamps
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False
+    )
+
+    # Relationships
+    collection = relationship("SearchCollection", back_populates="vector_syncs")
+    connection = relationship("Connection")
+    last_sync_run = relationship("Run", foreign_keys=[last_sync_run_id])
+
+    __table_args__ = (
+        Index(
+            "ix_collection_vector_syncs_coll_conn",
+            "collection_id", "connection_id", unique=True,
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<CollectionVectorSync(id={self.id}, collection={self.collection_id}, connection={self.connection_id})>"
+
+
+class CollectionChunk(Base):
+    """
+    Isolated chunk stored in a search collection's vector store.
+
+    Unlike search_chunks (the core index), collection_chunks are fully
+    isolated per-collection. Each collection acts as its own vector store
+    with independent embeddings, tsvector search, and flat metadata.
+
+    Attributes:
+        id: Unique chunk identifier
+        collection_id: Parent SearchCollection
+        chunk_index: Position within the source document (0-based)
+        content: Chunk text content
+        search_vector: PostgreSQL tsvector (trigger-populated)
+        embedding: pgvector embedding (1536-dim)
+        title: Chunk/document title
+        source_asset_id: Provenance — which asset this chunk came from
+        source_chunk_id: Provenance — if copied from search_chunks
+        metadata: Flat key/value metadata (no namespaced catalog)
+        created_at: Timestamp when chunk was created
+    """
+
+    __tablename__ = "collection_chunks"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    collection_id = Column(
+        UUID(), ForeignKey("search_collections.id", ondelete="CASCADE"),
+        nullable=False, index=True,
+    )
+    chunk_index = Column(Integer, nullable=False, default=0)
+    content = Column(Text, nullable=False)
+    # search_vector: tsvector column (trigger-populated, raw SQL type)
+    # embedding: vector(1536) column (raw SQL type, same as search_chunks)
+    title = Column(Text, nullable=True)
+    source_asset_id = Column(UUID(), nullable=True)
+    source_chunk_id = Column(UUID(), nullable=True)
+    chunk_metadata = Column("metadata", JSONB, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    # Relationships
+    collection = relationship("SearchCollection")
+
+    __table_args__ = (
+        Index(
+            "uq_collection_chunks_coll_asset_idx",
+            "collection_id", "source_asset_id", "chunk_index",
+            unique=True,
+        ),
+        Index(
+            "ix_collection_chunks_coll_asset",
+            "collection_id", "source_asset_id",
+        ),
+    )
+
+    def __repr__(self) -> str:
+        return f"<CollectionChunk(id={self.id}, collection={self.collection_id}, idx={self.chunk_index})>"

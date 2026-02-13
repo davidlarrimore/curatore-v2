@@ -22,11 +22,12 @@ Security:
 
 import logging
 from datetime import datetime
-from typing import Optional
+from typing import Any, Dict, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import func, select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.v1.admin.schemas import (
     ServiceCreateRequest,
@@ -61,6 +62,246 @@ def _redact_secrets(config: dict) -> dict:
         else:
             result[key] = value
     return result
+
+
+# =========================================================================
+# SERVICE SYNC FROM CONFIG
+# =========================================================================
+
+
+def _safe_db_url(url: str) -> str:
+    """Return a database URL with the password masked for display."""
+    if not url:
+        return url
+    # postgresql+asyncpg://user:password@host:5432/db  →  …user:***@host:5432/db
+    try:
+        at_idx = url.index("@")
+        scheme_end = url.index("://") + 3
+        user_pass = url[scheme_end:at_idx]
+        if ":" in user_pass:
+            user, _ = user_pass.split(":", 1)
+            return f"{url[:scheme_end]}{user}:***{url[at_idx:]}"
+    except (ValueError, IndexError):
+        pass
+    return url
+
+
+async def sync_services_from_config(session: AsyncSession) -> Dict[str, int]:
+    """Sync infrastructure services from config.yml into the services table.
+
+    Reads each config section via ``config_loader`` and upserts a ``Service``
+    row keyed by ``name``.  Sensitive fields (api_key, secret_key, …) are
+    **never** stored in the ``config`` JSONB column.
+
+    Returns ``{"created": N, "updated": N, "unchanged": N}``.
+    """
+    import os
+
+    from app.core.shared.config_loader import config_loader
+
+    counts: Dict[str, int] = {"created": 0, "updated": 0, "unchanged": 0}
+
+    # Build list of service definitions from config
+    defs: list[Dict[str, Any]] = []
+
+    # --- LLM ---
+    llm = config_loader.get_llm_config()
+    if llm:
+        task_type_names = list(llm.task_types.keys()) if llm.task_types else []
+        defs.append({
+            "name": "llm",
+            "service_type": "llm",
+            "description": f"LLM provider ({llm.provider})",
+            "is_active": True,
+            "config": {
+                "provider": llm.provider,
+                "base_url": llm.base_url,
+                "default_model": llm.default_model,
+                "timeout": llm.timeout,
+                "task_types": task_type_names,
+            },
+        })
+
+    # --- Extraction engines ---
+    ext = config_loader.get_extraction_config()
+    if ext:
+        for engine in ext.engines:
+            defs.append({
+                "name": engine.name,
+                "service_type": "extraction",
+                "description": engine.display_name,
+                "is_active": engine.enabled,
+                "config": {
+                    "engine_type": engine.engine_type,
+                    "service_url": engine.service_url,
+                    "timeout": engine.timeout,
+                },
+            })
+
+    # --- Playwright ---
+    pw = config_loader.get_playwright_config()
+    if pw:
+        defs.append({
+            "name": "playwright",
+            "service_type": "browser",
+            "description": "Playwright browser rendering service",
+            "is_active": pw.enabled,
+            "config": {
+                "service_url": pw.service_url,
+                "timeout": pw.timeout,
+                "browser_pool_size": pw.browser_pool_size,
+            },
+        })
+
+    # --- Object storage (MinIO / S3) ---
+    minio = config_loader.get_minio_config()
+    if minio:
+        defs.append({
+            "name": "object-storage",
+            "service_type": "storage",
+            "description": "S3/MinIO object storage",
+            "is_active": minio.enabled,
+            "config": {
+                "endpoint": minio.endpoint,
+                "secure": minio.secure,
+                "bucket_uploads": minio.bucket_uploads,
+                "bucket_processed": minio.bucket_processed,
+                "bucket_temp": minio.bucket_temp,
+            },
+        })
+
+    # --- Queue ---
+    queue = config_loader.get_queue_config()
+    if queue:
+        queue_config: Dict[str, Any] = {
+            "default_queue": queue.default_queue,
+            "worker_concurrency": queue.worker_concurrency,
+            "task_timeout": queue.task_timeout,
+        }
+
+        # Include per-queue-type settings from the initialized registry
+        try:
+            from app.core.ops.queue_registry import queue_registry
+            queue_defs = queue_registry.get_all()
+            if queue_defs:
+                queues_detail: Dict[str, Any] = {}
+                for qt, qdef in queue_defs.items():
+                    queues_detail[qt] = {
+                        "max_concurrent": qdef.max_concurrent,
+                        "timeout_seconds": qdef.timeout_seconds,
+                        "enabled": qdef.enabled,
+                    }
+                queue_config["queues"] = queues_detail
+        except Exception:
+            pass  # Registry may not be initialized yet
+
+        defs.append({
+            "name": "queue",
+            "service_type": "queue",
+            "description": "Celery task queue (Redis)",
+            "is_active": True,
+            "config": queue_config,
+        })
+
+    # --- Core Database + Search (always present) ---
+    db_cfg = config_loader.get_database_config()
+    search = config_loader.get_search_config()
+    primary_url = (
+        (db_cfg.database_url if db_cfg and db_cfg.database_url else None)
+        or os.getenv(
+            "DATABASE_URL",
+            "postgresql+asyncpg://curatore:curatore_dev_password@postgres:5432/curatore",
+        )
+    )
+    db_search_config: Dict[str, Any] = {
+        "database_url": _safe_db_url(primary_url),
+    }
+    if db_cfg:
+        db_search_config["pool_size"] = db_cfg.pool_size
+        db_search_config["max_overflow"] = db_cfg.max_overflow
+        db_search_config["pool_recycle"] = db_cfg.pool_recycle
+    else:
+        db_search_config["pool_size"] = int(os.getenv("DB_POOL_SIZE", "20"))
+        db_search_config["max_overflow"] = int(os.getenv("DB_MAX_OVERFLOW", "40"))
+        db_search_config["pool_recycle"] = int(os.getenv("DB_POOL_RECYCLE", "3600"))
+
+    # Add search config
+    search_enabled = True
+    if search:
+        db_search_config["search_mode"] = search.default_mode
+        db_search_config["semantic_weight"] = search.semantic_weight
+        db_search_config["chunk_size"] = search.chunk_size
+        db_search_config["chunk_overlap"] = search.chunk_overlap
+        search_enabled = search.enabled
+        if search.database_url:
+            db_search_config["search_database_url"] = _safe_db_url(search.database_url)
+            db_search_config["search_database"] = "dedicated pgvector instance"
+        else:
+            db_search_config["search_database"] = "shared (primary)"
+
+    defs.append({
+        "name": "database",
+        "service_type": "database",
+        "description": "PostgreSQL + pgvector (database & search)",
+        "is_active": search_enabled,
+        "config": db_search_config,
+    })
+
+    # --- Microsoft Graph ---
+    mg = config_loader.get_microsoft_graph_config()
+    if mg:
+        defs.append({
+            "name": "microsoft-graph",
+            "service_type": "microsoft_graph",
+            "description": "Microsoft Graph API",
+            "is_active": mg.enabled,
+            "config": {
+                "tenant_id": mg.tenant_id,
+                "graph_base_url": mg.graph_base_url,
+                "sharepoint": True,
+                "email": mg.enable_email,
+                "email_sender": mg.email_sender_user_id,
+            },
+        })
+
+    # Upsert each definition
+    for d in defs:
+        result = await session.execute(
+            select(Service).where(Service.name == d["name"])
+        )
+        existing = result.scalar_one_or_none()
+
+        if existing:
+            changed = False
+            if existing.config != d["config"]:
+                existing.config = d["config"]
+                changed = True
+            if existing.description != d["description"]:
+                existing.description = d["description"]
+                changed = True
+            if existing.service_type != d["service_type"]:
+                existing.service_type = d["service_type"]
+                changed = True
+            if existing.is_active != d["is_active"]:
+                existing.is_active = d["is_active"]
+                changed = True
+            if changed:
+                existing.updated_at = datetime.utcnow()
+                counts["updated"] += 1
+            else:
+                counts["unchanged"] += 1
+        else:
+            session.add(Service(
+                name=d["name"],
+                service_type=d["service_type"],
+                description=d["description"],
+                config=d["config"],
+                is_active=d["is_active"],
+                test_status="not_tested",
+            ))
+            counts["created"] += 1
+
+    return counts
 
 
 # =========================================================================

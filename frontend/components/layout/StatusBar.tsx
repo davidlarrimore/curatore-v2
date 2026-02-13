@@ -190,7 +190,7 @@ export function StatusBar({ systemStatus, sidebarCollapsed }: StatusBarProps) {
       <div className="flex items-center gap-4">
         {/* API Status - Links to Infrastructure settings */}
         <button
-          onClick={() => router.push('/settings-admin?tab=infrastructure')}
+          onClick={() => router.push(activeOrgSlug ? `/orgs/${activeOrgSlug}/admin/settings` : '/system/services')}
           className={clsx(
             "flex items-center gap-2 px-3 py-1.5 rounded-lg text-xs font-medium transition-all",
             systemStatus.health === 'healthy'

@@ -610,18 +610,10 @@ async def get_supported_formats():
 async def get_default_config():
     """Get default configuration values."""
     return {
-        "quality_thresholds": {
-            "conversion": settings.default_conversion_threshold,
-            "clarity": settings.default_clarity_threshold,
-            "completeness": settings.default_completeness_threshold,
-            "relevance": settings.default_relevance_threshold,
-            "markdown": settings.default_markdown_threshold
-        },
         "ocr_settings": {
             "language": settings.ocr_lang,
             "psm": settings.ocr_psm
         },
-        "auto_optimize": True
     }
 
 @router.get("/config/extraction-services", tags=["Configuration"])

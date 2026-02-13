@@ -3,6 +3,7 @@ from fastapi import APIRouter
 
 from .routers import (
     assets,
+    collections,
     forecasts,
     metadata,
     render,
@@ -20,6 +21,7 @@ router = APIRouter(prefix="/data", tags=["Data"])
 router.include_router(assets.router)
 router.include_router(storage.router)
 router.include_router(search.router)
+router.include_router(collections.router)
 router.include_router(metadata.router)
 router.include_router(sam.router)
 router.include_router(salesforce.router)

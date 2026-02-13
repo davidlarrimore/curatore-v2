@@ -222,3 +222,25 @@ source_types:
         filter: "collection_name='...'"
         next_step: "Use get_content(asset_ids=[...]) to read page text"
     note: "Content is org-specific. Use discover_data_sources to see available collections."
+
+  search_collection:
+    display_name: "Search Collections"
+    description: >
+      Custom named groups of indexed content for focused search and RAG.
+      Collections can be static (manually curated), dynamic (auto-populated
+      by saved filters), or source-bound (linked to a data source).
+    data_contains:
+      - "Curated document sets from multiple data sources"
+      - "Dynamic query-based content groups"
+    capabilities:
+      - "Search within a specific named collection by slug"
+      - "Custom RAG contexts for AI-powered analysis"
+    example_questions:
+      - "Search the 'federal-procurement-docs' collection for cybersecurity"
+      - "What collections are available?"
+    search_tools:
+      - tool: search_collection
+        use_for: "Search within a specific collection by slug or ID"
+        filter: "collection='collection-slug'"
+        next_step: "Use get_content(asset_ids=[...]) to read document text"
+    note: "Use discover_data_sources to see available collections and their slugs."

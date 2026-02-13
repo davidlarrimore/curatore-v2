@@ -1340,7 +1340,7 @@ export const settingsApi = {
     settings: Record<string, any>
   }> {
     const res = await fetch(apiUrl('/admin/organizations/me/settings'), {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       cache: 'no-store',
     })
     return handleJson(res)
@@ -1351,7 +1351,7 @@ export const settingsApi = {
   }> {
     const res = await fetch(apiUrl('/admin/organizations/me/settings'), {
       method: 'PUT',
-      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ settings }),
     })
     return handleJson(res)
@@ -1361,7 +1361,7 @@ export const settingsApi = {
     settings: Record<string, any>
   }> {
     const res = await fetch(apiUrl('/admin/users/me/settings'), {
-      headers: { Authorization: `Bearer ${token}` },
+      headers: authHeaders(token),
       cache: 'no-store',
     })
     return handleJson(res)
@@ -1372,7 +1372,7 @@ export const settingsApi = {
   }> {
     const res = await fetch(apiUrl('/admin/users/me/settings'), {
       method: 'PUT',
-      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ settings }),
     })
     return handleJson(res)
@@ -3065,6 +3065,238 @@ export const searchApi = {
   async getMetadataSchema(token: string | undefined): Promise<MetadataSchemaResponse> {
     const url = apiUrl('/data/search/metadata-schema')
     const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+}
+
+// ============================================================================
+// Search Collections API
+// ============================================================================
+
+export interface SearchCollection {
+  id: string
+  organization_id: string
+  name: string
+  slug: string
+  description?: string | null
+  collection_type: string
+  query_config?: Record<string, unknown> | null
+  source_type?: string | null
+  source_id?: string | null
+  is_active: boolean
+  item_count: number
+  last_synced_at?: string | null
+  vector_syncs?: VectorSync[] | null
+  created_at?: string | null
+  updated_at?: string | null
+  created_by?: string | null
+}
+
+export interface VectorSync {
+  id: string
+  collection_id: string
+  connection_id: string
+  is_enabled: boolean
+  sync_status: string
+  last_sync_at?: string | null
+  error_message?: string | null
+  chunks_synced: number
+  sync_config?: Record<string, unknown> | null
+  created_at?: string | null
+  updated_at?: string | null
+}
+
+export interface SearchCollectionListResponse {
+  collections: SearchCollection[]
+  total: number
+  limit: number
+  offset: number
+}
+
+export const collectionsApi = {
+  async listCollections(
+    token: string | undefined,
+    params?: {
+      collection_type?: string
+      is_active?: boolean
+      limit?: number
+      offset?: number
+    }
+  ): Promise<SearchCollectionListResponse> {
+    const query = new URLSearchParams()
+    if (params?.collection_type) query.set('collection_type', params.collection_type)
+    if (params?.is_active !== undefined) query.set('is_active', String(params.is_active))
+    if (params?.limit) query.set('limit', String(params.limit))
+    if (params?.offset) query.set('offset', String(params.offset))
+    const qs = query.toString()
+    const url = apiUrl(`/data/collections${qs ? `?${qs}` : ''}`)
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async getCollection(token: string | undefined, id: string): Promise<SearchCollection> {
+    const url = apiUrl(`/data/collections/${id}`)
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async createCollection(
+    token: string | undefined,
+    data: {
+      name: string
+      description?: string
+      collection_type?: string
+      query_config?: Record<string, unknown>
+      source_type?: string
+      source_id?: string
+    }
+  ): Promise<SearchCollection> {
+    const url = apiUrl('/data/collections')
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async updateCollection(
+    token: string | undefined,
+    id: string,
+    data: {
+      name?: string
+      description?: string
+      collection_type?: string
+      query_config?: Record<string, unknown>
+      is_active?: boolean
+    }
+  ): Promise<SearchCollection> {
+    const url = apiUrl(`/data/collections/${id}`)
+    const res = await fetch(url, {
+      method: 'PUT',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteCollection(token: string | undefined, id: string): Promise<void> {
+    const url = apiUrl(`/data/collections/${id}`)
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    if (!res.ok) throw new Error(`Failed to delete collection: ${res.status}`)
+  },
+
+  async listVectorSyncs(token: string | undefined, collectionId: string): Promise<VectorSync[]> {
+    const url = apiUrl(`/data/collections/${collectionId}/syncs`)
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    return handleJson(res)
+  },
+
+  async addVectorSync(
+    token: string | undefined,
+    collectionId: string,
+    data: { connection_id: string; sync_config?: Record<string, unknown> }
+  ): Promise<VectorSync> {
+    const url = apiUrl(`/data/collections/${collectionId}/syncs`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async removeVectorSync(
+    token: string | undefined,
+    collectionId: string,
+    syncId: string
+  ): Promise<void> {
+    const url = apiUrl(`/data/collections/${collectionId}/syncs/${syncId}`)
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
+    })
+    if (!res.ok) throw new Error(`Failed to remove vector sync: ${res.status}`)
+  },
+
+  async populateCollection(
+    token: string | undefined,
+    collectionId: string,
+    data: { asset_ids: string[] }
+  ): Promise<{ added: number; skipped: number; total: number }> {
+    const url = apiUrl(`/data/collections/${collectionId}/populate`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async populateCollectionFresh(
+    token: string | undefined,
+    collectionId: string,
+    data: { asset_ids: string[]; chunk_size?: number; chunk_overlap?: number }
+  ): Promise<{ run_id: string; message: string }> {
+    const url = apiUrl(`/data/collections/${collectionId}/populate/fresh`)
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async removeAssetsFromCollection(
+    token: string | undefined,
+    collectionId: string,
+    data: { asset_ids: string[] }
+  ): Promise<{ removed: number }> {
+    const url = apiUrl(`/data/collections/${collectionId}/assets`)
+    const res = await fetch(url, {
+      method: 'DELETE',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async clearCollection(
+    token: string | undefined,
+    collectionId: string
+  ): Promise<{ removed: number }> {
+    const url = apiUrl(`/data/collections/${collectionId}/clear`)
+    const res = await fetch(url, {
+      method: 'POST',
       headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)

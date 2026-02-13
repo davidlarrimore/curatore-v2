@@ -31,6 +31,7 @@ import {
   Server,
   Wrench,
   Calendar,
+  Library,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import { useOrganization } from '@/lib/organization-context'
@@ -191,6 +192,13 @@ export function LeftSidebar({
       icon: GitBranch,
       current: isCurrentPath('/admin/pipelines', true),
       gradient: 'from-blue-500 to-indigo-600'
+    },
+    {
+      name: 'Collections',
+      href: orgUrl('/collections'),
+      icon: Library,
+      current: isCurrentPath('/collections', true),
+      gradient: 'from-indigo-500 to-purple-600'
     }
   ] : []
 
@@ -219,9 +227,9 @@ export function LeftSidebar({
     },
     {
       name: 'Org Settings',
-      href: '/settings-admin',
+      href: orgUrl('/admin/settings'),
       icon: Shield,
-      current: pathname === '/settings-admin',
+      current: isCurrentPath('/admin/settings', true),
       gradient: 'from-red-500 to-rose-600'
     }
   ] : []

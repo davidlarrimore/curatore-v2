@@ -65,7 +65,7 @@ export function TopNavigation({
       'admin': 'Administration',
       'assets': 'Assets',
       'search': 'Search',
-      'settings-admin': 'Settings',
+      'settings': 'Settings',
       'connections': 'Connections',
       'procedures': 'Procedures',
       'functions': 'Functions',
@@ -356,7 +356,7 @@ export function TopNavigation({
                   <Menu.Item>
                     {({ active }) => (
                       <button
-                        onClick={() => router.push('/settings-admin')}
+                        onClick={() => router.push(currentOrganization?.slug ? `/orgs/${currentOrganization.slug}/admin/settings` : '/system/settings')}
                         className={`${
                           active ? 'bg-slate-50 dark:bg-slate-700' : ''
                         } text-slate-700 dark:text-slate-300 flex w-full items-center gap-3 px-4 py-2.5 text-sm`}

@@ -20,6 +20,29 @@
 version: "2.0"
 
 # ============================================================================
+# Database Configuration (optional)
+# ============================================================================
+# Primary PostgreSQL connection settings.
+# If this section is omitted, falls back to the DATABASE_URL environment variable
+# (default: postgresql+asyncpg://curatore:curatore_dev_password@postgres:5432/curatore).
+#
+# Pool settings only apply to the API server; Celery workers use NullPool.
+
+# database:
+#   # PostgreSQL connection string (optional, overrides DATABASE_URL env var)
+#   database_url: ${DATABASE_URL}
+#
+#   # Connection pool size (optional, default: 20)
+#   pool_size: 20
+#
+#   # Maximum overflow connections beyond pool_size (optional, default: 40)
+#   max_overflow: 40
+#
+#   # Recycle connections after this many seconds (optional, default: 3600)
+#   pool_recycle: 3600
+
+
+# ============================================================================
 # LLM Configuration (optional)
 # ============================================================================
 # Language model configuration for AI-powered features.
@@ -657,6 +680,12 @@ minio:
 search:
   # Enable search functionality (optional, default: true)
   enabled: true
+
+  # Dedicated pgvector database connection (optional)
+  # When omitted, search uses the primary application database.
+  # Set this to point search/indexing at a separate pgvector instance
+  # for workload isolation (recommended for large-scale deployments).
+  # database_url: postgresql+asyncpg://user:password@pgvector-host:5432/search_db
 
   # Default search mode (optional, default: hybrid)
   # Options: keyword, semantic, hybrid

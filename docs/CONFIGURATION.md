@@ -48,6 +48,72 @@ This generates `config.yml` from your `.env` settings with proper structure and 
 
 ## Configuration Reference
 
+### Database
+
+Configure the primary PostgreSQL database connection. If this section is omitted, the backend falls back to the `DATABASE_URL` environment variable.
+
+**Optional (all have defaults):**
+- `database.database_url`: PostgreSQL connection string (overrides `DATABASE_URL` env var)
+- `database.pool_size`: Connection pool size (default: 20, API server only)
+- `database.max_overflow`: Max overflow connections (default: 40)
+- `database.pool_recycle`: Recycle time in seconds (default: 3600)
+
+**Environment Variables (fallback):**
+- `DATABASE_URL`: PostgreSQL connection string (default: `postgresql+asyncpg://curatore:curatore_dev_password@postgres:5432/curatore`)
+- `DB_POOL_SIZE`: Connection pool size (default: 20)
+- `DB_MAX_OVERFLOW`: Max overflow connections (default: 40)
+- `DB_POOL_RECYCLE`: Recycle time in seconds (default: 3600)
+
+**Example:**
+```yaml
+database:
+  database_url: ${DATABASE_URL}
+  pool_size: 20
+  max_overflow: 40
+  pool_recycle: 3600
+```
+
+> **Note:** Pool settings only apply to the API server. Celery workers use `NullPool` (fresh connection per task) to avoid event loop issues.
+
+---
+
+### Search (PostgreSQL + pgvector)
+
+Configure hybrid full-text + semantic search. By default search shares the primary application database. For large-scale deployments, set `database_url` to point search at a dedicated pgvector instance.
+
+**Optional:**
+- `search.database_url`: Dedicated pgvector connection string (if omitted, uses primary database)
+- `search.enabled`: Enable search (default: true)
+- `search.default_mode`: Search mode — keyword, semantic, or hybrid (default: hybrid)
+- `search.semantic_weight`: Hybrid weight 0.0–1.0 (default: 0.5)
+- `search.chunk_size`: Characters per chunk (default: 1500)
+- `search.chunk_overlap`: Overlap between chunks (default: 200)
+- `search.batch_size`: Bulk indexing batch size (default: 50)
+- `search.timeout`: Query timeout in seconds (default: 30)
+- `search.max_content_length`: Max indexable content length (default: 100000)
+
+**Example — shared database (default):**
+```yaml
+search:
+  enabled: true
+  default_mode: hybrid
+  semantic_weight: 0.5
+  chunk_size: 1500
+  chunk_overlap: 200
+```
+
+**Example — dedicated pgvector instance:**
+```yaml
+search:
+  database_url: postgresql+asyncpg://search:password@pgvector-host:5432/search_db
+  enabled: true
+  default_mode: hybrid
+```
+
+> **Note:** When using a dedicated search database, the `search_chunks` table and pgvector extension must exist in that database. Run the search-specific Alembic migrations against it before starting. The primary database still stores all application tables (assets, runs, etc.).
+
+---
+
 ### LLM Service
 
 Configure your Language Model provider for document evaluation.

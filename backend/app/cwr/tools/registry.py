@@ -175,8 +175,10 @@ class FunctionRegistry:
             from .primitives.search.get_asset import GetAssetFunction
             from .primitives.search.get_content import GetContentFunction
             from .primitives.search.get_forecast_history import GetForecastHistoryFunction
+            from .primitives.search.populate_collection import PopulateCollectionFunction
             from .primitives.search.query_model import QueryModelFunction
             from .primitives.search.search_assets import SearchAssetsFunction
+            from .primitives.search.search_collection import SearchCollectionFunction
             from .primitives.search.search_forecasts import SearchForecastsFunction
             from .primitives.search.search_notices import SearchNoticesFunction
             from .primitives.search.search_salesforce import SearchSalesforceFunction
@@ -187,6 +189,8 @@ class FunctionRegistry:
             self.register(GetAssetFunction)
             self.register(GetFunction)
             self.register(SearchAssetsFunction)
+            self.register(SearchCollectionFunction)
+            self.register(PopulateCollectionFunction)
             self.register(SearchSolicitationsFunction)
             self.register(SearchNoticesFunction)
             self.register(SearchScrapedAssetsFunction)

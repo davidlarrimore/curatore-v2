@@ -55,9 +55,8 @@ export default function SystemOrganizationsPage() {
       )
     : organizations
 
-  const handleSwitchToOrg = async (orgId: string) => {
-    await switchOrganization(orgId)
-    router.push('/')
+  const handleSwitchToOrg = (orgId: string) => {
+    switchOrganization(orgId)
   }
 
   if (isLoading) {

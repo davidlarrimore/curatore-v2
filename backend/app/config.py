@@ -82,15 +82,6 @@ class Settings(BaseSettings):
     playwright_timeout: float = Field(default=60.0, description="Timeout (s) for Playwright requests")
 
     # =========================================================================
-    # QUALITY ASSESSMENT DEFAULTS
-    # =========================================================================
-    default_conversion_threshold: int = Field(default=70, description="0–100")
-    default_clarity_threshold: int = Field(default=7, description="1–10")
-    default_completeness_threshold: int = Field(default=7, description="1–10")
-    default_relevance_threshold: int = Field(default=7, description="1–10")
-    default_markdown_threshold: int = Field(default=7, description="1–10")
-
-    # =========================================================================
     # DATABASE CONFIGURATION
     # =========================================================================
     database_url: str = Field(

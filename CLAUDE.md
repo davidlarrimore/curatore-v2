@@ -230,6 +230,9 @@ mcp/                                 # MCP Gateway (AI tool server)
 | `SharePointSyncConfig` | SharePoint folder sync configuration |
 | `ScrapeCollection` | Web scraping project with seed URLs |
 | `SalesforceConnection` | Salesforce org connection credentials |
+| `SearchCollection` | Named search collection (static/dynamic/source_bound) |
+| `CollectionChunk` | Isolated chunk in a collection's vector store (pgvector-backed) |
+| `CollectionVectorSync` | Collection-to-external vector store sync target |
 
 ### Metadata Governance Models
 | Model | Purpose |
@@ -280,6 +283,9 @@ Services are organized into domain-specific subdirectories under `backend/app/co
 | `chunking_service.py` | Document chunking logic |
 | `document_chunker.py` | Chunk creation and formatting |
 | `embedding_service.py` | Vector embedding generation |
+| `collection_service.py` | Search collection CRUD and vector sync management |
+| `collection_population_service.py` | Collection population orchestration (index copy, fresh chunk+embed) |
+| `collection_stores/` | Store adapter pattern: `CollectionStoreAdapter` ABC, `PgVectorCollectionStore` |
 
 ### LLM (`core/llm/`)
 | Service | Purpose |
@@ -432,6 +438,7 @@ The procedure editor (`/admin/procedures/new`) displays governance metadata:
 | `assets.py` | Asset CRUD, versions, content, download, bulk download, delete |
 | `storage.py` | Object storage: artifacts, browsing, upload proxy |
 | `search.py` | Full-text + semantic search |
+| `collections.py` | Search collections CRUD, vector sync targets |
 | `metadata.py` | Metadata governance: catalog, namespaces, fields, facets |
 | `sam.py` | SAM.gov searches, solicitations, notices |
 | `salesforce.py` | Salesforce accounts, contacts, opportunities |
@@ -481,6 +488,7 @@ All background jobs are managed through the Queue Registry system. See [Queue Sy
 
 PostgreSQL with pgvector for hybrid full-text + semantic search:
 
+- **Database**: By default shares the primary PostgreSQL instance. Optional `search.database_url` in config.yml allows pointing search at a dedicated pgvector instance for workload isolation (Phase 1: config-level; Phase 2: runtime separation).
 - **Full-text search**: PostgreSQL tsvector + GIN indexes
 - **Semantic search**: pgvector embeddings (1536-dim via OpenAI)
 - **Hybrid mode**: Configurable keyword/semantic weighting
@@ -494,6 +502,16 @@ PostgreSQL with pgvector for hybrid full-text + semantic search:
 - **Governance APIs**: `GET /api/v1/data/metadata/catalog` returns full catalog; additional endpoints for namespaces, fields, field stats, and facets
 
 Indexed content types: assets, SAM solicitations/notices, forecasts, scraped pages.
+
+**Search Collections** (isolated vector stores):
+- `SearchCollection` model: Named groups of indexed content (static, dynamic, source_bound)
+- `collection_chunks` table: Isolated per-collection vector store with own embeddings, tsvector, and flat metadata
+- `CollectionStoreAdapter` pattern: Pluggable backends — `PgVectorCollectionStore` (local, default) or external adapters (future)
+- `CollectionPopulationService`: Populate from core index (fast, reuses embeddings) or fresh re-chunk + embed (async Celery)
+- `CollectionVectorSync` links collections to external vector stores (Pinecone, OpenSearch, etc.) via the Connection pattern
+- `vector_store` connection type registered in `ConnectionTypeRegistry`
+- CWR functions: `search_collection` (collection-scoped search via store adapter); discoverable via `discover_data_sources(source_type="search_collection")`
+- Optional `search.database_url` in config.yml for dedicated pgvector workload isolation
 
 ---
 
@@ -631,6 +649,7 @@ The API client is organized into namespace-specific exports:
 | `usersApi` | Admin | `listUsers`, `updateUser` |
 | `assetsApi` | Data | `listAssets`, `getAsset`, `deleteAsset` |
 | `searchApi` | Data | `search`, `getMetadataSchema` |
+| `collectionsApi` | Data | `listCollections`, `getCollection`, `createCollection`, `deleteCollection`, `listVectorSyncs`, `addVectorSync` |
 | `metadataApi` | Data | `getCatalog`, `getNamespaces`, `getFacets` |
 | `samApi` | Data | `getSearches`, `getSolicitations`, `getNotices` |
 | `salesforceApi` | Data | `getAccounts`, `getContacts`, `getOpportunities` |
@@ -660,6 +679,8 @@ Data:
   Content:     GET /api/v1/data/assets/{id}/content, /download
   Storage:     POST /api/v1/data/storage/upload/proxy
   Search:      POST /api/v1/data/search, GET /search/metadata-schema
+  Collections: GET/POST /api/v1/data/collections, GET/PUT/DELETE /collections/{id}
+  Coll Ops:    POST /collections/{id}/populate, /populate/fresh, /clear, DELETE /collections/{id}/assets
   Metadata:    GET /api/v1/data/metadata/catalog, /namespaces, /facets
   SAM.gov:     GET /api/v1/data/sam/searches, /solicitations, /notices
   Salesforce:  GET /api/v1/data/salesforce/accounts, /contacts

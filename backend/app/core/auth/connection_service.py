@@ -1013,6 +1013,153 @@ class SamGovConnectionType(BaseConnectionType):
 
 
 # =========================================================================
+# VECTOR STORE CONNECTION TYPE
+# =========================================================================
+
+
+class VectorStoreConnectionType(BaseConnectionType):
+    """
+    Connection type for external vector stores (Pinecone, OpenSearch, etc.).
+
+    Used to sync search collections to external vector databases for
+    independent querying, MCP access, or integration with other systems.
+    """
+
+    connection_type = "vector_store"
+    display_name = "Vector Store"
+    description = "External vector database for search collection sync (Pinecone, OpenSearch, Weaviate, etc.)"
+
+    def get_config_schema(self) -> Dict[str, Any]:
+        return {
+            "type": "object",
+            "properties": {
+                "provider": {
+                    "type": "string",
+                    "enum": ["pinecone", "opensearch", "weaviate", "qdrant", "milvus"],
+                    "description": "Vector store provider",
+                },
+                "endpoint": {
+                    "type": "string",
+                    "description": "Vector store endpoint URL",
+                },
+                "api_key": {
+                    "type": "string",
+                    "writeOnly": True,
+                    "description": "API key or authentication token",
+                },
+                "index_name": {
+                    "type": "string",
+                    "description": "Default index/collection name in the vector store",
+                },
+                "namespace": {
+                    "type": "string",
+                    "description": "Default namespace (provider-specific)",
+                },
+                "dimensions": {
+                    "type": "integer",
+                    "default": 1536,
+                    "description": "Embedding dimensions (must match embedding model)",
+                },
+                "metric": {
+                    "type": "string",
+                    "enum": ["cosine", "euclidean", "dotproduct"],
+                    "default": "cosine",
+                    "description": "Distance metric for similarity search",
+                },
+                "timeout": {
+                    "type": "integer",
+                    "default": 30,
+                    "description": "Request timeout in seconds",
+                },
+            },
+            "required": ["provider", "endpoint"],
+        }
+
+    def validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
+        """Validate vector store connection configuration."""
+        provider = config.get("provider")
+        if not provider:
+            raise ValueError("provider is required")
+        if provider not in ("pinecone", "opensearch", "weaviate", "qdrant", "milvus"):
+            raise ValueError(f"Unsupported provider: {provider}")
+
+        endpoint = config.get("endpoint")
+        if not endpoint:
+            raise ValueError("endpoint is required")
+
+        # Normalize config with defaults
+        return {
+            "provider": provider,
+            "endpoint": endpoint,
+            "api_key": config.get("api_key", ""),
+            "index_name": config.get("index_name", ""),
+            "namespace": config.get("namespace", ""),
+            "dimensions": config.get("dimensions", 1536),
+            "metric": config.get("metric", "cosine"),
+            "timeout": config.get("timeout", 30),
+        }
+
+    async def test_connection(self, config: Dict[str, Any]) -> ConnectionTestResult:
+        """Test vector store connection by attempting a health check."""
+        provider = config.get("provider", "unknown")
+        endpoint = config.get("endpoint", "")
+        timeout = config.get("timeout", 30)
+
+        try:
+            async with httpx.AsyncClient(timeout=float(timeout)) as client:
+                # Provider-specific health check endpoints
+                if provider == "pinecone":
+                    # Pinecone: check describe_index_stats
+                    headers = {"Api-Key": config.get("api_key", "")}
+                    response = await client.get(
+                        f"{endpoint.rstrip('/')}/describe_index_stats",
+                        headers=headers,
+                    )
+                elif provider == "opensearch":
+                    # OpenSearch: cluster health
+                    response = await client.get(
+                        f"{endpoint.rstrip('/')}/_cluster/health",
+                    )
+                else:
+                    # Generic: try GET on the endpoint root
+                    response = await client.get(endpoint)
+
+                if response.status_code < 400:
+                    return ConnectionTestResult(
+                        success=True,
+                        status="healthy",
+                        message=f"Successfully connected to {provider} vector store",
+                        details={
+                            "provider": provider,
+                            "endpoint": endpoint,
+                            "status_code": response.status_code,
+                        },
+                    )
+                else:
+                    return ConnectionTestResult(
+                        success=False,
+                        status="unhealthy",
+                        message=f"{provider} returned error",
+                        error=f"HTTP {response.status_code}",
+                    )
+
+        except httpx.TimeoutException:
+            return ConnectionTestResult(
+                success=False,
+                status="unhealthy",
+                message="Connection timeout",
+                error=f"Request timed out after {timeout}s",
+            )
+        except Exception as e:
+            return ConnectionTestResult(
+                success=False,
+                status="unhealthy",
+                message=f"Failed to connect to {provider}",
+                error=str(e),
+            )
+
+
+# =========================================================================
 # CONNECTION TYPE REGISTRY
 # =========================================================================
 
@@ -1092,6 +1239,7 @@ class ConnectionService:
         self._registry.register(ExtractionConnectionType())
         self._registry.register(PlaywrightConnectionType())
         self._registry.register(SamGovConnectionType())
+        self._registry.register(VectorStoreConnectionType())
 
         self._logger.info("Connection service initialized")
 

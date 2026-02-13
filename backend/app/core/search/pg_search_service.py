@@ -948,7 +948,7 @@ class PgSearchService:
             semantic_weight: Weight for semantic scores in hybrid mode (0-1)
             source_types: Filter by source types
             content_types: Filter by content/MIME types
-            collection_ids: Filter by collection IDs
+            collection_ids: Filter by scrape collection IDs
             sync_config_ids: Filter by sync config IDs
             date_from: Filter by creation date >=
             date_to: Filter by creation date <=

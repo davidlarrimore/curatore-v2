@@ -1826,6 +1826,158 @@ class SharePointRemoveItemsResponse(BaseModel):
 
 
 # =========================================================================
+# SEARCH COLLECTIONS
+# =========================================================================
+
+
+class SearchCollectionResponse(BaseModel):
+    """Search collection response."""
+    id: str = Field(..., description="Collection UUID")
+    organization_id: str = Field(..., description="Organization UUID")
+    name: str = Field(..., description="Collection name")
+    slug: str = Field(..., description="URL-friendly slug")
+    description: Optional[str] = Field(None, description="Collection description")
+    collection_type: str = Field(..., description="Type: static, dynamic, or source_bound")
+    query_config: Optional[Dict[str, Any]] = Field(None, description="Dynamic collection query config")
+    source_type: Optional[str] = Field(None, description="Bound source type")
+    source_id: Optional[str] = Field(None, description="Bound source entity ID")
+    is_active: bool = Field(True, description="Whether collection is active")
+    item_count: int = Field(0, description="Number of chunks in collection")
+    last_synced_at: Optional[datetime] = Field(None, description="Last external sync timestamp")
+    vector_syncs: Optional[List[Dict[str, Any]]] = Field(None, description="Vector store sync targets")
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+    created_by: Optional[str] = None
+
+
+class SearchCollectionCreateRequest(BaseModel):
+    """Request to create a search collection."""
+    name: str = Field(..., min_length=1, max_length=255, description="Collection name")
+    description: Optional[str] = Field(None, max_length=2000, description="Description")
+    collection_type: str = Field(
+        default="static",
+        description="Collection type: static, dynamic, or source_bound",
+    )
+    query_config: Optional[Dict[str, Any]] = Field(
+        None, description="Dynamic collection query/filter config",
+    )
+    source_type: Optional[str] = Field(
+        None, description="Source type for source_bound collections",
+    )
+    source_id: Optional[str] = Field(
+        None, description="Source entity ID for source_bound collections",
+    )
+
+    class Config:
+        json_schema_extra = {
+            "example": {
+                "name": "Federal Procurement Docs",
+                "description": "All documents related to federal procurement",
+                "collection_type": "static",
+            }
+        }
+
+
+class SearchCollectionUpdateRequest(BaseModel):
+    """Request to update a search collection."""
+    name: Optional[str] = Field(None, min_length=1, max_length=255, description="Collection name")
+    description: Optional[str] = Field(None, max_length=2000, description="Description")
+    collection_type: Optional[str] = Field(None, description="Collection type")
+    query_config: Optional[Dict[str, Any]] = Field(None, description="Dynamic query config")
+    source_type: Optional[str] = Field(None, description="Source type")
+    source_id: Optional[str] = Field(None, description="Source entity ID")
+    is_active: Optional[bool] = Field(None, description="Whether collection is active")
+
+
+class SearchCollectionListResponse(BaseModel):
+    """Paginated list of search collections."""
+    collections: List[SearchCollectionResponse]
+    total: int = Field(..., description="Total number of collections")
+    limit: int = Field(..., description="Page size")
+    offset: int = Field(..., description="Page offset")
+
+
+class VectorSyncResponse(BaseModel):
+    """Vector store sync target response."""
+    id: str = Field(..., description="Sync UUID")
+    collection_id: str = Field(..., description="Collection UUID")
+    connection_id: str = Field(..., description="Connection UUID")
+    is_enabled: bool = Field(True, description="Whether sync is active")
+    sync_status: str = Field("pending", description="Sync status")
+    last_sync_at: Optional[datetime] = Field(None, description="Last sync timestamp")
+    error_message: Optional[str] = Field(None, description="Last error message")
+    chunks_synced: int = Field(0, description="Number of chunks synced")
+    sync_config: Optional[Dict[str, Any]] = Field(None, description="Store-specific config")
+    created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
+
+
+class VectorSyncCreateRequest(BaseModel):
+    """Request to add a vector store sync target."""
+    connection_id: str = Field(..., description="Connection UUID for the vector store")
+    sync_config: Optional[Dict[str, Any]] = Field(
+        None, description="Store-specific config (index name, namespace, etc.)",
+    )
+
+
+# =========================================================================
+# COLLECTION POPULATION
+# =========================================================================
+
+
+class CollectionPopulateRequest(BaseModel):
+    """Request to populate a collection from the core index."""
+    asset_ids: List[str] = Field(
+        ..., min_length=1, description="Asset UUIDs to copy into the collection"
+    )
+
+
+class CollectionPopulateFreshRequest(BaseModel):
+    """Request to populate a collection with fresh chunking + embeddings."""
+    asset_ids: List[str] = Field(
+        ..., min_length=1, description="Asset UUIDs to chunk and embed"
+    )
+    chunk_size: Optional[int] = Field(
+        None, ge=200, le=10000,
+        description="Custom chunk size in characters (default: system default ~1500)",
+    )
+    chunk_overlap: Optional[int] = Field(
+        None, ge=0, le=2000,
+        description="Custom overlap between chunks in characters (default: ~200)",
+    )
+
+
+class CollectionPopulateResponse(BaseModel):
+    """Response from a synchronous collection population."""
+    added: int = Field(..., description="Number of chunks written")
+    skipped: int = Field(0, description="Number of assets skipped (no index data)")
+    total: int = Field(..., description="Total chunks now in collection")
+
+
+class CollectionPopulateFreshResponse(BaseModel):
+    """Response from an async fresh population request."""
+    run_id: str = Field(..., description="Run UUID for tracking progress")
+    message: str = Field(..., description="Status message")
+
+
+class CollectionRemoveAssetsRequest(BaseModel):
+    """Request to remove specific assets from a collection."""
+    asset_ids: List[str] = Field(
+        ..., min_length=1, description="Asset UUIDs to remove from the collection"
+    )
+
+
+class CollectionRemoveAssetsResponse(BaseModel):
+    """Response from removing assets from a collection."""
+    removed: int = Field(..., description="Number of chunks removed")
+
+
+class CollectionClearResponse(BaseModel):
+    """Response from clearing all chunks in a collection."""
+    removed: int = Field(..., description="Number of chunks removed")
+
+
+# =========================================================================
 # RE-EXPORTS from shared domain models
 # =========================================================================
 
@@ -1954,4 +2106,11 @@ __all__ = [
     "SharePointCleanupResponse",
     "SharePointRemoveItemsRequest",
     "SharePointRemoveItemsResponse",
+    # Search Collections
+    "SearchCollectionResponse",
+    "SearchCollectionCreateRequest",
+    "SearchCollectionUpdateRequest",
+    "SearchCollectionListResponse",
+    "VectorSyncResponse",
+    "VectorSyncCreateRequest",
 ]

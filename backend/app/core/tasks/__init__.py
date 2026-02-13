@@ -6,6 +6,11 @@ Celery discovers tasks via the include= list in celery_app.py,
 which references each submodule directly.
 """
 
+# Collection tasks
+from app.core.tasks.collections import (
+    populate_collection_fresh_task,
+)
+
 # Extraction tasks
 from app.core.tasks.extraction import (
     check_extraction_timeouts_task,
@@ -73,6 +78,8 @@ from app.core.tasks.sharepoint import (
 )
 
 __all__ = [
+    # Collections
+    "populate_collection_fresh_task",
     # Extraction
     "execute_extraction_task",
     "recover_orphaned_extractions",

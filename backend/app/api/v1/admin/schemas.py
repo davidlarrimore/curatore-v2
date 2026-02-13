@@ -220,16 +220,7 @@ class OrganizationResponse(BaseModel):
                 "display_name": "Acme Corp",
                 "slug": "acme-corp",
                 "is_active": True,
-                "settings": {
-                    "quality_thresholds": {
-                        "conversion": 70,
-                        "clarity": 7,
-                        "completeness": 7,
-                        "relevance": 7,
-                        "markdown": 7
-                    },
-                    "auto_optimize": False
-                },
+                "settings": {},
                 "created_at": "2024-01-01T00:00:00",
                 "updated_at": "2024-01-12T15:30:00"
             }
@@ -258,14 +249,6 @@ class OrganizationSettingsResponse(BaseModel):
         json_schema_extra = {
             "example": {
                 "settings": {
-                    "quality_thresholds": {
-                        "conversion": 70,
-                        "clarity": 7,
-                        "completeness": 7,
-                        "relevance": 7,
-                        "markdown": 7
-                    },
-                    "auto_optimize": False,
                     "max_file_size_mb": 100,
                     "allowed_formats": ["pdf", "docx", "pptx", "txt"]
                 }

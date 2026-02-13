@@ -301,6 +301,7 @@ Tools are auto-derived from backend contracts. Any function with `exposure_profi
 | Tool | Description | Payload |
 |------|-------------|---------|
 | `search_assets` | Search organization documents | Thin (IDs, titles, scores) |
+| `search_collection` | Search within a named collection | Thin |
 | `search_notices` | Search SAM.gov notices | Thin |
 | `search_solicitations` | Search SAM.gov solicitations | Thin |
 | `search_forecasts` | Search acquisition forecasts | Thin |

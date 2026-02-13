@@ -9,14 +9,16 @@
 import { useState, useEffect } from 'react'
 import {
   Server,
-  Plus,
-  Settings,
   CheckCircle,
   XCircle,
   RefreshCw,
   Brain,
   FileText,
   Globe,
+  Database,
+  Radio,
+  Share2,
+  HardDrive,
 } from 'lucide-react'
 import { servicesApi, Service } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
@@ -26,6 +28,10 @@ const serviceIcons: Record<string, React.ComponentType<{ className?: string }>> 
   llm: Brain,
   extraction: FileText,
   browser: Globe,
+  storage: HardDrive,
+  queue: Radio,
+  database: Database,
+  microsoft_graph: Share2,
   default: Server,
 }
 
@@ -74,22 +80,16 @@ export default function SystemServicesPage() {
             System Services
           </h1>
           <p className="text-sm text-gray-500 dark:text-gray-400">
-            Configure system-wide infrastructure services
+            System-wide infrastructure services defined in config.yml
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <button
-            onClick={loadServices}
-            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-          >
-            <RefreshCw className="h-4 w-4" />
-            Refresh
-          </button>
-          <button className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-amber-600 rounded-lg hover:bg-amber-700 transition-colors">
-            <Plus className="h-4 w-4" />
-            Add Service
-          </button>
-        </div>
+        <button
+          onClick={loadServices}
+          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+        >
+          <RefreshCw className="h-4 w-4" />
+          Refresh
+        </button>
       </div>
 
       {/* Services Grid */}
@@ -111,7 +111,7 @@ export default function SystemServicesPage() {
                       {service.name}
                     </h3>
                     <p className="text-sm text-gray-500 dark:text-gray-400">
-                      {service.service_type}
+                      {service.description || service.service_type}
                     </p>
                   </div>
                 </div>
@@ -128,12 +128,55 @@ export default function SystemServicesPage() {
                 )}
               </div>
 
-              <div className="mt-4">
-                <button className="flex items-center gap-2 px-3 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors w-full justify-center">
-                  <Settings className="h-4 w-4" />
-                  Configure
-                </button>
-              </div>
+              {/* Configuration details */}
+              {service.config && Object.keys(service.config).length > 0 && (
+                <div className="space-y-1 text-xs text-gray-600 dark:text-gray-400 pt-3 border-t border-gray-200/50 dark:border-gray-700/50">
+                  {Object.entries(service.config).map(([key, value]) => {
+                    // Nested object: render as a sub-section (e.g. queue types)
+                    if (value && typeof value === 'object' && !Array.isArray(value)) {
+                      return (
+                        <div key={key} className="pt-2">
+                          <span className="font-semibold capitalize text-gray-700 dark:text-gray-300">
+                            {key.replace(/_/g, ' ')}
+                          </span>
+                          <div className="mt-1 space-y-2">
+                            {Object.entries(value as Record<string, unknown>).map(([subKey, subVal]) => (
+                              <div key={subKey} className="pl-2 border-l-2 border-gray-200 dark:border-gray-700">
+                                <span className="font-medium text-gray-700 dark:text-gray-300">{subKey}</span>
+                                {subVal && typeof subVal === 'object' && !Array.isArray(subVal) ? (
+                                  <div className="ml-2 space-y-0.5">
+                                    {Object.entries(subVal as Record<string, unknown>).map(([k, v]) => (
+                                      <div key={k} className="flex justify-between">
+                                        <span className="capitalize">{k.replace(/_/g, ' ')}:</span>
+                                        <span>{v === null ? '—' : typeof v === 'boolean' ? (v ? 'Yes' : 'No') : String(v)}</span>
+                                      </div>
+                                    ))}
+                                  </div>
+                                ) : (
+                                  <span className="ml-2">{String(subVal)}</span>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      )
+                    }
+                    // Simple value
+                    return (
+                      <div key={key} className="flex justify-between">
+                        <span className="font-medium capitalize">{key.replace(/_/g, ' ')}:</span>
+                        <span className="truncate ml-2 text-right max-w-[60%]" title={String(value)}>
+                          {typeof value === 'boolean' ? (value ? 'Yes' : 'No')
+                           : Array.isArray(value) ? value.join(', ')
+                           : value === null ? '—'
+                           : String(value)}
+                        </span>
+                      </div>
+                    )
+                  })}
+                </div>
+              )}
+
             </div>
           )
         })}
@@ -143,10 +186,10 @@ export default function SystemServicesPage() {
         <div className="text-center py-12 bg-white dark:bg-gray-800 rounded-xl border border-gray-200 dark:border-gray-700">
           <Server className="h-12 w-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
           <p className="text-gray-500 dark:text-gray-400 mb-4">
-            No services configured yet
+            No services configured
           </p>
           <p className="text-sm text-gray-400 dark:text-gray-500">
-            Add system services like LLM providers, extraction engines, and browser automation.
+            Services are defined in config.yml and synced on backend startup.
           </p>
         </div>
       )}

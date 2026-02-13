@@ -57,6 +57,7 @@ class DiscoverDataSourcesFunction(BaseFunction):
                     "enum": [
                         "sam_gov", "sharepoint", "forecast_ag", "forecast_apfs",
                         "forecast_state", "salesforce", "web_scrape",
+                        "search_collection",
                     ],
                 },
             },
@@ -96,6 +97,7 @@ class DiscoverDataSourcesFunction(BaseFunction):
             ForecastSync,
             SamSearch,
             ScrapeCollection,
+            SearchCollection,
             SharePointSyncConfig,
         )
         from app.core.metadata.registry_service import metadata_registry_service
@@ -127,6 +129,7 @@ class DiscoverDataSourcesFunction(BaseFunction):
                         SharePointSyncConfig=SharePointSyncConfig,
                         SamSearch=SamSearch,
                         ScrapeCollection=ScrapeCollection,
+                        SearchCollection=SearchCollection,
                         ForecastSync=ForecastSync,
                         Connection=Connection,
                     )
@@ -340,6 +343,25 @@ class DiscoverDataSourcesFunction(BaseFunction):
                     "id": str(c.id),
                     "name": c.name,
                     "instance_url": config.get("instance_url", ""),
+                })
+
+        elif source_type == "search_collection":
+            SearchCollection = models["SearchCollection"]
+            result = await ctx.session.execute(
+                select(SearchCollection)
+                .where(SearchCollection.organization_id == org_id)
+                .where(SearchCollection.is_active == True)
+            )
+            for c in result.scalars():
+                instances.append({
+                    "type": "search_collection",
+                    "id": str(c.id),
+                    "name": c.name,
+                    "slug": c.slug,
+                    "description": (c.description or "")[:200] or None,
+                    "collection_type": c.collection_type,
+                    "item_count": c.item_count,
+                    "source_type": c.source_type,
                 })
 
         elif source_type == "web_scrape":

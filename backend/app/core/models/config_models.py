@@ -580,6 +580,44 @@ class SamConfig(BaseModel):
     )
 
 
+class DatabaseConfig(BaseModel):
+    """
+    Primary PostgreSQL database configuration.
+
+    By default the backend reads ``DATABASE_URL`` from the environment.
+    When this section is present in config.yml the ``database_url`` value
+    here takes precedence, keeping all infrastructure settings in one place.
+    """
+    model_config = ConfigDict(extra='forbid')
+
+    database_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "PostgreSQL connection string "
+            "(e.g. postgresql+asyncpg://user:pass@host:5432/db). "
+            "If omitted, falls back to the DATABASE_URL environment variable."
+        ),
+    )
+    pool_size: int = Field(
+        default=20,
+        ge=1,
+        le=200,
+        description="Connection pool size (API server only; workers use NullPool)"
+    )
+    max_overflow: int = Field(
+        default=40,
+        ge=0,
+        le=400,
+        description="Maximum overflow connections beyond pool_size"
+    )
+    pool_recycle: int = Field(
+        default=3600,
+        ge=60,
+        le=86400,
+        description="Recycle connections after this many seconds"
+    )
+
+
 class SearchConfig(BaseModel):
     """
     Search configuration for PostgreSQL + pgvector hybrid search.
@@ -588,10 +626,23 @@ class SearchConfig(BaseModel):
     indexed content (uploads, SharePoint, web scrapes, SAM.gov). Documents are
     automatically indexed after extraction.
 
+    By default, search uses the primary application database.  Set
+    ``database_url`` to point search at a dedicated pgvector instance
+    when you need to isolate vector workloads from transactional traffic.
+
     Note: The embedding model is configured in llm.models.embedding, not here.
     """
     model_config = ConfigDict(extra='forbid')
 
+    database_url: Optional[str] = Field(
+        default=None,
+        description=(
+            "Optional dedicated PostgreSQL+pgvector connection string for search. "
+            "When omitted, search uses the primary application database. "
+            "Set this to isolate vector workloads on a separate instance "
+            "(e.g. postgresql+asyncpg://user:pass@pgvector-host:5432/search_db)."
+        ),
+    )
     enabled: bool = Field(
         default=True,
         description="Enable full-text and semantic search"
@@ -709,6 +760,10 @@ class AppConfig(BaseModel):
     version: str = Field(
         default="2.0",
         description="Configuration file version"
+    )
+    database: Optional[DatabaseConfig] = Field(
+        default=None,
+        description="Primary PostgreSQL database configuration"
     )
     llm: Optional[LLMConfig] = Field(
         default=None,

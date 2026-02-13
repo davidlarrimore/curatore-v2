@@ -228,14 +228,6 @@ async def get_organization_settings(
         Response:
         {
             "settings": {
-                "quality_thresholds": {
-                    "conversion": 70,
-                    "clarity": 7,
-                    "completeness": 7,
-                    "relevance": 7,
-                    "markdown": 7
-                },
-                "auto_optimize": false,
                 "max_file_size_mb": 100
             }
         }

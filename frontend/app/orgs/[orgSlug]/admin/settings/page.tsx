@@ -1,25 +1,25 @@
 'use client'
 
+/**
+ * Organization-scoped settings page.
+ * Manages org details, user preferences, user management, and connections.
+ */
+
 import { useState, useEffect } from 'react'
 import { useSearchParams } from 'next/navigation'
 import { useAuth } from '@/lib/auth-context'
+import { useOrgUrl } from '@/lib/org-url-context'
 import { settingsApi, systemApi, usersApi, organizationsApi } from '@/lib/api'
 import { formatDate } from '@/lib/date-utils'
 import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
-import ProtectedRoute from '@/components/auth/ProtectedRoute'
-import InfrastructureHealthPanel from '@/components/admin/InfrastructureHealthPanel'
-import MetricsPanel from '@/components/admin/MetricsPanel'
-import SystemMaintenanceTab from '@/components/admin/SystemMaintenanceTab'
-import SystemSettingsPanel from '@/components/admin/SystemSettingsPanel'
 import UserInviteForm from '@/components/users/UserInviteForm'
 import UserEditForm from '@/components/users/UserEditForm'
+import ConnectionsTab from '@/components/connections/ConnectionsTab'
 import {
   Settings,
   Building2,
   User,
-  Server,
-  Info,
   Loader2,
   ChevronDown,
   ChevronUp,
@@ -27,14 +27,10 @@ import {
   Lock,
   Users,
   UserPlus,
-  Wrench,
   Link2,
   Globe,
   Check,
-  BarChart3,
-  SlidersHorizontal,
 } from 'lucide-react'
-import ConnectionsTab from '@/components/connections/ConnectionsTab'
 
 interface UserData {
   id: string
@@ -48,16 +44,11 @@ interface UserData {
   last_login?: string
 }
 
-export default function SettingsAdminPage() {
-  return (
-    <ProtectedRoute requiredRole="org_admin">
-      <SettingsAdminContent />
-    </ProtectedRoute>
-  )
-}
+type TabId = 'organization' | 'user' | 'users' | 'connections'
 
-function SettingsAdminContent() {
+export default function OrgSettingsPage() {
   const { token, user } = useAuth()
+  const { organization, isLoading: orgLoading } = useOrgUrl()
   const [orgSettings, setOrgSettings] = useState<Record<string, any>>({})
   const [userSettings, setUserSettings] = useState<Record<string, any>>({})
   const [editedOrgSettings, setEditedOrgSettings] = useState<Record<string, any>>({})
@@ -66,8 +57,8 @@ function SettingsAdminContent() {
   const [isSaving, setIsSaving] = useState(false)
   const [error, setError] = useState('')
   const searchParams = useSearchParams()
-  const initialTab = searchParams.get('tab') as 'organization' | 'user' | 'infrastructure' | 'users' | 'maintenance' | 'connections' | 'metrics' | 'system' | null
-  const [activeTab, setActiveTab] = useState<'organization' | 'user' | 'infrastructure' | 'users' | 'maintenance' | 'connections' | 'metrics' | 'system'>(initialTab || 'organization')
+  const initialTab = searchParams.get('tab') as TabId | null
+  const [activeTab, setActiveTab] = useState<TabId>(initialTab || 'organization')
   const [showMergedPreview, setShowMergedPreview] = useState(false)
 
   // Users management state
@@ -95,16 +86,16 @@ function SettingsAdminContent() {
   const [isEngineFromConfig, setIsEngineFromConfig] = useState(false)
 
   useEffect(() => {
-    if (token) {
+    if (token && organization) {
       loadSettings()
     }
-  }, [token])
+  }, [token, organization])
 
   useEffect(() => {
-    if (token && activeTab === 'users') {
+    if (token && organization && activeTab === 'users') {
       loadUsers()
     }
-  }, [token, activeTab])
+  }, [token, organization, activeTab])
 
   const loadSettings = async () => {
     if (!token) return
@@ -113,19 +104,16 @@ function SettingsAdminContent() {
     setError('')
 
     try {
-      // Load organization settings, details, and extraction engines
       const [orgData, orgDetails, enginesData] = await Promise.all([
         settingsApi.getOrganizationSettings(token),
         organizationsApi.getCurrentOrganization(token),
         systemApi.getExtractionEngines(),
       ])
 
-      // Set organization details
       setOrgDisplayName(orgDetails.display_name || '')
       setOrgSlug(orgDetails.slug || '')
       setOrgName(orgDetails.name || '')
 
-      // Try to load user settings, but don't fail if endpoint doesn't exist
       let userData = { settings: {} }
       try {
         userData = await settingsApi.getUserSettings(token)
@@ -138,21 +126,17 @@ function SettingsAdminContent() {
       setUserSettings(userData.settings || {})
       setEditedUserSettings(userData.settings || {})
 
-      // Load extraction engine settings
       if (enginesData && Array.isArray(enginesData.engines)) {
-        console.log('Loaded engines:', enginesData.engines)
         setAvailableEngines(enginesData.engines)
         setDefaultEngineSource(enginesData.default_engine_source)
         setIsEngineFromConfig(enginesData.default_engine_source === 'config.yml')
 
-        // If default is from config.yml, use that; otherwise use org setting
         if (enginesData.default_engine_source === 'config.yml') {
           setDefaultEngine(enginesData.default_engine || '')
         } else {
           setDefaultEngine(orgData.settings?.default_extraction_engine || enginesData.default_engine || '')
         }
       } else {
-        console.warn('No engines data or invalid format:', enginesData)
         setAvailableEngines([])
       }
     } catch (err: any) {
@@ -165,7 +149,6 @@ function SettingsAdminContent() {
 
   const loadUsers = async () => {
     if (!token) return
-
     try {
       const response = await usersApi.listUsers(token)
       setUsers(response.users)
@@ -187,7 +170,6 @@ function SettingsAdminContent() {
   const handleToggleActive = async (userId: string, isActive: boolean) => {
     if (!token) return
     if (!confirm(`Are you sure you want to ${isActive ? 'deactivate' : 'activate'} this user?`)) return
-
     try {
       await usersApi.updateUser(token, userId, { is_active: !isActive })
       await loadUsers()
@@ -199,7 +181,6 @@ function SettingsAdminContent() {
   const handleDeleteUser = async (userId: string) => {
     if (!token) return
     if (!confirm('Are you sure you want to delete this user? This action cannot be undone.')) return
-
     try {
       await usersApi.deleteUser(token, userId)
       await loadUsers()
@@ -210,25 +191,20 @@ function SettingsAdminContent() {
 
   const getRoleBadgeVariant = (role: string): 'default' | 'secondary' | 'success' | 'warning' | 'error' | 'info' => {
     switch (role) {
-      case 'admin':
-        return 'error'
-      case 'user':
-        return 'info'
-      default:
-        return 'secondary'
+      case 'admin': return 'error'
+      case 'user': return 'info'
+      default: return 'secondary'
     }
   }
 
   const handleSaveOrgSettings = async () => {
     if (!token) return
-
     setIsSaving(true)
     setError('')
-
     try {
       await settingsApi.updateOrganizationSettings(token, editedOrgSettings)
       setOrgSettings(editedOrgSettings)
-      alert('✅ Organization settings saved successfully!')
+      alert('Organization settings saved successfully!')
     } catch (err: any) {
       setError(err.message || 'Failed to save organization settings')
     } finally {
@@ -238,14 +214,12 @@ function SettingsAdminContent() {
 
   const handleSaveUserSettings = async () => {
     if (!token) return
-
     setIsSaving(true)
     setError('')
-
     try {
       await settingsApi.updateUserSettings(token, editedUserSettings)
       setUserSettings(editedUserSettings)
-      alert('✅ User settings saved successfully!')
+      alert('User settings saved successfully!')
     } catch (err: any) {
       setError(err.message || 'Failed to save user settings')
     } finally {
@@ -263,10 +237,8 @@ function SettingsAdminContent() {
 
   const handleSaveExtractionEngine = async () => {
     if (!token) return
-
     setIsSaving(true)
     setError('')
-
     try {
       const updatedSettings = {
         ...editedOrgSettings,
@@ -275,7 +247,7 @@ function SettingsAdminContent() {
       await settingsApi.updateOrganizationSettings(token, updatedSettings)
       setOrgSettings(updatedSettings)
       setEditedOrgSettings(updatedSettings)
-      alert('✅ Default extraction engine saved successfully!')
+      alert('Default extraction engine saved successfully!')
     } catch (err: any) {
       setError(err.message || 'Failed to save extraction engine')
     } finally {
@@ -285,11 +257,9 @@ function SettingsAdminContent() {
 
   const handleSaveOrgDetails = async () => {
     if (!token) return
-
     setIsSavingOrgDetails(true)
     setOrgDetailsError('')
     setOrgDetailsSaved(false)
-
     try {
       const updated = await organizationsApi.updateOrganization(token, {
         display_name: orgDisplayName,
@@ -346,7 +316,7 @@ function SettingsAdminContent() {
     )
   }
 
-  if (isLoading) {
+  if (isLoading || orgLoading) {
     return (
       <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
         <div className="text-center">
@@ -367,7 +337,7 @@ function SettingsAdminContent() {
               <Settings className="h-6 w-6 text-white" />
             </div>
             <div>
-              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Settings Management</h1>
+              <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Organization Settings</h1>
               <p className="mt-0.5 text-sm text-gray-600 dark:text-gray-400">
                 Configure organization-wide and user-specific settings
               </p>
@@ -410,17 +380,6 @@ function SettingsAdminContent() {
                 User Settings
               </button>
               <button
-                onClick={() => setActiveTab('infrastructure')}
-                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'infrastructure'
-                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-                }`}
-              >
-                <Server className="w-4 h-4 mr-2" />
-                Infrastructure
-              </button>
-              <button
                 onClick={() => setActiveTab('users')}
                 className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
                   activeTab === 'users'
@@ -430,17 +389,6 @@ function SettingsAdminContent() {
               >
                 <Users className="w-4 h-4 mr-2" />
                 Users
-              </button>
-              <button
-                onClick={() => setActiveTab('maintenance')}
-                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'maintenance'
-                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-                }`}
-              >
-                <Wrench className="w-4 h-4 mr-2" />
-                Maintenance
               </button>
               <button
                 onClick={() => setActiveTab('connections')}
@@ -453,276 +401,250 @@ function SettingsAdminContent() {
                 <Link2 className="w-4 h-4 mr-2" />
                 Connections
               </button>
-              <button
-                onClick={() => setActiveTab('metrics')}
-                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'metrics'
-                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-                }`}
-              >
-                <BarChart3 className="w-4 h-4 mr-2" />
-                Metrics
-              </button>
-              <button
-                onClick={() => setActiveTab('system')}
-                className={`flex items-center py-4 px-1 border-b-2 font-medium text-sm ${
-                  activeTab === 'system'
-                    ? 'border-indigo-500 text-indigo-600 dark:text-indigo-400'
-                    : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300 dark:text-gray-400 dark:hover:text-gray-300'
-                }`}
-              >
-                <SlidersHorizontal className="w-4 h-4 mr-2" />
-                System
-              </button>
             </nav>
           </div>
 
           {/* Settings Content */}
           <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm p-6">
-        {activeTab === 'organization' && (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                Organization-Wide Settings
-              </h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                These settings apply to all users in your organization. They can be overridden by individual user settings.
-              </p>
-            </div>
-
-            {/* Organization Details Section */}
-            <div className="border-b border-gray-200 dark:border-gray-700 pb-6">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white shadow-lg">
-                  <Globe className="w-5 h-5" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-base font-semibold text-gray-900 dark:text-white">
-                    Organization Details
-                  </h3>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                    Manage your organization&apos;s identity and URL slug
+            {activeTab === 'organization' && (
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                    Organization-Wide Settings
+                  </h2>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                    These settings apply to all users in your organization. They can be overridden by individual user settings.
                   </p>
                 </div>
-              </div>
 
-              {orgDetailsError && (
-                <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-lg p-3">
-                  <p className="text-sm text-red-800 dark:text-red-200">{orgDetailsError}</p>
-                </div>
-              )}
-
-              {orgDetailsSaved && (
-                <div className="mb-4 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50 rounded-lg p-3">
-                  <div className="flex items-center gap-2">
-                    <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
-                    <p className="text-sm text-emerald-800 dark:text-emerald-200">Organization details saved successfully!</p>
-                  </div>
-                </div>
-              )}
-
-              <div className="space-y-4">
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Organization Name
-                  </label>
-                  <input
-                    type="text"
-                    value={orgName}
-                    disabled
-                    className="w-full max-w-lg px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800/50 text-gray-500 dark:text-gray-400 cursor-not-allowed"
-                  />
-                  <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">Internal name (not editable)</p>
-                </div>
-
-                <div>
-                  <label htmlFor="org-display-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    Display Name
-                  </label>
-                  <input
-                    id="org-display-name"
-                    type="text"
-                    value={orgDisplayName}
-                    onChange={(e) => setOrgDisplayName(e.target.value)}
-                    className="w-full max-w-lg px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
-                  />
-                </div>
-
-                <div>
-                  <label htmlFor="org-slug" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
-                    URL Slug
-                  </label>
-                  <input
-                    id="org-slug"
-                    type="text"
-                    value={orgSlug}
-                    onChange={(e) => setOrgSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
-                    placeholder="e.g. acme-corp"
-                    className={`w-full max-w-lg px-3 py-2 border rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${
-                      orgSlug && !isSlugValid(orgSlug)
-                        ? 'border-red-300 dark:border-red-600'
-                        : 'border-gray-300 dark:border-gray-600'
-                    }`}
-                  />
-                  {orgSlug && !isSlugValid(orgSlug) && (
-                    <p className="mt-1 text-xs text-red-600 dark:text-red-400">
-                      Slug must be lowercase letters, numbers, and hyphens only (e.g. &quot;acme-corp&quot;)
-                    </p>
-                  )}
-                  {orgSlug && isSlugValid(orgSlug) && (
-                    <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
-                      Your organization will appear as: <span className="font-mono font-medium text-indigo-600 dark:text-indigo-400">{orgSlug}</span> in storage URLs
-                    </p>
-                  )}
-                </div>
-              </div>
-
-              <div className="flex gap-3 pt-4">
-                <Button
-                  onClick={handleSaveOrgDetails}
-                  disabled={isSavingOrgDetails || (orgSlug !== '' && !isSlugValid(orgSlug))}
-                >
-                  {isSavingOrgDetails ? 'Saving...' : 'Save Organization Details'}
-                </Button>
-                <Button variant="secondary" onClick={loadSettings}>
-                  Reset
-                </Button>
-              </div>
-            </div>
-
-            {/* Default Extraction Engine Section */}
-            <div className="border-b border-gray-200 dark:border-gray-700 pb-6">
-              <div className="flex items-center gap-3 mb-4">
-                <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white shadow-lg">
-                  <FileText className="w-5 h-5" />
-                </div>
-                <div className="flex-1">
-                  <h3 className="text-base font-semibold text-gray-900 dark:text-white">
-                    Default Extraction Engine
-                  </h3>
-                  <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
-                    Choose which engine to use for document extraction by default
-                  </p>
-                </div>
-              </div>
-
-              {isEngineFromConfig && (
-                <div className="mb-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-lg p-4">
-                  <div className="flex">
-                    <div className="flex-shrink-0">
-                      <Lock className="h-5 w-5 text-amber-500 dark:text-amber-400" />
+                {/* Organization Details Section */}
+                <div className="border-b border-gray-200 dark:border-gray-700 pb-6">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-500 to-purple-500 flex items-center justify-center text-white shadow-lg">
+                      <Globe className="w-5 h-5" />
                     </div>
-                    <div className="ml-3">
-                      <h4 className="text-sm font-medium text-amber-800 dark:text-amber-200">
-                        Configured in config.yml
-                      </h4>
-                      <div className="mt-1 text-sm text-amber-700 dark:text-amber-300">
-                        The default extraction engine is set in <code className="bg-amber-100 dark:bg-amber-900/50 px-1 py-0.5 rounded">config.yml</code> and cannot be changed here.
-                        To change it, update the <code className="bg-amber-100 dark:bg-amber-900/50 px-1 py-0.5 rounded">extraction.default_engine</code> setting in your configuration file.
+                    <div className="flex-1">
+                      <h3 className="text-base font-semibold text-gray-900 dark:text-white">
+                        Organization Details
+                      </h3>
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                        Manage your organization&apos;s identity and URL slug
+                      </p>
+                    </div>
+                  </div>
+
+                  {orgDetailsError && (
+                    <div className="mb-4 bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800/50 rounded-lg p-3">
+                      <p className="text-sm text-red-800 dark:text-red-200">{orgDetailsError}</p>
+                    </div>
+                  )}
+
+                  {orgDetailsSaved && (
+                    <div className="mb-4 bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-200 dark:border-emerald-800/50 rounded-lg p-3">
+                      <div className="flex items-center gap-2">
+                        <Check className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                        <p className="text-sm text-emerald-800 dark:text-emerald-200">Organization details saved successfully!</p>
                       </div>
                     </div>
+                  )}
+
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Organization Name
+                      </label>
+                      <input
+                        type="text"
+                        value={orgName}
+                        disabled
+                        className="w-full max-w-lg px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg bg-gray-50 dark:bg-gray-800/50 text-gray-500 dark:text-gray-400 cursor-not-allowed"
+                      />
+                      <p className="mt-1 text-xs text-gray-400 dark:text-gray-500">Internal name (not editable)</p>
+                    </div>
+
+                    <div>
+                      <label htmlFor="org-display-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        Display Name
+                      </label>
+                      <input
+                        id="org-display-name"
+                        type="text"
+                        value={orgDisplayName}
+                        onChange={(e) => setOrgDisplayName(e.target.value)}
+                        className="w-full max-w-lg px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white"
+                      />
+                    </div>
+
+                    <div>
+                      <label htmlFor="org-slug" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">
+                        URL Slug
+                      </label>
+                      <input
+                        id="org-slug"
+                        type="text"
+                        value={orgSlug}
+                        onChange={(e) => setOrgSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ''))}
+                        placeholder="e.g. acme-corp"
+                        className={`w-full max-w-lg px-3 py-2 border rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${
+                          orgSlug && !isSlugValid(orgSlug)
+                            ? 'border-red-300 dark:border-red-600'
+                            : 'border-gray-300 dark:border-gray-600'
+                        }`}
+                      />
+                      {orgSlug && !isSlugValid(orgSlug) && (
+                        <p className="mt-1 text-xs text-red-600 dark:text-red-400">
+                          Slug must be lowercase letters, numbers, and hyphens only (e.g. &quot;acme-corp&quot;)
+                        </p>
+                      )}
+                      {orgSlug && isSlugValid(orgSlug) && (
+                        <p className="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                          Your organization will appear as: <span className="font-mono font-medium text-indigo-600 dark:text-indigo-400">{orgSlug}</span> in storage URLs
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-3 pt-4">
+                    <Button
+                      onClick={handleSaveOrgDetails}
+                      disabled={isSavingOrgDetails || (orgSlug !== '' && !isSlugValid(orgSlug))}
+                    >
+                      {isSavingOrgDetails ? 'Saving...' : 'Save Organization Details'}
+                    </Button>
+                    <Button variant="secondary" onClick={loadSettings}>
+                      Reset
+                    </Button>
                   </div>
                 </div>
-              )}
 
-              <div>
-                <label htmlFor="default-extraction-engine" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
-                  Extraction Engine
-                </label>
-                <select
-                  id="default-extraction-engine"
-                  value={defaultEngine}
-                  onChange={(e) => setDefaultEngine(e.target.value)}
-                  disabled={isEngineFromConfig || availableEngines.length === 0}
-                  className={`w-full max-w-lg px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${
-                    isEngineFromConfig || availableEngines.length === 0 ? 'opacity-50 cursor-not-allowed' : ''
-                  }`}
-                >
-                  {availableEngines.length === 0 && (
-                    <option value="">Loading engines...</option>
+                {/* Default Extraction Engine Section */}
+                <div className="border-b border-gray-200 dark:border-gray-700 pb-6">
+                  <div className="flex items-center gap-3 mb-4">
+                    <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-emerald-500 to-teal-500 flex items-center justify-center text-white shadow-lg">
+                      <FileText className="w-5 h-5" />
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-base font-semibold text-gray-900 dark:text-white">
+                        Default Extraction Engine
+                      </h3>
+                      <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+                        Choose which engine to use for document extraction by default
+                      </p>
+                    </div>
+                  </div>
+
+                  {isEngineFromConfig && (
+                    <div className="mb-4 bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-800/50 rounded-lg p-4">
+                      <div className="flex">
+                        <div className="flex-shrink-0">
+                          <Lock className="h-5 w-5 text-amber-500 dark:text-amber-400" />
+                        </div>
+                        <div className="ml-3">
+                          <h4 className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                            Configured in config.yml
+                          </h4>
+                          <div className="mt-1 text-sm text-amber-700 dark:text-amber-300">
+                            The default extraction engine is set in <code className="bg-amber-100 dark:bg-amber-900/50 px-1 py-0.5 rounded">config.yml</code> and cannot be changed here.
+                            To change it, update the <code className="bg-amber-100 dark:bg-amber-900/50 px-1 py-0.5 rounded">extraction.default_engine</code> setting in your configuration file.
+                          </div>
+                        </div>
+                      </div>
+                    </div>
                   )}
-                  {availableEngines.map((engine) => (
-                    <option key={engine.id} value={engine.name}>
-                      {engine.display_name}
-                    </option>
-                  ))}
-                </select>
-                {defaultEngine && availableEngines.length > 0 && (
-                  <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
-                    {availableEngines.find((e) => e.name === defaultEngine)?.description}
-                  </p>
-                )}
-                {availableEngines.length === 0 && !isLoading && (
-                  <p className="mt-2 text-sm text-amber-600 dark:text-amber-400">
-                    No extraction engines available. Check your config.yml file.
-                  </p>
-                )}
-              </div>
 
-              {!isEngineFromConfig && (
-                <div className="flex gap-3 pt-4">
-                  <Button onClick={handleSaveExtractionEngine} disabled={isSaving}>
-                    {isSaving ? 'Saving...' : 'Save Extraction Engine'}
+                  <div>
+                    <label htmlFor="default-extraction-engine" className="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">
+                      Extraction Engine
+                    </label>
+                    <select
+                      id="default-extraction-engine"
+                      value={defaultEngine}
+                      onChange={(e) => setDefaultEngine(e.target.value)}
+                      disabled={isEngineFromConfig || availableEngines.length === 0}
+                      className={`w-full max-w-lg px-3 py-2 border border-gray-300 dark:border-gray-600 rounded-lg focus:outline-none focus:ring-indigo-500 focus:border-indigo-500 bg-white dark:bg-gray-800 text-gray-900 dark:text-white ${
+                        isEngineFromConfig || availableEngines.length === 0 ? 'opacity-50 cursor-not-allowed' : ''
+                      }`}
+                    >
+                      {availableEngines.length === 0 && (
+                        <option value="">Loading engines...</option>
+                      )}
+                      {availableEngines.map((engine) => (
+                        <option key={engine.id} value={engine.name}>
+                          {engine.display_name}
+                        </option>
+                      ))}
+                    </select>
+                    {defaultEngine && availableEngines.length > 0 && (
+                      <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+                        {availableEngines.find((e) => e.name === defaultEngine)?.description}
+                      </p>
+                    )}
+                    {availableEngines.length === 0 && !isLoading && (
+                      <p className="mt-2 text-sm text-amber-600 dark:text-amber-400">
+                        No extraction engines available. Check your config.yml file.
+                      </p>
+                    )}
+                  </div>
+
+                  {!isEngineFromConfig && (
+                    <div className="flex gap-3 pt-4">
+                      <Button onClick={handleSaveExtractionEngine} disabled={isSaving}>
+                        {isSaving ? 'Saving...' : 'Save Extraction Engine'}
+                      </Button>
+                      <Button variant="secondary" onClick={loadSettings}>
+                        Reset
+                      </Button>
+                    </div>
+                  )}
+                </div>
+
+                <div className="space-y-4">
+                  {Object.entries(editedOrgSettings).filter(([key]) => key !== 'default_extraction_engine').map(([key, value]) => (
+                    <div key={key}>
+                      {renderSettingField(key, value, handleOrgSettingChange)}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="flex gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <Button onClick={handleSaveOrgSettings} disabled={isSaving}>
+                    {isSaving ? 'Saving...' : 'Save Organization Settings'}
                   </Button>
                   <Button variant="secondary" onClick={loadSettings}>
                     Reset
                   </Button>
                 </div>
-              )}
-            </div>
+              </div>
+            )}
 
-            <div className="space-y-4">
-              {Object.entries(editedOrgSettings).filter(([key]) => key !== 'default_extraction_engine').map(([key, value]) => (
-                <div key={key}>
-                  {renderSettingField(key, value, handleOrgSettingChange)}
+            {activeTab === 'user' && (
+              <div className="space-y-6">
+                <div>
+                  <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
+                    User-Specific Settings
+                  </h2>
+                  <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+                    These settings override organization defaults for user <strong>{user?.username}</strong>.
+                  </p>
                 </div>
-              ))}
-            </div>
 
-            <div className="flex gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <Button onClick={handleSaveOrgSettings} disabled={isSaving}>
-                {isSaving ? 'Saving...' : 'Save Organization Settings'}
-              </Button>
-              <Button variant="secondary" onClick={loadSettings}>
-                Reset
-              </Button>
-            </div>
-          </div>
-        )}
-
-        {activeTab === 'user' && (
-          <div className="space-y-6">
-            <div>
-              <h2 className="text-lg font-semibold text-gray-900 dark:text-white mb-4">
-                User-Specific Settings
-              </h2>
-              <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
-                These settings override organization defaults for user <strong>{user?.username}</strong>.
-              </p>
-            </div>
-
-            <div className="space-y-4">
-              {Object.entries(editedUserSettings).map(([key, value]) => (
-                <div key={key}>
-                  {renderSettingField(key, value, handleUserSettingChange)}
+                <div className="space-y-4">
+                  {Object.entries(editedUserSettings).map(([key, value]) => (
+                    <div key={key}>
+                      {renderSettingField(key, value, handleUserSettingChange)}
+                    </div>
+                  ))}
                 </div>
-              ))}
-            </div>
 
-            <div className="flex gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <Button onClick={handleSaveUserSettings} disabled={isSaving}>
-                {isSaving ? 'Saving...' : 'Save User Settings'}
-              </Button>
-              <Button variant="secondary" onClick={loadSettings}>
-                Reset
-              </Button>
-            </div>
-          </div>
-        )}
-
-            {activeTab === 'infrastructure' && (
-              <InfrastructureHealthPanel />
+                <div className="flex gap-3 pt-4 border-t border-gray-200 dark:border-gray-700">
+                  <Button onClick={handleSaveUserSettings} disabled={isSaving}>
+                    {isSaving ? 'Saving...' : 'Save User Settings'}
+                  </Button>
+                  <Button variant="secondary" onClick={loadSettings}>
+                    Reset
+                  </Button>
+                </div>
+              </div>
             )}
 
             {activeTab === 'users' && (
@@ -766,21 +688,11 @@ function SettingsAdminContent() {
                   <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
                     <thead className="bg-gray-50 dark:bg-gray-800/50">
                       <tr>
-                        <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                          User
-                        </th>
-                        <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                          Role
-                        </th>
-                        <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                          Status
-                        </th>
-                        <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                          Last Login
-                        </th>
-                        <th className="px-6 py-3.5 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                          Actions
-                        </th>
+                        <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">User</th>
+                        <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Role</th>
+                        <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Status</th>
+                        <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Last Login</th>
+                        <th className="px-6 py-3.5 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">Actions</th>
                       </tr>
                     </thead>
                     <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
@@ -795,19 +707,13 @@ function SettingsAdminContent() {
                                     <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">(You)</span>
                                   )}
                                 </div>
-                                <div className="text-sm text-gray-500 dark:text-gray-400">
-                                  {userItem.email}
-                                </div>
-                                <div className="text-xs text-gray-400 dark:text-gray-500">
-                                  @{userItem.username}
-                                </div>
+                                <div className="text-sm text-gray-500 dark:text-gray-400">{userItem.email}</div>
+                                <div className="text-xs text-gray-400 dark:text-gray-500">@{userItem.username}</div>
                               </div>
                             </div>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
-                            <Badge variant={getRoleBadgeVariant(userItem.role)}>
-                              {userItem.role}
-                            </Badge>
+                            <Badge variant={getRoleBadgeVariant(userItem.role)}>{userItem.role}</Badge>
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap">
                             <Badge variant={userItem.is_active ? 'success' : 'secondary'}>
@@ -819,27 +725,15 @@ function SettingsAdminContent() {
                           </td>
                           <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
                             <div className="flex justify-end gap-2">
-                              <Button
-                                variant="secondary"
-                                size="sm"
-                                onClick={() => setEditingUser(userItem)}
-                              >
+                              <Button variant="secondary" size="sm" onClick={() => setEditingUser(userItem)}>
                                 Edit
                               </Button>
                               {userItem.id !== user?.id && (
                                 <>
-                                  <Button
-                                    variant="secondary"
-                                    size="sm"
-                                    onClick={() => handleToggleActive(userItem.id, userItem.is_active)}
-                                  >
+                                  <Button variant="secondary" size="sm" onClick={() => handleToggleActive(userItem.id, userItem.is_active)}>
                                     {userItem.is_active ? 'Deactivate' : 'Activate'}
                                   </Button>
-                                  <Button
-                                    variant="destructive"
-                                    size="sm"
-                                    onClick={() => handleDeleteUser(userItem.id)}
-                                  >
+                                  <Button variant="destructive" size="sm" onClick={() => handleDeleteUser(userItem.id)}>
                                     Delete
                                   </Button>
                                 </>
@@ -862,20 +756,8 @@ function SettingsAdminContent() {
               </div>
             )}
 
-            {activeTab === 'maintenance' && (
-              <SystemMaintenanceTab onError={(msg) => setError(msg)} />
-            )}
-
             {activeTab === 'connections' && (
               <ConnectionsTab onError={(msg) => setError(msg)} />
-            )}
-
-            {activeTab === 'metrics' && (
-              <MetricsPanel />
-            )}
-
-            {activeTab === 'system' && (
-              <SystemSettingsPanel />
             )}
           </div>
 

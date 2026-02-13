@@ -9,8 +9,11 @@ from .base import Base, get_db
 from .models import (
     ApiKey,
     AuditLog,
+    CollectionChunk,
+    CollectionVectorSync,
     Connection,
     Organization,
+    SearchCollection,
     SystemSetting,
     User,
 )
@@ -33,6 +36,10 @@ __all__ = [
     "Connection",
     "SystemSetting",
     "AuditLog",
+    # Search collections
+    "SearchCollection",
+    "CollectionVectorSync",
+    "CollectionChunk",
     # Procedures framework
     "Procedure",
     "Pipeline",

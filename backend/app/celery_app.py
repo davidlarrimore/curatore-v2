@@ -39,6 +39,7 @@ app = Celery(
         "app.core.tasks.forecasts",
         "app.core.tasks.procedures",
         "app.core.tasks.maintenance",
+        "app.core.tasks.collections",
     ],
 )
 
@@ -142,6 +143,11 @@ app.conf.update(
         "app.tasks.send_invitation_email_task": {"queue": "maintenance"},
         # Cleanup tasks
         "app.tasks.cleanup_expired_files_task": {"queue": "maintenance"},
+
+        # =================================================================
+        # COLLECTION QUEUE - Collection population (uses extraction queue)
+        # =================================================================
+        "app.tasks.populate_collection_fresh_task": {"queue": "extraction"},
 
         # =================================================================
         # PRIORITY QUEUE - User-boosted tasks get priority processing

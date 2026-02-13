@@ -39,7 +39,10 @@ clamps:
     limit:
       max: 50
       default: 20
-
+  search_collection:
+    limit:
+      max: 50
+      default: 20
   # SharePoint browsing — limit result count
   sp_list_items:
     limit:

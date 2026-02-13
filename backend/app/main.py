@@ -449,6 +449,18 @@ async def startup_event() -> None:
             print(f"   ⚠️  Failed to sync default connections: {e}")
             # Don't fail startup if connection sync fails
 
+        # Sync system services from config.yml
+        try:
+            print("🔧 Syncing system services from config...")
+            async with database_service.get_session() as session:
+                from .api.v1.admin.routers.services import sync_services_from_config
+                counts = await sync_services_from_config(session)
+                await session.commit()
+                print(f"   ✅ Services: {counts['created']} created, {counts['updated']} updated, {counts['unchanged']} unchanged")
+        except Exception as e:
+            print(f"   ⚠️  Service sync warning: {e}")
+            # Non-fatal - services can be synced later
+
         # The DocumentService handles directory creation and validation
         # This is called during service import/initialization
 

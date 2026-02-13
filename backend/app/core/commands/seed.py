@@ -89,16 +89,7 @@ async def create_default_organization() -> Organization:
             display_name=settings.default_org_name,
             slug=settings.default_org_slug,
             is_active=True,
-            settings={
-                "quality_thresholds": {
-                    "conversion": settings.default_conversion_threshold,
-                    "clarity": settings.default_clarity_threshold,
-                    "completeness": settings.default_completeness_threshold,
-                    "relevance": settings.default_relevance_threshold,
-                    "markdown": settings.default_markdown_threshold,
-                },
-                "auto_optimize": False,
-            },
+            settings={},
         )
 
         session.add(org)

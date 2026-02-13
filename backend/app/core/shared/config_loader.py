@@ -222,6 +222,17 @@ class ConfigLoader:
     # Typed configuration getters
     # -------------------------------------------------------------------------
 
+    def get_database_config(self):
+        """Get typed database configuration.
+
+        Returns:
+            DatabaseConfig instance or None if not configured.
+        """
+        config = self.get_config()
+        if config is None:
+            return None
+        return config.database
+
     def get_llm_config(self) -> Optional[LLMConfig]:
         """
         Get typed LLM configuration.
