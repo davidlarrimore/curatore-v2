@@ -466,7 +466,7 @@ async def comprehensive_health() -> Dict[str, Any]:
 
     component_keys = [
         "backend", "database", "redis", "celery_worker",
-        "extraction_service", "object_storage",
+        "document_service", "object_storage",
         "llm", "playwright", "sharepoint",
     ]
 

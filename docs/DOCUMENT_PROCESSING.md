@@ -141,16 +141,16 @@ The backend connects to the Document Service via the `DocumentServiceAdapter`. C
 
 1. **DB Connection** (per-org): Connection record with `connection_type=extraction`
 2. **config.yml**: `extraction.engines` section
-3. **Environment variables**: `EXTRACTION_SERVICE_URL`, `EXTRACTION_SERVICE_API_KEY`, `EXTRACTION_SERVICE_TIMEOUT`, `EXTRACTION_SERVICE_VERIFY_SSL`
+3. **Environment variables**: `DOCUMENT_SERVICE_URL`, `DOCUMENT_SERVICE_API_KEY`, `DOCUMENT_SERVICE_TIMEOUT`, `DOCUMENT_SERVICE_VERIFY_SSL`
 
 ### config.yml Example
 
 ```yaml
 extraction:
   engines:
-    - name: extraction-service
-      engine_type: extraction-service
-      service_url: http://extraction:8010
+    - name: document-service
+      engine_type: document-service
+      service_url: http://document-service:8010
       timeout: 300
       enabled: true
 ```
@@ -161,7 +161,7 @@ The backend connects to the Document Service container via `curatore-network`:
 
 ```yaml
 environment:
-  - EXTRACTION_SERVICE_URL=http://extraction:8010
+  - DOCUMENT_SERVICE_URL=http://document-service:8010
 ```
 
 ### Enable/Disable Search Indexing

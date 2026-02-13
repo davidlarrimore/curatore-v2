@@ -225,9 +225,6 @@ npm run lint
 # Backend tests only
 pytest backend/tests
 
-# Extraction service tests
-pytest extraction-service/tests -v
-
 # API smoke tests
 ./scripts/api_smoke_test.sh
 

@@ -68,14 +68,14 @@ class Settings(BaseSettings):
     max_file_size: int = Field(default=50 * 1024 * 1024, description="Max upload size in bytes")
 
     # =========================================================================
-    # EXTRACTION SERVICE (optional external microservice)
+    # DOCUMENT SERVICE (external document processing microservice)
     # =========================================================================
-    # If provided, backend will POST files to this service for text/markdown extraction.
+    # Backend POSTs files to this service for text/markdown extraction.
     # Example: http://localhost:8010
-    extraction_service_url: Optional[str] = Field(default=None, description="Base URL for extraction service")
-    extraction_service_timeout: float = Field(default=60.0, description="Timeout (s) for extraction requests")
-    extraction_service_api_key: Optional[str] = Field(default=None, description="Bearer token for extraction service")
-    extraction_service_verify_ssl: bool = Field(default=True, description="Verify SSL for extraction service calls")
+    document_service_url: Optional[str] = Field(default=None, description="Base URL for document service")
+    document_service_timeout: float = Field(default=60.0, description="Timeout (s) for document service requests")
+    document_service_api_key: Optional[str] = Field(default=None, description="Bearer token for document service")
+    document_service_verify_ssl: bool = Field(default=True, description="Verify SSL for document service calls")
 
     # Playwright rendering service (for JavaScript-rendered web scraping)
     playwright_service_url: Optional[str] = Field(default=None, description="Base URL for Playwright rendering service")

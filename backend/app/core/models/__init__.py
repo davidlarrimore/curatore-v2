@@ -138,7 +138,7 @@ class ProcessingOptions(BaseModel):
     )
     extraction_engine: Optional[str] = Field(
         default="docling-external",
-        description="Extraction engine to use (e.g., 'docling-external', 'extraction-service', 'docling')",
+        description="Extraction engine to use (e.g., 'docling-external', 'document-service', 'docling')",
     )
 
 
@@ -237,7 +237,7 @@ class ConversionResult(BaseModel):
     # Extraction engine metadata
     extraction_engine: Optional[str] = Field(
         default=None,
-        description="Extraction engine used (e.g., 'extraction-service', 'docling')"
+        description="Extraction engine used (e.g., 'document-service', 'docling')"
     )
     extraction_attempts: Optional[int] = Field(
         default=None,

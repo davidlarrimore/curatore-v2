@@ -488,11 +488,11 @@ class LLMConnectionType(BaseConnectionType):
 
 
 class ExtractionConfigSchema(BaseModel):
-    """Extraction service configuration schema."""
+    """Document service configuration schema."""
 
-    service_url: str = Field(..., description="Extraction service URL")
-    engine_type: Literal["extraction-service", "docling"] = Field(
-        default="extraction-service",
+    service_url: str = Field(..., description="Document service URL")
+    engine_type: Literal["document-service", "extraction-service", "docling"] = Field(
+        default="document-service",
         description="Type of extraction engine"
     )
     endpoint_path: Optional[str] = Field(
@@ -509,11 +509,11 @@ class ExtractionConfigSchema(BaseModel):
 
 
 class ExtractionConnectionType(BaseConnectionType):
-    """Extraction service connection type."""
+    """Document service connection type."""
 
     connection_type = "extraction"
-    display_name = "Extraction Service"
-    description = "Connect to document extraction service for file conversion"
+    display_name = "Document Service"
+    description = "Connect to document service for file conversion"
 
     async def _detect_docling_version(
         self,
@@ -536,22 +536,22 @@ class ExtractionConnectionType(BaseConnectionType):
         return None
 
     def get_config_schema(self) -> Dict[str, Any]:
-        """Get JSON schema for extraction service configuration."""
+        """Get JSON schema for document service configuration."""
         return {
             "type": "object",
             "properties": {
                 "service_url": {
                     "type": "string",
                     "title": "Service URL",
-                    "description": "Base URL for extraction service (e.g., http://extraction:8010 or http://docling:5001)",
-                    "default": "http://extraction:8010"
+                    "description": "Base URL for document service (e.g., http://document-service:8010 or http://docling:5001)",
+                    "default": "http://document-service:8010"
                 },
                 "engine_type": {
                     "type": "string",
                     "title": "Engine Type",
                     "description": "Type of extraction engine",
-                    "enum": ["extraction-service", "docling"],
-                    "default": "extraction-service"
+                    "enum": ["document-service", "docling"],
+                    "default": "document-service"
                 },
                 "docling_ocr_enabled": {
                     "type": "boolean",
@@ -562,7 +562,7 @@ class ExtractionConnectionType(BaseConnectionType):
                 "endpoint_path": {
                     "type": "string",
                     "title": "Endpoint Path (optional)",
-                    "description": "Custom endpoint path (e.g., /v1/convert/file for docling, /api/v1/extract for extraction-service). Leave empty to use defaults.",
+                    "description": "Custom endpoint path (e.g., /v1/convert/file for docling, /api/v1/extract for document-service). Leave empty to use defaults.",
                     "default": ""
                 },
                 "timeout": {
@@ -584,26 +584,26 @@ class ExtractionConnectionType(BaseConnectionType):
         }
 
     def validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate extraction service configuration."""
+        """Validate document service configuration."""
         try:
             validated = ExtractionConfigSchema(**config)
             return validated.model_dump()
         except ValidationError as e:
-            raise ValueError(f"Invalid extraction service configuration: {e}")
+            raise ValueError(f"Invalid document service configuration: {e}")
 
     async def test_connection(self, config: Dict[str, Any]) -> ConnectionTestResult:
-        """Test extraction service connection."""
+        """Test document service connection."""
         try:
             service_url = config["service_url"].rstrip("/")
             timeout = config.get("timeout", 60)
             api_key = config.get("api_key")
-            verify_ssl = config.get("verify_ssl", settings.extraction_service_verify_ssl)
+            verify_ssl = config.get("verify_ssl", settings.document_service_verify_ssl)
 
             headers = {}
             if api_key:
                 headers["X-API-Key"] = api_key
 
-            # Docling uses /health, extraction-service uses /api/v1/system/health
+            # Docling uses /health, document-service uses /api/v1/system/health
             # Detect Docling by engine_type or URL pattern
             is_docling = config.get("engine_type") == "docling" or "docling" in service_url.lower() or ":5001" in service_url
             if is_docling:
@@ -655,7 +655,7 @@ class ExtractionConnectionType(BaseConnectionType):
                         return ConnectionTestResult(
                             success=True,
                             status="healthy",
-                            message="Extraction service is responding",
+                            message="Document service is responding",
                             details=details,
                         )
 
@@ -667,7 +667,7 @@ class ExtractionConnectionType(BaseConnectionType):
             return ConnectionTestResult(
                 success=False,
                 status="unhealthy",
-                message="Extraction service returned error",
+                message="Document service returned error",
                 error=error_message,
             )
 
@@ -682,7 +682,7 @@ class ExtractionConnectionType(BaseConnectionType):
             return ConnectionTestResult(
                 success=False,
                 status="unhealthy",
-                message="Failed to test extraction service",
+                message="Failed to test document service",
                 error=str(e)
             )
 
@@ -1429,7 +1429,7 @@ async def sync_default_connections_from_env(
         def _normalize_url(value: Optional[str]) -> str:
             return (value or "").rstrip("/")
 
-        default_url = _normalize_url(settings.extraction_service_url)
+        default_url = _normalize_url(settings.document_service_url)
 
         if extraction_config and extraction_config.engines:
             for engine in extraction_config.engines:
@@ -1471,8 +1471,8 @@ async def sync_default_connections_from_env(
                 elif default_url and service_url == default_url:
                     # Legacy fallback: match by URL from env var
                     is_default = True
-                elif engine.name.lower() in {"extraction-service", "default"}:
-                    # Ultimate fallback: extraction-service is default
+                elif engine.name.lower() in {"document-service", "extraction-service", "default"}:
+                    # Ultimate fallback: document-service is default
                     is_default = True
 
                 # Sync enabled/disabled state from config.yml
@@ -1534,20 +1534,20 @@ async def sync_default_connections_from_env(
             else:
                 results["extraction"] = "skipped"
         else:
-            service_url = settings.extraction_service_url
+            service_url = settings.document_service_url
 
             if service_url:
                 config = {
                     "service_url": service_url,
-                    "timeout": int(settings.extraction_service_timeout),
+                    "timeout": int(settings.document_service_timeout),
                 }
 
                 # Add API key if present
-                if settings.extraction_service_api_key:
-                    config["api_key"] = settings.extraction_service_api_key
+                if settings.document_service_api_key:
+                    config["api_key"] = settings.document_service_api_key
 
                 # Add verify_ssl setting
-                config["verify_ssl"] = settings.extraction_service_verify_ssl
+                config["verify_ssl"] = settings.document_service_verify_ssl
 
                 # Query for existing managed extraction connection
                 result = await session.execute(
@@ -1566,36 +1566,36 @@ async def sync_default_connections_from_env(
                         existing.updated_at = datetime.utcnow()
                         await session.commit()
                         results["extraction"] = "updated"
-                        logger.info("Updated managed Extraction Service connection")
+                        logger.info("Updated managed Document Service connection")
                     else:
                         results["extraction"] = "unchanged"
                 else:
                     # Create new managed connection
                     new_connection = Connection(
                         organization_id=organization_id,
-                        name="Default Extraction Service",
-                        description="Auto-managed extraction service connection from environment variables",
+                        name="Default Document Service",
+                        description="Auto-managed document service connection from environment variables",
                         connection_type="extraction",
                         config=config,
                         is_active=True,
                         is_default=True,
                         is_managed=True,
-                        managed_by="Environment variables: EXTRACTION_SERVICE_URL",
+                        managed_by="Environment variables: DOCUMENT_SERVICE_URL",
                         scope="organization",
                     )
                     session.add(new_connection)
                     await session.commit()
                     results["extraction"] = "created"
-                    logger.info("Created managed Extraction Service connection")
+                    logger.info("Created managed Document Service connection")
             else:
                 results["extraction"] = "skipped"
                 logger.debug(
-                    "Skipping extraction connection sync - missing EXTRACTION_SERVICE_URL"
+                    "Skipping extraction connection sync - missing DOCUMENT_SERVICE_URL"
                 )
 
     except Exception as e:
         results["extraction"] = "error"
-        logger.error(f"Failed to sync Extraction Service connection: {e}")
+        logger.error(f"Failed to sync Document Service connection: {e}")
 
     # -------------------------------------------------------------------------
     # Playwright Connection

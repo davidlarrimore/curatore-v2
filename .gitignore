@@ -42,7 +42,6 @@ logs/
 
 
 .pytest_cache/
-extraction-service/test_documents/*
 
 # Coverage reports
 .coverage

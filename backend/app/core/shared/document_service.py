@@ -323,7 +323,7 @@ class DocumentService:
             engine_lower = str(engine).lower()
             if engine_lower in ("docling", "docling-internal", "docling-external"):
                 engine_hint = "docling"
-            elif engine_lower in ("extraction-service", "markitdown", "default", "extraction"):
+            elif engine_lower in ("document-service", "extraction-service", "markitdown", "default", "extraction"):
                 engine_hint = "markitdown"
             elif engine_lower in ("fast_pdf",):
                 engine_hint = "fast_pdf"
@@ -338,7 +338,7 @@ class DocumentService:
                         et = config_engine.engine_type
                         if et == "docling":
                             engine_hint = "docling"
-                        elif et == "extraction-service":
+                        elif et in ("document-service", "extraction-service"):
                             engine_hint = "markitdown"
                         else:
                             engine_hint = "auto"

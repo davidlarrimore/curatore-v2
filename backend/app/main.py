@@ -244,7 +244,7 @@ async def startup_event() -> None:
     # Document service summary
     try:
         print("🔧 Document Service Configuration:")
-        print(f"   EXTRACTION_SERVICE_URL: {settings.extraction_service_url}")
+        print(f"   DOCUMENT_SERVICE_URL: {settings.document_service_url}")
     except Exception:
         pass
 

@@ -36,7 +36,7 @@ jobs:
         env:
           # Keep external integrations quiet/disabled in CI
           USE_CELERY: "false"
-          EXTRACTION_SERVICE_URL: ""
+          DOCUMENT_SERVICE_URL: ""
           FILES_ROOT: "${{ runner.temp }}/curatore_pytest"
           # Make logs deterministic per run attempt
           REPORT_DIR: ${{ github.workspace }}/logs/test_reports/${{ github.run_id }}_${{ github.run_attempt }}/backend

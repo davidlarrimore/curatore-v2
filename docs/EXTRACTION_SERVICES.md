@@ -33,8 +33,8 @@ For detailed pipeline documentation, see [`DOCUMENT_PROCESSING.md`](DOCUMENT_PRO
 
 ## Quick Comparison
 
-| Feature | fast_pdf | extraction-service | docling |
-|---------|----------|-------------------|---------|
+| Feature | fast_pdf | document-service | docling |
+|---------|----------|-----------------|---------|
 | **Location** | Local (worker) | Container (8010) | External (5001) |
 | **Technology** | PyMuPDF | MarkItDown + LibreOffice | IBM Docling Serve |
 | **PDF (simple)** | ✅ Fast | ❌ | ✅ |
@@ -67,7 +67,7 @@ For detailed pipeline documentation, see [`DOCUMENT_PROCESSING.md`](DOCUMENT_PRO
 - Low resource usage
 - Best for reports, articles, simple documents
 
-### 2. extraction-service (MarkItDown)
+### 2. document-service (MarkItDown)
 
 **Purpose:** Document conversion for Office files, text files, and emails.
 
@@ -195,7 +195,7 @@ Analyzes first 3 pages for:
 Uses file size as a complexity proxy:
 | File Size | Engine | Reason |
 |-----------|--------|--------|
-| < 5 MB | `extraction-service` | Simple document, MarkItDown handles well |
+| < 5 MB | `document-service` | Simple document, MarkItDown handles well |
 | >= 5 MB | `docling` | Large file likely has complex content |
 
 ## Configuration
@@ -204,15 +204,15 @@ Uses file size as a complexity proxy:
 
 ```yaml
 extraction:
-  default_engine: extraction-service
+  default_engine: document-service
 
   engines:
-    # Internal Extraction Service (MarkItDown)
-    - name: extraction-service
-      display_name: "Internal Extraction Service"
-      description: "Built-in extraction using MarkItDown"
-      engine_type: extraction-service
-      service_url: http://extraction:8010
+    # Document Service (MarkItDown)
+    - name: document-service
+      display_name: "Document Service"
+      description: "External document service using MarkItDown"
+      engine_type: document-service
+      service_url: http://document-service:8010
       timeout: 240
       enabled: true
 
@@ -242,7 +242,7 @@ docker-compose --profile docling up -d
 ```bash
 # Extraction Service
 curl http://localhost:8010/api/v1/system/health
-# {"status":"ok","service":"extraction-service"}
+# {"status":"ok","service":"document-service"}
 
 # Docling Service
 curl http://localhost:5151/health
@@ -272,7 +272,7 @@ docker-compose up -d worker
 
 **Cause:** File format not supported by Docling (e.g., .txt files)
 
-**Solution:** Triage automatically routes unsupported formats to extraction-service
+**Solution:** Triage automatically routes unsupported formats to the document service
 
 ### Images Not Processing
 
@@ -291,4 +291,4 @@ docker-compose up -d worker
 
 ## Updated: 2026-02-01
 
-Triage-based architecture with fast_pdf, extraction-service, and docling engines.
+Triage-based architecture with fast_pdf, document-service, and docling engines.

@@ -16,7 +16,7 @@ os.environ.setdefault("USE_OBJECT_STORAGE", "true")
 
 # Keep external integrations quiet during tests
 os.environ.setdefault("USE_CELERY", "false")
-os.environ.setdefault("EXTRACTION_SERVICE_URL", "")
+os.environ.setdefault("DOCUMENT_SERVICE_URL", "")
 
 
 @pytest.fixture

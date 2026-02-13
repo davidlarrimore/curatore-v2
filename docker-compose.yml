@@ -43,10 +43,10 @@ services:
       # FILE UPLOAD LIMITS
       - MAX_FILE_SIZE=${MAX_FILE_SIZE:-52428800}
       # Document service (separate Docker Compose project on curatore-network)
-      - EXTRACTION_SERVICE_URL=http://document-service:8010
-      - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-180}
-      - EXTRACTION_SERVICE_VERIFY_SSL=false
-      - EXTRACTION_SERVICE_API_KEY=${EXTRACTION_SERVICE_API_KEY:-doc-svc-dev-key-2026}
+      - DOCUMENT_SERVICE_URL=http://document-service:8010
+      - DOCUMENT_SERVICE_TIMEOUT=${DOCUMENT_SERVICE_TIMEOUT:-180}
+      - DOCUMENT_SERVICE_VERIFY_SSL=false
+      - DOCUMENT_SERVICE_API_KEY=${DOCUMENT_SERVICE_API_KEY:-doc-svc-dev-key-2026}
       # Playwright rendering service (for JavaScript-rendered web scraping)
       - PLAYWRIGHT_SERVICE_URL=http://playwright:8011
       - PLAYWRIGHT_TIMEOUT=${PLAYWRIGHT_TIMEOUT:-60}
@@ -119,10 +119,10 @@ services:
       # Worker concurrency - should be >= sum of all queue max_concurrent in config.yml
       - CELERY_CONCURRENCY=${CELERY_CONCURRENCY:-4}
       # Document service (separate Docker Compose project on curatore-network)
-      - EXTRACTION_SERVICE_URL=http://document-service:8010
-      - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-180}
-      - EXTRACTION_SERVICE_VERIFY_SSL=false
-      - EXTRACTION_SERVICE_API_KEY=${EXTRACTION_SERVICE_API_KEY:-doc-svc-dev-key-2026}
+      - DOCUMENT_SERVICE_URL=http://document-service:8010
+      - DOCUMENT_SERVICE_TIMEOUT=${DOCUMENT_SERVICE_TIMEOUT:-180}
+      - DOCUMENT_SERVICE_VERIFY_SSL=false
+      - DOCUMENT_SERVICE_API_KEY=${DOCUMENT_SERVICE_API_KEY:-doc-svc-dev-key-2026}
       # Playwright rendering service (match backend)
       - PLAYWRIGHT_SERVICE_URL=http://playwright:8011
       - PLAYWRIGHT_TIMEOUT=${PLAYWRIGHT_TIMEOUT:-60}
@@ -182,10 +182,10 @@ services:
       - SCHEDULED_TASK_CHECK_ENABLED=${SCHEDULED_TASK_CHECK_ENABLED:-true}
       - SCHEDULED_TASK_CHECK_INTERVAL=${SCHEDULED_TASK_CHECK_INTERVAL:-60}
       # Document service (separate Docker Compose project on curatore-network)
-      - EXTRACTION_SERVICE_URL=http://document-service:8010
-      - EXTRACTION_SERVICE_TIMEOUT=${EXTRACTION_SERVICE_TIMEOUT:-180}
-      - EXTRACTION_SERVICE_VERIFY_SSL=false
-      - EXTRACTION_SERVICE_API_KEY=${EXTRACTION_SERVICE_API_KEY:-doc-svc-dev-key-2026}
+      - DOCUMENT_SERVICE_URL=http://document-service:8010
+      - DOCUMENT_SERVICE_TIMEOUT=${DOCUMENT_SERVICE_TIMEOUT:-180}
+      - DOCUMENT_SERVICE_VERIFY_SSL=false
+      - DOCUMENT_SERVICE_API_KEY=${DOCUMENT_SERVICE_API_KEY:-doc-svc-dev-key-2026}
       # Object Storage (match worker)
       - USE_OBJECT_STORAGE=${USE_OBJECT_STORAGE:-true}
       - MINIO_ENDPOINT=minio:9000

@@ -125,9 +125,9 @@ class LLMConfig(BaseModel):
 
 class OCRConfig(BaseModel):
     """
-    OCR configuration (Tesseract-specific for extraction-service).
+    OCR configuration (Tesseract-specific for document-service).
 
-    These settings are specific to the extraction-service implementation
+    These settings are specific to the document-service implementation
     that uses Tesseract OCR for image-based PDFs and scanned documents.
     """
     model_config = ConfigDict(extra='forbid')
@@ -157,11 +157,11 @@ class ExtractionEngineConfig(BaseModel):
     description: str = Field(
         description="Description of this engine and its use cases"
     )
-    engine_type: Literal["extraction-service", "docling", "tika"] = Field(
+    engine_type: Literal["document-service", "extraction-service", "docling", "tika"] = Field(
         description="Engine type identifier (determines extraction logic)"
     )
     service_url: str = Field(
-        description="Base URL for the extraction service"
+        description="Base URL for the document service"
     )
     timeout: int = Field(
         default=300,
@@ -187,7 +187,7 @@ class ExtractionEngineConfig(BaseModel):
     )
     ocr: Optional[OCRConfig] = Field(
         default=None,
-        description="OCR settings (specific to extraction-service implementation)"
+        description="OCR settings (specific to document-service implementation)"
     )
     options: Optional[Dict[str, Any]] = Field(
         default=None,

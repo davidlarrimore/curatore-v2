@@ -31,7 +31,7 @@ app/
 - System/health: `GET /api/v1/health`
 - Supported formats: `GET /api/v1/config/supported-formats`
 - Defaults/config: `GET /api/v1/config/defaults`
-- Extraction services: `GET /api/v1/config/extraction-services` (lists available extractors and which is active)
+- Document services: `GET /api/v1/config/extraction-services` (lists available document extraction engines and which is active)
 - List uploaded files: `GET /api/v1/documents/uploaded`
 - List batch files: `GET /api/v1/documents/batch`
 - Upload file: `POST /api/v1/documents/upload` (multipart)

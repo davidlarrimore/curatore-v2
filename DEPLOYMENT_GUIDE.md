@@ -208,7 +208,7 @@ This guide focuses on **Option 1: Docker Compose** deployment.
 /opt/curatore/
 ├── backend/              # Backend API code
 ├── frontend/             # Frontend Next.js code
-├── extraction-service/   # Extraction service code
+├── mcp/                  # MCP Gateway (AI tool server)
 ├── docker-compose.yml    # Service definitions
 ├── .env                  # Environment configuration
 ├── scripts/              # Utility scripts
@@ -405,13 +405,13 @@ ENABLE_DEDUPLICATION=true
 HASH_ALGORITHM="sha256"
 ```
 
-#### Extraction Configuration
+#### Document Service Configuration
 
 ```bash
-# Extraction Service
-EXTRACTION_SERVICE_URL="http://extraction:8010"
+# Document Service (curatore-document-service)
+DOCUMENT_SERVICE_URL="http://document-service:8010"
 
-# Docling (optional)
+# Docling (optional, configured inside Document Service)
 ENABLE_DOCLING_SERVICE=false
 DOCLING_SERVICE_URL="http://docling:5001"
 ```

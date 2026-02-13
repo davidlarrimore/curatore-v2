@@ -155,7 +155,7 @@ export default function ConnectionCard({
 
     if (connection_type === 'extraction') {
       const engineType = config.engine_type || 'unknown'
-      const engineLabel = engineType === 'extraction-service' || engineType === 'document-service'
+      const engineLabel = engineType === 'document-service' || engineType === 'extraction-service'
         ? 'Document Service'
         : engineType.charAt(0).toUpperCase() + engineType.slice(1)
 

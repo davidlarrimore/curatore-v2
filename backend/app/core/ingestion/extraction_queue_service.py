@@ -169,7 +169,7 @@ class ExtractionQueueService:
             if default_engine:
                 extractor_version = default_engine.name
             else:
-                extractor_version = "extraction-service"
+                extractor_version = "document-service"
 
         # Get asset for metadata
         asset = await session.get(Asset, asset_id)

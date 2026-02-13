@@ -7,7 +7,7 @@ extraction (triage, fast_pdf, markitdown, docling proxy) and generation.
 Configuration Priority:
     1. Connection from database (per-organization)
     2. config.yml extraction section
-    3. Environment variables (EXTRACTION_SERVICE_URL, etc.)
+    3. Environment variables (DOCUMENT_SERVICE_URL, etc.)
 
 Usage:
     from app.connectors.adapters.document_service_adapter import document_service_adapter
@@ -112,7 +112,7 @@ class DocumentServiceAdapter(ServiceAdapter):
         elif default_engine and default_engine.service_url:
             self.base_url = default_engine.service_url.rstrip("/")
         else:
-            self.base_url = (getattr(settings, "extraction_service_url", None) or "").rstrip("/")
+            self.base_url = (getattr(settings, "document_service_url", None) or "").rstrip("/")
 
         # Resolve api_key: param > config.yml > env
         if api_key is not None:
@@ -120,7 +120,7 @@ class DocumentServiceAdapter(ServiceAdapter):
         elif default_engine and getattr(default_engine, "api_key", None):
             self.api_key = default_engine.api_key
         else:
-            self.api_key = getattr(settings, "extraction_service_api_key", None)
+            self.api_key = getattr(settings, "document_service_api_key", None)
 
         # Resolve timeout: param > config.yml > env
         if timeout is not None:
@@ -128,7 +128,7 @@ class DocumentServiceAdapter(ServiceAdapter):
         elif default_engine and getattr(default_engine, "timeout", None):
             self.timeout = float(default_engine.timeout)
         else:
-            self.timeout = float(getattr(settings, "extraction_service_timeout", 180))
+            self.timeout = float(getattr(settings, "document_service_timeout", 180))
 
         # Resolve verify_ssl: param > config.yml > env
         if verify_ssl is not None:
@@ -136,7 +136,7 @@ class DocumentServiceAdapter(ServiceAdapter):
         elif default_engine and hasattr(default_engine, "verify_ssl"):
             self.verify_ssl = default_engine.verify_ssl
         else:
-            self.verify_ssl = getattr(settings, "extraction_service_verify_ssl", True)
+            self.verify_ssl = getattr(settings, "document_service_verify_ssl", True)
 
         # Circuit breaker state
         self._consecutive_failures: int = 0
@@ -210,17 +210,17 @@ class DocumentServiceAdapter(ServiceAdapter):
 
         if default_engine:
             return {
-                "service_url": default_engine.service_url or getattr(settings, "extraction_service_url", None),
-                "api_key": getattr(default_engine, "api_key", None) or getattr(settings, "extraction_service_api_key", None),
-                "timeout": getattr(default_engine, "timeout", None) or getattr(settings, "extraction_service_timeout", 180),
+                "service_url": default_engine.service_url or getattr(settings, "document_service_url", None),
+                "api_key": getattr(default_engine, "api_key", None) or getattr(settings, "document_service_api_key", None),
+                "timeout": getattr(default_engine, "timeout", None) or getattr(settings, "document_service_timeout", 180),
                 "verify_ssl": getattr(default_engine, "verify_ssl", True),
             }
 
         return {
-            "service_url": getattr(settings, "extraction_service_url", None),
-            "api_key": getattr(settings, "extraction_service_api_key", None),
-            "timeout": getattr(settings, "extraction_service_timeout", 180),
-            "verify_ssl": getattr(settings, "extraction_service_verify_ssl", True),
+            "service_url": getattr(settings, "document_service_url", None),
+            "api_key": getattr(settings, "document_service_api_key", None),
+            "timeout": getattr(settings, "document_service_timeout", 180),
+            "verify_ssl": getattr(settings, "document_service_verify_ssl", True),
         }
 
     async def resolve_config_for_org(

@@ -96,25 +96,25 @@ The backend delegates all extraction to the Document Service, which handles tria
 
 **Engine Configuration:**
 - `name`: Engine identifier
-- `engine_type`: `extraction-service`
+- `engine_type`: `document-service`
 - `service_url`: Document Service endpoint URL
 - `enabled`: Enable/disable (default: true)
 - `timeout`: Request timeout in seconds (default: 300)
 - `verify_ssl`: Verify SSL certificates (default: true)
 
 **Environment Variables (fallback):**
-- `EXTRACTION_SERVICE_URL`: Document Service URL (e.g., `http://extraction:8010`)
-- `EXTRACTION_SERVICE_API_KEY`: API key (optional)
-- `EXTRACTION_SERVICE_TIMEOUT`: Request timeout in seconds (default: 300)
-- `EXTRACTION_SERVICE_VERIFY_SSL`: Verify SSL (default: true)
+- `DOCUMENT_SERVICE_URL`: Document Service URL (e.g., `http://document-service:8010`)
+- `DOCUMENT_SERVICE_API_KEY`: API key (optional)
+- `DOCUMENT_SERVICE_TIMEOUT`: Request timeout in seconds (default: 300)
+- `DOCUMENT_SERVICE_VERIFY_SSL`: Verify SSL (default: true)
 
 **Example:**
 ```yaml
 extraction:
   engines:
-    - name: extraction-service
-      engine_type: extraction-service
-      service_url: http://extraction:8010
+    - name: document-service
+      engine_type: document-service
+      service_url: http://document-service:8010
       timeout: 300
       enabled: true
 ```
@@ -467,9 +467,9 @@ llm:
 
 extraction:
   engines:
-    - name: extraction-service
-      engine_type: extraction-service
-      service_url: http://extraction:8010
+    - name: document-service
+      engine_type: document-service
+      service_url: http://document-service:8010
       timeout: 300
       enabled: true
 

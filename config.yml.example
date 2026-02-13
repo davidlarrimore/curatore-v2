@@ -113,17 +113,17 @@ llm:
 # Enable/disable engines as needed for your use case.
 #
 # Available engines:
-#   - extraction-service: Internal service using MarkItDown + Tesseract OCR
+#   - document-service: External service using MarkItDown + Tesseract OCR (curatore-document-service)
 #   - docling: IBM Docling for complex PDFs and Office documents
 #   - tika: Apache Tika for wide format support (1000+ types)
 #
-# If not configured here, falls back to EXTRACTION_* environment variables
+# If not configured here, falls back to DOCUMENT_SERVICE_* environment variables
 
 extraction:
-  # Default engine to use when none specified (optional, default: extraction-service)
+  # Default engine to use when none specified (optional, default: document-service)
   # IMPORTANT: This must match the 'name' field of one of the enabled engines below
-  # Options: extraction-service, docling, tika
-  default_engine: extraction-service
+  # Options: document-service, docling, tika
+  default_engine: document-service
 
   # Intelligent Triage-Based Extraction Routing
   # Documents are automatically analyzed upfront to select the optimal extraction engine:
@@ -141,22 +141,22 @@ extraction:
   # Users can select these when creating jobs via Connections UI
   engines:
     # -------------------------------------------------------------------------
-    # Internal Extraction Service (Recommended)
+    # Document Service (Recommended)
     # -------------------------------------------------------------------------
-    # Built-in service using MarkItDown + Tesseract OCR
+    # External service using MarkItDown + Tesseract OCR (curatore-document-service)
     # Best for: General documents, PDFs, Office files, images with text
     # API Endpoint: /api/v1/extract (automatically used based on engine_type)
-    - name: extraction-service
-      display_name: "Internal Extraction Service"
-      description: "Built-in extraction using MarkItDown and Tesseract OCR"
+    - name: document-service
+      display_name: "Document Service"
+      description: "External document service using MarkItDown and Tesseract OCR"
 
       # Engine type identifier (required)
       # This determines which extraction logic and API endpoint to use
       # API endpoints are predefined per engine_type and cannot be overridden
-      engine_type: extraction-service
+      engine_type: document-service
 
       # Service base URL (required)
-      service_url: http://extraction:8010
+      service_url: http://document-service:8010
 
       # Request timeout in seconds (optional, default: 300)
       timeout: 300
@@ -173,7 +173,7 @@ extraction:
       docling_ocr_enabled: true
 
       # OCR settings (Tesseract-specific, optional)
-      # These settings apply to the extraction-service's OCR processing
+      # These settings apply to the document-service's OCR processing
       ocr:
         # Tesseract OCR language code (optional, default: eng)
         # Examples: eng, spa, fra, deu, or combinations like "eng+spa"
@@ -529,7 +529,7 @@ queues:
   # Extraction queue - triage-based document conversion
   # Uses intelligent routing to select optimal engine:
   #   - fast_pdf: Simple text-based PDFs (PyMuPDF)
-  #   - extraction-service: Office files, text, emails (MarkItDown)
+  #   - document-service: Office files, text, emails (MarkItDown)
   #   - docling: Complex PDFs, large Office files (OCR + layout)
   extraction:
     # Maximum concurrent extractions (default: 10)

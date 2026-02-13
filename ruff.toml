@@ -1,6 +1,6 @@
 target-version = "py312"
 line-length = 120
-src = ["backend", "extraction-service", "mcp"]
+src = ["backend", "mcp"]
 
 [lint]
 select = ["E", "F", "W", "I"]  # pycodestyle, pyflakes, warnings, isort

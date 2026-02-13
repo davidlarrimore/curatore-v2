@@ -203,7 +203,7 @@ class UploadIntegrationService:
             if default_engine:
                 extractor_version = default_engine.name
             else:
-                extractor_version = "extraction-service"
+                extractor_version = "document-service"
 
         # Phase 1: Get current asset version
         current_version = await asset_service.get_current_asset_version(session, asset_id)
@@ -419,7 +419,7 @@ class UploadIntegrationService:
             if default_engine:
                 extractor_version = default_engine.name
             else:
-                extractor_version = "extraction-service"
+                extractor_version = "document-service"
 
         # Phase 1: Get current asset version
         current_version = await asset_service.get_current_asset_version(session, asset_id)
