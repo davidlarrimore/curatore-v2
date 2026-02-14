@@ -463,7 +463,7 @@ async def get_current_user(
 
 
 # =========================================================================
-# DELEGATED AUTHENTICATION (SERVICE ACCOUNT + ON-BEHALF-OF)
+# DELEGATED AUTHENTICATION (TRUSTED SERVICE KEY + ON-BEHALF-OF)
 # =========================================================================
 
 
@@ -472,35 +472,39 @@ async def get_delegated_user(
     x_on_behalf_of: Optional[str] = Header(None, alias="X-On-Behalf-Of"),
 ) -> User:
     """
-    Resolve a user via delegated authentication (ServiceAccount + X-On-Behalf-Of).
+    Resolve a user via delegated authentication (trusted service key + X-On-Behalf-Of).
 
     Used by trusted services (e.g., MCP Gateway) that authenticate with a
-    ServiceAccount API key and forward end-user identity via the
+    shared secret (TRUSTED_SERVICE_KEY) and forward end-user identity via the
     X-On-Behalf-Of header containing the user's email address.
 
     Auth chain:
-        Service → Backend:  X-API-Key: <ServiceAccount key>
+        Service → Backend:  X-API-Key: <trusted service key>
                             X-On-Behalf-Of: alice@company.com
 
     Args:
-        x_api_key: ServiceAccount API key from X-API-Key header
+        x_api_key: Trusted service key from X-API-Key header
         x_on_behalf_of: End-user email from X-On-Behalf-Of header
 
     Returns:
         User: The resolved end-user (with their org_id, role, etc.)
 
     Raises:
-        HTTPException: 401 if API key is invalid or not a ServiceAccount key
-        HTTPException: 403 if API key belongs to a regular User (not ServiceAccount)
+        HTTPException: 401 if API key doesn't match the trusted service key
+        HTTPException: 400 if X-On-Behalf-Of header is missing
         HTTPException: 404 if X-On-Behalf-Of email doesn't match any Curatore user
     """
-    # Validate the API key — must be a ServiceAccount key
-    principal = await get_current_principal_from_api_key(x_api_key)
-
-    if not isinstance(principal, ServiceAccount):
+    # Validate the API key against the configured trusted service key
+    if not settings.trusted_service_key:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Delegated auth requires a ServiceAccount API key, not a user key.",
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Delegated auth not configured. Set TRUSTED_SERVICE_KEY in backend environment.",
+        )
+
+    if not x_api_key or x_api_key != settings.trusted_service_key:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid service key for delegated authentication.",
         )
 
     if not x_on_behalf_of:
@@ -518,8 +522,7 @@ async def get_delegated_user(
 
         if not user:
             logger.warning(
-                f"Delegated auth: user not found for email '{x_on_behalf_of}' "
-                f"(service account: {principal.name})"
+                f"Delegated auth: user not found for email '{x_on_behalf_of}'"
             )
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
@@ -534,7 +537,7 @@ async def get_delegated_user(
 
         logger.debug(
             f"Delegated auth: resolved {x_on_behalf_of} → {user.email} "
-            f"(org: {user.organization_id}, via service account: {principal.name})"
+            f"(org: {user.organization_id})"
         )
         return user
 

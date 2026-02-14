@@ -219,16 +219,20 @@ ENABLE_FORWARD_USER_INFO_HEADERS=true
 
 **2. Add the MCP Gateway as a tool server:**
 
-Go to **Settings** > **Tools** > **OpenAPI Tools** and add:
+Go to **Settings** > **Tools** > **MCP Servers** and add:
 - **Name**: Curatore
-- **URL**: `http://localhost:8020` (or `http://mcp:8020` if on the same Docker network)
-- **Authentication**: Bearer Token
-- **Token**: Your `SERVICE_API_KEY` value
+- **Type**: HTTP (Streamable)
+- **URL**: `http://host.docker.internal:8020/mcp` (or `http://mcp:8020/mcp` if on the same Docker network)
+- **Headers**: `{"Authorization": "Bearer YOUR_SERVICE_API_KEY"}`
 
-Open WebUI will automatically:
-- Fetch tools from `GET /openapi.json`
-- Execute tools via `POST /{tool_name}` (flat paths)
-- Forward `X-OpenWebUI-User-Email` on every request (when `ENABLE_FORWARD_USER_INFO_HEADERS=true`)
+Open WebUI will automatically forward these headers on every MCP tool call:
+
+| Header | Used by Gateway |
+|--------|-----------------|
+| `x-openwebui-user-email` | Yes — forwarded as `X-On-Behalf-Of` |
+| `x-openwebui-user-name` | No (available for future use) |
+| `x-openwebui-user-id` | No (available for future use) |
+| `x-openwebui-user-role` | No (available for future use) |
 
 **3. Ensure user accounts match:**
 

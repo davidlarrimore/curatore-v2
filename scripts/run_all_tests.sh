@@ -390,7 +390,7 @@ run_mcp_tests() {
   local code=0
   (
     cd "$svc_dir" && \
-    MCP_API_KEY="test-key" BACKEND_URL="http://localhost:8000" \
+    SERVICE_API_KEY="test-key" BACKEND_URL="http://localhost:8000" \
     PYTHONPATH="${svc_dir}${PYTHONPATH:+:$PYTHONPATH}" \
     "$venv/bin/python" -m pytest tests -q "${cov_flags[@]}"
   ) >"$log" 2>&1 || code=$?

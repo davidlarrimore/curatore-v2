@@ -171,6 +171,10 @@ class Settings(BaseSettings):
     default_org_id: Optional[str] = Field(
         default=None, description="Default organization ID for unauthenticated requests"
     )
+    trusted_service_key: Optional[str] = Field(
+        default=None,
+        description="Shared secret for trusted services (e.g., MCP Gateway) to use delegated auth via X-On-Behalf-Of",
+    )
     auto_test_connections: bool = Field(
         default=True, description="Automatically test connections on create/update"
     )

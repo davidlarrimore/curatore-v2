@@ -25,6 +25,8 @@ services:
       - PYTHONUNBUFFERED=1
       - DEBUG=${DEBUG:-false}
       - CORS_ORIGINS=${CORS_ORIGINS:-["http://localhost:3000"]}
+      # Trusted service key for delegated auth (MCP Gateway → Backend)
+      - TRUSTED_SERVICE_KEY=${MCP_API_KEY:-}
       # Database (PostgreSQL)
       - DATABASE_URL=${DATABASE_URL:-postgresql+asyncpg://curatore:curatore_dev_password@postgres:5432/curatore}
       - DB_POOL_SIZE=${DB_POOL_SIZE:-20}
@@ -268,8 +270,8 @@ services:
       - PYTHONUNBUFFERED=1
       - BACKEND_URL=http://backend:8000
       - REDIS_URL=redis://redis:6379/2
-      - SERVICE_API_KEY=${MCP_SERVICE_API_KEY:-}
-      - BACKEND_API_KEY=${MCP_BACKEND_API_KEY:-}
+      - SERVICE_API_KEY=${MCP_API_KEY:-}
+      - BACKEND_API_KEY=${MCP_API_KEY:-}
       - LOG_LEVEL=${MCP_LOG_LEVEL:-INFO}
       - DEBUG=${DEBUG:-false}
     volumes:

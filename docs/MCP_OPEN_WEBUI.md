@@ -78,7 +78,29 @@ Open WebUI must forward per-user identity headers so the MCP Gateway can propaga
 ENABLE_FORWARD_USER_INFO_HEADERS=true
 ```
 
-This tells Open WebUI to send `X-OpenWebUI-User-Email` on every tool call, which the MCP Gateway forwards to the backend as `X-On-Behalf-Of`.
+This tells Open WebUI to send user identity headers on every MCP tool call. The following headers are forwarded automatically:
+
+| Header | Example | Used by Gateway |
+|--------|---------|-----------------|
+| `x-openwebui-user-email` | `alice@company.com` | Yes — forwarded as `X-On-Behalf-Of` |
+| `x-openwebui-user-name` | `Alice Smith` | No (available for future use) |
+| `x-openwebui-user-id` | `3d688e10-...` | No (available for future use) |
+| `x-openwebui-user-role` | `admin` | No (available for future use) |
+| `x-openwebui-chat-id` | `377f7274-...` | No |
+| `x-openwebui-message-id` | `2fb66beb-...` | No |
+
+**Add the MCP Gateway as a tool server in Open WebUI:**
+
+1. Go to **Settings** > **Tools** > **MCP Servers**
+2. Click **Add MCP Server**
+3. Configure:
+
+| Field | Value |
+|-------|-------|
+| Name | Curatore |
+| Type | HTTP (Streamable) |
+| URL | `http://host.docker.internal:8020/mcp` (see URL table below) |
+| Headers | `{"Authorization": "Bearer YOUR_SERVICE_API_KEY"}` |
 
 ### How Identity Propagation Works
 
@@ -86,7 +108,7 @@ This tells Open WebUI to send `X-OpenWebUI-User-Email` on every tool call, which
 Open WebUI                         MCP Gateway                      Curatore Backend
     │                                  │                                  │
     │  Authorization: Bearer <SERVICE_API_KEY>                            │
-    │  X-OpenWebUI-User-Email: alice@company.com                          │
+    │  x-openwebui-user-email: alice@company.com                          │
     │─────────────────────────►│                                          │
     │                          │  X-API-Key: <BACKEND_API_KEY>            │
     │                          │  X-On-Behalf-Of: alice@company.com       │
@@ -100,7 +122,7 @@ Open WebUI                         MCP Gateway                      Curatore Bac
 ```
 
 **Key points:**
-- Each Open WebUI user's email is forwarded to the backend
+- Each Open WebUI user's email is forwarded to the backend automatically
 - The backend resolves the Curatore user by email and scopes all data to that user's organization
 - Open WebUI users **must have matching Curatore accounts** (same email address)
 - If no matching Curatore user exists, the request returns 404
@@ -109,22 +131,9 @@ Open WebUI                         MCP Gateway                      Curatore Bac
 
 ## Connection Method 1: MCP Protocol (Streamable HTTP)
 
-Use this method if you want to connect via the native MCP protocol.
+Use this method if you want to connect via the native MCP protocol. This is the recommended method — the Step 4 configuration above uses this approach.
 
-### Open WebUI Configuration
-
-1. Go to **Settings** > **Tools** > **MCP Servers**
-2. Click **Add MCP Server**
-3. Configure:
-
-| Field | Value |
-|-------|-------|
-| Name | Curatore |
-| Type | HTTP (Streamable) |
-| URL | See table below |
-| Headers | `Authorization: Bearer YOUR_SERVICE_API_KEY` |
-
-**URL by deployment:**
+### URL by Deployment
 
 | Open WebUI Setup | URL |
 |------------------|-----|

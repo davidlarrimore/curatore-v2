@@ -56,6 +56,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
         """Check authentication for protected endpoints."""
         path = request.url.path
 
+        # Log all incoming headers for debugging identity propagation
+        if settings.debug:
+            header_dump = dict(request.headers)
+            logger.info(f"[DEBUG] {request.method} {path} — headers: {header_dump}")
+
         # Skip auth for CORS preflight requests
         if request.method == "OPTIONS":
             return await call_next(request)
