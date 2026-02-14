@@ -18,7 +18,7 @@ Usage:
 import json
 import logging
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Set
 from uuid import UUID
 
 from app.cwr.governance.capability_profiles import check_exposure
@@ -145,6 +145,7 @@ def get_tool_contract_pack(
     org_id: Optional[UUID] = None,
     profile: Optional[GenerationProfile] = None,
     profile_name: Optional[str] = None,
+    enabled_data_sources: Optional[Set[str]] = None,
 ) -> ToolContractPack:
     """
     Build a ToolContractPack filtered by generation profile and exposure policies.
@@ -154,11 +155,15 @@ def get_tool_contract_pack(
     2. Category filter - tool's category must be in profile.allowed_categories
     3. Blocked tools - tool must not be in profile.blocked_tools
     4. Side effects - if profile.allow_side_effects is False, side-effect tools excluded
+    5. Org data sources - tool's required_data_sources must overlap enabled set
 
     Args:
-        org_id: Organization ID (reserved for future org-specific filtering)
+        org_id: Organization ID for context logging.
         profile: GenerationProfile to use. If None, resolved from profile_name.
         profile_name: Profile name string. Used if profile is None.
+        enabled_data_sources: Set of active data source types for the org.
+            None means system context (no filtering). When provided, tools whose
+            required_data_sources have no overlap with this set are excluded.
 
     Returns:
         ToolContractPack with filtered contracts
@@ -188,6 +193,13 @@ def get_tool_contract_pack(
         # Layer 4: side effects policy
         if meta.side_effects and not profile.allow_side_effects:
             continue
+
+        # Layer 5: org data source availability
+        # When enabled_data_sources is None → system context, no filtering
+        # When provided → tool must have no required_data_sources or at least one in the set
+        if enabled_data_sources is not None and meta.required_data_sources:
+            if not any(ds in enabled_data_sources for ds in meta.required_data_sources):
+                continue
 
         # Generate contract
         contract = meta.as_contract()

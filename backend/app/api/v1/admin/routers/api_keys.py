@@ -35,7 +35,7 @@ from app.api.v1.admin.schemas import (
 from app.core.auth.auth_service import auth_service
 from app.core.database.models import ApiKey, User
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_user
+from app.dependencies import get_current_org_id, get_current_user
 
 # Initialize router
 router = APIRouter(prefix="/api-keys", tags=["API Keys"])
@@ -145,6 +145,7 @@ async def list_api_keys(
 async def create_api_key(
     request: ApiKeyCreateRequest,
     current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> ApiKeyCreateResponse:
     """
     Generate new API key.
@@ -199,7 +200,7 @@ async def create_api_key(
         api_key = ApiKey(
             id=uuid4(),
             user_id=current_user.id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             name=request.name,
             key_hash=key_hash,
             prefix=prefix,

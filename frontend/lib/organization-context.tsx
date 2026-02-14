@@ -88,7 +88,11 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
 
     try {
       const response = await organizationsApi.listOrganizations(token)
-      setAvailableOrganizations(response.organizations || [])
+      // Filter out the reserved system org (belt-and-suspenders — backend also filters)
+      const orgs = (response.organizations || []).filter(
+        (o: any) => o.slug !== '__system__'
+      )
+      setAvailableOrganizations(orgs)
     } catch (error) {
       console.error('Failed to load organizations:', error)
       setAvailableOrganizations([])
@@ -131,6 +135,13 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
         return
       }
 
+      // Admin users: set mode from URL immediately (before async work)
+      if (isSystemRoute) {
+        setMode('system')
+        setCurrentOrganization(null)
+        setOrgContext(null)
+      }
+
       // Admin users: load available organizations (context derived from URL)
       await refreshOrganizations()
       setIsLoading(false)
@@ -142,8 +153,8 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
   // Sync context from URL for admin users
   useEffect(() => {
     if (!isAuthenticated || !isAdmin) return
-    if (isLoading) return
 
+    // System route can be set immediately — no need to wait for org list
     if (isSystemRoute) {
       // System route - system context
       if (mode !== 'system') {
@@ -151,8 +162,8 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
         setMode('system')
         setOrgContext(null)
       }
-    } else if (urlOrgSlug) {
-      // Org route - find org by slug
+    } else if (urlOrgSlug && !isLoading) {
+      // Org route - find org by slug (wait for org list to load)
       const org = availableOrganizations.find(o => o.slug === urlOrgSlug)
       if (org && currentOrganization?.id !== org.id) {
         setCurrentOrganization(org)

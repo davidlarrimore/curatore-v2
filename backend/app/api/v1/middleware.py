@@ -37,7 +37,8 @@ async def validate_document_access(
     document_id: str,
     organization_id: UUID,
     session: AsyncSession,
-    require_exists: bool = True
+    require_exists: bool = True,
+    user: Optional[User] = None,
 ) -> Optional[Artifact]:
     """
     Validate that a document belongs to the specified organization.
@@ -46,11 +47,14 @@ async def validate_document_access(
     document_id is associated with at least one artifact owned by the organization.
     This prevents cross-tenant data access.
 
+    System admins (role='admin') bypass organization checks and can access any document.
+
     Args:
         document_id: Document ID to validate (UUID or legacy format)
         organization_id: UUID of the organization to check against
         session: Database session for queries
         require_exists: If True, raises 404 if document not found. If False, returns None.
+        user: Optional User object; when provided, admins bypass org isolation.
 
     Returns:
         Artifact: The first artifact found for the document (typically the uploaded artifact)
@@ -85,6 +89,21 @@ async def validate_document_access(
         - Uses database query to verify ownership (not just client claims)
         - Logs access denial attempts for security monitoring
     """
+    # Admin bypass: system admins can access any document
+    if user and user.role == "admin":
+        result = await session.execute(
+            select(Artifact)
+            .where(Artifact.document_id == document_id)
+            .limit(1)
+        )
+        artifact = result.scalar_one_or_none()
+        if not artifact and require_exists:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Document not found"
+            )
+        return artifact
+
     # Query for any artifact with this document_id and organization_id
     result = await session.execute(
         select(Artifact)
@@ -162,7 +181,8 @@ async def validate_document_ownership(
         document_id,
         user.organization_id,
         session,
-        require_exists=True
+        require_exists=True,
+        user=user,
     )
 
 

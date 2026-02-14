@@ -141,7 +141,7 @@ class BulkUpdateMetadataFunction(BaseFunction):
             # Verify assets exist and belong to org
             asset_query = select(Asset.id).where(
                 Asset.id.in_(asset_ids),
-                Asset.organization_id == ctx.organization_id,
+                Asset.organization_id == ctx.requires_org_id,
             )
             result = await ctx.session.execute(asset_query)
             valid_ids = {row[0] for row in result.fetchall()}

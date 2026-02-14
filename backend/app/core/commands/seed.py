@@ -46,7 +46,7 @@ from sqlalchemy import select
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-from app.config import settings
+from app.config import SYSTEM_ORG_DISPLAY_NAME, SYSTEM_ORG_NAME, SYSTEM_ORG_SLUG, settings
 from app.core.auth.auth_service import auth_service
 from app.core.database.models import Organization, User
 from app.core.shared.database_service import database_service
@@ -57,6 +57,31 @@ logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
 )
 logger = logging.getLogger("curatore.seed")
+
+
+async def ensure_system_org() -> Organization:
+    """Ensure the reserved __system__ organization exists."""
+    async with database_service.get_session() as session:
+        result = await session.execute(
+            select(Organization).where(Organization.slug == SYSTEM_ORG_SLUG)
+        )
+        org = result.scalar_one_or_none()
+        if org is None:
+            org = Organization(
+                id=uuid4(),
+                name=SYSTEM_ORG_NAME,
+                display_name=SYSTEM_ORG_DISPLAY_NAME,
+                slug=SYSTEM_ORG_SLUG,
+                is_active=True,
+                settings={},
+            )
+            session.add(org)
+            await session.commit()
+            await session.refresh(org)
+            logger.info(f"✅ Created system organization: {org.name} (id: {org.id})")
+        else:
+            logger.info(f"System organization already exists: {org.name} (id: {org.id})")
+        return org
 
 
 async def create_default_organization() -> Organization:
@@ -100,12 +125,9 @@ async def create_default_organization() -> Organization:
         return org
 
 
-async def create_admin_user(organization: Organization) -> User:
+async def create_admin_user() -> User:
     """
     Create the initial admin user from environment settings.
-
-    Args:
-        organization: Organization to add admin to
 
     Returns:
         User: Created admin user
@@ -140,15 +162,15 @@ async def create_admin_user(organization: Organization) -> User:
         logger.info("Hashing admin password...")
         password_hash = await auth_service.hash_password(settings.admin_password)
 
-        # Create admin user
+        # Create admin user — system admins have no organization_id
         admin = User(
             id=uuid4(),
-            organization_id=organization.id,
+            organization_id=None,
             email=settings.admin_email,
             username=settings.admin_username,
             password_hash=password_hash,
             full_name=settings.admin_full_name,
-            role="org_admin",  # Admin role
+            role="admin",
             is_active=True,
             is_verified=True,  # Pre-verified for admin
             settings={},
@@ -163,6 +185,51 @@ async def create_admin_user(organization: Organization) -> User:
             "⚠️  IMPORTANT: Change the default admin password immediately after first login!"
         )
         return admin
+
+
+async def seed_data_source_overrides(organization: Organization) -> list:
+    """
+    Enable all manageable data source types for an organization.
+
+    Creates DataSourceTypeOverride records with is_active=True for each
+    manageable data source type. This ensures the default org starts with
+    all data connections enabled.
+
+    Args:
+        organization: Organization to enable data sources for
+
+    Returns:
+        list: List of enabled source type names
+    """
+    from app.core.metadata.registry_service import (
+        MANAGEABLE_DATA_SOURCE_TYPES,
+        metadata_registry_service,
+    )
+
+    logger.info("Enabling data connections for organization...")
+
+    enabled = []
+    async with database_service.get_session() as session:
+        # Ensure registry is loaded
+        metadata_registry_service._ensure_loaded()
+
+        for source_type in sorted(MANAGEABLE_DATA_SOURCE_TYPES):
+            try:
+                await metadata_registry_service.upsert_data_source_override(
+                    session,
+                    organization_id=organization.id,
+                    source_type=source_type,
+                    is_active=True,
+                )
+                enabled.append(source_type)
+                logger.info(f"  ✅ Enabled: {source_type}")
+            except Exception as e:
+                logger.warning(f"  ⚠️  Failed to enable {source_type}: {e}")
+
+        await session.commit()
+
+    logger.info(f"  Data connections: {len(enabled)} enabled")
+    return enabled
 
 
 async def seed_scheduled_tasks() -> list:
@@ -271,14 +338,22 @@ async def seed_database(create_admin: bool = True):
         logger.info(f"Database connected: {health.get('database_type')}")
         logger.info("")
 
+        # Ensure system org exists
+        await ensure_system_org()
+        logger.info("")
+
         # Create default organization
         org = await create_default_organization()
         logger.info("")
 
         # Create admin user if requested
         if create_admin:
-            admin = await create_admin_user(org)
+            admin = await create_admin_user()
             logger.info("")
+
+        # Enable data connections for default org
+        data_connections = await seed_data_source_overrides(org)
+        logger.info("")
 
         # Seed default scheduled tasks (Phase 5)
         scheduled_tasks = await seed_scheduled_tasks()
@@ -297,6 +372,10 @@ async def seed_database(create_admin: bool = True):
             logger.info(f"  - ID: {admin.id}")
             logger.info(f"  - Username: {admin.username}")
             logger.info(f"  - Role: {admin.role}")
+            logger.info("")
+            logger.info(f"Data Connections: {len(data_connections)} enabled")
+            for dc_name in data_connections:
+                logger.info(f"  - {dc_name}")
             logger.info("")
             logger.info(f"Scheduled Tasks: {len(scheduled_tasks)} created")
             for task_name in scheduled_tasks:

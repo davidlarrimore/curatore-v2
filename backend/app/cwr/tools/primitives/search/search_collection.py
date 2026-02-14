@@ -137,13 +137,13 @@ class SearchCollectionFunction(BaseFunction):
                 collection = await collection_service.get_collection(
                     session=ctx.session,
                     collection_id=collection_uuid,
-                    organization_id=ctx.organization_id,
+                    organization_id=ctx.requires_org_id,
                 )
             except (ValueError, AttributeError):
                 # Not a UUID, try as slug
                 collection = await collection_service.get_collection_by_slug(
                     session=ctx.session,
-                    organization_id=ctx.organization_id,
+                    organization_id=ctx.requires_org_id,
                     slug=collection_ref,
                 )
 

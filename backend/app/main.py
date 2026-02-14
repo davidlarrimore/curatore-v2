@@ -48,7 +48,7 @@ from starlette.requests import Request as StarletteRequest
 from starlette.types import Message
 
 from .api.v1 import api_router as v1_router
-from .config import settings
+from .config import SYSTEM_ORG_DISPLAY_NAME, SYSTEM_ORG_NAME, SYSTEM_ORG_SLUG, settings
 from .core.models import ErrorResponse
 from .core.shared.database_service import database_service
 from .core.storage.storage_service import storage_service
@@ -211,6 +211,33 @@ async def request_response_logger(request: Request, call_next):
 # APPLICATION EVENT HANDLERS
 # ============================================================================
 
+async def ensure_system_org(session) -> "Organization":
+    """Ensure the reserved __system__ organization exists.
+
+    Creates it on first startup if not found.  Returns the Organization row.
+    """
+    from sqlalchemy import select
+
+    from .core.database.models import Organization
+
+    result = await session.execute(
+        select(Organization).where(Organization.slug == SYSTEM_ORG_SLUG)
+    )
+    org = result.scalar_one_or_none()
+    if org is None:
+        org = Organization(
+            name=SYSTEM_ORG_NAME,
+            display_name=SYSTEM_ORG_DISPLAY_NAME,
+            slug=SYSTEM_ORG_SLUG,
+            is_active=True,
+            settings={},
+        )
+        session.add(org)
+        await session.flush()
+        print(f"   ✅ Created system organization: {org.name} (id: {org.id})")
+    return org
+
+
 @app.on_event("startup")
 async def startup_event() -> None:
     """
@@ -359,42 +386,73 @@ async def startup_event() -> None:
             print(f"   ⚠️  Scheduled task seeding warning: {e}")
             # Non-fatal - tasks can be seeded later via seed command
 
-        # Discover and register procedures and pipelines
+        # Ensure system org exists and discover procedures/pipelines
         try:
-            print("🔄 Discovering procedures and pipelines...")
+            print("🔄 Ensuring system org and discovering procedures/pipelines...")
             async with database_service.get_session() as session:
                 from sqlalchemy import select
 
                 from .core.database.models import Organization
+                from .core.database.procedures import Procedure
                 from .cwr.pipelines.store.discovery import pipeline_discovery_service
                 from .cwr.procedures.store.discovery import procedure_discovery_service
 
-                # Get organizations to register procedures/pipelines for
-                result = await session.execute(select(Organization))
-                orgs = result.scalars().all()
+                # Ensure the reserved __system__ org exists
+                system_org = await ensure_system_org(session)
+                await session.commit()
 
-                for org in orgs:
-                    # Discover and register procedures
-                    proc_result = await procedure_discovery_service.discover_and_register(
-                        session, org.id
-                    )
-                    proc_removed = proc_result.get('removed', 0)
-                    proc_msg = f"   ✅ Procedures: {proc_result.get('registered', 0)} registered, {proc_result.get('updated', 0)} updated"
-                    if proc_removed > 0:
-                        proc_msg += f", {proc_removed} removed"
-                    proc_msg += f" for org {org.name}"
-                    print(proc_msg)
+                # Clean up stale per-org system copies (one-time migration)
+                try:
+                    from sqlalchemy import and_, delete
 
-                    # Discover and register pipelines
-                    pipe_result = await pipeline_discovery_service.discover_and_register(
-                        session, org.id
+                    from .core.database.pipelines import Pipeline
+
+                    stale_procs = await session.execute(
+                        delete(Procedure).where(
+                            and_(
+                                Procedure.source_type == "system",
+                                Procedure.organization_id != system_org.id,
+                            )
+                        )
                     )
-                    pipe_removed = pipe_result.get('removed', 0)
-                    pipe_msg = f"   ✅ Pipelines: {pipe_result.get('registered', 0)} registered, {pipe_result.get('updated', 0)} updated"
-                    if pipe_removed > 0:
-                        pipe_msg += f", {pipe_removed} removed"
-                    pipe_msg += f" for org {org.name}"
-                    print(pipe_msg)
+                    stale_pipes = await session.execute(
+                        delete(Pipeline).where(
+                            and_(
+                                Pipeline.source_type == "system",
+                                Pipeline.organization_id != system_org.id,
+                            )
+                        )
+                    )
+                    if stale_procs.rowcount or stale_pipes.rowcount:
+                        print(
+                            f"   🧹 Cleaned up stale system copies: "
+                            f"{stale_procs.rowcount} procedures, {stale_pipes.rowcount} pipelines"
+                        )
+                    await session.commit()
+                except Exception as e:
+                    print(f"   ⚠️  Stale copy cleanup warning: {e}")
+                    await session.rollback()
+
+                # Discover and register system procedures/pipelines under system org only
+                proc_result = await procedure_discovery_service.discover_and_register(
+                    session, system_org.id
+                )
+                proc_removed = proc_result.get('removed', 0)
+                proc_msg = f"   ✅ Procedures: {proc_result.get('registered', 0)} registered, {proc_result.get('updated', 0)} updated"
+                if proc_removed > 0:
+                    proc_msg += f", {proc_removed} removed"
+                proc_msg += f" (system org)"
+                print(proc_msg)
+
+                pipe_result = await pipeline_discovery_service.discover_and_register(
+                    session, system_org.id
+                )
+                pipe_removed = pipe_result.get('removed', 0)
+                pipe_msg = f"   ✅ Pipelines: {pipe_result.get('registered', 0)} registered, {pipe_result.get('updated', 0)} updated"
+                if pipe_removed > 0:
+                    pipe_msg += f", {pipe_removed} removed"
+                pipe_msg += f" (system org)"
+                print(pipe_msg)
 
         except ImportError as e:
             print(f"   ⚠️  Procedure/pipeline discovery not available: {e}")

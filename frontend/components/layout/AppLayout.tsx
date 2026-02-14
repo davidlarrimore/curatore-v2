@@ -30,6 +30,7 @@ import { StatusBar } from './StatusBar'
 import { systemApi } from '@/lib/api'
 import { useAuth } from '@/lib/auth-context'
 import { OrganizationProvider } from '@/lib/organization-context'
+import { DataConnectionsProvider } from '@/lib/data-connections-context'
 import { useUnifiedJobs } from '@/lib/unified-jobs-context'
 import ProtectedRoute from '@/components/auth/ProtectedRoute'
 import toast, { Toaster } from 'react-hot-toast'
@@ -271,6 +272,7 @@ export function AppLayout({ children }: AppLayoutProps) {
   return (
     <ProtectedRoute>
       <OrganizationProvider>
+        <DataConnectionsProvider>
         <div className="h-full flex flex-col" style={{
           '--sidebar-width': sidebarCollapsed ? '4rem' : '16rem'
         } as React.CSSProperties}>
@@ -343,6 +345,7 @@ export function AppLayout({ children }: AppLayoutProps) {
 
         <HealthUnavailableOverlay isVisible={isSystemUnavailable} />
         </div>
+        </DataConnectionsProvider>
       </OrganizationProvider>
     </ProtectedRoute>
   )

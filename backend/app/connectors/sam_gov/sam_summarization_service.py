@@ -846,30 +846,9 @@ Keep the summary brief and actionable."""
         prompt_template = self.prompt_templates.get("auto_bd", self.prompt_templates["executive"])
         prompt = prompt_template.format(**context)
 
-        # Get LLM client - first try database connection, then fall back to default
-        client = None
+        # Use the global LLM client (infrastructure service)
+        client = self.llm_service._client
         model = settings.openai_model
-
-        try:
-            from app.core.auth.connection_service import connection_service
-            from app.core.shared.database_service import database_service
-
-            async with database_service.get_session() as conn_session:
-                llm_conn = await connection_service.get_default_connection(
-                    conn_session, organization_id, "llm"
-                )
-                if llm_conn and llm_conn.is_active and llm_conn.config.get("api_key"):
-                    # Create client from database connection config
-                    client = await self.llm_service._create_client_from_config(llm_conn.config)
-                    # Use model from connection config if available
-                    model = llm_conn.config.get("model", model)
-                    logger.info(f"Using database LLM connection: {llm_conn.name}")
-        except Exception as e:
-            logger.warning(f"Error getting database LLM connection: {e}")
-
-        # Fall back to default client
-        if not client:
-            client = self.llm_service._client
 
         if not client:
             logger.error(f"No LLM client available for auto-summary of {solicitation_id}")
@@ -917,29 +896,7 @@ Keep the summary brief and actionable."""
             return None
 
     async def _check_llm_availability(self, organization_id: UUID) -> bool:
-        """Check if LLM is configured and available.
-
-        Checks for LLM availability in this order:
-        1. Database connection for the organization
-        2. Environment variable (settings.openai_api_key)
-        """
-        from app.core.auth.connection_service import connection_service
-        from app.core.shared.database_service import database_service
-
-        # First check for database connection
-        try:
-            async with database_service.get_session() as session:
-                llm_conn = await connection_service.get_default_connection(
-                    session, organization_id, "llm"
-                )
-                if llm_conn and llm_conn.is_active:
-                    # Check if connection has an API key configured
-                    if llm_conn.config and llm_conn.config.get("api_key"):
-                        return True
-        except Exception as e:
-            logger.warning(f"Error checking database LLM connection: {e}")
-
-        # Fallback to environment variable
+        """Check if LLM is configured and available."""
         if settings.openai_api_key:
             return True
 

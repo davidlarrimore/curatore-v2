@@ -30,11 +30,11 @@ import {
   Plug,
   Server,
   Wrench,
-  Calendar,
   Library,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import { useOrganization } from '@/lib/organization-context'
+import { useDataConnections } from '@/lib/data-connections-context'
 import clsx from 'clsx'
 
 interface SystemStatus {
@@ -74,6 +74,7 @@ export function LeftSidebar({
   const pathname = usePathname()
   const { user, isAuthenticated, isAdmin } = useAuth()
   const { mode, currentOrganization } = useOrganization()
+  const { isEnabled, isAnyEnabled } = useDataConnections()
 
   // Determine if we're in system mode (admin with no org selected)
   const isSystemMode = isAdmin && mode === 'system'
@@ -132,42 +133,43 @@ export function LeftSidebar({
   ]
 
   // Acquire section items (syncs in URL-based routing)
+  // Only show items whose data connection is enabled for this org
   const acquireNavigation: NavItem[] = isAuthenticated ? [
-    {
+    ...(isEnabled('sharepoint') ? [{
       name: 'SharePoint Sync',
       href: orgUrl('/syncs/sharepoint'),
       icon: FolderSync,
       current: isCurrentPath('/syncs/sharepoint', true) || isCurrentPath('/sharepoint-sync', true),
       gradient: 'from-teal-500 to-cyan-600'
-    },
-    {
+    }] : []),
+    ...(isEnabled('web_scrape') ? [{
       name: 'Web Scraping',
       href: orgUrl('/syncs/scrape'),
       icon: Globe,
       current: isCurrentPath('/syncs/scrape', true) || isCurrentPath('/scrape', true),
       gradient: 'from-indigo-500 to-purple-600'
-    },
-    {
+    }] : []),
+    ...(isEnabled('sam_gov') ? [{
       name: 'SAM.gov',
       href: orgUrl('/syncs/sam'),
       icon: Building2,
       current: isCurrentPath('/syncs/sam', true) || isCurrentPath('/sam', true),
       gradient: 'from-blue-500 to-indigo-600'
-    },
-    {
+    }] : []),
+    ...(isAnyEnabled('forecast_ag', 'forecast_apfs', 'forecast_state') ? [{
       name: 'Acquisition Forecasts',
       href: orgUrl('/syncs/forecasts'),
       icon: TrendingUp,
       current: isCurrentPath('/syncs/forecasts', true) || isCurrentPath('/forecasts', true),
       gradient: 'from-emerald-500 to-teal-600'
-    },
-    {
+    }] : []),
+    ...(isEnabled('salesforce') ? [{
       name: 'Salesforce CRM',
       href: orgUrl('/syncs/salesforce'),
       icon: Database,
       current: isCurrentPath('/syncs/salesforce', true) || isCurrentPath('/salesforce', true),
       gradient: 'from-cyan-500 to-blue-600'
-    }
+    }] : []),
   ] : []
 
   // Build section items (org context only)
@@ -259,6 +261,31 @@ export function LeftSidebar({
     }
   ] : []
 
+  // System Build section (functions, procedures, pipelines)
+  const systemBuildNavigation: NavItem[] = isSystemMode ? [
+    {
+      name: 'Functions',
+      href: '/system/functions',
+      icon: Code,
+      current: pathname?.startsWith('/system/functions'),
+      gradient: 'from-amber-500 to-orange-600'
+    },
+    {
+      name: 'Procedures',
+      href: '/system/procedures',
+      icon: Workflow,
+      current: pathname?.startsWith('/system/procedures'),
+      gradient: 'from-amber-500 to-orange-600'
+    },
+    {
+      name: 'Pipelines',
+      href: '/system/pipelines',
+      icon: GitBranch,
+      current: pathname?.startsWith('/system/pipelines'),
+      gradient: 'from-amber-500 to-orange-600'
+    }
+  ] : []
+
   // System services navigation
   const systemServicesNavigation: NavItem[] = isSystemMode ? [
     {
@@ -269,7 +296,7 @@ export function LeftSidebar({
       gradient: 'from-amber-500 to-orange-600'
     },
     {
-      name: 'Connections',
+      name: 'Data Connections',
       href: '/system/connections',
       icon: Plug,
       current: pathname?.startsWith('/system/connections'),
@@ -284,13 +311,6 @@ export function LeftSidebar({
       href: '/system/maintenance',
       icon: Wrench,
       current: pathname?.startsWith('/system/maintenance'),
-      gradient: 'from-amber-500 to-orange-600'
-    },
-    {
-      name: 'Scheduled Tasks',
-      href: '/system/scheduled-tasks',
-      icon: Calendar,
-      current: pathname?.startsWith('/system/scheduled-tasks'),
       gradient: 'from-amber-500 to-orange-600'
     },
     {
@@ -424,6 +444,20 @@ export function LeftSidebar({
                 </li>
               ))}
             </ul>
+
+            {/* Build section */}
+            {systemBuildNavigation.length > 0 && (
+              <div className="mt-4 space-y-1">
+                {(!collapsed || isMobile) && (
+                  <p className="px-3 mb-2 text-[10px] font-semibold text-amber-600 dark:text-amber-400 uppercase tracking-wider">
+                    Build
+                  </p>
+                )}
+                {systemBuildNavigation.map((item) => (
+                  <NavLink key={item.name} item={item} isMobile={isMobile} />
+                ))}
+              </div>
+            )}
 
             {/* Services section */}
             {systemServicesNavigation.length > 0 && (

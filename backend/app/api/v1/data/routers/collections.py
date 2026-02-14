@@ -45,7 +45,7 @@ from app.api.v1.data.schemas import (
 from app.core.database.models import SearchCollection, User
 from app.core.search.collection_service import collection_service
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_org_id, get_current_user, require_org_admin
+from app.dependencies import get_current_org_id, get_current_user, require_org_admin_or_above
 
 router = APIRouter(prefix="/collections", tags=["Search Collections"])
 
@@ -128,7 +128,7 @@ async def list_collections(
 async def create_collection(
     request: SearchCollectionCreateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ):
     """Create a new search collection."""
     async with database_service.get_session() as session:
@@ -174,7 +174,7 @@ async def update_collection(
     collection_id: UUID,
     request: SearchCollectionUpdateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ):
     """Update a search collection."""
     async with database_service.get_session() as session:
@@ -201,7 +201,7 @@ async def update_collection(
 async def delete_collection(
     collection_id: UUID,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ):
     """Delete a search collection and its vector sync targets."""
     async with database_service.get_session() as session:
@@ -231,7 +231,7 @@ async def populate_collection(
     collection_id: UUID,
     request: CollectionPopulateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ):
     """
     Populate a collection by copying chunks from the core index.
@@ -276,7 +276,7 @@ async def populate_collection_fresh(
     collection_id: UUID,
     request: CollectionPopulateFreshRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ):
     """
     Populate a collection with fresh chunking and embeddings.
@@ -322,7 +322,7 @@ async def remove_assets_from_collection(
     collection_id: UUID,
     request: CollectionRemoveAssetsRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ):
     """Remove specific assets' chunks from a collection."""
     async with database_service.get_session() as session:
@@ -358,7 +358,7 @@ async def remove_assets_from_collection(
 async def clear_collection(
     collection_id: UUID,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ):
     """Remove all chunks from a collection."""
     async with database_service.get_session() as session:
@@ -441,7 +441,7 @@ async def add_vector_sync(
     collection_id: UUID,
     request: VectorSyncCreateRequest,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ):
     """Add an external vector store sync target to a collection."""
     async with database_service.get_session() as session:
@@ -487,7 +487,7 @@ async def remove_vector_sync(
     collection_id: UUID,
     sync_id: UUID,
     org_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ):
     """Remove an external vector store sync target."""
     async with database_service.get_session() as session:

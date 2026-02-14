@@ -149,6 +149,7 @@ class SpListItemsFunction(BaseFunction):
         side_effects=False,
         is_primitive=True,
         payload_profile="full",
+        required_data_sources=["sharepoint"],
         examples=[
             {
                 "description": "List files in sync config folder",
@@ -187,7 +188,7 @@ class SpListItemsFunction(BaseFunction):
                 result = await ctx.session.execute(
                     select(SharePointSyncConfig).where(
                         SharePointSyncConfig.id == config_uuid,
-                        SharePointSyncConfig.organization_id == ctx.organization_id,
+                        SharePointSyncConfig.organization_id == ctx.requires_org_id,
                     )
                 )
                 config = result.scalar_one_or_none()
@@ -205,7 +206,7 @@ class SpListItemsFunction(BaseFunction):
                 include_folders=include_folders,
                 page_size=200,
                 max_items=limit,
-                organization_id=ctx.organization_id,
+                organization_id=ctx.requires_org_id,
                 session=ctx.session,
             )
 

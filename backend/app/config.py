@@ -25,6 +25,11 @@ from typing import List, Optional
 from pydantic import Field
 from pydantic_settings import BaseSettings
 
+# System organization constants
+SYSTEM_ORG_SLUG = "__system__"
+SYSTEM_ORG_NAME = "System"
+SYSTEM_ORG_DISPLAY_NAME = "System"
+
 
 class Settings(BaseSettings):
     # =========================================================================

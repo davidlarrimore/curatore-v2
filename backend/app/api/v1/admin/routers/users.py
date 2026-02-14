@@ -38,7 +38,7 @@ from app.api.v1.admin.schemas import (
 from app.core.auth.auth_service import auth_service
 from app.core.database.models import Organization, PasswordResetToken, User
 from app.core.shared.database_service import database_service
-from app.dependencies import require_org_admin
+from app.dependencies import get_current_org_id, require_admin, require_org_admin_or_above
 
 # Initialize router
 router = APIRouter(prefix="/organizations/me/users", tags=["User Management"])
@@ -63,7 +63,8 @@ async def list_organization_users(
     role: str = Query(None, description="Filter by role (optional)"),
     skip: int = Query(0, ge=0, description="Number of users to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Max users to return"),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> UserListResponse:
     """
     List users in organization.
@@ -91,11 +92,11 @@ async def list_organization_users(
             "total": 10
         }
     """
-    logger.info(f"User list requested by {current_user.email} (org: {current_user.organization_id})")
+    logger.info(f"User list requested by {current_user.email} (org: {org_id})")
 
     async with database_service.get_session() as session:
         # Build query
-        query = select(User).where(User.organization_id == current_user.organization_id)
+        query = select(User).where(User.organization_id == org_id)
 
         # Apply filters
         if is_active is not None:
@@ -144,7 +145,8 @@ async def list_organization_users(
 )
 async def invite_user(
     request: UserInviteRequest,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> UserInviteResponse:
     """
     Invite new user to organization.
@@ -180,6 +182,19 @@ async def invite_user(
         In production, this should send an email with a password reset link
         instead of generating a temporary password.
     """
+    # Block user assignment to system org
+    from app.config import SYSTEM_ORG_SLUG
+    async with database_service.get_session() as check_session:
+        from app.core.database.models import Organization as OrgModel
+        org_result = await check_session.execute(
+            select(OrgModel.slug).where(OrgModel.id == org_id)
+        )
+        if org_result.scalar_one_or_none() == SYSTEM_ORG_SLUG:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Cannot add users to the system organization",
+            )
+
     logger.info(f"User invite requested by {current_user.email} for {request.email}")
 
     # Validate role - admin role requires current user to be admin
@@ -220,8 +235,8 @@ async def invite_user(
         password_hash = await auth_service.hash_password(temp_password)
 
         # Admin users have no organization (system-wide access)
-        # Other users belong to the current user's organization
-        user_org_id = None if request.role == "admin" else current_user.organization_id
+        # Other users belong to the current org context
+        user_org_id = None if request.role == "admin" else org_id
 
         # Create user
         new_user = User(
@@ -266,7 +281,7 @@ async def invite_user(
         if request.send_email:
             # Get organization name for the email
             org_result = await session.execute(
-                select(Organization).where(Organization.id == current_user.organization_id)
+                select(Organization).where(Organization.id == org_id)
             )
             org = org_result.scalar_one_or_none()
             org_name = org.display_name or org.name if org else "Curatore"
@@ -301,6 +316,72 @@ async def invite_user(
 
 
 @router.get(
+    "/all",
+    response_model=UserListResponse,
+    summary="List all users (system admin)",
+    description="List all users across all organizations. Requires system admin role.",
+)
+async def list_all_users(
+    is_active: bool = Query(None, description="Filter by active status (optional)"),
+    role: str = Query(None, description="Filter by role (optional)"),
+    organization_id: str = Query(None, description="Filter by organization ID (optional)"),
+    skip: int = Query(0, ge=0, description="Number of users to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Max users to return"),
+    current_user: User = Depends(require_admin),
+) -> UserListResponse:
+    """List all users across all organizations. System admin only."""
+    logger.info(f"All users list requested by {current_user.email}")
+
+    async with database_service.get_session() as session:
+        query = select(User, Organization.display_name, Organization.name).outerjoin(
+            Organization, User.organization_id == Organization.id
+        )
+
+        if is_active is not None:
+            query = query.where(User.is_active == is_active)
+        if role:
+            query = query.where(User.role == role)
+        if organization_id:
+            query = query.where(User.organization_id == UUID(organization_id))
+
+        count_query = select(func.count()).select_from(
+            select(User).where(
+                *([User.is_active == is_active] if is_active is not None else []),
+                *([User.role == role] if role else []),
+                *([User.organization_id == UUID(organization_id)] if organization_id else []),
+            ).subquery()
+        )
+        total_result = await session.execute(count_query)
+        total = total_result.scalar() or 0
+
+        query = query.order_by(User.created_at.desc()).offset(skip).limit(limit)
+        result = await session.execute(query)
+        rows = result.all()
+
+        logger.info(f"Returning {len(rows)} users (total: {total})")
+
+        return UserListResponse(
+            users=[
+                UserResponse(
+                    id=str(user.id),
+                    email=user.email,
+                    username=user.username,
+                    full_name=user.full_name,
+                    role=user.role,
+                    is_active=user.is_active,
+                    is_verified=user.is_verified,
+                    created_at=user.created_at,
+                    last_login_at=user.last_login_at,
+                    organization_id=str(user.organization_id) if user.organization_id else None,
+                    organization_name=display_name or org_name if (display_name or org_name) else None,
+                )
+                for user, display_name, org_name in rows
+            ],
+            total=total,
+        )
+
+
+@router.get(
     "/{user_id}",
     response_model=UserResponse,
     summary="Get user details",
@@ -308,7 +389,8 @@ async def invite_user(
 )
 async def get_user(
     user_id: str,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> UserResponse:
     """
     Get user details.
@@ -335,14 +417,14 @@ async def get_user(
         result = await session.execute(
             select(User)
             .where(User.id == UUID(user_id))
-            .where(User.organization_id == current_user.organization_id)
+            .where(User.organization_id == org_id)
         )
         user = result.scalar_one_or_none()
 
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found in your organization",
+                detail="User not found in this organization",
             )
 
         return UserResponse(
@@ -367,7 +449,8 @@ async def get_user(
 async def update_user(
     user_id: str,
     request: UserUpdateRequest,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> UserResponse:
     """
     Update user details.
@@ -419,23 +502,17 @@ async def update_user(
             )
 
     async with database_service.get_session() as session:
-        # Admin users can access any user; org_admins can only access their org's users
-        if current_user.role == "admin":
-            result = await session.execute(
-                select(User).where(User.id == UUID(user_id))
-            )
-        else:
-            result = await session.execute(
-                select(User)
-                .where(User.id == UUID(user_id))
-                .where(User.organization_id == current_user.organization_id)
-            )
+        result = await session.execute(
+            select(User)
+            .where(User.id == UUID(user_id))
+            .where(User.organization_id == org_id)
+        )
         user = result.scalar_one_or_none()
 
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found" if current_user.role == "admin" else "User not found in your organization",
+                detail="User not found in this organization",
             )
 
         # Prevent changing own role (avoid lockout)
@@ -456,6 +533,14 @@ async def update_user(
             # Admin users have no organization
             if request.role == "admin":
                 user.organization_id = None
+            elif old_role == "admin" and request.role != "admin":
+                # Demoting from admin — must assign an org
+                if not org_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Must specify organization context (X-Organization-Id header) when demoting from admin role",
+                    )
+                user.organization_id = org_id
             logger.info(f"Updated role from {old_role} to {request.role}")
 
         user.updated_at = datetime.utcnow()
@@ -486,7 +571,8 @@ async def update_user(
 )
 async def deactivate_user(
     user_id: str,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> None:
     """
     Deactivate user.
@@ -516,14 +602,14 @@ async def deactivate_user(
         result = await session.execute(
             select(User)
             .where(User.id == UUID(user_id))
-            .where(User.organization_id == current_user.organization_id)
+            .where(User.organization_id == org_id)
         )
         user = result.scalar_one_or_none()
 
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found in your organization",
+                detail="User not found in this organization",
             )
 
         # Prevent deactivating yourself
@@ -549,7 +635,8 @@ async def deactivate_user(
 )
 async def reactivate_user(
     user_id: str,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> UserResponse:
     """
     Reactivate user.
@@ -578,14 +665,14 @@ async def reactivate_user(
         result = await session.execute(
             select(User)
             .where(User.id == UUID(user_id))
-            .where(User.organization_id == current_user.organization_id)
+            .where(User.organization_id == org_id)
         )
         user = result.scalar_one_or_none()
 
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found in your organization",
+                detail="User not found in this organization",
             )
 
         if user.is_active:

@@ -21,9 +21,9 @@ Connection Types:
 Usage:
     from app.core.auth.connection_service import connection_service
 
-    # Get default LLM connection for organization
-    llm_conn = await connection_service.get_default_connection(
-        session, org_id, "llm"
+    # Get default extraction connection for organization
+    ext_conn = await connection_service.get_default_connection(
+        session, org_id, "extraction"
     )
 
     # Test connection health
@@ -36,7 +36,7 @@ Architecture:
     - BaseConnectionType: Abstract base class for all connection types
     - ConnectionTypeRegistry: Registry for registering and retrieving types
     - ConnectionService: Main service for CRUD and health testing
-    - Type-specific classes: SharePointConnectionType, LLMConnectionType, etc.
+    - Type-specific classes: MicrosoftGraphConnectionType, ExtractionConnectionType, etc.
 
 Security:
     - Secrets are hashed/encrypted before storage (future enhancement)
@@ -335,149 +335,6 @@ class MicrosoftGraphConnectionType(BaseConnectionType):
                 success=False,
                 status="unhealthy",
                 message="Failed to test SharePoint connection",
-                error=str(e)
-            )
-
-
-# =========================================================================
-# LLM CONNECTION TYPE
-# =========================================================================
-
-
-class LLMConfigSchema(BaseModel):
-    """LLM connection configuration schema."""
-
-    api_key: str = Field(..., min_length=1, description="API key or authentication token")
-    model: str = Field(..., min_length=1, description="Model name (e.g., gpt-4, gpt-3.5-turbo)")
-    base_url: str = Field(..., description="API base URL")
-    timeout: int = Field(default=60, ge=1, le=600, description="Request timeout in seconds")
-    verify_ssl: bool = Field(default=True, description="Verify SSL certificates")
-
-
-class LLMConnectionType(BaseConnectionType):
-    """LLM connection type for OpenAI-compatible APIs."""
-
-    connection_type = "llm"
-    display_name = "LLM API"
-    description = "Connect to OpenAI-compatible LLM APIs (OpenAI, Ollama, LM Studio, etc.)"
-
-    def get_config_schema(self) -> Dict[str, Any]:
-        """Get JSON schema for LLM configuration."""
-        return {
-            "type": "object",
-            "properties": {
-                "api_key": {
-                    "type": "string",
-                    "title": "API Key",
-                    "description": "API key or authentication token",
-                    "writeOnly": True
-                },
-                "model": {
-                    "type": "string",
-                    "title": "Model",
-                    "description": "Model name (e.g., gpt-4, claude-3, llama2)",
-                    "default": "gpt-4"
-                },
-                "base_url": {
-                    "type": "string",
-                    "title": "Base URL",
-                    "description": "API endpoint URL",
-                    "default": "https://api.openai.com/v1"
-                },
-                "timeout": {
-                    "type": "integer",
-                    "title": "Timeout (seconds)",
-                    "description": "Request timeout in seconds",
-                    "default": 60,
-                    "minimum": 1,
-                    "maximum": 600
-                },
-                "verify_ssl": {
-                    "type": "boolean",
-                    "title": "Verify SSL",
-                    "description": "Verify SSL certificates (disable for local servers)",
-                    "default": True
-                }
-            },
-            "required": ["api_key", "model", "base_url"]
-        }
-
-    def validate_config(self, config: Dict[str, Any]) -> Dict[str, Any]:
-        """Validate LLM configuration."""
-        try:
-            validated = LLMConfigSchema(**config)
-            return validated.model_dump()
-        except ValidationError as e:
-            raise ValueError(f"Invalid LLM configuration: {e}")
-
-    async def test_connection(self, config: Dict[str, Any]) -> ConnectionTestResult:
-        """Test LLM connection by making a simple API call."""
-        try:
-            api_key = config["api_key"]
-            model = config["model"]
-            base_url = config["base_url"].rstrip("/")
-            timeout = config.get("timeout", 60)
-            verify_ssl = config.get("verify_ssl", True)
-
-            # Test with a simple completion request
-            async with httpx.AsyncClient(timeout=float(timeout), verify=verify_ssl) as client:
-                response = await client.post(
-                    f"{base_url}/chat/completions",
-                    json={
-                        "model": model,
-                        "messages": [{"role": "user", "content": "test"}],
-                        "max_tokens": 5
-                    },
-                    headers={
-                        "Authorization": f"Bearer {api_key}",
-                        "Content-Type": "application/json"
-                    }
-                )
-
-                if response.status_code == 200:
-                    return ConnectionTestResult(
-                        success=True,
-                        status="healthy",
-                        message=f"Successfully connected to {model}",
-                        details={
-                            "model": model,
-                            "endpoint": base_url
-                        }
-                    )
-                elif response.status_code == 401:
-                    return ConnectionTestResult(
-                        success=False,
-                        status="unhealthy",
-                        message="Authentication failed - invalid API key",
-                        error="HTTP 401 Unauthorized"
-                    )
-                elif response.status_code == 404:
-                    return ConnectionTestResult(
-                        success=False,
-                        status="unhealthy",
-                        message=f"Model '{model}' not found at endpoint",
-                        error="HTTP 404 Not Found"
-                    )
-                else:
-                    return ConnectionTestResult(
-                        success=False,
-                        status="unhealthy",
-                        message="LLM API returned error",
-                        error=f"HTTP {response.status_code}: {response.text[:200]}"
-                    )
-
-        except httpx.TimeoutException:
-            return ConnectionTestResult(
-                success=False,
-                status="unhealthy",
-                message="Connection timeout",
-                error=f"Request timed out after {timeout} seconds"
-            )
-        except Exception as e:
-            return ConnectionTestResult(
-                success=False,
-                status="unhealthy",
-                message="Failed to test LLM connection",
                 error=str(e)
             )
 
@@ -1242,7 +1099,6 @@ class ConnectionService:
 
         # Register built-in connection types
         self._registry.register(MicrosoftGraphConnectionType())
-        self._registry.register(LLMConnectionType())
         self._registry.register(ExtractionConnectionType())
         self._registry.register(PlaywrightConnectionType())
         self._registry.register(SamGovConnectionType())
@@ -1382,7 +1238,7 @@ async def sync_default_connections_from_env(
         ...         session, org_id
         ...     )
         ...     print(results)
-        {"sharepoint": "created", "llm": "updated", "extraction": "unchanged"}
+        {"sharepoint": "created", "extraction": "unchanged"}
     """
     import os
     from datetime import datetime
@@ -1464,67 +1320,6 @@ async def sync_default_connections_from_env(
     except Exception as e:
         results["microsoft_graph"] = "error"
         logger.error(f"Failed to sync Microsoft Graph connection: {e}")
-
-    # -------------------------------------------------------------------------
-    # LLM Connection
-    # -------------------------------------------------------------------------
-    try:
-        api_key = os.environ.get("OPENAI_API_KEY")
-
-        if api_key:
-            config = {
-                "api_key": api_key,
-                "model": settings.openai_model,
-                "base_url": settings.openai_base_url,
-                "timeout": int(settings.openai_timeout),
-                "verify_ssl": settings.openai_verify_ssl,
-            }
-
-            # Query for existing managed LLM connection
-            result = await session.execute(
-                select(Connection).where(
-                    Connection.organization_id == organization_id,
-                    Connection.connection_type == "llm",
-                    Connection.is_managed == True,
-                )
-            )
-            existing = result.scalar_one_or_none()
-
-            if existing:
-                # Update if config changed
-                if existing.config != config:
-                    existing.config = config
-                    existing.updated_at = datetime.utcnow()
-                    await session.commit()
-                    results["llm"] = "updated"
-                    logger.info("Updated managed LLM connection")
-                else:
-                    results["llm"] = "unchanged"
-            else:
-                # Create new managed connection
-                new_connection = Connection(
-                    organization_id=organization_id,
-                    name="Default LLM",
-                    description="Auto-managed LLM connection from environment variables",
-                    connection_type="llm",
-                    config=config,
-                    is_active=True,
-                    is_default=True,
-                    is_managed=True,
-                    managed_by="Environment variables: OPENAI_API_KEY, OPENAI_MODEL, OPENAI_BASE_URL",
-                    scope="organization",
-                )
-                session.add(new_connection)
-                await session.commit()
-                results["llm"] = "created"
-                logger.info("Created managed LLM connection")
-        else:
-            results["llm"] = "skipped"
-            logger.debug("Skipping LLM connection sync - missing OPENAI_API_KEY")
-
-    except Exception as e:
-        results["llm"] = "error"
-        logger.error(f"Failed to sync LLM connection: {e}")
 
     # -------------------------------------------------------------------------
     # Extraction Service Connection(s)

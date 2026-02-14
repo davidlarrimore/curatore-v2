@@ -6,13 +6,15 @@ Provides endpoints for querying execution metrics from RunLogEvent data.
 
 import logging
 from datetime import datetime, timedelta
+from typing import Optional
+from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import and_, select
 
 from app.core.database.models import Run, RunLogEvent, User
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, get_effective_org_id
 
 logger = logging.getLogger("curatore.api.metrics")
 
@@ -27,12 +29,21 @@ router = APIRouter(prefix="/metrics", tags=["metrics"])
 async def get_procedure_metrics(
     days: int = Query(7, ge=1, le=90, description="Number of days to look back"),
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ):
     """Get procedure execution metrics for the last N days."""
     cutoff = datetime.utcnow() - timedelta(days=days)
 
     async with database_service.get_session() as session:
         # Query step_complete events with duration and function info
+        conditions = [
+            Run.run_type == "procedure",
+            RunLogEvent.event_type == "step_complete",
+            RunLogEvent.created_at >= cutoff,
+        ]
+        if org_id is not None:
+            conditions.append(Run.organization_id == org_id)
+
         step_events = await session.execute(
             select(
                 RunLogEvent.context,
@@ -40,32 +51,26 @@ async def get_procedure_metrics(
                 RunLogEvent.created_at,
             )
             .join(Run, RunLogEvent.run_id == Run.id)
-            .where(
-                and_(
-                    Run.organization_id == current_user.organization_id,
-                    Run.run_type == "procedure",
-                    RunLogEvent.event_type == "step_complete",
-                    RunLogEvent.created_at >= cutoff,
-                )
-            )
+            .where(and_(*conditions))
         )
         step_rows = step_events.all()
 
         # Query procedure_complete events for overall stats
+        proc_conditions = [
+            Run.run_type == "procedure",
+            RunLogEvent.event_type == "procedure_complete",
+            RunLogEvent.created_at >= cutoff,
+        ]
+        if org_id is not None:
+            proc_conditions.append(Run.organization_id == org_id)
+
         proc_events = await session.execute(
             select(
                 RunLogEvent.context,
                 RunLogEvent.level,
             )
             .join(Run, RunLogEvent.run_id == Run.id)
-            .where(
-                and_(
-                    Run.organization_id == current_user.organization_id,
-                    Run.run_type == "procedure",
-                    RunLogEvent.event_type == "procedure_complete",
-                    RunLogEvent.created_at >= cutoff,
-                )
-            )
+            .where(and_(*proc_conditions))
         )
         proc_rows = proc_events.all()
 

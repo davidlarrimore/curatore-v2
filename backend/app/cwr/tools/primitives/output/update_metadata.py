@@ -125,7 +125,7 @@ class UpdateMetadataFunction(BaseFunction):
             # Verify asset exists and belongs to org
             asset_query = select(Asset).where(
                 Asset.id == asset_uuid,
-                Asset.organization_id == ctx.organization_id,
+                ctx.org_filter(Asset.organization_id),
             )
             result = await ctx.session.execute(asset_query)
             asset = result.scalar_one_or_none()

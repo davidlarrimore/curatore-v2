@@ -103,19 +103,6 @@ export default function ConnectionCard({
   const getDocsUrl = (): string | null => {
     const { connection_type, config } = connection
 
-    if (connection_type === 'llm') {
-      if (config.base_url?.includes('openai.com')) {
-        return 'https://platform.openai.com/docs'
-      }
-      if (config.base_url?.includes('localhost:11434') || config.base_url?.includes('ollama')) {
-        return 'https://ollama.com/docs'
-      }
-      if (config.base_url?.includes('anthropic.com')) {
-        return 'https://docs.anthropic.com'
-      }
-      return null
-    }
-
     if (connection_type === 'microsoft_graph') {
       return 'https://learn.microsoft.com/en-us/graph/api/overview'
     }
@@ -138,13 +125,6 @@ export default function ConnectionCard({
 
   const getConfigSummary = (): SummaryItem[] => {
     const { connection_type, config } = connection
-
-    if (connection_type === 'llm') {
-      return [
-        { label: 'Model', value: config.model || 'Not set' },
-        { label: 'Endpoint', value: config.base_url?.replace(/^https?:\/\//, '').split('/')[0] || 'Not set' }
-      ]
-    }
 
     if (connection_type === 'microsoft_graph') {
       return [

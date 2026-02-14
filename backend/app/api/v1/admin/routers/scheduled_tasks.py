@@ -29,7 +29,7 @@ from pydantic import BaseModel, Field
 from app.core.database.models import Run, ScheduledTask, User
 from app.core.ops.scheduled_task_service import scheduled_task_service
 from app.core.shared.database_service import database_service
-from app.dependencies import require_org_admin
+from app.dependencies import get_effective_org_id, require_org_admin_or_above
 
 # Initialize router
 router = APIRouter(prefix="/scheduled-tasks", tags=["Scheduled Tasks"])
@@ -192,7 +192,8 @@ def _run_to_response(run: Run) -> TaskRunResponse:
 )
 async def list_scheduled_tasks(
     enabled_only: bool = Query(False, description="Only return enabled tasks"),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> ScheduledTaskListResponse:
     """
     List scheduled tasks.
@@ -203,6 +204,7 @@ async def list_scheduled_tasks(
     Args:
         enabled_only: Filter to only enabled tasks
         current_user: Current authenticated user (must be org_admin)
+        org_id: Effective organization ID (supports admin X-Organization-Id header)
 
     Returns:
         ScheduledTaskListResponse: List of tasks
@@ -210,7 +212,7 @@ async def list_scheduled_tasks(
     async with database_service.get_session() as session:
         tasks = await scheduled_task_service.list_tasks(
             session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             enabled_only=enabled_only,
         )
 
@@ -228,7 +230,7 @@ async def list_scheduled_tasks(
 )
 async def get_maintenance_stats(
     days: int = Query(7, ge=1, le=90, description="Number of days to look back"),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
 ) -> MaintenanceStatsResponse:
     """
     Get maintenance task statistics.
@@ -261,7 +263,8 @@ async def get_maintenance_stats(
 )
 async def get_scheduled_task(
     task_id: UUID,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> ScheduledTaskResponse:
     """
     Get scheduled task details.
@@ -269,6 +272,7 @@ async def get_scheduled_task(
     Args:
         task_id: Task UUID
         current_user: Current authenticated user (must be org_admin)
+        org_id: Effective organization ID (supports admin X-Organization-Id header)
 
     Returns:
         ScheduledTaskResponse: Task details
@@ -285,8 +289,8 @@ async def get_scheduled_task(
                 detail=f"Scheduled task not found: {task_id}"
             )
 
-        # Check access (global tasks or same organization)
-        if task.organization_id and task.organization_id != current_user.organization_id:
+        # Check access (global tasks or same organization; admins bypass)
+        if current_user.role != "admin" and task.organization_id and task.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to this task"
@@ -305,7 +309,8 @@ async def get_task_runs(
     task_id: UUID,
     limit: int = Query(20, ge=1, le=100, description="Maximum runs to return"),
     offset: int = Query(0, ge=0, description="Number of runs to skip"),
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> TaskRunListResponse:
     """
     Get run history for a scheduled task.
@@ -315,6 +320,7 @@ async def get_task_runs(
         limit: Maximum runs to return
         offset: Number of runs to skip
         current_user: Current authenticated user (must be org_admin)
+        org_id: Effective organization ID (supports admin X-Organization-Id header)
 
     Returns:
         TaskRunListResponse: List of runs
@@ -331,8 +337,8 @@ async def get_task_runs(
                 detail=f"Scheduled task not found: {task_id}"
             )
 
-        # Check access
-        if task.organization_id and task.organization_id != current_user.organization_id:
+        # Check access (admins bypass)
+        if current_user.role != "admin" and task.organization_id and task.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to this task"
@@ -361,7 +367,8 @@ async def get_task_runs(
 )
 async def enable_task(
     task_id: UUID,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> EnableDisableResponse:
     """
     Enable a scheduled task.
@@ -369,6 +376,7 @@ async def enable_task(
     Args:
         task_id: Task UUID
         current_user: Current authenticated user (must be org_admin)
+        org_id: Effective organization ID (supports admin X-Organization-Id header)
 
     Returns:
         EnableDisableResponse: Updated task status
@@ -385,8 +393,8 @@ async def enable_task(
                 detail=f"Scheduled task not found: {task_id}"
             )
 
-        # Check access
-        if task.organization_id and task.organization_id != current_user.organization_id:
+        # Check access (admins bypass)
+        if current_user.role != "admin" and task.organization_id and task.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to this task"
@@ -414,7 +422,8 @@ async def enable_task(
 )
 async def disable_task(
     task_id: UUID,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> EnableDisableResponse:
     """
     Disable a scheduled task.
@@ -422,6 +431,7 @@ async def disable_task(
     Args:
         task_id: Task UUID
         current_user: Current authenticated user (must be org_admin)
+        org_id: Effective organization ID (supports admin X-Organization-Id header)
 
     Returns:
         EnableDisableResponse: Updated task status
@@ -438,8 +448,8 @@ async def disable_task(
                 detail=f"Scheduled task not found: {task_id}"
             )
 
-        # Check access
-        if task.organization_id and task.organization_id != current_user.organization_id:
+        # Check access (admins bypass)
+        if current_user.role != "admin" and task.organization_id and task.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to this task"
@@ -468,7 +478,8 @@ async def disable_task(
 async def trigger_task(
     task_id: UUID,
     body: Optional[TriggerTaskRequest] = None,
-    current_user: User = Depends(require_org_admin),
+    current_user: User = Depends(require_org_admin_or_above),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> TriggerTaskResponse:
     """
     Trigger a scheduled task to run immediately.
@@ -480,6 +491,7 @@ async def trigger_task(
         task_id: Task UUID
         body: Optional request body with config overrides
         current_user: Current authenticated user (must be org_admin)
+        org_id: Effective organization ID (supports admin X-Organization-Id header)
 
     Returns:
         TriggerTaskResponse: Trigger result with run ID
@@ -496,8 +508,8 @@ async def trigger_task(
                 detail=f"Scheduled task not found: {task_id}"
             )
 
-        # Check access
-        if task.organization_id and task.organization_id != current_user.organization_id:
+        # Check access (admins bypass)
+        if current_user.role != "admin" and task.organization_id and task.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied to this task"
@@ -506,7 +518,7 @@ async def trigger_task(
         config_overrides = body.config_overrides if body else None
         run = await scheduled_task_service.trigger_task_now(
             session, task_id, triggered_by=current_user.id,
-            user_organization_id=current_user.organization_id,
+            user_organization_id=org_id or task.organization_id,
             config_overrides=config_overrides,
         )
         await session.commit()

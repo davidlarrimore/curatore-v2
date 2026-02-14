@@ -28,6 +28,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 logger = logging.getLogger("curatore.core.metadata.registry")
 
+# Data source types that are managed per-org (disabled by default, must be
+# explicitly enabled via DataSourceTypeOverride with is_active=True).
+MANAGEABLE_DATA_SOURCE_TYPES = frozenset([
+    "sam_gov", "sharepoint", "forecast_ag", "forecast_apfs",
+    "forecast_state", "salesforce", "web_scrape",
+])
+
 # Path to YAML baseline files
 _REGISTRY_DIR = Path(__file__).parent / "registry"
 
@@ -693,6 +700,23 @@ class MetadataRegistryService:
         defn = self._data_sources.get(source_type)
         return dict(defn) if defn else None
 
+    async def get_enabled_data_sources(
+        self,
+        session: AsyncSession,
+        organization_id: Optional[UUID],
+    ) -> Optional[set]:
+        """
+        Return the set of data source types that are active for the org.
+
+        Returns None for system context (org_id=None), meaning all sources
+        available.  Returns a set for org context — orgs start with manageable
+        sources disabled and must explicitly enable them.
+        """
+        if organization_id is None:
+            return None  # System context: all sources available
+        catalog = await self.get_data_source_catalog(session, organization_id)
+        return {k for k, v in catalog.items() if v.get("is_active", False)}
+
     async def get_data_source_catalog(
         self,
         session: AsyncSession,
@@ -738,6 +762,12 @@ class MetadataRegistryService:
         if organization_id is None:
             return catalog
 
+        # Manageable data sources default to disabled per-org
+        # (must be explicitly enabled via DataSourceTypeOverride with is_active=True)
+        for key in MANAGEABLE_DATA_SOURCE_TYPES:
+            if key in catalog:
+                catalog[key]["is_active"] = False
+
         # Load org-level overrides
         try:
             result = await session.execute(
@@ -757,8 +787,8 @@ class MetadataRegistryService:
                     catalog[key]["description"] = override.description
                 if override.capabilities:
                     catalog[key]["capabilities"] = override.capabilities
-                if not override.is_active:
-                    catalog[key]["is_active"] = False
+                if override.is_active is not None:
+                    catalog[key]["is_active"] = override.is_active
         except Exception as e:
             logger.warning(f"Failed to load data source overrides: {e}")
 

@@ -187,6 +187,7 @@ class SearchSolicitationsFunction(BaseFunction):
         side_effects=False,
         is_primitive=True,
         payload_profile="thin",
+        required_data_sources=["sam_gov"],
         examples=[
             {
                 "description": "Hybrid search with NAICS and type filters",
@@ -283,7 +284,7 @@ class SearchSolicitationsFunction(BaseFunction):
 
                 result = await ctx.session.execute(
                     select(SamSearch.id)
-                    .where(SamSearch.organization_id == ctx.organization_id)
+                    .where(ctx.org_filter(SamSearch.organization_id))
                     .where(SamSearch.is_active == True)
                     .where(sqla_func.lower(SamSearch.name) == search_name.lower())
                 )
@@ -292,7 +293,7 @@ class SearchSolicitationsFunction(BaseFunction):
                     # Try partial match as fallback
                     result = await ctx.session.execute(
                         select(SamSearch.id)
-                        .where(SamSearch.organization_id == ctx.organization_id)
+                        .where(ctx.org_filter(SamSearch.organization_id))
                         .where(SamSearch.is_active == True)
                         .where(sqla_func.lower(SamSearch.name).contains(search_name.lower()))
                     )
@@ -325,7 +326,7 @@ class SearchSolicitationsFunction(BaseFunction):
                 )
 
             # Otherwise, use direct database query with filters
-            conditions = [SamSolicitation.organization_id == ctx.organization_id]
+            conditions = [ctx.org_filter(SamSolicitation.organization_id)]
 
             # NAICS codes filter (check if any code matches)
             if naics_codes:

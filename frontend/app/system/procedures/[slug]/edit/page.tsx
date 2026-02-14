@@ -1,0 +1,921 @@
+'use client'
+
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react'
+import { useRouter, useParams } from 'next/navigation'
+import dynamic from 'next/dynamic'
+import YAML from 'yaml'
+import { useAuth } from '@/lib/auth-context'
+import {
+  systemCwrApi,
+  type UpdateProcedureRequest,
+  type ValidationError,
+  type FunctionMeta,
+  type Procedure,
+  getParametersFromSchema,
+} from '@/lib/api'
+import { Button } from '@/components/ui/Button'
+import {
+  Save,
+  RotateCcw,
+  AlertTriangle,
+  CheckCircle,
+  ChevronDown,
+  ChevronRight,
+  Search,
+  Code,
+  Loader2,
+  ArrowLeft,
+  X,
+  Copy,
+  Trash2,
+  Settings,
+  Sparkles,
+  Box,
+} from 'lucide-react'
+import type { AIGeneratorPanelHandle } from '@/components/procedures/AIGeneratorPanel'
+
+// Lazy load the AI Generator Panel - heavy component with SSE streaming
+const AIGeneratorPanel = dynamic(
+  () => import('@/components/procedures/AIGeneratorPanel').then(mod => mod.AIGeneratorPanel),
+  {
+    loading: () => (
+      <div className="bg-white dark:bg-gray-800 rounded-b-lg border border-t-0 border-gray-200 dark:border-gray-700 p-8">
+        <div className="flex flex-col items-center justify-center">
+          <div className="w-10 h-10 rounded-full border-4 border-gray-200 dark:border-gray-700 border-t-amber-500 animate-spin" />
+          <p className="mt-4 text-sm text-gray-500 dark:text-gray-400">Loading AI Generator...</p>
+        </div>
+      </div>
+    ),
+    ssr: false,
+  }
+)
+
+export default function SystemEditProcedurePage() {
+  return <SystemProcedureEditor />
+}
+
+function SystemProcedureEditor() {
+  const router = useRouter()
+  const params = useParams()
+  const slug = params.slug as string
+  const { token } = useAuth()
+
+  // Procedure state
+  const [procedure, setProcedure] = useState<Procedure | null>(null)
+  const [isLoading, setIsLoading] = useState(true)
+  const [loadError, setLoadError] = useState('')
+
+  // Editor state
+  const [yamlContent, setYamlContent] = useState('')
+  const [savedYaml, setSavedYaml] = useState('')
+  const [isDirty, setIsDirty] = useState(false)
+
+  // UI state
+  const [isSaving, setIsSaving] = useState(false)
+  const [isValidating, setIsValidating] = useState(false)
+  const [isDeleting, setIsDeleting] = useState(false)
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  const [successMessage, setSuccessMessage] = useState('')
+  const [errorMessage, setErrorMessage] = useState('')
+
+  // Validation state
+  const [validationErrors, setValidationErrors] = useState<ValidationError[]>([])
+  const [validationWarnings, setValidationWarnings] = useState<ValidationError[]>([])
+  const [validationPassed, setValidationPassed] = useState(false)
+
+  // Right panel tab state
+  const [activeTab, setActiveTab] = useState<'generator' | 'catalog'>('generator')
+
+  // Function catalog state
+  const [functions, setFunctions] = useState<FunctionMeta[]>([])
+  const [loadingFunctions, setLoadingFunctions] = useState(true)
+
+  // Ref to AI Generator panel for programmatic control
+  const aiGeneratorRef = useRef<AIGeneratorPanelHandle>(null)
+  const [functionSearch, setFunctionSearch] = useState('')
+  const [expandedCategories, setExpandedCategories] = useState<Set<string>>(new Set(['llm', 'output', 'search']))
+  const [expandedFunctions, setExpandedFunctions] = useState<Set<string>>(new Set())
+
+  // Load procedure
+  const loadProcedure = useCallback(async () => {
+    if (!slug) return
+    try {
+      const proc = await systemCwrApi.getProcedure(slug)
+      setProcedure(proc)
+
+      // Convert definition to YAML
+      const yaml = YAML.stringify(proc.definition)
+      setYamlContent(yaml)
+      setSavedYaml(yaml)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to load procedure'
+      setLoadError(message)
+    } finally {
+      setIsLoading(false)
+    }
+  }, [slug])
+
+  useEffect(() => {
+    loadProcedure()
+  }, [loadProcedure])
+
+  // Load functions
+  useEffect(() => {
+    const loadFunctions = async () => {
+      try {
+        const funcsData = await systemCwrApi.listFunctions()
+        setFunctions(funcsData.functions)
+      } catch (err: unknown) {
+        console.error('Failed to load functions:', err)
+      } finally {
+        setLoadingFunctions(false)
+      }
+    }
+
+    loadFunctions()
+  }, [])
+
+  // Track dirty state
+  useEffect(() => {
+    setIsDirty(yamlContent !== savedYaml)
+  }, [yamlContent, savedYaml])
+
+  // Parse name and slug from YAML for display
+  const parsedInfo = useMemo(() => {
+    try {
+      const data = YAML.parse(yamlContent)
+      return {
+        name: data.name || '',
+        slug: data.slug || '',
+        description: data.description || '',
+      }
+    } catch {
+      return { name: '', slug: '', description: '' }
+    }
+  }, [yamlContent])
+
+  // Parse YAML to get procedure data
+  const parseProcedure = useCallback((): UpdateProcedureRequest | null => {
+    try {
+      const data = YAML.parse(yamlContent)
+      return {
+        name: data.name || '',
+        description: data.description || '',
+        parameters: data.parameters || [],
+        steps: data.steps || [],
+        on_error: data.on_error || 'fail',
+        tags: data.tags || [],
+      }
+    } catch {
+      return null
+    }
+  }, [yamlContent])
+
+  // Validate procedure
+  const handleValidate = useCallback(async () => {
+    const data = parseProcedure()
+    if (!data) {
+      setValidationErrors([{
+        code: 'INVALID_YAML',
+        message: 'Invalid YAML syntax',
+        path: '',
+        details: {},
+      }])
+      return false
+    }
+
+    // Build full procedure for validation
+    const fullProc = {
+      name: data.name || procedure?.name || '',
+      slug: procedure?.slug || '',
+      description: data.description,
+      parameters: data.parameters,
+      steps: data.steps || [],
+      on_error: data.on_error,
+      tags: data.tags,
+    }
+
+    setIsValidating(true)
+    setValidationPassed(false)
+    try {
+      const result = await systemCwrApi.validateProcedure(fullProc as Parameters<typeof systemCwrApi.validateProcedure>[0])
+      setValidationErrors(result.errors)
+      setValidationWarnings(result.warnings)
+      if (result.valid) {
+        setValidationPassed(true)
+        if (result.warnings.length === 0) {
+          setSuccessMessage('Validation passed -- no errors or warnings')
+          setTimeout(() => setSuccessMessage(''), 5000)
+        }
+      }
+      return result.valid
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Validation failed'
+      setErrorMessage(message)
+      setTimeout(() => setErrorMessage(''), 5000)
+      return false
+    } finally {
+      setIsValidating(false)
+    }
+  }, [parseProcedure, procedure])
+
+  // Save procedure
+  const handleSave = async () => {
+    if (!procedure) return
+
+    const data = parseProcedure()
+    if (!data) {
+      setValidationErrors([{
+        code: 'INVALID_YAML',
+        message: 'Invalid YAML syntax',
+        path: '',
+        details: {},
+      }])
+      return
+    }
+
+    setIsSaving(true)
+    setValidationErrors([])
+    setValidationWarnings([])
+    setValidationPassed(false)
+
+    try {
+      const saved = await systemCwrApi.updateProcedure(procedure.slug, data)
+      setProcedure(saved)
+
+      // Update saved YAML
+      const yaml = YAML.stringify(saved.definition)
+      setSavedYaml(yaml)
+      setYamlContent(yaml)
+
+      setSuccessMessage(`Procedure saved (v${saved.version})!`)
+      setTimeout(() => setSuccessMessage(''), 3000)
+    } catch (err: unknown) {
+      const errorObj = err as { validation?: { errors?: ValidationError[]; warnings?: ValidationError[] }; message?: string }
+      if (errorObj.validation) {
+        setValidationErrors(errorObj.validation.errors || [])
+        setValidationWarnings(errorObj.validation.warnings || [])
+        setErrorMessage('Validation failed. See errors below.')
+      } else {
+        setErrorMessage(errorObj.message || 'Failed to save procedure')
+      }
+      setTimeout(() => setErrorMessage(''), 5000)
+    } finally {
+      setIsSaving(false)
+    }
+  }
+
+  // Delete procedure
+  const handleDelete = async () => {
+    if (!procedure) return
+
+    setIsDeleting(true)
+    try {
+      await systemCwrApi.deleteProcedure(procedure.slug)
+      setSuccessMessage('Procedure deleted')
+      router.push('/system/procedures')
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to delete procedure'
+      setErrorMessage(message)
+      setTimeout(() => setErrorMessage(''), 5000)
+    } finally {
+      setIsDeleting(false)
+      setShowDeleteConfirm(false)
+    }
+  }
+
+  // Reset to saved version
+  const handleReset = () => {
+    setYamlContent(savedYaml)
+    setValidationErrors([])
+    setValidationWarnings([])
+  }
+
+  // Toggle category expansion
+  const toggleCategory = (category: string) => {
+    const newExpanded = new Set(expandedCategories)
+    if (newExpanded.has(category)) {
+      newExpanded.delete(category)
+    } else {
+      newExpanded.add(category)
+    }
+    setExpandedCategories(newExpanded)
+  }
+
+  // Toggle function expansion
+  const toggleFunction = (funcName: string) => {
+    const newExpanded = new Set(expandedFunctions)
+    if (newExpanded.has(funcName)) {
+      newExpanded.delete(funcName)
+    } else {
+      newExpanded.add(funcName)
+    }
+    setExpandedFunctions(newExpanded)
+  }
+
+  // Copy function snippet
+  const copyFunctionSnippet = (func: FunctionMeta) => {
+    const params: Record<string, unknown> = {}
+    getParametersFromSchema(func).forEach(p => {
+      if (p.required) {
+        params[p.name] = p.example || p.default || `<${p.type}>`
+      }
+    })
+
+    const snippet = YAML.stringify({
+      name: func.name.replace('llm_', '').replace('_', '-'),
+      function: func.name,
+      params,
+    })
+
+    navigator.clipboard.writeText(snippet)
+    setSuccessMessage(`Copied ${func.name} snippet to clipboard`)
+    setTimeout(() => setSuccessMessage(''), 2000)
+  }
+
+  // Filter functions by search
+  const filteredFunctions = useMemo(() => {
+    if (!functionSearch.trim()) return functions
+
+    const query = functionSearch.toLowerCase()
+    return functions.filter(fn =>
+      fn.name.toLowerCase().includes(query) ||
+      fn.description.toLowerCase().includes(query) ||
+      fn.category.toLowerCase().includes(query)
+    )
+  }, [functions, functionSearch])
+
+  // Group filtered functions by category
+  const groupedFunctions = useMemo(() => {
+    const groups: Record<string, FunctionMeta[]> = {}
+    for (const fn of filteredFunctions) {
+      if (!groups[fn.category]) {
+        groups[fn.category] = []
+      }
+      groups[fn.category].push(fn)
+    }
+    return groups
+  }, [filteredFunctions])
+
+  // Loading state
+  if (isLoading) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 flex items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="w-8 h-8 animate-spin mx-auto text-amber-500" />
+          <p className="mt-4 text-gray-500 dark:text-gray-400">Loading procedure...</p>
+        </div>
+      </div>
+    )
+  }
+
+  // Error state
+  if (loadError) {
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950 flex items-center justify-center">
+        <div className="text-center">
+          <AlertTriangle className="w-12 h-12 mx-auto text-red-500" />
+          <h2 className="mt-4 text-xl font-bold text-gray-900 dark:text-white">Failed to load procedure</h2>
+          <p className="mt-2 text-gray-500 dark:text-gray-400">{loadError}</p>
+          <Button
+            variant="secondary"
+            onClick={() => router.push('/system/procedures')}
+            className="mt-6"
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Procedures
+          </Button>
+        </div>
+      </div>
+    )
+  }
+
+  const isSystemProcedure = procedure?.source_type !== 'user'
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
+      {/* Header */}
+      <div className="border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800">
+        <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-4">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-4">
+              <button
+                onClick={() => router.push('/system/procedures')}
+                className="p-2 rounded-lg hover:bg-gray-100 dark:hover:bg-gray-700 text-gray-500 dark:text-gray-400"
+              >
+                <ArrowLeft className="w-5 h-5" />
+              </button>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-xl font-bold text-gray-900 dark:text-white">
+                    {parsedInfo.name || procedure?.name || 'Procedure'}
+                  </h1>
+                  {isSystemProcedure && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                      <Settings className="w-3 h-3" />
+                      System
+                    </span>
+                  )}
+                </div>
+                <p className="text-sm text-gray-500 dark:text-gray-400">
+                  v{procedure?.version} - <span className="font-mono">{parsedInfo.slug || procedure?.slug}</span>
+                </p>
+              </div>
+              {isDirty && (
+                <span className="px-2 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">
+                  Unsaved changes
+                </span>
+              )}
+            </div>
+
+            {/* Control buttons */}
+            <div className="flex items-center gap-3">
+              {!isSystemProcedure && (
+                <Button
+                  variant="secondary"
+                  onClick={() => setShowDeleteConfirm(true)}
+                  disabled={isDeleting}
+                  className="gap-2 text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-900/20"
+                >
+                  <Trash2 className="w-4 h-4" />
+                  Delete
+                </Button>
+              )}
+              <Button
+                variant="secondary"
+                onClick={handleReset}
+                disabled={!isDirty}
+                className="gap-2"
+              >
+                <RotateCcw className="w-4 h-4" />
+                Reset
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleSave}
+                disabled={isSaving}
+                className="gap-2"
+              >
+                {isSaving ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  <Save className="w-4 h-4" />
+                )}
+                Save
+              </Button>
+            </div>
+          </div>
+
+          {/* System procedure notice */}
+          {isSystemProcedure && (
+            <div className="mt-4 rounded-lg bg-amber-50 dark:bg-amber-900/20 border border-amber-100 dark:border-amber-900/50 p-3">
+              <div className="flex items-center gap-2">
+                <Settings className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                <p className="text-sm text-amber-800 dark:text-amber-200">
+                  System procedure -- changes will be saved to the database and written back to the source JSON definition file.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Success/Error messages */}
+          {successMessage && (
+            <div className="mt-4 rounded-lg bg-emerald-50 dark:bg-emerald-900/20 border border-emerald-100 dark:border-emerald-900/50 p-3">
+              <div className="flex items-center gap-2">
+                <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                <p className="text-sm text-emerald-800 dark:text-emerald-200">{successMessage}</p>
+              </div>
+            </div>
+          )}
+
+          {errorMessage && (
+            <div className="mt-4 rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-100 dark:border-red-900/50 p-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400" />
+                <p className="text-sm text-red-800 dark:text-red-200">{errorMessage}</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Delete confirmation modal */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50">
+          <div className="bg-white dark:bg-gray-800 rounded-xl p-6 max-w-md mx-4 shadow-xl">
+            <h3 className="text-lg font-bold text-gray-900 dark:text-white">Delete Procedure?</h3>
+            <p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+              Are you sure you want to delete &quot;{procedure?.name}&quot;? This action cannot be undone.
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <Button
+                variant="secondary"
+                onClick={() => setShowDeleteConfirm(false)}
+                disabled={isDeleting}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="primary"
+                onClick={handleDelete}
+                disabled={isDeleting}
+                className="bg-red-600 hover:bg-red-700"
+              >
+                {isDeleting ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : (
+                  'Delete'
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Main content - two panels */}
+      <div className="max-w-[1800px] mx-auto px-4 sm:px-6 lg:px-8 py-6">
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          {/* Left panel - Editor */}
+          <div className="space-y-4">
+            <div className="bg-white dark:bg-gray-800 rounded-lg border border-gray-200 dark:border-gray-700 overflow-hidden">
+              <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+                <div className="flex items-center justify-between">
+                  <h2 className="text-sm font-semibold text-gray-900 dark:text-white">
+                    Procedure Definition (YAML)
+                  </h2>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => {
+                        navigator.clipboard.writeText(yamlContent)
+                        setSuccessMessage('YAML copied to clipboard')
+                        setTimeout(() => setSuccessMessage(''), 2000)
+                      }}
+                      className="p-1.5 rounded-lg text-gray-500 dark:text-gray-400 hover:bg-gray-200 dark:hover:bg-gray-700 hover:text-gray-700 dark:hover:text-gray-200 transition-colors"
+                      title="Copy YAML"
+                    >
+                      <Copy className="w-4 h-4" />
+                    </button>
+                    <button
+                      onClick={handleValidate}
+                      disabled={isValidating}
+                      className="flex items-center gap-2 px-3 py-1.5 text-xs font-medium rounded-lg bg-amber-50 dark:bg-amber-900/20 text-amber-600 dark:text-amber-400 hover:bg-amber-100 dark:hover:bg-amber-900/30 transition-colors"
+                    >
+                      {isValidating ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <CheckCircle className="w-3 h-3" />
+                      )}
+                      Validate
+                    </button>
+                  </div>
+                </div>
+              </div>
+              <textarea
+                value={yamlContent}
+                onChange={(e) => setYamlContent(e.target.value)}
+                className="w-full h-[500px] p-4 font-mono text-sm bg-gray-900 text-gray-100 focus:outline-none resize-none"
+                placeholder="Enter procedure YAML..."
+                spellCheck={false}
+                readOnly={false}
+              />
+            </div>
+
+            {/* Validation with warnings panel (valid but has warnings) */}
+            {validationPassed && validationErrors.length === 0 && validationWarnings.length > 0 && (
+              <div className="bg-white dark:bg-gray-800 rounded-xl border border-amber-200 dark:border-amber-700 overflow-hidden">
+                <div className="px-4 py-3 border-b border-amber-200 dark:border-amber-700 bg-amber-50 dark:bg-amber-900/20">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <CheckCircle className="w-4 h-4 text-emerald-600 dark:text-emerald-400" />
+                      <h2 className="text-sm font-semibold text-amber-800 dark:text-amber-200">
+                        Valid with Warnings ({validationWarnings.length})
+                      </h2>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          aiGeneratorRef.current?.fixValidationErrors([], validationWarnings)
+                        }}
+                        disabled={aiGeneratorRef.current?.isGenerating}
+                        className="group inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+                        title="Use AI to fix these warnings"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        Fix with AI
+                      </button>
+                      <button
+                        onClick={() => {
+                          setValidationPassed(false)
+                          setValidationWarnings([])
+                        }}
+                        className="p-1 rounded hover:bg-amber-100 dark:hover:bg-amber-900/30"
+                      >
+                        <X className="w-4 h-4 text-amber-600 dark:text-amber-400" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="divide-y divide-amber-200 dark:divide-amber-700">
+                  {validationWarnings.map((warning, idx) => (
+                    <div key={`warn-${idx}`} className="px-4 py-3">
+                      <div className="flex items-start gap-3">
+                        <div className="w-6 h-6 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
+                          <AlertTriangle className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 dark:text-white">
+                            {warning.message}
+                          </p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-mono">
+                            Path: {warning.path || '(root)'} | Code: {warning.code}
+                          </p>
+                          {warning.details && Object.keys(warning.details).length > 0 && (
+                            <details className="mt-2">
+                              <summary className="text-xs text-amber-600 dark:text-amber-400 cursor-pointer hover:text-amber-700 dark:hover:text-amber-300">
+                                Show suggestion
+                              </summary>
+                              <div className="mt-1 text-xs text-gray-600 dark:text-gray-400 bg-amber-50 dark:bg-amber-900/20 p-2 rounded">
+                                {warning.details.suggestion || JSON.stringify(warning.details, null, 2)}
+                              </div>
+                            </details>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Validation errors panel */}
+            {validationErrors.length > 0 && (
+              <div className="bg-white dark:bg-gray-800 rounded-xl border border-red-200 dark:border-red-700 overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-red-50 dark:bg-red-900/20">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <AlertTriangle className="w-4 h-4 text-red-600 dark:text-red-400" />
+                      <h2 className="text-sm font-semibold text-red-800 dark:text-red-200">
+                        Validation Errors ({validationErrors.length})
+                      </h2>
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => {
+                          aiGeneratorRef.current?.fixValidationErrors(validationErrors, validationWarnings)
+                        }}
+                        disabled={aiGeneratorRef.current?.isGenerating}
+                        className="group inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg bg-gradient-to-r from-amber-500 to-orange-500 hover:from-amber-600 hover:to-orange-600 text-white shadow-sm disabled:opacity-50 disabled:cursor-not-allowed transition-all duration-200"
+                        title="Use AI to automatically fix these errors"
+                      >
+                        <Sparkles className="w-3 h-3" />
+                        Fix with AI
+                      </button>
+                      <button
+                        onClick={() => {
+                          setValidationErrors([])
+                          setValidationWarnings([])
+                          setValidationPassed(false)
+                        }}
+                        className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-900/30"
+                      >
+                        <X className="w-4 h-4 text-red-600 dark:text-red-400" />
+                      </button>
+                    </div>
+                  </div>
+                </div>
+                <div className="divide-y divide-gray-200 dark:divide-gray-700">
+                  {validationErrors.map((error, idx) => (
+                    <div key={idx} className="px-4 py-3">
+                      <div className="flex items-start gap-3">
+                        <div className="w-6 h-6 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center flex-shrink-0">
+                          <X className="w-3 h-3 text-red-600 dark:text-red-400" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 dark:text-white">
+                            {error.message}
+                          </p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-mono">
+                            Path: {error.path || '(root)'} | Code: {error.code}
+                          </p>
+                          {error.details && Object.keys(error.details).length > 0 && (
+                            <details className="mt-2">
+                              <summary className="text-xs text-gray-500 dark:text-gray-400 cursor-pointer hover:text-gray-700 dark:hover:text-gray-300">
+                                Show details
+                              </summary>
+                              <pre className="mt-1 text-xs font-mono text-gray-600 dark:text-gray-400 bg-gray-50 dark:bg-gray-900/50 p-2 rounded overflow-x-auto">
+                                {JSON.stringify(error.details, null, 2)}
+                              </pre>
+                            </details>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {validationWarnings.map((warning, idx) => (
+                    <div key={`warn-${idx}`} className="px-4 py-3 bg-amber-50/50 dark:bg-amber-900/10">
+                      <div className="flex items-start gap-3">
+                        <div className="w-6 h-6 rounded-full bg-amber-100 dark:bg-amber-900/30 flex items-center justify-center flex-shrink-0">
+                          <AlertTriangle className="w-3 h-3 text-amber-600 dark:text-amber-400" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <p className="text-sm font-medium text-gray-900 dark:text-white">
+                            {warning.message}
+                          </p>
+                          <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5 font-mono">
+                            Path: {warning.path || '(root)'} | Code: {warning.code}
+                          </p>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* Right panel - Tabbed: AI Generator / Function Catalog */}
+          <div className="sticky top-6">
+            {/* Tab bar */}
+            <div className="flex border-b border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 rounded-t-lg overflow-hidden">
+              <button
+                onClick={() => setActiveTab('generator')}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                  activeTab === 'generator'
+                    ? 'text-amber-600 dark:text-amber-400 border-b-2 border-amber-600 dark:border-amber-400 bg-amber-50/50 dark:bg-amber-950/20'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                }`}
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <Sparkles className="w-4 h-4" />
+                  AI Generator
+                </span>
+              </button>
+              <button
+                onClick={() => setActiveTab('catalog')}
+                className={`flex-1 px-4 py-3 text-sm font-medium transition-colors ${
+                  activeTab === 'catalog'
+                    ? 'text-amber-600 dark:text-amber-400 border-b-2 border-amber-600 dark:border-amber-400 bg-amber-50/50 dark:bg-amber-950/20'
+                    : 'text-gray-500 dark:text-gray-400 hover:text-gray-700 dark:hover:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700/50'
+                }`}
+              >
+                <span className="inline-flex items-center gap-1.5">
+                  <Box className="w-4 h-4" />
+                  Function Catalog
+                </span>
+              </button>
+            </div>
+
+            {/* Tab content */}
+            {activeTab === 'generator' && (
+              <AIGeneratorPanel
+                ref={aiGeneratorRef}
+                currentYaml={yamlContent}
+                onYamlGenerated={(yaml) => setYamlContent(yaml)}
+                onSuccess={(msg) => {
+                  setSuccessMessage(msg)
+                  setValidationErrors([])
+                  setValidationWarnings([])
+                  setTimeout(() => setSuccessMessage(''), 5000)
+                }}
+                onError={(msg) => {
+                  setErrorMessage(msg)
+                  setTimeout(() => setErrorMessage(''), 5000)
+                }}
+              />
+            )}
+
+            {activeTab === 'catalog' && (
+              <div className="bg-white dark:bg-gray-800 rounded-b-lg border border-t-0 border-gray-200 dark:border-gray-700 overflow-hidden">
+                <div className="px-4 py-3 border-b border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-900/50">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                    <input
+                      type="text"
+                      placeholder="Search functions..."
+                      value={functionSearch}
+                      onChange={(e) => setFunctionSearch(e.target.value)}
+                      className="w-full pl-9 pr-4 py-2 text-sm rounded-lg border border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-800 text-gray-700 dark:text-gray-300 placeholder:text-gray-400 focus:outline-none focus:ring-2 focus:ring-amber-500"
+                    />
+                  </div>
+                </div>
+
+                <div className="max-h-[700px] overflow-y-auto">
+                {loadingFunctions ? (
+                  <div className="p-8 text-center">
+                    <Loader2 className="w-6 h-6 animate-spin mx-auto text-gray-400" />
+                    <p className="mt-2 text-sm text-gray-500">Loading functions...</p>
+                  </div>
+                ) : Object.keys(groupedFunctions).length === 0 ? (
+                  <div className="p-8 text-center">
+                    <Code className="w-8 h-8 mx-auto text-gray-300 dark:text-gray-600" />
+                    <p className="mt-2 text-sm text-gray-500">No functions found</p>
+                  </div>
+                ) : (
+                  <div className="divide-y divide-gray-200 dark:divide-gray-700">
+                    {Object.entries(groupedFunctions).map(([category, funcs]) => (
+                      <div key={category}>
+                        <button
+                          onClick={() => toggleCategory(category)}
+                          className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                        >
+                          <span className="text-sm font-medium text-gray-900 dark:text-white capitalize">
+                            {category}
+                          </span>
+                          <div className="flex items-center gap-2">
+                            <span className="text-xs text-gray-500 dark:text-gray-400">
+                              {funcs.length}
+                            </span>
+                            {expandedCategories.has(category) ? (
+                              <ChevronDown className="w-4 h-4 text-gray-400" />
+                            ) : (
+                              <ChevronRight className="w-4 h-4 text-gray-400" />
+                            )}
+                          </div>
+                        </button>
+
+                        {expandedCategories.has(category) && (
+                          <div className="bg-gray-50 dark:bg-gray-900/30">
+                            {funcs.map((func) => (
+                              <div key={func.name} className="border-t border-gray-100 dark:border-gray-800">
+                                <div className="px-4 py-2">
+                                  <div className="flex items-center justify-between">
+                                    <button
+                                      onClick={() => toggleFunction(func.name)}
+                                      className="flex items-center gap-2 text-left group flex-1"
+                                    >
+                                      {expandedFunctions.has(func.name) ? (
+                                        <ChevronDown className="w-3 h-3 text-gray-400 flex-shrink-0" />
+                                      ) : (
+                                        <ChevronRight className="w-3 h-3 text-gray-400 flex-shrink-0" />
+                                      )}
+                                      <span className="text-xs font-mono font-medium text-gray-700 dark:text-gray-300 group-hover:text-amber-600 dark:group-hover:text-amber-400">
+                                        {func.name}
+                                      </span>
+                                    </button>
+                                    <button
+                                      onClick={() => copyFunctionSnippet(func)}
+                                      className="p-1 rounded hover:bg-gray-200 dark:hover:bg-gray-700"
+                                      title="Copy YAML snippet"
+                                    >
+                                      <Copy className="w-3 h-3 text-gray-400" />
+                                    </button>
+                                  </div>
+                                  <p className="ml-5 text-xs text-gray-500 dark:text-gray-400 line-clamp-2">
+                                    {func.description}
+                                  </p>
+
+                                  {expandedFunctions.has(func.name) && (
+                                    <div className="mt-2 ml-5 space-y-2">
+                                      {(() => { const params = getParametersFromSchema(func); return params.length > 0 && (
+                                        <div>
+                                          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+                                            Parameters
+                                          </p>
+                                          <div className="space-y-1">
+                                            {params.map((param) => (
+                                              <div key={param.name} className="flex items-start gap-2 text-xs">
+                                                <span className="font-mono text-gray-700 dark:text-gray-300">
+                                                  {param.name}
+                                                </span>
+                                                <span className="text-gray-400">:</span>
+                                                <span className="text-gray-500">{param.type}</span>
+                                                {param.required && (
+                                                  <span className="px-1 py-0.5 rounded bg-red-100 dark:bg-red-900/30 text-red-600 dark:text-red-400 text-[10px]">
+                                                    required
+                                                  </span>
+                                                )}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        </div>
+                                      ); })()}
+                                      {func.output_schema && func.output_schema.type && (
+                                        <div>
+                                          <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 uppercase tracking-wider mb-1">
+                                            Returns
+                                          </p>
+                                          <p className="text-xs font-mono text-gray-600 dark:text-gray-400">
+                                            {func.output_schema.type}{func.output_schema.description ? ` -- ${func.output_schema.description}` : ''}
+                                          </p>
+                                        </div>
+                                      )}
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  )
+}

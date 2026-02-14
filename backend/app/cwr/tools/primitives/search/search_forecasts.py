@@ -134,6 +134,7 @@ class SearchForecastsFunction(BaseFunction):
         side_effects=False,
         is_primitive=True,
         payload_profile="thin",
+        required_data_sources=["forecast_ag", "forecast_apfs", "forecast_state"],
         examples=[
             {
                 "description": "Hybrid search with source type and fiscal year",

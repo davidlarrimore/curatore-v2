@@ -88,23 +88,15 @@ class LLMService:
         """Get the temperature for a specific task type."""
         return self._adapter.get_temperature(task_type)
 
-    async def _get_llm_config(
-        self,
-        organization_id: Optional[UUID] = None,
-        session: Optional[AsyncSession] = None
-    ) -> Dict[str, Any]:
+    async def _get_llm_config(self) -> Dict[str, Any]:
         """
-        Get LLM configuration from database connection or ENV fallback.
+        Get LLM configuration from config.yml / ENV.
 
-        Args:
-            organization_id: Organization UUID (optional)
-            session: Database session (optional)
+        LLM is an infrastructure service — always uses global config.
 
         Returns:
             Dict[str, Any]: LLM configuration dict
         """
-        if organization_id and session:
-            return await self._adapter.resolve_config_for_org(organization_id, session)
         return self._adapter.resolve_config()
 
     async def _create_client_from_config(self, config: Dict[str, Any]) -> Optional[OpenAI]:
@@ -156,10 +148,6 @@ class LLMService:
         client = self._client
         model = task_config.model
 
-        if organization_id and session:
-            config = await self._get_llm_config(organization_id, session)
-            client = await self._create_client_from_config(config)
-
         if not client:
             return {"content": "", "error": "LLM client not available"}
 
@@ -205,13 +193,8 @@ class LLMService:
             session=session,
         )
 
-        # Get client (from database connection or fallback to ENV-based client)
         client = self._client
         model = task_config.model
-
-        if organization_id and session:
-            config = await self._get_llm_config(organization_id, session)
-            client = await self._create_client_from_config(config)
 
         if not client:
             return None
@@ -294,14 +277,9 @@ class LLMService:
             session=session,
         )
 
-        # Get client (from database connection or fallback to ENV-based client)
         client = self._client
         model = task_config.model
         temperature = task_config.temperature if task_config.temperature is not None else 0.2
-
-        if organization_id and session:
-            config = await self._get_llm_config(organization_id, session)
-            client = await self._create_client_from_config(config)
 
         if not client:
             return markdown_text
@@ -399,14 +377,9 @@ class LLMService:
             session=session,
         )
 
-        # Get client (from database connection or fallback to ENV-based client)
         client = self._client
         model = task_config.model
         temperature = task_config.temperature if task_config.temperature is not None else 0.1
-
-        if organization_id and session:
-            config = await self._get_llm_config(organization_id, session)
-            client = await self._create_client_from_config(config)
 
         if not client:
             return "Unable to generate summary - LLM not available"

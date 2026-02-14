@@ -68,9 +68,13 @@ class ProcedureExecutor:
         # Try YAML loader first (for system/file-based procedures)
         definition = procedure_loader.get(procedure_slug)
 
-        # Fall back to database (for user-created procedures)
+        # Detect if this is a system procedure (from DB)
+        is_system = False
         if not definition:
             definition = await self._load_from_database(session, organization_id, procedure_slug)
+            # Check if the loaded procedure is a system procedure
+            if definition and definition.source_type == "system":
+                is_system = True
 
         if not definition:
             return {
@@ -78,14 +82,26 @@ class ProcedureExecutor:
                 "error": f"Procedure not found: {procedure_slug}",
             }
 
+        # Also detect system procedure via org slug
+        if not is_system:
+            from app.config import SYSTEM_ORG_SLUG
+            from sqlalchemy import select as sa_select
+            from app.core.database.models import Organization
+            org_result = await session.execute(
+                sa_select(Organization.slug).where(Organization.id == organization_id)
+            )
+            if org_result.scalar_one_or_none() == SYSTEM_ORG_SLUG:
+                is_system = True
+
         return await self.execute_definition(
             session=session,
-            organization_id=organization_id,
+            organization_id=None if is_system else organization_id,
             definition=definition,
             params=params,
             user_id=user_id,
             run_id=run_id,
             dry_run=dry_run,
+            is_system_context=is_system,
         )
 
     async def _load_from_database(
@@ -128,24 +144,26 @@ class ProcedureExecutor:
     async def execute_definition(
         self,
         session: AsyncSession,
-        organization_id: UUID,
+        organization_id: Optional[UUID],
         definition: ProcedureDefinition,
         params: Dict[str, Any] = None,
         user_id: Optional[UUID] = None,
         run_id: Optional[UUID] = None,
         dry_run: bool = False,
+        is_system_context: bool = False,
     ) -> Dict[str, Any]:
         """
         Execute a procedure definition.
 
         Args:
             session: Database session
-            organization_id: Organization context
+            organization_id: Organization context (None for system context)
             definition: Procedure definition to execute
             params: Input parameters
             user_id: User who triggered execution
             run_id: Existing run ID
             dry_run: If true, don't make changes
+            is_system_context: If true, functions see all orgs' data
 
         Returns:
             Execution results
@@ -165,6 +183,7 @@ class ProcedureExecutor:
             procedure_id=None,  # Will be set if procedure is in DB
             params=validated_params,
             dry_run=dry_run,
+            is_system_context=is_system_context,
         )
 
         # Propagate trace context: if run exists, ensure it has a trace_id
@@ -449,6 +468,37 @@ class ProcedureExecutor:
                 "status": "failed",
                 "error": error_msg,
             }
+
+        # Governance: check required_data_sources
+        required_ds = getattr(func.meta, 'required_data_sources', None)
+        if required_ds and ctx.organization_id:
+            try:
+                from app.core.metadata.registry_service import metadata_registry_service
+
+                catalog = await metadata_registry_service.get_data_source_catalog(
+                    ctx.session, ctx.organization_id
+                )
+                if not any(catalog.get(ds, {}).get("is_active", False) for ds in required_ds):
+                    error_msg = (
+                        f"Function '{step.function}' requires data source(s) "
+                        f"{required_ds} but none are enabled for this organization"
+                    )
+                    await ctx.log_run_event(
+                        level="ERROR",
+                        event_type="data_source_disabled",
+                        message=error_msg,
+                        context={
+                            "step": step.name,
+                            "function": step.function,
+                            "required_data_sources": required_ds,
+                        },
+                    )
+                    return {
+                        "status": "failed",
+                        "error": error_msg,
+                    }
+            except Exception as e:
+                logger.warning(f"Data source check failed for {step.function}: {e}")
 
         # Governance: log side-effect usage
         if func.meta.side_effects:

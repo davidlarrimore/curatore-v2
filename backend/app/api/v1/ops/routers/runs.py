@@ -26,7 +26,7 @@ from app.core.shared.database_service import database_service
 from app.core.shared.run_group_service import run_group_service
 from app.core.shared.run_log_service import run_log_service
 from app.core.shared.run_service import run_service
-from app.dependencies import get_current_user
+from app.dependencies import get_current_user, get_effective_org_id
 
 logger = logging.getLogger("curatore.api.runs")
 
@@ -46,12 +46,13 @@ async def list_runs(
     limit: int = Query(100, ge=1, le=1000, description="Maximum results to return"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> RunsListResponse:
     """List runs for the organization."""
     async with database_service.get_session() as session:
         runs = await run_service.get_runs_by_organization(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             run_type=run_type,
             status=status,
             origin=origin,
@@ -61,7 +62,7 @@ async def list_runs(
 
         total = await run_service.count_runs_by_organization(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             run_type=run_type,
             status=status,
         )
@@ -81,6 +82,7 @@ async def list_runs(
 )
 async def get_run_stats(
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ):
     """Get run statistics for the organization."""
     async with database_service.get_session() as session:
@@ -90,42 +92,43 @@ async def get_run_stats(
 
         from app.core.database.models import Asset, Run
 
-        org_id = current_user.organization_id
+        # Build org filter conditions
+        run_org_conditions = []
+        if org_id is not None:
+            run_org_conditions.append(Run.organization_id == org_id)
+
+        asset_org_conditions = []
+        if org_id is not None:
+            asset_org_conditions.append(Asset.organization_id == org_id)
 
         # Count by status
-        status_counts = await session.execute(
-            select(Run.status, func.count(Run.id))
-            .where(Run.organization_id == org_id)
-            .group_by(Run.status)
-        )
+        status_query = select(Run.status, func.count(Run.id)).group_by(Run.status)
+        for cond in run_org_conditions:
+            status_query = status_query.where(cond)
+        status_counts = await session.execute(status_query)
         by_status = {row[0]: row[1] for row in status_counts.fetchall()}
 
         # Count by run_type
-        type_counts = await session.execute(
-            select(Run.run_type, func.count(Run.id))
-            .where(Run.organization_id == org_id)
-            .group_by(Run.run_type)
-        )
+        type_query = select(Run.run_type, func.count(Run.id)).group_by(Run.run_type)
+        for cond in run_org_conditions:
+            type_query = type_query.where(cond)
+        type_counts = await session.execute(type_query)
         by_type = {row[0]: row[1] for row in type_counts.fetchall()}
 
         # Recent activity (last 24 hours)
         yesterday = datetime.utcnow() - timedelta(hours=24)
-        recent_counts = await session.execute(
-            select(Run.status, func.count(Run.id))
-            .where(and_(
-                Run.organization_id == org_id,
-                Run.created_at >= yesterday
-            ))
-            .group_by(Run.status)
-        )
+        recent_conditions = list(run_org_conditions) + [Run.created_at >= yesterday]
+        recent_query = select(Run.status, func.count(Run.id)).group_by(Run.status)
+        for cond in recent_conditions:
+            recent_query = recent_query.where(cond)
+        recent_counts = await session.execute(recent_query)
         recent_by_status = {row[0]: row[1] for row in recent_counts.fetchall()}
 
         # Asset status counts
-        asset_counts = await session.execute(
-            select(Asset.status, func.count(Asset.id))
-            .where(Asset.organization_id == org_id)
-            .group_by(Asset.status)
-        )
+        asset_query = select(Asset.status, func.count(Asset.id)).group_by(Asset.status)
+        for cond in asset_org_conditions:
+            asset_query = asset_query.where(cond)
+        asset_counts = await session.execute(asset_query)
         assets_by_status = {row[0]: row[1] for row in asset_counts.fetchall()}
 
         # Queue length (from Redis)
@@ -182,6 +185,7 @@ async def get_run_stats(
 async def get_run(
     run_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> RunResponse:
     """Get run by ID."""
     async with database_service.get_session() as session:
@@ -190,8 +194,8 @@ async def get_run(
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        # Verify run belongs to user's organization
-        if run.organization_id != current_user.organization_id:
+        # Verify run belongs to user's organization (admins bypass)
+        if current_user.role != "admin" and run.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         return RunResponse.model_validate(run)
@@ -205,6 +209,7 @@ async def get_run(
 async def get_run_group_status(
     run_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ):
     """
     Get run status with child job counts.
@@ -220,7 +225,7 @@ async def get_run_group_status(
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        if run.organization_id != current_user.organization_id:
+        if current_user.role != "admin" and run.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         response = {
@@ -258,6 +263,7 @@ async def get_run_with_logs(
     event_type: Optional[str] = Query(None, description="Filter by event type"),
     limit: Optional[int] = Query(None, ge=1, le=1000, description="Limit log events"),
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> RunWithLogsResponse:
     """Get run with log events."""
     async with database_service.get_session() as session:
@@ -266,8 +272,8 @@ async def get_run_with_logs(
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        # Verify run belongs to user's organization
-        if run.organization_id != current_user.organization_id:
+        # Verify run belongs to user's organization (admins bypass)
+        if current_user.role != "admin" and run.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Get log events
@@ -294,6 +300,7 @@ async def get_run_with_logs(
 async def retry_extraction(
     run_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> RunResponse:
     """
     Retry a failed extraction.
@@ -307,8 +314,8 @@ async def retry_extraction(
         if not original_run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        # Verify run belongs to user's organization
-        if original_run.organization_id != current_user.organization_id:
+        # Verify run belongs to user's organization (admins bypass)
+        if current_user.role != "admin" and original_run.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Only allow retry for failed extraction runs
@@ -341,7 +348,7 @@ async def retry_extraction(
         # Create new extraction run
         new_run = await run_service.create_run(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id or original_run.organization_id,
             run_type="extraction",
             origin="user",  # User-triggered retry
             config={

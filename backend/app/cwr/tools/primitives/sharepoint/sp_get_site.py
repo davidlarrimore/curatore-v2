@@ -104,6 +104,7 @@ class SpGetSiteFunction(BaseFunction):
         side_effects=False,
         is_primitive=True,
         payload_profile="full",
+        required_data_sources=["sharepoint"],
         examples=[
             {
                 "description": "Get site info from URL",
@@ -134,7 +135,7 @@ class SpGetSiteFunction(BaseFunction):
                 result = await ctx.session.execute(
                     select(SharePointSyncConfig).where(
                         SharePointSyncConfig.id == config_uuid,
-                        SharePointSyncConfig.organization_id == ctx.organization_id,
+                        SharePointSyncConfig.organization_id == ctx.requires_org_id,
                     )
                 )
                 config = result.scalar_one_or_none()
@@ -148,7 +149,7 @@ class SpGetSiteFunction(BaseFunction):
 
             meta = await get_site_metadata(
                 folder_url=url,
-                organization_id=ctx.organization_id,
+                organization_id=ctx.requires_org_id,
                 session=ctx.session,
             )
 

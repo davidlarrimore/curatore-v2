@@ -140,27 +140,11 @@ class LLMAdapter(ServiceAdapter):
         self, organization_id: UUID, session: AsyncSession
     ) -> Dict[str, Any]:
         """
-        Resolve configuration with DB connection as tier 1.
+        Resolve LLM configuration.
 
-        Priority:
-            1. Database connection (if organization_id and session provided)
-            2. config.yml / ENV fallback
+        LLM is an infrastructure service — always uses config.yml / ENV.
+        Per-org DB connections are not supported for LLM.
         """
-        try:
-            connection = await self._get_db_connection(organization_id, session)
-
-            if connection:
-                config = connection.config
-                return {
-                    "api_key": config.get("api_key", ""),
-                    "model": config.get("model", settings.openai_model),
-                    "base_url": config.get("base_url", settings.openai_base_url),
-                    "timeout": config.get("timeout", settings.openai_timeout),
-                    "verify_ssl": config.get("verify_ssl", settings.openai_verify_ssl),
-                }
-        except Exception as e:
-            print(f"Warning: Failed to get LLM connection from database: {e}")
-
         return self.resolve_config()
 
     async def test_connection(self) -> LLMConnectionStatus:

@@ -110,6 +110,7 @@ class GetForecastHistoryFunction(BaseFunction):
         side_effects=False,
         is_primitive=True,
         payload_profile="full",
+        required_data_sources=["forecast_ag", "forecast_apfs", "forecast_state"],
         examples=[
             {
                 "description": "Get full history and diffs for a forecast",
@@ -151,7 +152,7 @@ class GetForecastHistoryFunction(BaseFunction):
 
             result = await forecast_service.get_forecast_history(
                 session=ctx.session,
-                organization_id=ctx.organization_id,
+                organization_id=ctx.requires_org_id,
                 forecast_id=forecast_uuid,
                 source_type=source_type,
             )

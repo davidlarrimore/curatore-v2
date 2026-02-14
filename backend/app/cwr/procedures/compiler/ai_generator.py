@@ -158,9 +158,20 @@ class ProcedureGeneratorService:
                 diagnostics=diagnostics,
             )
 
+        # Resolve org-specific data source availability
+        enabled_ds = None
+        if organization_id and session:
+            from app.core.metadata.registry_service import metadata_registry_service
+
+            enabled_ds = await metadata_registry_service.get_enabled_data_sources(
+                session, organization_id
+            )
+
         # Build contract pack
         contract_pack = get_tool_contract_pack(
-            org_id=organization_id, profile=gen_profile
+            org_id=organization_id,
+            profile=gen_profile,
+            enabled_data_sources=enabled_ds,
         )
         diagnostics.tools_available = len(contract_pack.contracts)
 

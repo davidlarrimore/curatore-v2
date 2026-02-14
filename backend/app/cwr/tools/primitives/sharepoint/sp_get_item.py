@@ -126,6 +126,7 @@ class SpGetItemFunction(BaseFunction):
         side_effects=False,
         is_primitive=True,
         payload_profile="full",
+        required_data_sources=["sharepoint"],
         examples=[
             {
                 "description": "Get item by Graph IDs",
@@ -161,7 +162,7 @@ class SpGetItemFunction(BaseFunction):
                 result = await ctx.session.execute(
                     select(Asset).where(
                         Asset.id == asset_uuid,
-                        Asset.organization_id == ctx.organization_id,
+                        Asset.organization_id == ctx.requires_org_id,
                     )
                 )
                 asset = result.scalar_one_or_none()
@@ -184,7 +185,7 @@ class SpGetItemFunction(BaseFunction):
             item_data = await get_item_metadata(
                 drive_id=drive_id,
                 item_id=item_id,
-                organization_id=ctx.organization_id,
+                organization_id=ctx.requires_org_id,
                 session=ctx.session,
             )
 

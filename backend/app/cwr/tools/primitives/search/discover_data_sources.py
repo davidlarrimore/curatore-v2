@@ -179,13 +179,12 @@ class DiscoverDataSourcesFunction(BaseFunction):
     ) -> List[Dict[str, Any]]:
         """Fetch live configuration instances for a source type."""
         instances = []
-        org_id = ctx.organization_id
 
         if source_type == "sam_gov":
             SamSearch = models["SamSearch"]
             result = await ctx.session.execute(
                 select(SamSearch)
-                .where(SamSearch.organization_id == org_id)
+                .where(ctx.org_filter(SamSearch.organization_id))
                 .where(SamSearch.is_active == True)
             )
             for s in result.scalars():
@@ -219,7 +218,7 @@ class DiscoverDataSourcesFunction(BaseFunction):
             # Get configs
             result = await ctx.session.execute(
                 select(SharePointSyncConfig)
-                .where(SharePointSyncConfig.organization_id == org_id)
+                .where(ctx.org_filter(SharePointSyncConfig.organization_id))
                 .where(SharePointSyncConfig.is_active == True)
             )
             configs = list(result.scalars())
@@ -234,7 +233,7 @@ class DiscoverDataSourcesFunction(BaseFunction):
                         func.count(Asset.indexed_at).label("indexed"),
                     )
                     .where(Asset.source_type == "sharepoint")
-                    .where(Asset.organization_id == org_id)
+                    .where(ctx.org_filter(Asset.organization_id))
                     .where(
                         config_id_col.in_([str(c.id) for c in configs])
                     )
@@ -314,7 +313,7 @@ class DiscoverDataSourcesFunction(BaseFunction):
             fs_type = fs_type_map[source_type]
             result = await ctx.session.execute(
                 select(ForecastSync)
-                .where(ForecastSync.organization_id == org_id)
+                .where(ctx.org_filter(ForecastSync.organization_id))
                 .where(ForecastSync.source_type == fs_type)
                 .where(ForecastSync.is_active == True)
             )
@@ -332,7 +331,7 @@ class DiscoverDataSourcesFunction(BaseFunction):
             Connection = models["Connection"]
             result = await ctx.session.execute(
                 select(Connection)
-                .where(Connection.organization_id == org_id)
+                .where(ctx.org_filter(Connection.organization_id))
                 .where(Connection.connection_type == "salesforce")
                 .where(Connection.is_active == True)
             )
@@ -349,7 +348,7 @@ class DiscoverDataSourcesFunction(BaseFunction):
             SearchCollection = models["SearchCollection"]
             result = await ctx.session.execute(
                 select(SearchCollection)
-                .where(SearchCollection.organization_id == org_id)
+                .where(ctx.org_filter(SearchCollection.organization_id))
                 .where(SearchCollection.is_active == True)
             )
             for c in result.scalars():
@@ -370,7 +369,7 @@ class DiscoverDataSourcesFunction(BaseFunction):
 
             result = await ctx.session.execute(
                 select(ScrapeCollection)
-                .where(ScrapeCollection.organization_id == org_id)
+                .where(ctx.org_filter(ScrapeCollection.organization_id))
                 .where(ScrapeCollection.status == "active")
             )
             collections = list(result.scalars())
@@ -385,7 +384,7 @@ class DiscoverDataSourcesFunction(BaseFunction):
                         func.count(Asset.indexed_at).label("indexed"),
                     )
                     .where(Asset.source_type.in_(["web_scrape", "web_scrape_document"]))
-                    .where(Asset.organization_id == org_id)
+                    .where(ctx.org_filter(Asset.organization_id))
                     .where(
                         coll_id_col.in_([str(c.id) for c in collections])
                     )

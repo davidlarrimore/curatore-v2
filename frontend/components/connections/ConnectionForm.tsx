@@ -4,7 +4,7 @@ import { useState, useEffect, FormEvent } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { connectionsApi } from '@/lib/api'
 import { Button } from '../ui/Button'
-import { Zap, FolderSync, FileText, Check, ChevronRight, AlertTriangle, Loader2, X } from 'lucide-react'
+import { FolderSync, FileText, Check, ChevronRight, AlertTriangle, Loader2, X, Link2 } from 'lucide-react'
 
 interface Connection {
   id: string
@@ -31,69 +31,19 @@ interface ConnectionFormProps {
   onCancel: () => void
 }
 
-type Step = 'select-type' | 'select-provider' | 'configure' | 'review'
-
-interface LLMProvider {
-  id: string
-  name: string
-  baseUrl: string
-  requiresIAM?: boolean
-  description: string
-  icon?: string
-}
-
-const LLM_PROVIDERS: LLMProvider[] = [
-  {
-    id: 'openai',
-    name: 'OpenAI',
-    baseUrl: 'https://api.openai.com/v1',
-    description: 'GPT-4, GPT-3.5, and other OpenAI models'
-  },
-  {
-    id: 'anthropic',
-    name: 'Anthropic',
-    baseUrl: 'https://api.anthropic.com/v1',
-    description: 'Claude 3 Opus, Sonnet, and Haiku models'
-  },
-  {
-    id: 'google',
-    name: 'Google Gemini',
-    baseUrl: 'https://generativelanguage.googleapis.com/v1',
-    description: 'Gemini Pro and Ultra models'
-  },
-  {
-    id: 'bedrock',
-    name: 'AWS Bedrock',
-    baseUrl: 'https://bedrock-runtime.us-east-1.amazonaws.com',
-    requiresIAM: true,
-    description: 'AWS Bedrock foundation models'
-  },
-  {
-    id: 'custom',
-    name: 'Custom / OpenAI-Compatible',
-    baseUrl: '',
-    description: 'Ollama, LM Studio, or other compatible APIs'
-  }
-]
+type Step = 'select-type' | 'configure' | 'review'
 
 export default function ConnectionForm({ connection, onSuccess, onCancel }: ConnectionFormProps) {
   const { token } = useAuth()
   const [currentStep, setCurrentStep] = useState<Step>(connection ? 'configure' : 'select-type')
   const [connectionTypes, setConnectionTypes] = useState<ConnectionType[]>([])
   const [selectedType, setSelectedType] = useState(connection?.connection_type || '')
-  const [selectedProvider, setSelectedProvider] = useState<LLMProvider | null>(null)
   const [name, setName] = useState(connection?.name || '')
   const [config, setConfig] = useState<Record<string, any>>(connection?.config || {})
   const [isDefault, setIsDefault] = useState(connection?.is_default || false)
   const [testOnSave, setTestOnSave] = useState(true)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState('')
-
-  // LLM-specific state
-  const [availableModels, setAvailableModels] = useState<string[]>([])
-  const [isFetchingModels, setIsFetchingModels] = useState(false)
-  const [modelsFetched, setModelsFetched] = useState(false)
-  const [requiresManualModel, setRequiresManualModel] = useState(false)
 
   useEffect(() => {
     const loadConnectionTypes = async () => {
@@ -105,17 +55,6 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
         if (connection) {
           setSelectedType(connection.connection_type)
           setConfig(connection.config)
-
-          // Try to determine provider from base_url if it's an LLM connection
-          if (connection.connection_type === 'llm' && connection.config.base_url) {
-            const matchedProvider = LLM_PROVIDERS.find(p =>
-              connection.config.base_url.includes(p.id) ||
-              connection.config.base_url === p.baseUrl
-            )
-            if (matchedProvider) {
-              setSelectedProvider(matchedProvider)
-            }
-          }
         } else if (response.types.length > 0 && !selectedType) {
           // Default to first type if creating new
           setSelectedType(response.types[0].type)
@@ -141,71 +80,11 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
 
   const handleTypeSelect = (type: string) => {
     handleTypeChange(type)
-
-    // If LLM type selected, go to provider selection
-    if (type === 'llm') {
-      setCurrentStep('select-provider')
-    } else {
-      setCurrentStep('configure')
-    }
-  }
-
-  const handleProviderSelect = (provider: LLMProvider) => {
-    setSelectedProvider(provider)
-
-    // Pre-populate config with provider defaults
-    setConfig({
-      ...config,
-      base_url: provider.baseUrl,
-      provider: provider.id
-    })
-
-    setRequiresManualModel(provider.requiresIAM || false)
     setCurrentStep('configure')
   }
 
   const handleConfigChange = (key: string, value: any) => {
     setConfig(prev => ({ ...prev, [key]: value }))
-  }
-
-  const handleTestCredentials = async () => {
-    if (!token || !config.api_key || !config.base_url) {
-      setError('API key and base URL are required to test connection')
-      return
-    }
-
-    setIsFetchingModels(true)
-    setError('')
-
-    try {
-      const result = await connectionsApi.testCredentials(token, {
-        provider: selectedProvider?.id || 'openai',
-        base_url: config.base_url,
-        api_key: config.api_key,
-        ...config
-      })
-
-      if (result.success) {
-        setAvailableModels(result.models)
-        setModelsFetched(true)
-
-        // Auto-select first model if none selected
-        if (result.models.length > 0 && !config.model) {
-          handleConfigChange('model', result.models[0])
-        }
-      } else {
-        setError(result.error || 'Failed to fetch models')
-
-        if (result.requires_manual_model) {
-          setRequiresManualModel(true)
-          setModelsFetched(true)
-        }
-      }
-    } catch (err: any) {
-      setError(err.message || 'Failed to test connection')
-    } finally {
-      setIsFetchingModels(false)
-    }
   }
 
   const handleSubmit = async (e: FormEvent) => {
@@ -240,21 +119,17 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
 
   const getConnectionTypeIcon = (type: string) => {
     switch (type) {
-      case 'llm':
-        return <Zap className="w-6 h-6" />
       case 'microsoft_graph':
         return <FolderSync className="w-6 h-6" />
       case 'extraction':
         return <FileText className="w-6 h-6" />
       default:
-        return <Zap className="w-6 h-6" />
+        return <Link2 className="w-6 h-6" />
     }
   }
 
   const getTypeGradient = (type: string) => {
     switch (type) {
-      case 'llm':
-        return 'from-violet-500 to-purple-600'
       case 'microsoft_graph':
         return 'from-blue-500 to-cyan-500'
       case 'extraction':
@@ -324,12 +199,7 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
   }
 
   const renderStepIndicator = () => {
-    const steps = selectedType === 'llm' && !connection ? [
-      { id: 'select-type', label: 'Type' },
-      { id: 'select-provider', label: 'Provider' },
-      { id: 'configure', label: 'Configure' },
-      { id: 'review', label: 'Review' }
-    ] : [
+    const steps = [
       { id: 'select-type', label: 'Type' },
       { id: 'configure', label: 'Configure' },
       { id: 'review', label: 'Review' }
@@ -423,271 +293,11 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
     )
   }
 
-  const renderSelectProvider = () => {
-    return (
-      <div className="space-y-6">
-        <div className="text-center mb-8">
-          <div className={`inline-flex items-center justify-center p-3 rounded-xl bg-gradient-to-br ${getTypeGradient('llm')} text-white mb-4 shadow-lg`}>
-            {getConnectionTypeIcon('llm')}
-          </div>
-          <h3 className="text-xl font-semibold text-gray-900 dark:text-white">
-            Choose LLM Provider
-          </h3>
-          <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Select your AI model provider
-          </p>
-        </div>
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-          {LLM_PROVIDERS.map((provider) => (
-            <button
-              key={provider.id}
-              type="button"
-              onClick={() => handleProviderSelect(provider)}
-              className="group relative p-4 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl hover:border-indigo-300 dark:hover:border-indigo-700 hover:shadow-lg transition-all duration-200 text-left"
-            >
-              <div className="flex items-start gap-3">
-                <div className={`p-2.5 rounded-lg bg-gradient-to-br ${getTypeGradient('llm')} text-white group-hover:scale-110 transition-transform flex-shrink-0`}>
-                  <Zap className="w-5 h-5" />
-                </div>
-                <div className="flex-1 min-w-0">
-                  <h4 className="text-sm font-semibold text-gray-900 dark:text-white group-hover:text-indigo-600 dark:group-hover:text-indigo-400 transition-colors">
-                    {provider.name}
-                  </h4>
-                  <p className="mt-0.5 text-xs text-gray-500 dark:text-gray-400 line-clamp-2">
-                    {provider.description}
-                  </p>
-                  {provider.requiresIAM && (
-                    <span className="inline-block mt-2 px-2 py-0.5 text-xs font-medium bg-amber-50 dark:bg-amber-900/30 text-amber-700 dark:text-amber-300 rounded-md">
-                      Requires IAM
-                    </span>
-                  )}
-                </div>
-                <ChevronRight className="w-5 h-5 text-gray-300 dark:text-gray-600 group-hover:text-indigo-500 group-hover:translate-x-1 transition-all flex-shrink-0" />
-              </div>
-            </button>
-          ))}
-        </div>
-      </div>
-    )
-  }
-
-  const renderLLMConfig = () => {
-    return (
-      <div className="space-y-5">
-        <div className="bg-gray-50 dark:bg-gray-900/50 rounded-xl p-5 border border-gray-100 dark:border-gray-800">
-          {/* Provider badge */}
-          {selectedProvider && (
-            <div className="flex items-center gap-2 pb-4 mb-4 border-b border-gray-200 dark:border-gray-700">
-              <span className="text-sm text-gray-500 dark:text-gray-400">Provider:</span>
-              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 bg-indigo-50 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-300 rounded-lg text-sm font-medium">
-                <Zap className="w-3.5 h-3.5" />
-                {selectedProvider.name}
-              </span>
-            </div>
-          )}
-
-          <div className="space-y-4">
-            {/* Connection Name */}
-            <div className="space-y-1.5">
-              <label htmlFor="connection-name" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Connection Name
-              </label>
-              <input
-                id="connection-name"
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={`e.g., ${selectedProvider?.name || 'My'} LLM`}
-                required
-                className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
-              />
-            </div>
-
-            {/* Base URL */}
-            <div className="space-y-1.5">
-              <label htmlFor="base_url" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                Base URL
-              </label>
-              <input
-                id="base_url"
-                type="text"
-                value={config.base_url || ''}
-                onChange={(e) => handleConfigChange('base_url', e.target.value)}
-                placeholder="https://api.openai.com/v1"
-                required
-                className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all font-mono text-xs"
-              />
-            </div>
-
-            {/* API Key or IAM Credentials */}
-            {selectedProvider?.requiresIAM ? (
-              <>
-                <div className="space-y-1.5">
-                  <label htmlFor="access_key" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    AWS Access Key ID
-                  </label>
-                  <input
-                    id="access_key"
-                    type="password"
-                    value={config.access_key || ''}
-                    onChange={(e) => handleConfigChange('access_key', e.target.value)}
-                    placeholder="AKIAIOSFODNN7EXAMPLE"
-                    required
-                    className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label htmlFor="secret_key" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    AWS Secret Access Key
-                  </label>
-                  <input
-                    id="secret_key"
-                    type="password"
-                    value={config.secret_key || ''}
-                    onChange={(e) => handleConfigChange('secret_key', e.target.value)}
-                    placeholder="wJalrXUtnFEMI/K7MDENG/bPxRfiCYEXAMPLEKEY"
-                    required
-                    className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <label htmlFor="region" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                    AWS Region
-                  </label>
-                  <input
-                    id="region"
-                    type="text"
-                    value={config.region || 'us-east-1'}
-                    onChange={(e) => handleConfigChange('region', e.target.value)}
-                    placeholder="us-east-1"
-                    required
-                    className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
-                  />
-                </div>
-              </>
-            ) : (
-              <div className="space-y-1.5">
-                <label htmlFor="api_key" className="block text-sm font-medium text-gray-700 dark:text-gray-300">
-                  API Key
-                </label>
-                <input
-                  id="api_key"
-                  type="password"
-                  value={config.api_key || ''}
-                  onChange={(e) => handleConfigChange('api_key', e.target.value)}
-                  placeholder="sk-..."
-                  required
-                  className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all"
-                />
-              </div>
-            )}
-
-            {/* Test Connection and Fetch Models */}
-            {!modelsFetched && !selectedProvider?.requiresIAM && (
-              <div className="pt-2">
-                <Button
-                  type="button"
-                  onClick={handleTestCredentials}
-                  disabled={isFetchingModels || !config.api_key || !config.base_url}
-                  variant="secondary"
-                  className="w-full"
-                >
-                  {isFetchingModels ? (
-                    <span className="flex items-center justify-center gap-2">
-                      <Loader2 className="w-4 h-4 animate-spin" />
-                      Testing Connection...
-                    </span>
-                  ) : (
-                    'Test Connection & Fetch Models'
-                  )}
-                </Button>
-              </div>
-            )}
-
-            {/* Model Selection */}
-            {(modelsFetched || availableModels.length > 0) && (
-              <div className="space-y-1.5 pt-4 border-t border-gray-200 dark:border-gray-700">
-                <label htmlFor="model" className="flex items-center gap-2 text-sm font-medium text-gray-700 dark:text-gray-300">
-                  Model
-                  {availableModels.length > 0 && (
-                    <span className="text-xs text-emerald-600 dark:text-emerald-400 font-normal">
-                      {availableModels.length} available
-                    </span>
-                  )}
-                </label>
-                {availableModels.length > 0 ? (
-                  <select
-                    id="model"
-                    value={config.model || ''}
-                    onChange={(e) => handleConfigChange('model', e.target.value)}
-                    required
-                    className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white transition-all"
-                  >
-                    <option value="">Select a model</option>
-                    {availableModels.map(model => (
-                      <option key={model} value={model}>{model}</option>
-                    ))}
-                  </select>
-                ) : requiresManualModel ? (
-                  <input
-                    id="model"
-                    type="text"
-                    value={config.model || ''}
-                    onChange={(e) => handleConfigChange('model', e.target.value)}
-                    placeholder="e.g., anthropic.claude-3-sonnet-20240229-v1:0"
-                    required
-                    className="w-full px-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent bg-white dark:bg-gray-900 text-gray-900 dark:text-white placeholder-gray-400 dark:placeholder-gray-500 transition-all font-mono text-xs"
-                  />
-                ) : null}
-              </div>
-            )}
-
-            {modelsFetched && availableModels.length > 0 && (
-              <button
-                type="button"
-                onClick={() => {
-                  setModelsFetched(false)
-                  setAvailableModels([])
-                }}
-                className="text-sm text-indigo-600 dark:text-indigo-400 hover:underline"
-              >
-                Re-test connection
-              </button>
-            )}
-          </div>
-        </div>
-      </div>
-    )
-  }
-
   const renderConfigure = () => {
     if (!selectedTypeInfo || !selectedTypeInfo.config_schema) {
       return <p className="text-sm text-gray-500 dark:text-gray-400">No configuration schema available</p>
     }
 
-    // Special handling for LLM connections
-    if (selectedType === 'llm') {
-      return (
-        <div className="space-y-6">
-          <div className="text-center mb-6">
-            <div className={`inline-flex items-center justify-center p-3 rounded-xl bg-gradient-to-br ${getTypeGradient(selectedType)} text-white mb-4 shadow-lg`}>
-              {getConnectionTypeIcon(selectedType)}
-            </div>
-            <h3 className="text-xl font-semibold text-gray-900 dark:text-white">
-              Configure {selectedProvider?.name || 'LLM'} Connection
-            </h3>
-            <p className="mt-1 text-sm text-gray-500 dark:text-gray-400">
-              {selectedProvider?.description || 'Set up your LLM connection'}
-            </p>
-          </div>
-
-          {renderLLMConfig()}
-        </div>
-      )
-    }
-
-    // Standard configuration for non-LLM connections
     const schema = selectedTypeInfo.config_schema
     const properties = schema.properties || {}
 
@@ -760,7 +370,7 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
               <div className="text-white">
                 <h4 className="font-semibold">{name}</h4>
                 <p className="text-sm text-white/80">
-                  {selectedProvider?.name || selectedTypeInfo.display_name}
+                  {selectedTypeInfo.display_name}
                 </p>
               </div>
             </div>
@@ -886,29 +496,17 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
 
         <form onSubmit={handleSubmit}>
           {currentStep === 'select-type' && renderSelectType()}
-          {currentStep === 'select-provider' && renderSelectProvider()}
           {currentStep === 'configure' && renderConfigure()}
           {currentStep === 'review' && renderReview()}
 
           {/* Footer */}
           <div className="flex items-center justify-between pt-6 mt-6 border-t border-gray-200 dark:border-gray-700">
             <div>
-              {currentStep === 'select-provider' && (
-                <Button
-                  type="button"
-                  variant="secondary"
-                  onClick={() => setCurrentStep('select-type')}
-                  className="gap-1"
-                >
-                  <ChevronRight className="w-4 h-4 rotate-180" />
-                  Back
-                </Button>
-              )}
               {currentStep === 'configure' && !connection && (
                 <Button
                   type="button"
                   variant="secondary"
-                  onClick={() => setCurrentStep(selectedType === 'llm' ? 'select-provider' : 'select-type')}
+                  onClick={() => setCurrentStep('select-type')}
                   className="gap-1"
                 >
                   <ChevronRight className="w-4 h-4 rotate-180" />
@@ -936,7 +534,7 @@ export default function ConnectionForm({ connection, onSuccess, onCancel }: Conn
                 <Button
                   type="button"
                   onClick={() => setCurrentStep('review')}
-                  disabled={!name || !selectedType || (selectedType === 'llm' && !config.model)}
+                  disabled={!name || !selectedType}
                   className="gap-1"
                 >
                   Continue

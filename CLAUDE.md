@@ -14,7 +14,7 @@ Development guidance for Claude Code working with Curatore v2.
 
 **AI Clients**: [MCP Gateway](mcp/README.md) | [Open WebUI](docs/MCP_OPEN_WEBUI.md)
 
-**Reference**: [API Docs](docs/API_DOCUMENTATION.md) | [Configuration](docs/CONFIGURATION.md) | [Maintenance Tasks](docs/MAINTENANCE_TASKS.md)
+**Reference**: [API Docs](docs/API_DOCUMENTATION.md) | [Auth & Access Model](docs/AUTH_ACCESS_MODEL.md) | [Configuration](docs/CONFIGURATION.md) | [Maintenance Tasks](docs/MAINTENANCE_TASKS.md)
 
 ---
 
@@ -35,6 +35,32 @@ Curatore v2 is a document processing and curation platform that converts documen
 4. **Database is source of truth** - Object store contains only bytes
 5. **Queue isolation** - Each job type has its own Celery queue to prevent blocking
 6. **Contract-constrained governance** - Functions expose formal JSON Schema contracts with side-effect declarations, payload profiles, and exposure policies; the AI procedure generator uses these constraints when planning workflows
+
+---
+
+## Authentication & Access Model
+
+See [Auth & Access Model](docs/AUTH_ACCESS_MODEL.md) for the full reference.
+
+**Roles**: `admin` (system-wide, `organization_id=NULL`), `org_admin` (single org), `member` (single org), `viewer` (read-only).
+
+**Key Rules**:
+- Admin users have `organization_id=NULL` — **never** use `current_user.organization_id` directly
+- Use `get_effective_org_id` for cross-org admin views, `get_current_org_id` for org-scoped operations
+- System org (`__system__`) is for CWR procedure ownership only, never for user assignment
+- Side-effect CWR functions require `org_admin+` role
+- CWR function visibility is filtered by org's enabled data sources — functions whose `required_data_sources` aren't active for the org are hidden from listings and the AI generator
+- Generation profiles are server-enforced by role (`admin` → `admin_full`, `org_admin` → `workflow_standard`, others → `safe_readonly`)
+
+**Key Dependencies** (`backend/app/dependencies.py`):
+
+| Dependency | Returns | Purpose |
+|-----------|---------|---------|
+| `get_effective_org_id` | `Optional[UUID]` | Cross-org admin views; returns `None` for admin system context |
+| `get_current_org_id` | `UUID` (required) | Org-scoped operations; raises 400 if no org context |
+| `require_admin` | `User` | System admin only |
+| `require_org_admin_or_above` | `User` | `org_admin` or `admin` |
+| `require_org_admin` | `User` | `org_admin` only (NOT admin) |
 
 ---
 
@@ -392,19 +418,32 @@ Functions expose formal **tool contracts** — JSON Schema-based definitions wit
 | `payload_profile` | `"thin"` (IDs/titles/scores), `"full"` (complete data), `"summary"` (condensed) |
 | `exposure_profile` | Access policy: `{"procedure": true, "agent": true}` |
 | `requires_llm` | Whether function needs an LLM connection |
+| `required_data_sources` | Data source types that must be enabled for the org (e.g., `["sam_gov"]`) |
 | `tags` | Categorization tags for filtering |
 
 ### Key Files
 - `backend/app/cwr/tools/schema_utils.py` — `ContractView` frozen dataclass (replaces deleted `ToolContract`)
 - `backend/app/cwr/tools/base.py` — `FunctionMeta` with `input_schema`/`output_schema` as JSON Schema dicts; `to_contract_dict()` and `as_contract()` methods
+- `backend/app/cwr/contracts/contract_pack.py` — `get_tool_contract_pack()` builds profile-filtered contract packs with 5 filtering layers (exposure, category, blocked, side-effects, org data sources)
 - `backend/app/cwr/contracts/validation.py` — Procedure validation with facet checking
 - `backend/app/api/v1/cwr/routers/contracts.py` — REST API endpoints
+- `backend/app/api/v1/cwr/routers/functions.py` — Function listing/detail endpoints with org data source filtering
 - `backend/app/api/v1/cwr/schemas.py` — `FunctionSchema` includes governance fields; `ToolContractResponse` for contract API
-- `backend/app/cwr/procedures/compiler/ai_generator.py` — System prompt includes CONTRACT & GOVERNANCE CONSTRAINTS section
+- `backend/app/cwr/procedures/compiler/ai_generator.py` — Resolves org's enabled data sources and passes to contract pack; system prompt via `context_builder.py`
+- `backend/app/core/metadata/registry_service.py` — `get_enabled_data_sources()` returns active source types for an org
 - `frontend/lib/api.ts` — `contractsApi` client + `ToolContract` TypeScript interface; `FunctionMeta` with `input_schema`/`output_schema`
 
 ### Governance in the Procedure Generator
-The AI generator's system prompt includes contract constraint rules:
+The AI generator enforces governance at two levels:
+
+**Contract pack filtering** (before the LLM sees any tools):
+1. Exposure profile — tool must be allowed in "procedure" context
+2. Category filter — tool category must be in profile's allowed categories
+3. Blocked tools — tool must not be in profile's blocked list
+4. Side effects — if profile disallows side effects, side-effect tools are excluded
+5. Org data sources — tools whose `required_data_sources` are not active for the org are excluded (system context sees all)
+
+**System prompt constraint rules** (guidance for the LLM when planning):
 1. Functions with `side_effects=true` are placed late in workflows after data gathering
 2. `payload_profile="thin"` search functions require a `get_content` step before LLM functions
 3. External-exposure functions (email, webhook) are guarded with conditionals
@@ -742,4 +781,5 @@ docker exec -it curatore-postgres psql -U curatore -d curatore -c "\dt"
 | [Document Processing](docs/DOCUMENT_PROCESSING.md) | Extraction pipeline |
 | [Maintenance Tasks](docs/MAINTENANCE_TASKS.md) | Scheduled background tasks |
 | [Configuration](docs/CONFIGURATION.md) | Environment and YAML config |
+| [Auth & Access Model](docs/AUTH_ACCESS_MODEL.md) | Roles, org context, RBAC, dependencies |
 | [API Documentation](docs/API_DOCUMENTATION.md) | Complete API reference |

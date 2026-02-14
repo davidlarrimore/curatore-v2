@@ -198,7 +198,7 @@ class ExtractAssetFunction(BaseFunction):
             # Fetch asset and verify org ownership
             query = select(Asset).where(
                 Asset.id == asset_uuid,
-                Asset.organization_id == ctx.organization_id,
+                ctx.org_filter(Asset.organization_id),
             )
             result = await ctx.session.execute(query)
             asset = result.scalar_one_or_none()
@@ -254,7 +254,7 @@ class ExtractAssetFunction(BaseFunction):
 
             group = await run_group_service.create_group(
                 session=ctx.session,
-                organization_id=ctx.organization_id,
+                organization_id=ctx.requires_org_id,
                 group_type="extract_asset",
                 parent_run_id=ctx.run_id,
             )

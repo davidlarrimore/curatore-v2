@@ -129,7 +129,7 @@ class GetContentFunction(BaseFunction):
                 select(Asset)
                 .where(
                     Asset.id.in_(uuid_ids),
-                    Asset.organization_id == ctx.organization_id,
+                    ctx.org_filter(Asset.organization_id),
                 )
             )
 

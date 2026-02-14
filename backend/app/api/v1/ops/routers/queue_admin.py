@@ -211,6 +211,7 @@ class ForceKillResponse(BaseModel):
 )
 async def get_queue_stats(
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ):
     """
     Get extraction queue statistics.
@@ -226,7 +227,7 @@ async def get_queue_stats(
         # Get stats from queue service
         stats = await extraction_queue_service.get_queue_stats(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         # Get 24h statistics
@@ -234,14 +235,12 @@ async def get_queue_stats(
 
         recent_stats = {}
         for status in ["completed", "failed", "timed_out"]:
+            conditions = [Run.run_type == "extraction", Run.status == status, Run.completed_at >= day_ago]
+            if org_id is not None:
+                conditions.append(Run.organization_id == org_id)
             result = await session.execute(
                 select(func.count(Run.id))
-                .where(and_(
-                    Run.run_type == "extraction",
-                    Run.organization_id == current_user.organization_id,
-                    Run.status == status,
-                    Run.completed_at >= day_ago,
-                ))
+                .where(and_(*conditions))
             )
             recent_stats[status] = result.scalar() or 0
 
@@ -268,6 +267,7 @@ async def get_queue_stats(
 )
 async def get_unified_queue_stats(
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ):
     """
     Get unified queue statistics.
@@ -285,20 +285,19 @@ async def get_unified_queue_stats(
         # Get extraction queue stats
         stats = await extraction_queue_service.get_queue_stats(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         # Get 5-minute statistics (all job types)
         five_min_ago = datetime.utcnow() - timedelta(minutes=5)
         recent_5m_stats = {}
         for status in ["completed", "failed", "timed_out"]:
+            conditions = [Run.status == status, Run.completed_at >= five_min_ago]
+            if org_id is not None:
+                conditions.append(Run.organization_id == org_id)
             result = await session.execute(
                 select(func.count(Run.id))
-                .where(and_(
-                    Run.organization_id == current_user.organization_id,
-                    Run.status == status,
-                    Run.completed_at >= five_min_ago,
-                ))
+                .where(and_(*conditions))
             )
             recent_5m_stats[status] = result.scalar() or 0
 
@@ -306,14 +305,12 @@ async def get_unified_queue_stats(
         day_ago = datetime.utcnow() - timedelta(hours=24)
         recent_stats = {}
         for status in ["completed", "failed", "timed_out"]:
+            conditions = [Run.run_type == "extraction", Run.status == status, Run.completed_at >= day_ago]
+            if org_id is not None:
+                conditions.append(Run.organization_id == org_id)
             result = await session.execute(
                 select(func.count(Run.id))
-                .where(and_(
-                    Run.run_type == "extraction",
-                    Run.organization_id == current_user.organization_id,
-                    Run.status == status,
-                    Run.completed_at >= day_ago,
-                ))
+                .where(and_(*conditions))
             )
             recent_stats[status] = result.scalar() or 0
 
@@ -341,12 +338,12 @@ async def get_unified_queue_stats(
         # This replaces the unreliable Celery queue counts
         job_counts_by_status = {}
         for status in ["pending", "submitted", "running", "stale"]:
+            conditions = [Run.status == status]
+            if org_id is not None:
+                conditions.append(Run.organization_id == org_id)
             result = await session.execute(
                 select(func.count(Run.id))
-                .where(and_(
-                    Run.organization_id == current_user.organization_id,
-                    Run.status == status,
-                ))
+                .where(and_(*conditions))
             )
             job_counts_by_status[status] = result.scalar() or 0
 
@@ -402,6 +399,7 @@ async def get_unified_queue_stats(
 )
 async def list_active_extractions(
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
     limit: int = Query(100, ge=1, le=500),
     include_completed: bool = Query(False, description="Include recently completed extractions"),
     status_filter: Optional[str] = Query(None, description="Filter by specific status: pending, submitted, running, completed, failed, timed_out"),
@@ -424,18 +422,17 @@ async def list_active_extractions(
                 statuses.extend(["completed", "failed", "timed_out"])
 
         logger.debug(
-            f"Listing active extractions for org={current_user.organization_id}, "
+            f"Listing active extractions for org={org_id}, "
             f"statuses={statuses}, limit={limit}"
         )
 
         # Query runs first (simpler query without complex JSON join)
+        conditions = [Run.run_type == "extraction", Run.status.in_(statuses)]
+        if org_id is not None:
+            conditions.append(Run.organization_id == org_id)
         result = await session.execute(
             select(Run)
-            .where(and_(
-                Run.run_type == "extraction",
-                Run.organization_id == current_user.organization_id,
-                Run.status.in_(statuses),
-            ))
+            .where(and_(*conditions))
             .order_by(Run.queue_priority.desc(), Run.created_at.asc())
             .limit(limit)
         )
@@ -500,13 +497,12 @@ async def list_active_extractions(
             ))
 
         # Get total count
+        count_conditions = [Run.run_type == "extraction", Run.status.in_(statuses)]
+        if org_id is not None:
+            count_conditions.append(Run.organization_id == org_id)
         count_result = await session.execute(
             select(func.count(Run.id))
-            .where(and_(
-                Run.run_type == "extraction",
-                Run.organization_id == current_user.organization_id,
-                Run.status.in_(statuses),
-            ))
+            .where(and_(*count_conditions))
         )
         total = count_result.scalar() or 0
 
@@ -522,6 +518,7 @@ async def list_active_extractions(
 async def cancel_extraction(
     run_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ):
     """
     Cancel a specific extraction.
@@ -535,7 +532,7 @@ async def cancel_extraction(
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        if run.organization_id != current_user.organization_id:
+        if current_user.role != "admin" and run.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         if run.run_type != "extraction":
@@ -586,6 +583,7 @@ class BulkCancelResponse(BaseModel):
 async def cancel_extractions_bulk(
     request: BulkCancelRequest,
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ):
     """
     Cancel multiple extractions at once.
@@ -607,7 +605,7 @@ async def cancel_extractions_bulk(
                     failed.append({"run_id": run_id_str, "error": "Run not found"})
                     continue
 
-                if run.organization_id != current_user.organization_id:
+                if current_user.role != "admin" and run.organization_id != org_id:
                     failed.append({"run_id": run_id_str, "error": "Access denied"})
                     continue
 
@@ -1057,6 +1055,7 @@ async def list_active_jobs(
 async def get_child_jobs(
     run_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
     limit: int = Query(default=100, ge=1, le=500),
     offset: int = Query(default=0, ge=0),
 ):
@@ -1072,7 +1071,7 @@ async def get_child_jobs(
         if not parent_run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        if parent_run.organization_id != current_user.organization_id:
+        if current_user.role != "admin" and parent_run.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         if not parent_run.group_id:
@@ -1158,6 +1157,7 @@ async def get_child_jobs(
 async def cancel_job(
     run_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ):
     """
     Cancel a job by run ID with cascade cancellation for parent jobs.
@@ -1183,7 +1183,7 @@ async def cancel_job(
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        if run.organization_id != current_user.organization_id:
+        if current_user.role != "admin" and run.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Check if this run type supports cancellation
@@ -1257,6 +1257,7 @@ async def cancel_job(
 async def force_kill_job(
     run_id: UUID,
     current_user: User = Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ):
     """
     Force-terminate a stuck job.
@@ -1279,7 +1280,7 @@ async def force_kill_job(
         if not run:
             raise HTTPException(status_code=404, detail="Run not found")
 
-        if run.organization_id != current_user.organization_id:
+        if current_user.role != "admin" and run.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Only allow force-kill for active jobs

@@ -1,6 +1,6 @@
 'use client'
 
-import { CheckCircle, XCircle, AlertCircle, Loader2, RefreshCw, Pencil, Eye, Trash2, Star, Shield, Zap, FolderSync, FileText, Link2 } from 'lucide-react'
+import { CheckCircle, XCircle, AlertCircle, Loader2, RefreshCw, Pencil, Eye, Trash2, Star, Shield, FolderSync, FileText, Link2 } from 'lucide-react'
 
 interface Connection {
   id: string
@@ -89,8 +89,6 @@ export default function ConnectionRow({
 
   const getTypeIcon = () => {
     switch (connection.connection_type) {
-      case 'llm':
-        return <Zap className="w-4 h-4" />
       case 'microsoft_graph':
         return <FolderSync className="w-4 h-4" />
       case 'extraction':
@@ -102,8 +100,6 @@ export default function ConnectionRow({
 
   const getTypeGradient = () => {
     switch (connection.connection_type) {
-      case 'llm':
-        return 'from-violet-500 to-purple-600'
       case 'microsoft_graph':
         return 'from-blue-500 to-cyan-500'
       case 'extraction':
@@ -115,12 +111,6 @@ export default function ConnectionRow({
 
   const getConfigSummary = (): string => {
     const { connection_type, config } = connection
-
-    if (connection_type === 'llm') {
-      const model = config.model || 'Unknown model'
-      const endpoint = config.base_url?.replace(/^https?:\/\//, '').split('/')[0] || ''
-      return `${model}${endpoint ? ` @ ${endpoint}` : ''}`
-    }
 
     if (connection_type === 'microsoft_graph') {
       const tenant = config.tenant_id ? `${config.tenant_id.substring(0, 8)}...` : ''

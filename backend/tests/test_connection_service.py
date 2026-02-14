@@ -14,7 +14,6 @@ from app.core.auth.connection_service import (
     ConnectionTestResult,
     ConnectionTypeRegistry,
     ExtractionConnectionType,
-    LLMConnectionType,
     MicrosoftGraphConnectionType,
     connection_service,
 )
@@ -49,9 +48,8 @@ class TestConnectionServiceInitialization:
         """Test that default connection types are registered."""
         registry = connection_service_instance.registry
 
-        # Should have Microsoft Graph (for SharePoint), LLM, Extraction, Playwright, and SAM.gov types
+        # Should have Microsoft Graph (for SharePoint), Extraction, Playwright, and SAM.gov types
         assert registry.get("microsoft_graph") is not None
-        assert registry.get("llm") is not None
         assert registry.get("extraction") is not None
         assert registry.get("playwright") is not None
         assert registry.get("sam_gov") is not None
@@ -90,17 +88,17 @@ class TestConnectionTypeRegistry:
     def test_list_types(self, registry_instance):
         """Test listing all connection types."""
         ms_type = MicrosoftGraphConnectionType()
-        llm_type = LLMConnectionType()
+        ext_type = ExtractionConnectionType()
 
         registry_instance.register(ms_type)
-        registry_instance.register(llm_type)
+        registry_instance.register(ext_type)
 
         types = registry_instance.list_types()
 
         assert len(types) == 2
         type_names = [t["type"] for t in types]
         assert "microsoft_graph" in type_names
-        assert "llm" in type_names
+        assert "extraction" in type_names
 
     def test_list_types_includes_schema(self, registry_instance):
         """Test that list_types includes config schema."""
@@ -280,156 +278,6 @@ class TestMicrosoftGraphConnectionType:
             assert "timeout" in result.message.lower()
 
 
-class TestLLMConnectionType:
-    """Test LLMConnectionType."""
-
-    def test_connection_type_attributes(self):
-        """Test LLM connection type attributes."""
-        llm_type = LLMConnectionType()
-
-        assert llm_type.connection_type == "llm"
-        assert llm_type.display_name == "LLM API"
-        assert len(llm_type.description) > 0
-
-    def test_get_config_schema(self):
-        """Test getting LLM config schema."""
-        llm_type = LLMConnectionType()
-        schema = llm_type.get_config_schema()
-
-        assert schema["type"] == "object"
-        assert "api_key" in schema["properties"]
-        assert "model" in schema["properties"]
-        assert "base_url" in schema["properties"]
-        assert "timeout" in schema["properties"]
-        assert "verify_ssl" in schema["properties"]
-
-    def test_validate_config_valid(self):
-        """Test validating valid LLM config."""
-        llm_type = LLMConnectionType()
-
-        config = {
-            "api_key": "sk-test123",
-            "model": "gpt-4",
-            "base_url": "https://api.openai.com/v1",
-        }
-
-        validated = llm_type.validate_config(config)
-
-        assert validated["api_key"] == config["api_key"]
-        assert validated["model"] == config["model"]
-        assert validated["base_url"] == config["base_url"]
-
-    def test_validate_config_with_defaults(self):
-        """Test LLM config validation with defaults."""
-        llm_type = LLMConnectionType()
-
-        config = {
-            "api_key": "sk-test",
-            "model": "gpt-4",
-            "base_url": "https://api.openai.com/v1",
-        }
-
-        validated = llm_type.validate_config(config)
-
-        # Should have default values
-        assert "timeout" in validated
-        assert validated["timeout"] == 60
-        assert "verify_ssl" in validated
-        assert validated["verify_ssl"] is True
-
-    def test_validate_config_timeout_bounds(self):
-        """Test LLM config timeout validation."""
-        llm_type = LLMConnectionType()
-
-        # Test minimum bound
-        config_min = {
-            "api_key": "sk-test",
-            "model": "gpt-4",
-            "base_url": "https://api.openai.com/v1",
-            "timeout": 1,
-        }
-        validated_min = llm_type.validate_config(config_min)
-        assert validated_min["timeout"] == 1
-
-        # Test maximum bound
-        config_max = {
-            "api_key": "sk-test",
-            "model": "gpt-4",
-            "base_url": "https://api.openai.com/v1",
-            "timeout": 600,
-        }
-        validated_max = llm_type.validate_config(config_max)
-        assert validated_max["timeout"] == 600
-
-        # Test out of bounds (should fail)
-        config_invalid = {
-            "api_key": "sk-test",
-            "model": "gpt-4",
-            "base_url": "https://api.openai.com/v1",
-            "timeout": 1000,  # Exceeds maximum
-        }
-        with pytest.raises(ValueError):
-            llm_type.validate_config(config_invalid)
-
-    @pytest.mark.asyncio
-    async def test_llm_connection_successful(self):
-        """Test successful LLM connection test."""
-        llm_type = LLMConnectionType()
-
-        config = {
-            "api_key": "sk-test123",
-            "model": "gpt-4",
-            "base_url": "https://api.openai.com/v1",
-            "timeout": 30,
-            "verify_ssl": True,
-        }
-
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-
-            # Mock successful completion response
-            mock_response = AsyncMock()
-            mock_response.status_code = 200
-            mock_response.json.return_value = {
-                "choices": [{"message": {"content": "test"}}]
-            }
-
-            mock_client.post.return_value = mock_response
-
-            result = await llm_type.test_connection(config)
-
-            assert result.success is True
-            assert result.status == "healthy"
-
-    @pytest.mark.asyncio
-    async def test_llm_connection_invalid_api_key(self):
-        """Test LLM connection with invalid API key."""
-        llm_type = LLMConnectionType()
-
-        config = {
-            "api_key": "invalid-key",
-            "model": "gpt-4",
-            "base_url": "https://api.openai.com/v1",
-        }
-
-        with patch("httpx.AsyncClient") as mock_client_class:
-            mock_client = AsyncMock()
-            mock_client_class.return_value.__aenter__.return_value = mock_client
-
-            # Mock 401 response
-            mock_response = AsyncMock()
-            mock_response.status_code = 401
-            mock_response.text = "Invalid API key"
-
-            mock_client.post.return_value = mock_response
-
-            result = await llm_type.test_connection(config)
-
-            assert result.success is False
-            assert result.status == "unhealthy"
-
-
 class TestExtractionConnectionType:
     """Test ExtractionConnectionType."""
 
@@ -587,14 +435,6 @@ class TestConnectionTypeSchemas:
         assert "client_id" in required_fields
         assert "client_secret" in required_fields
 
-    def test_llm_schema_has_writeonly_secret(self):
-        """Test LLM schema marks API key as writeOnly."""
-        llm_type = LLMConnectionType()
-        schema = llm_type.get_config_schema()
-
-        api_key_prop = schema["properties"]["api_key"]
-        assert api_key_prop.get("writeOnly") is True
-
     def test_extraction_schema_has_optional_fields(self):
         """Test Extraction schema has optional fields."""
         ext_type = ExtractionConnectionType()
@@ -619,28 +459,28 @@ class TestErrorHandling:
 
     def test_validate_config_handles_none(self):
         """Test config validation with None."""
-        llm_type = LLMConnectionType()
+        ext_type = ExtractionConnectionType()
 
         with pytest.raises((ValueError, TypeError)):
-            llm_type.validate_config(None)
+            ext_type.validate_config(None)
 
     @pytest.mark.asyncio
     async def test_test_connection_handles_network_error(self):
         """Test connection testing handles network errors."""
-        llm_type = LLMConnectionType()
+        ms_type = MicrosoftGraphConnectionType()
 
         config = {
-            "api_key": "sk-test",
-            "model": "gpt-4",
-            "base_url": "https://api.openai.com/v1",
+            "tenant_id": "12345678-1234-1234-1234-123456789abc",
+            "client_id": "app-id",
+            "client_secret": "secret",
         }
 
         with patch("httpx.AsyncClient") as mock_client_class:
             mock_client = AsyncMock()
             mock_client_class.return_value.__aenter__.return_value = mock_client
-            mock_client.post.side_effect = Exception("Network error")
+            mock_client.get.side_effect = Exception("Network error")
 
-            result = await llm_type.test_connection(config)
+            result = await ms_type.test_connection(config)
 
             assert result.success is False
             assert result.error is not None
@@ -664,20 +504,6 @@ class TestConfigNormalization:
 
         # Should normalize URL (though this might not be implemented)
         assert "graph_base_url" in validated
-
-    def test_llm_url_normalization(self):
-        """Test LLM URL normalization in test_connection."""
-        llm_type = LLMConnectionType()
-
-        config = {
-            "api_key": "sk-test",
-            "model": "gpt-4",
-            "base_url": "https://api.openai.com/v1/",  # Extra slash
-        }
-
-        # The test_connection method should handle trailing slashes
-        # This is tested through the actual implementation
-
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])

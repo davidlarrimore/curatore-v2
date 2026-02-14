@@ -235,7 +235,7 @@ class SearchAssetsFunction(BaseFunction):
 
                 result = await ctx.session.execute(
                     select(SharePointSyncConfig.id)
-                    .where(SharePointSyncConfig.organization_id == ctx.organization_id)
+                    .where(ctx.org_filter(SharePointSyncConfig.organization_id))
                     .where(SharePointSyncConfig.is_active == True)
                     .where(sqla_func.lower(SharePointSyncConfig.site_name) == site_name.lower())
                 )
@@ -244,7 +244,7 @@ class SearchAssetsFunction(BaseFunction):
                     # Try matching on config name as fallback
                     result = await ctx.session.execute(
                         select(SharePointSyncConfig.id)
-                        .where(SharePointSyncConfig.organization_id == ctx.organization_id)
+                        .where(ctx.org_filter(SharePointSyncConfig.organization_id))
                         .where(SharePointSyncConfig.is_active == True)
                         .where(sqla_func.lower(SharePointSyncConfig.name).contains(site_name.lower()))
                     )
@@ -380,7 +380,7 @@ class SearchAssetsFunction(BaseFunction):
             # This is consistent with the search-based path which only returns
             # indexed assets, and excludes unsupported/failed/pending/deleted files.
             query = select(Asset).where(
-                Asset.organization_id == ctx.organization_id,
+                ctx.org_filter(Asset.organization_id),
                 Asset.status == "ready",
             )
 
@@ -409,7 +409,7 @@ class SearchAssetsFunction(BaseFunction):
                 from app.core.database.models import SharePointSyncConfig
                 config_result = await ctx.session.execute(
                     select(SharePointSyncConfig.id)
-                    .where(SharePointSyncConfig.organization_id == ctx.organization_id)
+                    .where(ctx.org_filter(SharePointSyncConfig.organization_id))
                     .where(SharePointSyncConfig.is_active == True)
                     .where(sqla_func.lower(SharePointSyncConfig.site_name) == site_name.lower())
                 )

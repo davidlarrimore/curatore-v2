@@ -164,6 +164,7 @@ class SearchSalesforceFunction(BaseFunction):
         side_effects=False,
         is_primitive=True,
         payload_profile="thin",
+        required_data_sources=["salesforce"],
         examples=[
             {
                 "description": "Search open opportunities with keyword",
@@ -322,7 +323,7 @@ class SearchSalesforceFunction(BaseFunction):
         """Use PgSearchService for hybrid search."""
         search_results = await ctx.search_service.search_salesforce(
             session=ctx.session,
-            organization_id=ctx.organization_id,
+            organization_id=ctx.requires_org_id,
             query=query,
             search_mode=search_mode,
             semantic_weight=semantic_weight,
@@ -386,7 +387,7 @@ class SearchSalesforceFunction(BaseFunction):
         from app.core.database.models import SalesforceAccount
 
         stmt = select(SalesforceAccount).where(
-            SalesforceAccount.organization_id == ctx.organization_id
+            ctx.org_filter(SalesforceAccount.organization_id)
         )
 
         # Text search
@@ -446,7 +447,7 @@ class SearchSalesforceFunction(BaseFunction):
         from app.core.database.models import SalesforceContact
 
         stmt = select(SalesforceContact).where(
-            SalesforceContact.organization_id == ctx.organization_id
+            ctx.org_filter(SalesforceContact.organization_id)
         )
 
         # Text search
@@ -512,7 +513,7 @@ class SearchSalesforceFunction(BaseFunction):
         from app.core.database.models import SalesforceOpportunity
 
         stmt = select(SalesforceOpportunity).where(
-            SalesforceOpportunity.organization_id == ctx.organization_id
+            ctx.org_filter(SalesforceOpportunity.organization_id)
         )
 
         # Text search

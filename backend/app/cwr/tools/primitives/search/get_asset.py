@@ -130,7 +130,7 @@ class GetAssetFunction(BaseFunction):
             # Query asset
             query = select(Asset).where(
                 Asset.id == asset_uuid,
-                Asset.organization_id == ctx.organization_id,
+                ctx.org_filter(Asset.organization_id),
             )
             result = await ctx.session.execute(query)
             asset = result.scalar_one_or_none()

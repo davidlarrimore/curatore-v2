@@ -105,13 +105,16 @@ class FunctionContext:
 
     # Required context
     session: AsyncSession
-    organization_id: UUID
+    organization_id: Optional[UUID] = None  # None = system context (cross-org)
 
     # Optional execution context
     user_id: Optional[UUID] = None
     run_id: Optional[UUID] = None
     procedure_id: Optional[UUID] = None
     pipeline_id: Optional[UUID] = None
+
+    # System context flag
+    is_system_context: bool = False
 
     # Execution state
     params: Dict[str, Any] = field(default_factory=dict)
@@ -124,7 +127,36 @@ class FunctionContext:
 
     def __post_init__(self):
         """Initialize the context."""
-        self._logger = logging.getLogger(f"curatore.functions.ctx.{self.organization_id}")
+        label = self.organization_id or "system"
+        self._logger = logging.getLogger(f"curatore.functions.ctx.{label}")
+
+    # =========================================================================
+    # ORG-SCOPING HELPERS
+    # =========================================================================
+
+    def org_filter(self, column):
+        """Return a SQLAlchemy filter for org scoping.
+
+        In system context (cross-org), returns a no-op true() so queries see
+        all organizations' data.  In normal org context, filters to the
+        current organization.
+        """
+        from sqlalchemy import true
+        if self.is_system_context or self.organization_id is None:
+            return true()
+        return column == self.organization_id
+
+    @property
+    def requires_org_id(self) -> UUID:
+        """Get organization_id or raise if running in system context.
+
+        Use this in functions that haven't been updated for cross-org yet.
+        """
+        if self.organization_id is None:
+            raise ValueError(
+                "This function requires org context but is running in system context"
+            )
+        return self.organization_id
 
     # =========================================================================
     # SERVICE ACCESSORS (Lazy Loading)
@@ -345,7 +377,7 @@ class FunctionContext:
                     if k.startswith("steps.")
                 },
                 "variables": self.variables,
-                "org_id": str(self.organization_id),
+                "org_id": str(self.organization_id) if self.organization_id else "system",
             }
 
             # Add item to context if provided (for foreach iteration)
@@ -415,7 +447,7 @@ class FunctionContext:
                 },
                 "variables": self.variables,
                 "now": datetime.utcnow,
-                "org_id": str(self.organization_id),
+                "org_id": str(self.organization_id) if self.organization_id else "system",
             }
 
             # Add item to context if provided
@@ -464,13 +496,14 @@ class FunctionContext:
     async def create(
         cls,
         session: AsyncSession,
-        organization_id: UUID,
+        organization_id: Optional[UUID] = None,
         user_id: Optional[UUID] = None,
         run_id: Optional[UUID] = None,
         procedure_id: Optional[UUID] = None,
         pipeline_id: Optional[UUID] = None,
         params: Optional[Dict[str, Any]] = None,
         dry_run: bool = False,
+        is_system_context: bool = False,
     ) -> "FunctionContext":
         """
         Create a new function context.
@@ -485,6 +518,7 @@ class FunctionContext:
             run_id=run_id,
             procedure_id=procedure_id,
             pipeline_id=pipeline_id,
+            is_system_context=is_system_context,
             params=params or {},
             dry_run=dry_run,
         )
@@ -506,6 +540,7 @@ class FunctionContext:
             run_id=run_id or self.run_id,
             procedure_id=self.procedure_id,
             pipeline_id=self.pipeline_id,
+            is_system_context=self.is_system_context,
             params={**self.params, **(params or {})},
             variables=self.variables.copy(),
             dry_run=self.dry_run,

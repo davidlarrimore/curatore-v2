@@ -280,6 +280,8 @@ For iteration and branching, use flow control tools with `branches`:
         return f"""# TOOL CATALOG
 
 The following tools are available under the `{self._profile.name.value}` profile.
+This catalog has been pre-filtered to include only tools that are allowed by the generation profile and whose required data sources are enabled for the current organization. Tools requiring data sources that the organization has not activated have been excluded.
+
 Each tool has a name, description, category, input_schema (JSON Schema for args), and governance metadata.
 
 Use ONLY these tools in your plan. Any tool not listed here will be rejected.
@@ -739,6 +741,8 @@ RULES:
 4. Planning tool results inform YOUR decisions. The generated plan must be
    self-contained — use verified paths, names, and IDs directly in step args.
 5. Never ignore tool results. If verification fails, adjust the plan accordingly.
+6. The TOOL CATALOG is already filtered by the organization's enabled data sources.
+   Only use tools listed there — do not reference tools that are not in the catalog.
 
 AMBIGUITY HANDLING:
 If your research reveals ambiguity (zero matches, multiple matches, unclear user intent),

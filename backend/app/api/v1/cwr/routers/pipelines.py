@@ -187,10 +187,24 @@ async def list_pipelines(
     """
     List all pipelines.
     """
+    from app.config import SYSTEM_ORG_SLUG
+
     async with database_service.get_session() as session:
+        # Determine whether we're in system-org context
+        from app.core.database.models import Organization
+        org_result = await session.execute(
+            select(Organization.slug).where(Organization.id == organization_id)
+        )
+        org_slug = org_result.scalar_one_or_none()
+        is_system_org = org_slug == SYSTEM_ORG_SLUG
+
         query = select(Pipeline).where(
             Pipeline.organization_id == organization_id,
         )
+
+        # Safety: never show system pipelines in regular org context
+        if not is_system_org:
+            query = query.where(Pipeline.is_system == False)
 
         if is_active is not None:
             query = query.where(Pipeline.is_active == is_active)

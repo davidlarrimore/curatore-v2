@@ -124,6 +124,7 @@ class ResolveSharepointFoldersFunction(BaseFunction):
         is_primitive=True,
         payload_profile="full",
         exposure_profile={"procedure": True, "agent": True},
+        required_data_sources=["sharepoint"],
         examples=[
             {
                 "description": "Find Past Performances folder on Growth site",
@@ -151,7 +152,7 @@ class ResolveSharepointFoldersFunction(BaseFunction):
         # Build config filter
         config_query = (
             select(SharePointSyncConfig)
-            .where(SharePointSyncConfig.organization_id == ctx.organization_id)
+            .where(SharePointSyncConfig.organization_id == ctx.requires_org_id)
             .where(SharePointSyncConfig.is_active == True)
         )
         if sync_config_id:

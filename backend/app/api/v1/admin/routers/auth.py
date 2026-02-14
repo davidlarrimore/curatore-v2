@@ -290,9 +290,13 @@ async def register(request: UserRegisterRequest) -> UserProfileResponse:
                     detail="Organization not found",
                 )
         else:
-            # Use default organization (get first active org)
+            # Use default organization (get first active org, excluding system org)
+            from app.config import SYSTEM_ORG_SLUG
             result = await session.execute(
-                select(Organization).where(Organization.is_active == True).limit(1)
+                select(Organization).where(
+                    Organization.is_active == True,
+                    Organization.slug != SYSTEM_ORG_SLUG,
+                ).limit(1)
             )
             org = result.scalar_one_or_none()
             if not org:

@@ -147,11 +147,14 @@ Authorization: ApiKey cur_1234567890abcdef
 
 #### Role-Based Access Control
 
-| Role | Permissions |
-|------|-------------|
-| `admin` | Full access: manage organization, users, API keys, connections, documents |
-| `member` | Document operations, view connections, view users |
-| `viewer` | Read-only access to documents and results |
+| Role | Scope | Permissions |
+|------|-------|-------------|
+| `admin` | System-wide (`organization_id=NULL`) | Full access to all orgs via `X-Organization-Id` header. Manage organizations, users, system config, connections, all CWR functions, system procedures. Cross-org view in ops dashboards when no org selected. |
+| `org_admin` | Single org | Manage org settings, users within org, connections, API keys. Full CWR function access (including side-effects). Create/edit procedures with `workflow_standard` generation profile. |
+| `member` | Single org | Document operations, view connections, view users. Execute read-only CWR functions (no side-effects). Run procedures. |
+| `viewer` | Single org | Read-only access to documents, search results, and procedure output. |
+
+See [Auth & Access Model](AUTH_ACCESS_MODEL.md) for the full reference including org context resolution and CWR RBAC details.
 
 ---
 

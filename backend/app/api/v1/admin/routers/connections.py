@@ -40,9 +40,9 @@ from app.api.v1.admin.schemas import (
     ConnectionUpdateRequest,
 )
 from app.core.auth.connection_service import connection_service
-from app.core.database.models import Connection, User
+from app.core.database.models import Connection, Organization, User
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_org_id, get_current_user, require_org_admin, require_org_admin_or_above
+from app.dependencies import get_current_org_id, get_current_user, require_admin, require_org_admin, require_org_admin_or_above
 
 # Initialize router
 router = APIRouter(prefix="/connections", tags=["Connections"])
@@ -111,9 +111,9 @@ async def list_connection_types(
         {
             "types": [
                 {
-                    "type": "llm",
-                    "display_name": "LLM API",
-                    "description": "Connect to OpenAI-compatible LLM APIs",
+                    "type": "extraction",
+                    "display_name": "Document Service",
+                    "description": "Connect to document extraction services",
                     "schema": {...}
                 }
             ]
@@ -228,6 +228,80 @@ async def list_connections(
         )
 
 
+@router.get(
+    "/all",
+    response_model=ConnectionListResponse,
+    summary="List all connections (system admin)",
+    description="List all connections across all organizations. Requires system admin role.",
+)
+async def list_all_connections(
+    connection_type: Optional[str] = Query(None, description="Filter by connection type"),
+    is_active: Optional[bool] = Query(None, description="Filter by active status"),
+    organization_id: Optional[str] = Query(None, description="Filter by organization ID"),
+    skip: int = Query(0, ge=0, description="Number of connections to skip"),
+    limit: int = Query(100, ge=1, le=1000, description="Max connections to return"),
+    current_user: User = Depends(require_admin),
+) -> ConnectionListResponse:
+    """List all connections across all organizations. System admin only."""
+    logger.info(f"All connections list requested by {current_user.email}")
+
+    async with database_service.get_session() as session:
+        query = select(Connection, Organization.display_name, Organization.name).outerjoin(
+            Organization, Connection.organization_id == Organization.id
+        )
+
+        if connection_type:
+            query = query.where(Connection.connection_type == connection_type)
+        if is_active is not None:
+            query = query.where(Connection.is_active == is_active)
+        if organization_id:
+            query = query.where(Connection.organization_id == UUID(organization_id))
+
+        # Count query
+        count_base = select(Connection)
+        if connection_type:
+            count_base = count_base.where(Connection.connection_type == connection_type)
+        if is_active is not None:
+            count_base = count_base.where(Connection.is_active == is_active)
+        if organization_id:
+            count_base = count_base.where(Connection.organization_id == UUID(organization_id))
+        count_query = select(func.count()).select_from(count_base.subquery())
+        total_result = await session.execute(count_query)
+        total = total_result.scalar() or 0
+
+        query = query.order_by(Connection.created_at.desc()).offset(skip).limit(limit)
+        result = await session.execute(query)
+        rows = result.all()
+
+        logger.info(f"Returning {len(rows)} connections (total: {total})")
+
+        return ConnectionListResponse(
+            connections=[
+                ConnectionResponse(
+                    id=str(conn.id),
+                    organization_id=str(conn.organization_id),
+                    name=conn.name,
+                    description=conn.description,
+                    connection_type=conn.connection_type,
+                    config=_redact_secrets(conn.config),
+                    is_active=conn.is_active,
+                    is_default=conn.is_default,
+                    is_managed=conn.is_managed,
+                    managed_by=conn.managed_by,
+                    last_tested_at=conn.last_tested_at,
+                    test_status=conn.test_status,
+                    test_result=conn.test_result,
+                    organization_name=display_name or org_name if (display_name or org_name) else None,
+                    scope=conn.scope,
+                    created_at=conn.created_at,
+                    updated_at=conn.updated_at,
+                )
+                for conn, display_name, org_name in rows
+            ],
+            total=total,
+        )
+
+
 @router.post(
     "",
     response_model=ConnectionResponse,
@@ -263,12 +337,11 @@ async def create_connection(
         Content-Type: application/json
 
         {
-            "name": "Production LLM",
-            "connection_type": "llm",
+            "name": "Production Extraction",
+            "connection_type": "extraction",
             "config": {
-                "api_key": "sk-...",
-                "model": "gpt-4",
-                "base_url": "https://api.openai.com/v1"
+                "service_url": "http://document-service:8010",
+                "engine_type": "document-service"
             },
             "is_default": true,
             "test_on_save": true

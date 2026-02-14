@@ -11,10 +11,11 @@ from app.api.v1.data.schemas import (
     SharePointInventoryRequest,
     SharePointInventoryResponse,
 )
+from uuid import UUID
+
 from app.connectors.sharepoint import sharepoint_service
-from app.core.database.models import User
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_user_optional
+from app.dependencies import get_effective_org_id
 
 router = APIRouter()
 
@@ -22,7 +23,7 @@ router = APIRouter()
 @router.post("/sharepoint/inventory", response_model=SharePointInventoryResponse, tags=["SharePoint"])
 async def sharepoint_inventory(
     request: SharePointInventoryRequest,
-    user: Optional[User] = Depends(get_current_user_optional),
+    organization_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> SharePointInventoryResponse:
     """
     List SharePoint folder contents with metadata.
@@ -31,9 +32,6 @@ async def sharepoint_inventory(
     Falls back to environment variables if not authenticated.
     """
     try:
-        organization_id = user.organization_id if user else None
-        session = None
-
         if organization_id:
             async with database_service.get_session() as session:
                 payload = await sharepoint_service.sharepoint_inventory(
@@ -62,7 +60,7 @@ async def sharepoint_inventory(
 @router.post("/sharepoint/download", response_model=SharePointDownloadResponse, tags=["SharePoint"])
 async def sharepoint_download(
     request: SharePointDownloadRequest,
-    user: Optional[User] = Depends(get_current_user_optional),
+    organization_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> SharePointDownloadResponse:
     """
     Download selected SharePoint files to the batch directory.
@@ -71,9 +69,6 @@ async def sharepoint_download(
     Falls back to environment variables if not authenticated.
     """
     try:
-        organization_id = user.organization_id if user else None
-        session = None
-
         if organization_id:
             async with database_service.get_session() as session:
                 payload = await sharepoint_service.sharepoint_download(

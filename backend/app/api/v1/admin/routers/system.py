@@ -17,7 +17,9 @@ from app.core.shared.database_service import database_service
 from app.core.shared.document_service import document_service
 from app.core.storage.storage_service import storage_service
 from app.core.storage.zip_service import zip_service
-from app.dependencies import get_current_user
+from uuid import UUID
+
+from app.dependencies import get_current_user, get_effective_org_id
 
 
 def get_redis_client():
@@ -673,6 +675,7 @@ async def get_extraction_engines() -> Dict[str, Any]:
 @router.get("/config/system-settings", tags=["Configuration"])
 async def get_system_settings(
     current_user=Depends(get_current_user),
+    org_id: Optional[UUID] = Depends(get_effective_org_id),
 ) -> Dict[str, Any]:
     """Read-only view of system configuration from config.yml.
 
@@ -692,26 +695,30 @@ async def get_system_settings(
         "dimensions": embedding_state.get("dimensions"),
     }
 
-    # Per-org stored config comparison
+    # Per-org stored config comparison (skip if no org context)
     try:
-        async with database_service.get_session() as session:
-            result = await session.execute(
-                select(Organization).where(
-                    Organization.id == current_user.organization_id
-                )
-            )
-            org = result.scalar_one_or_none()
-            if org:
-                org_settings = org.settings or {}
-                stored = org_settings.get("embedding_config")
-                embedding_section["stored_config"] = stored
-                if stored:
-                    embedding_section["config_matches_stored"] = (
-                        stored.get("model") == embedding_state.get("model")
-                        and stored.get("dimensions") == embedding_state.get("dimensions")
+        if org_id is not None:
+            async with database_service.get_session() as session:
+                result = await session.execute(
+                    select(Organization).where(
+                        Organization.id == org_id
                     )
-                else:
-                    embedding_section["config_matches_stored"] = None
+                )
+                org = result.scalar_one_or_none()
+        else:
+            org = None
+
+        if org:
+            org_settings = org.settings or {}
+            stored = org_settings.get("embedding_config")
+            embedding_section["stored_config"] = stored
+            if stored:
+                embedding_section["config_matches_stored"] = (
+                    stored.get("model") == embedding_state.get("model")
+                    and stored.get("dimensions") == embedding_state.get("dimensions")
+                )
+            else:
+                embedding_section["config_matches_stored"] = None
     except Exception:
         embedding_section["stored_config"] = None
         embedding_section["config_matches_stored"] = None

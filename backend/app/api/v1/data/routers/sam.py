@@ -77,10 +77,14 @@ from app.core.database.models import (
 from app.core.shared.database_service import database_service
 from app.core.shared.run_service import run_service
 from app.core.tasks import sam_pull_task, sam_refresh_notice_task, sam_refresh_solicitation_task
-from app.dependencies import get_current_org_id, get_current_user, require_org_admin_or_above
+from app.dependencies import get_current_org_id, get_current_user, require_data_source_enabled, require_org_admin_or_above
 
 # Initialize router
-router = APIRouter(prefix="/sam", tags=["SAM.gov"])
+router = APIRouter(
+    prefix="/sam",
+    tags=["SAM.gov"],
+    dependencies=[Depends(require_data_source_enabled("sam_gov"))],
+)
 
 # Initialize logger
 logger = logging.getLogger("curatore.api.sam")

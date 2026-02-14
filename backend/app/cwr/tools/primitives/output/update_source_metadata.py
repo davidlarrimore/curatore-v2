@@ -122,7 +122,7 @@ class UpdateSourceMetadataFunction(BaseFunction):
             result = await ctx.session.execute(
                 select(Asset).where(
                     Asset.id == asset_uuid,
-                    Asset.organization_id == ctx.organization_id,
+                    ctx.org_filter(Asset.organization_id),
                 )
             )
             asset = result.scalar_one_or_none()

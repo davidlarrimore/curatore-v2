@@ -22,7 +22,8 @@ from sqlalchemy import select
 from app.core.database.procedures import Procedure, ProcedureTrigger, ProcedureVersion
 from app.core.shared.database_service import database_service
 from app.cwr.procedures import procedure_executor, procedure_loader
-from app.dependencies import get_current_org_id, get_optional_current_user
+from app.core.database.models import User
+from app.dependencies import get_current_org_id, get_current_user, get_optional_current_user
 
 logger = logging.getLogger("curatore.api.procedures")
 
@@ -323,6 +324,7 @@ async def validate_procedure(
 async def generate_procedure(
     request: GenerateProcedureRequest,
     organization_id: UUID = Depends(get_current_org_id),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Generate or refine a procedure using AI with SSE streaming.
@@ -351,6 +353,17 @@ async def generate_procedure(
     from app.core.shared.database_service import database_service
     from app.cwr.procedures.compiler.ai_generator import procedure_generator_service
 
+    # RBAC: Cap generation profile by role
+    requested_profile = request.profile or "workflow_standard"
+    profile_caps = {
+        "admin": "admin_full",
+        "org_admin": "workflow_standard",
+    }
+    max_profile = profile_caps.get(current_user.role, "safe_readonly")
+    profile_order = ["safe_readonly", "workflow_standard", "admin_full"]
+    if profile_order.index(requested_profile) > profile_order.index(max_profile):
+        requested_profile = max_profile
+
     logger.info(f"Generating procedure from prompt: {request.prompt[:100]}...")
 
     async def event_stream():
@@ -367,7 +380,7 @@ async def generate_procedure(
                         organization_id=organization_id,
                         session=session,
                         include_examples=request.include_examples,
-                        profile=request.profile or "workflow_standard",
+                        profile=requested_profile,
                         current_plan=request.current_plan,
                         on_progress=on_progress,
                     )
@@ -483,7 +496,7 @@ async def validate_draft(
 async def create_procedure(
     request: CreateProcedureRequest,
     organization_id: UUID = Depends(get_current_org_id),
-    user: Optional[Any] = Depends(get_optional_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Create a new user-defined procedure.
@@ -552,7 +565,7 @@ async def create_procedure(
             is_system=False,
             source_type="user",
             source_path=None,
-            created_by=user.id if user else None,
+            created_by=current_user.id,
         )
         session.add(procedure)
         await session.flush()  # Get the procedure.id before creating version
@@ -564,7 +577,7 @@ async def create_procedure(
             version=1,
             definition=definition,
             change_summary="Initial version",
-            created_by=user.id if user else None,
+            created_by=current_user.id,
         )
         session.add(version_record)
 
@@ -598,10 +611,24 @@ async def list_procedures(
     """
     List all procedures.
     """
+    from app.config import SYSTEM_ORG_SLUG
+
     async with database_service.get_session() as session:
+        # Determine whether we're in system-org context
+        from app.core.database.models import Organization
+        org_result = await session.execute(
+            select(Organization.slug).where(Organization.id == organization_id)
+        )
+        org_slug = org_result.scalar_one_or_none()
+        is_system_org = org_slug == SYSTEM_ORG_SLUG
+
         query = select(Procedure).where(
             Procedure.organization_id == organization_id,
         )
+
+        # Safety: never show system procedures in regular org context
+        if not is_system_org:
+            query = query.where(Procedure.is_system == False)
 
         if is_active is not None:
             query = query.where(Procedure.is_active == is_active)
@@ -715,7 +742,7 @@ async def update_procedure(
     slug: str,
     request: UpdateProcedureRequest,
     organization_id: UUID = Depends(get_current_org_id),
-    user: Optional[Any] = Depends(get_optional_current_user),
+    current_user: User = Depends(get_current_user),
 ):
     """
     Update procedure settings or definition.
@@ -731,8 +758,6 @@ async def update_procedure(
     system definitions directory and flips the DB record to
     ``source_type="system"``.  The conversion is atomic — if the file write
     fails, the request returns 500 and no DB changes are committed.
-
-    # TODO: Gate system procedure editing and conversion behind admin role when RBAC is implemented.
     """
     async with database_service.get_session() as session:
         query = select(Procedure).where(
@@ -745,7 +770,12 @@ async def update_procedure(
         if not procedure:
             raise HTTPException(status_code=404, detail=f"Procedure not found: {slug}")
 
-        # TODO: Gate system procedure editing behind admin role when RBAC is implemented
+        # RBAC: System procedure editing requires admin role
+        if procedure.is_system and current_user.role != "admin":
+            raise HTTPException(
+                status_code=403,
+                detail="System procedure editing requires admin role",
+            )
 
         # Check if trying to modify definition
         definition_fields = [request.name, request.parameters, request.steps, request.on_error, request.tags]
@@ -800,7 +830,7 @@ async def update_procedure(
                 version=procedure.version,
                 definition=definition,
                 change_summary=request.change_summary,
-                created_by=user.id if user else None,
+                created_by=current_user.id,
             )
             session.add(version_record)
 

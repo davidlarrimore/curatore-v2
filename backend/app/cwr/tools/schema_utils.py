@@ -13,8 +13,8 @@ Usage:
 """
 
 import copy
-from dataclasses import dataclass, fields
-from typing import Any, Dict, List
+from dataclasses import dataclass, field, fields
+from typing import Any, Dict, List, Optional
 
 # Mapping from legacy type strings to JSON Schema types.
 # Used by the migration script and param_type_to_json_schema().
@@ -75,6 +75,7 @@ class ContractView:
     requires_llm: bool
     requires_session: bool
     tags: List[str]
+    required_data_sources: Optional[List[str]] = field(default=None)
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""

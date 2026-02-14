@@ -730,6 +730,46 @@ steps:
 
 The MCP Gateway's `policy.yaml` includes `confirm_email` in the `side_effects_allowlist`, allowing it to execute while blocking other side-effect functions.
 
+### Org-Scoped Data Source Filtering
+
+Function visibility is scoped by the org's enabled data sources. Functions that declare `required_data_sources` (e.g., `["sam_gov"]`) are hidden from organizations that haven't enabled those sources:
+
+- **`GET /api/v1/cwr/functions/`** — only returns functions whose required data sources are active for the calling org
+- **`GET /api/v1/cwr/functions/{name}`** — returns 404 if the function's required data sources aren't enabled
+- **AI procedure generator** — the contract pack excludes functions with unsatisfied data source requirements, so the LLM never proposes steps the org can't execute
+- **System context** (`org_id=None`, admin with no org selected) — all functions are visible regardless of data source configuration
+- **Runtime execution** — `execute_function` also checks `required_data_sources` at execution time (403 if disabled), as a defense-in-depth safety net
+
+This ensures users only see and build procedures with tools their org actually supports. Data source enablement is managed via `DataSourceTypeOverride` records per org.
+
+### Access Control (RBAC)
+
+CWR functions and procedures enforce role-based access control:
+
+**Function Execution:**
+- Authenticated users can list and view function metadata (filtered by org's enabled data sources)
+- Functions with `side_effects=True` require `org_admin` or `admin` role
+- Non-privileged users (`member`, `viewer`) receive 403 when attempting side-effect functions
+
+**Procedure Creation & Editing:**
+- Creating/editing procedures requires authentication
+- System procedure editing (`is_system=True`) requires `admin` role
+- Running procedures is available to users with appropriate access
+
+**Generation Profiles by Role:**
+
+| Role | Max Profile | Available Tools |
+|------|-------------|-----------------|
+| `admin` | `admin_full` | All tools including destructive |
+| `org_admin` | `workflow_standard` | Standard workflow tools |
+| `member` / `viewer` | `safe_readonly` | Read-only tools only |
+
+Profiles are server-enforced — if a user requests a profile above their cap, it is silently downgraded.
+
+**Runtime Permissions:** Approved procedures run with full permissions at execution time, regardless of the triggering user's role.
+
+See [Auth & Access Model](AUTH_ACCESS_MODEL.md) for the full reference.
+
 ---
 
 ## Tool Contracts
@@ -746,7 +786,7 @@ This returns:
 
 Variants are embedded in `output_schema` under a `variants` key when functions have dual-mode output.
 
-Tool contracts enable the AI procedure generator to create valid procedure YAML automatically.
+Tool contracts enable the AI procedure generator to create valid procedure YAML automatically. The contract pack is filtered by generation profile, exposure policies, and org-scoped data source availability before the LLM receives it.
 
 ---
 

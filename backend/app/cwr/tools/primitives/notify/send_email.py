@@ -226,7 +226,7 @@ class SendEmailFunction(BaseFunction):
                     cc=cc,
                     attachments=attachments,
                     session=ctx.session,
-                    organization_id=ctx.organization_id,
+                    organization_id=ctx.requires_org_id,
                 )
 
                 # Check if the send was actually successful

@@ -181,13 +181,13 @@ class QueryModelFunction(BaseFunction):
                 return value
         return value
 
-    def _build_filters(self, model_class, filters: Dict[str, Any], org_id: UUID):
+    def _build_filters(self, model_class, filters: Dict[str, Any], ctx: FunctionContext):
         """Build SQLAlchemy filter conditions."""
         conditions = []
 
         # Always filter by organization
         if hasattr(model_class, "organization_id"):
-            conditions.append(model_class.organization_id == org_id)
+            conditions.append(ctx.org_filter(model_class.organization_id))
 
         if not filters:
             return conditions
@@ -255,7 +255,7 @@ class QueryModelFunction(BaseFunction):
             query = select(model_class)
 
             # Apply filters
-            conditions = self._build_filters(model_class, filters, ctx.organization_id)
+            conditions = self._build_filters(model_class, filters, ctx)
             if conditions:
                 query = query.where(and_(*conditions))
 
@@ -290,7 +290,7 @@ class QueryModelFunction(BaseFunction):
 
             # Get total count for pagination info
             count_query = select(func.count()).select_from(model_class)
-            count_conditions = self._build_filters(model_class, filters, ctx.organization_id)
+            count_conditions = self._build_filters(model_class, filters, ctx)
             if count_conditions:
                 count_query = count_query.where(and_(*count_conditions))
             total_result = await ctx.session.execute(count_query)

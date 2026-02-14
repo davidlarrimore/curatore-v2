@@ -123,12 +123,12 @@ class PopulateCollectionFunction(BaseFunction):
                 collection = await collection_service.get_collection(
                     session=ctx.session,
                     collection_id=collection_uuid,
-                    organization_id=ctx.organization_id,
+                    organization_id=ctx.requires_org_id,
                 )
             except (ValueError, AttributeError):
                 collection = await collection_service.get_collection_by_slug(
                     session=ctx.session,
-                    organization_id=ctx.organization_id,
+                    organization_id=ctx.requires_org_id,
                     slug=collection_ref,
                 )
 
@@ -172,7 +172,7 @@ class PopulateCollectionFunction(BaseFunction):
             result = await collection_population_service.populate_from_index(
                 session=ctx.session,
                 collection_id=collection.id,
-                organization_id=ctx.organization_id,
+                organization_id=ctx.requires_org_id,
                 asset_ids=asset_uuids,
             )
 

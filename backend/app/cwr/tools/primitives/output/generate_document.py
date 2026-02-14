@@ -288,8 +288,9 @@ class GenerateDocumentFunction(BaseFunction):
 
                 bucket = settings.minio_bucket_temp
                 content_hash = hashlib.sha256(doc_bytes).hexdigest()
+                org_prefix = str(ctx.organization_id) if ctx.organization_id else "system"
                 object_key = temp_path(
-                    org_id=str(ctx.organization_id),
+                    org_id=org_prefix,
                     content_hash=content_hash,
                     filename=filename,
                 )

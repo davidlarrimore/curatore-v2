@@ -912,6 +912,50 @@ get_optional_current_user = get_current_user_optional
 
 
 # =========================================================================
+# DATA SOURCE ENABLEMENT
+# =========================================================================
+
+
+def require_data_source_enabled(*source_types: str):
+    """
+    Dependency factory: 403 if none of the given source types are enabled for the org.
+
+    Uses the cached data source catalog (5-min TTL) so there is no extra DB query
+    in the common case.
+
+    Args:
+        source_types: One or more source type identifiers. At least one must be
+            enabled for the request to proceed (OR logic).
+
+    Returns:
+        A FastAPI dependency that raises 403 if the data source is not enabled.
+
+    Example:
+        router = APIRouter(
+            dependencies=[Depends(require_data_source_enabled("sam_gov"))]
+        )
+    """
+    async def _check(
+        org_id: UUID_TYPE = Depends(get_current_org_id),
+    ):
+        from app.core.metadata.registry_service import metadata_registry_service
+
+        async with database_service.get_session() as session:
+            catalog = await metadata_registry_service.get_data_source_catalog(
+                session, org_id
+            )
+            for st in source_types:
+                if catalog.get(st, {}).get("is_active", False):
+                    return  # At least one enabled
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Data connection is not enabled for this organization.",
+        )
+
+    return _check
+
+
+# =========================================================================
 # DOCUMENT ID VALIDATION
 # =========================================================================
 

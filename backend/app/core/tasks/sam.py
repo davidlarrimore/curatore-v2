@@ -1241,16 +1241,7 @@ def sam_auto_summarize_task(
 
                 if summary:
                     # Determine status based on whether LLM was used
-                    # Check if it's a fallback (no LLM)
-                    # Check both database connection and environment variable
-                    from app.core.auth.connection_service import connection_service
-                    llm_conn = await connection_service.get_default_connection(
-                        session, uuid.UUID(organization_id), "llm"
-                    )
-                    has_llm = (
-                        (llm_conn and llm_conn.is_active and llm_conn.config.get("api_key"))
-                        or settings.openai_api_key
-                    )
+                    has_llm = bool(settings.openai_api_key)
                     status = "ready" if has_llm else "no_llm"
 
                     # Update solicitation with summary and status
@@ -1345,7 +1336,6 @@ def sam_auto_summarize_notice_task(
     from datetime import datetime
 
     from app.connectors.sam_gov.sam_service import sam_service
-    from app.core.auth.connection_service import connection_service
     from app.core.database.models import ExtractionResult
     from app.core.llm.llm_service import LLMService
 
@@ -1400,14 +1390,8 @@ def sam_auto_summarize_notice_task(
                             )
                             return {"notice_id": notice_id, "status": "waiting_for_assets"}
 
-                # Check for LLM availability - first try database connection
-                org_id = uuid.UUID(organization_id)
-                llm_conn = await connection_service.get_default_connection(session, org_id, "llm")
-
-                has_llm = (
-                    (llm_conn and llm_conn.is_active and llm_conn.config.get("api_key"))
-                    or settings.openai_api_key
-                )
+                # Check for LLM availability (infrastructure service, global config)
+                has_llm = bool(settings.openai_api_key)
 
                 if not has_llm:
                     # No LLM - mark as no_llm, keep original description

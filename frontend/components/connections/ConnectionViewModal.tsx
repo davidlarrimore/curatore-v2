@@ -35,7 +35,6 @@ export default function ConnectionViewModal({ connection, onClose }: ConnectionV
 
   const getTypeLabel = (type: string) => {
     switch (type) {
-      case 'llm': return 'LLM Provider'
       case 'microsoft_graph': return 'Microsoft Graph API'
       case 'extraction': return 'Extraction Service'
       default: return type

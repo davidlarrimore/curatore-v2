@@ -31,6 +31,7 @@ class ConnectionResponse(BaseModel):
     last_tested_at: Optional[datetime] = Field(None, description="Last test timestamp")
     test_status: Optional[str] = Field(None, description="Test status (healthy, unhealthy, not_tested)")
     test_result: Optional[Dict[str, Any]] = Field(None, description="Detailed test results")
+    organization_name: Optional[str] = Field(None, description="Organization name (included in system-wide listings)")
     scope: str = Field(..., description="Connection scope (organization, user)")
     created_at: datetime = Field(..., description="Creation timestamp")
     updated_at: datetime = Field(..., description="Last update timestamp")
@@ -40,13 +41,12 @@ class ConnectionResponse(BaseModel):
             "example": {
                 "id": "123e4567-e89b-12d3-a456-426614174000",
                 "organization_id": "04ace7c6-2043-4935-b074-ec0a567d1fd2",
-                "name": "Production LLM",
-                "description": "Main LLM for document processing",
-                "connection_type": "llm",
+                "name": "Production Extraction",
+                "description": "Document extraction service",
+                "connection_type": "extraction",
                 "config": {
-                    "api_key": "***REDACTED***",
-                    "model": "gpt-4",
-                    "base_url": "https://api.openai.com/v1"
+                    "service_url": "http://document-service:8010",
+                    "engine_type": "document-service"
                 },
                 "is_active": True,
                 "is_default": True,
@@ -79,13 +79,12 @@ class ConnectionCreateRequest(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "name": "Production LLM",
-                "description": "Main LLM for document processing",
-                "connection_type": "llm",
+                "name": "Production Extraction",
+                "description": "Document extraction service",
+                "connection_type": "extraction",
                 "config": {
-                    "api_key": "sk-...",
-                    "model": "gpt-4",
-                    "base_url": "https://api.openai.com/v1"
+                    "service_url": "http://document-service:8010",
+                    "engine_type": "document-service"
                 },
                 "is_default": True,
                 "test_on_save": True
@@ -124,8 +123,8 @@ class ConnectionListResponse(BaseModel):
                     {
                         "id": "123e4567-e89b-12d3-a456-426614174000",
                         "organization_id": "04ace7c6-2043-4935-b074-ec0a567d1fd2",
-                        "name": "Production LLM",
-                        "connection_type": "llm",
+                        "name": "Production Extraction",
+                        "connection_type": "extraction",
                         "is_active": True,
                         "is_default": True,
                         "test_status": "healthy",
@@ -176,17 +175,16 @@ class ConnectionTypeInfo(BaseModel):
     class Config:
         json_schema_extra = {
             "example": {
-                "type": "llm",
-                "display_name": "LLM API",
-                "description": "Connect to OpenAI-compatible LLM APIs",
+                "type": "extraction",
+                "display_name": "Document Service",
+                "description": "Connect to document extraction services",
                 "config_schema": {
                     "type": "object",
                     "properties": {
-                        "api_key": {"type": "string", "writeOnly": True},
-                        "model": {"type": "string"},
-                        "base_url": {"type": "string"}
+                        "service_url": {"type": "string"},
+                        "engine_type": {"type": "string"}
                     },
-                    "required": ["api_key", "model", "base_url"]
+                    "required": ["service_url"]
                 }
             }
         }
@@ -286,6 +284,8 @@ class UserResponse(BaseModel):
     is_verified: bool = Field(..., description="Whether email is verified")
     created_at: datetime = Field(..., description="Creation timestamp")
     last_login_at: Optional[datetime] = Field(None, description="Last login timestamp")
+    organization_id: Optional[str] = Field(None, description="Organization UUID (included in system-wide listings)")
+    organization_name: Optional[str] = Field(None, description="Organization name (included in system-wide listings)")
 
     class Config:
         json_schema_extra = {
@@ -738,6 +738,50 @@ class RoleListResponse(BaseModel):
     total: int = Field(..., description="Total number of roles")
 
 
+# =========================================================================
+# DATA CONNECTION MODELS (Per-Org Data Source Enablement)
+# =========================================================================
+
+
+class DataConnectionCatalogEntry(BaseModel):
+    """Data connection source type with per-org enablement counts."""
+    source_type: str = Field(..., description="Source type identifier (e.g., sam_gov, sharepoint)")
+    display_name: str = Field(..., description="Human-readable name")
+    description: Optional[str] = Field(None, description="Description of the data connection")
+    capabilities: Optional[List[str]] = Field(None, description="What this source can do")
+    is_globally_active: bool = Field(default=True, description="Whether source is active in baseline YAML")
+    enabled_org_count: int = Field(default=0, description="Number of orgs with this source enabled")
+    total_org_count: int = Field(default=0, description="Total number of active organizations")
+
+
+class DataConnectionCatalogResponse(BaseModel):
+    """Catalog of all data connections with per-org enablement counts."""
+    data_connections: List[DataConnectionCatalogEntry] = Field(..., description="List of data connections")
+    total: int = Field(..., description="Total number of data connections")
+
+
+class DataConnectionStatus(BaseModel):
+    """Data connection status for a specific organization."""
+    source_type: str = Field(..., description="Source type identifier")
+    display_name: str = Field(..., description="Human-readable name")
+    description: Optional[str] = Field(None, description="Description of the data connection")
+    is_enabled: bool = Field(..., description="Whether source is enabled for this org")
+    capabilities: Optional[List[str]] = Field(None, description="What this source can do")
+    updated_at: Optional[datetime] = Field(None, description="Last override update timestamp")
+
+
+class DataConnectionOrgStatusResponse(BaseModel):
+    """Data connection statuses for a specific organization."""
+    data_connections: List[DataConnectionStatus] = Field(..., description="List of data connection statuses")
+    organization_id: str = Field(..., description="Organization UUID")
+    organization_name: Optional[str] = Field(None, description="Organization name")
+
+
+class DataConnectionToggleRequest(BaseModel):
+    """Request to enable or disable a data connection for an organization."""
+    is_enabled: bool = Field(..., description="Whether to enable or disable the connection")
+
+
 __all__ = [
     # Connection models
     "ConnectionResponse",
@@ -788,6 +832,12 @@ __all__ = [
     # Role models
     "RoleResponse",
     "RoleListResponse",
+    # Data Connection models
+    "DataConnectionCatalogEntry",
+    "DataConnectionCatalogResponse",
+    "DataConnectionStatus",
+    "DataConnectionOrgStatusResponse",
+    "DataConnectionToggleRequest",
     # System/health models (re-exported from app.core.models)
     "HealthStatus",
     "LLMConnectionStatus",

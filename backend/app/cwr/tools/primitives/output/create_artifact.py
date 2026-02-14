@@ -153,7 +153,8 @@ class CreateArtifactFunction(BaseFunction):
             # Build object key
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             artifact_id = uuid4().hex[:8]
-            object_key = f"{ctx.organization_id}/{folder}/{timestamp}_{artifact_id}_{filename}"
+            org_prefix = str(ctx.organization_id) if ctx.organization_id else "system"
+            object_key = f"{org_prefix}/{folder}/{timestamp}_{artifact_id}_{filename}"
 
             if ctx.dry_run:
                 return FunctionResult.success_result(

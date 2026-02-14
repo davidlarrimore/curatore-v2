@@ -44,7 +44,7 @@ from app.api.v1.admin.schemas import (
 )
 from app.core.database.models import Organization, OrganizationConnection, User
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_organization, get_current_user, require_admin, require_org_admin
+from app.dependencies import get_current_org_id, get_current_organization, get_current_user, require_admin, require_org_admin_or_above
 
 # Initialize router
 router = APIRouter(prefix="/organizations", tags=["Organizations"])
@@ -117,7 +117,8 @@ async def get_current_user_organization(
 )
 async def update_organization(
     request: OrganizationUpdateRequest,
-    user: User = Depends(require_org_admin),
+    user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> OrganizationResponse:
     """
     Update organization details.
@@ -128,6 +129,7 @@ async def update_organization(
     Args:
         request: Organization update details
         user: Current user (must be org_admin)
+        org_id: Effective organization ID (supports admin X-Organization-Id header)
 
     Returns:
         OrganizationResponse: Updated organization details
@@ -150,7 +152,7 @@ async def update_organization(
     async with database_service.get_session() as session:
         # Fetch organization
         result = await session.execute(
-            select(Organization).where(Organization.id == user.organization_id)
+            select(Organization).where(Organization.id == org_id)
         )
         organization = result.scalar_one_or_none()
 
@@ -166,7 +168,7 @@ async def update_organization(
             existing = await session.execute(
                 select(Organization).where(
                     Organization.slug == request.slug,
-                    Organization.id != user.organization_id
+                    Organization.id != org_id
                 )
             )
             if existing.scalar_one_or_none():
@@ -247,7 +249,8 @@ async def get_organization_settings(
 )
 async def update_organization_settings(
     request: OrganizationSettingsUpdateRequest,
-    user: User = Depends(require_org_admin),
+    user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> OrganizationSettingsResponse:
     """
     Update organization settings.
@@ -258,6 +261,7 @@ async def update_organization_settings(
     Args:
         request: Settings to update
         user: Current user (must be org_admin)
+        org_id: Effective organization ID (supports admin X-Organization-Id header)
 
     Returns:
         OrganizationSettingsResponse: Updated settings
@@ -287,7 +291,7 @@ async def update_organization_settings(
     async with database_service.get_session() as session:
         # Fetch organization
         result = await session.execute(
-            select(Organization).where(Organization.id == user.organization_id)
+            select(Organization).where(Organization.id == org_id)
         )
         organization = result.scalar_one_or_none()
 
@@ -373,9 +377,11 @@ async def list_organizations(
     """List all organizations in the system."""
     logger.info(f"Admin {user.email} listing all organizations")
 
+    from app.config import SYSTEM_ORG_SLUG
+
     async with database_service.get_session() as session:
-        # Build query
-        query = select(Organization)
+        # Build query — always exclude the reserved system org
+        query = select(Organization).where(Organization.slug != SYSTEM_ORG_SLUG)
 
         if is_active is not None:
             query = query.where(Organization.is_active == is_active)
@@ -387,7 +393,9 @@ async def list_organizations(
             )
 
         # Get total count
-        count_query = select(func.count()).select_from(Organization)
+        count_query = select(func.count()).select_from(Organization).where(
+            Organization.slug != SYSTEM_ORG_SLUG
+        )
         if is_active is not None:
             count_query = count_query.where(Organization.is_active == is_active)
         if search:
@@ -456,6 +464,14 @@ async def create_organization(
     user: User = Depends(require_admin),
 ) -> OrganizationAdminResponse:
     """Create a new organization."""
+    from app.config import SYSTEM_ORG_SLUG
+
+    if request.slug == SYSTEM_ORG_SLUG:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"The slug '{SYSTEM_ORG_SLUG}' is reserved for internal use",
+        )
+
     logger.info(f"Admin {user.email} creating organization: {request.name}")
 
     async with database_service.get_session() as session:

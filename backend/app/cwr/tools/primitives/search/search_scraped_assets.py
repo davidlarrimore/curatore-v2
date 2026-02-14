@@ -150,6 +150,7 @@ class SearchScrapedAssetsFunction(BaseFunction):
         side_effects=False,
         is_primitive=True,
         payload_profile="thin",
+        required_data_sources=["web_scrape"],
         examples=[
             {
                 "description": "Hybrid search in collection",
@@ -217,7 +218,7 @@ class SearchScrapedAssetsFunction(BaseFunction):
 
             result = await ctx.session.execute(
                 select(ScrapeCollection.id)
-                .where(ScrapeCollection.organization_id == ctx.organization_id)
+                .where(ctx.org_filter(ScrapeCollection.organization_id))
                 .where(ScrapeCollection.status == "active")
                 .where(sqla_func.lower(ScrapeCollection.name) == collection_name.lower())
             )
@@ -226,7 +227,7 @@ class SearchScrapedAssetsFunction(BaseFunction):
                 # Try partial match as fallback
                 result = await ctx.session.execute(
                     select(ScrapeCollection.id)
-                    .where(ScrapeCollection.organization_id == ctx.organization_id)
+                    .where(ctx.org_filter(ScrapeCollection.organization_id))
                     .where(ScrapeCollection.status == "active")
                     .where(sqla_func.lower(ScrapeCollection.name).contains(collection_name.lower()))
                 )
@@ -254,7 +255,7 @@ class SearchScrapedAssetsFunction(BaseFunction):
             # Verify collection belongs to organization
             collection_query = select(ScrapeCollection).where(
                 ScrapeCollection.id == collection_uuid,
-                ScrapeCollection.organization_id == ctx.organization_id,
+                ctx.org_filter(ScrapeCollection.organization_id),
             )
             collection_result = await ctx.session.execute(collection_query)
             collection = collection_result.scalar_one_or_none()
@@ -371,7 +372,7 @@ class SearchScrapedAssetsFunction(BaseFunction):
         # Search using the main search service with collection filter
         search_results = await ctx.search_service.search(
             session=ctx.session,
-            organization_id=ctx.organization_id,
+            organization_id=ctx.requires_org_id,
             query=keyword,
             search_mode=search_mode,
             semantic_weight=semantic_weight,

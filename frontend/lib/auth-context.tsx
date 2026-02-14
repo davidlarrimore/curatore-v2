@@ -281,7 +281,10 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     const timeUntilExpiry = expiry - Date.now()
     if (timeUntilExpiry <= 0) {
-      logout('session_expired')
+      // Access token expired — try refresh before logging out
+      refreshAccessToken().then((refreshed) => {
+        if (!refreshed) logout('session_expired')
+      })
       return
     }
 
@@ -338,37 +341,55 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     warningTimeoutRef.current = setTimeout(showSessionWarningToast, warningDelay)
 
-    logoutTimeoutRef.current = setTimeout(() => {
-      logout('session_expired')
+    logoutTimeoutRef.current = setTimeout(async () => {
+      // Access token expired — try silent refresh before logging out
+      console.log('Access token expired — attempting silent refresh')
+      const refreshed = await refreshAccessToken()
+      if (!refreshed) {
+        console.log('Refresh failed — logging out')
+        logout('session_expired')
+      }
     }, timeUntilExpiry)
 
     return clearSessionTimers
-  }, [token, logout, clearSessionTimers, extendSession])
+  }, [token, logout, clearSessionTimers, extendSession, refreshAccessToken])
 
   /**
    * Handle unauthorized (401) errors from API calls.
    *
-   * This method should be called when an API request returns a 401 status,
-   * indicating the user's session has expired or the token is invalid.
-   *
-   * It will:
-   * 1. Clear authentication state
-   * 2. Store the current path for return after re-authentication
-   * 3. Redirect to the login page
+   * Attempts a silent token refresh first. Only logs out if the refresh
+   * also fails (e.g., refresh token expired or invalid).
    *
    * Anti-loop measures:
    * - Checks if already redirecting
    * - Checks if already on login page
-   * - Uses timeout to reset redirect flag
+   * - Uses ref to prevent concurrent refresh attempts
    */
-  const handleUnauthorized = useCallback(() => {
-    console.log('Session expired or unauthorized, redirecting to login')
+  const isRefreshingRef = useRef(false)
 
-    // Only handle if we're not already redirecting and not on login page
-    if (!isRedirecting.current && pathname !== '/login') {
-      logout('session_expired')
+  const handleUnauthorized = useCallback(async () => {
+    if (isRedirecting.current || pathname === '/login') return
+
+    // Prevent concurrent refresh attempts from multiple 401s
+    if (isRefreshingRef.current) return
+    isRefreshingRef.current = true
+
+    try {
+      console.log('Received 401 — attempting silent token refresh')
+      const refreshed = await refreshAccessToken()
+      if (refreshed) {
+        console.log('Token refreshed successfully after 401')
+        return
+      }
+    } catch {
+      // refresh failed — fall through to logout
+    } finally {
+      isRefreshingRef.current = false
     }
-  }, [logout, pathname])
+
+    console.log('Token refresh failed — logging out')
+    logout('session_expired')
+  }, [logout, pathname, refreshAccessToken])
 
   useEffect(() => {
     const handleUnauthorizedEvent = () => handleUnauthorized()
@@ -379,7 +400,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   // Visibility change detection - check token expiry when tab becomes visible
   // This handles the case where JavaScript timers were throttled while the tab was in background
   useEffect(() => {
-    const handleVisibilityChange = () => {
+    const handleVisibilityChange = async () => {
       if (document.visibilityState !== 'visible' || !token) return
 
       const expiry = getTokenExpiry(token)
@@ -388,14 +409,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const timeUntilExpiry = expiry - Date.now()
 
       if (timeUntilExpiry <= 0) {
-        // Token has already expired - logout immediately
-        console.log('Token expired while tab was inactive - logging out')
+        // Access token expired while tab was inactive — try silent refresh first
+        console.log('Token expired while tab was inactive — attempting refresh')
         // Dismiss any stale warning toast
         if (warningToastId.current) {
           toast.dismiss(warningToastId.current)
           warningToastId.current = null
         }
-        logout('session_expired')
+        const refreshed = await refreshAccessToken()
+        if (!refreshed) {
+          console.log('Refresh failed — logging out')
+          logout('session_expired')
+        }
       } else if (timeUntilExpiry <= SESSION_WARNING_THRESHOLD) {
         // Token is about to expire - show warning toast if not already shown
         // The existing timers may have been throttled, so show it now
@@ -449,7 +474,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
     document.addEventListener('visibilitychange', handleVisibilityChange)
     return () => document.removeEventListener('visibilitychange', handleVisibilityChange)
-  }, [token, logout, extendSession])
+  }, [token, logout, extendSession, refreshAccessToken])
 
   const refreshUserData = async () => {
     if (!token) return

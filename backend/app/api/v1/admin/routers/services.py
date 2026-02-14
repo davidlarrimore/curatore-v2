@@ -107,7 +107,6 @@ async def sync_services_from_config(session: AsyncSession) -> Dict[str, int]:
     # --- LLM ---
     llm = config_loader.get_llm_config()
     if llm:
-        task_type_names = list(llm.task_types.keys()) if llm.task_types else []
         defs.append({
             "name": "llm",
             "service_type": "llm",
@@ -118,7 +117,17 @@ async def sync_services_from_config(session: AsyncSession) -> Dict[str, int]:
                 "base_url": llm.base_url,
                 "default_model": llm.default_model,
                 "timeout": llm.timeout,
-                "task_types": task_type_names,
+                "max_retries": llm.max_retries,
+                "verify_ssl": llm.verify_ssl,
+                "task_types": {
+                    name: {
+                        "model": cfg.model,
+                        **({"temperature": cfg.temperature} if cfg.temperature is not None else {}),
+                        **({"max_tokens": cfg.max_tokens} if cfg.max_tokens is not None else {}),
+                        **({"dimensions": cfg.dimensions} if cfg.dimensions is not None else {}),
+                    }
+                    for name, cfg in llm.task_types.items()
+                } if llm.task_types else {},
             },
         })
 

@@ -157,6 +157,7 @@ class SearchNoticesFunction(BaseFunction):
         side_effects=False,
         is_primitive=True,
         payload_profile="thin",
+        required_data_sources=["sam_gov"],
         examples=[
             {
                 "description": "Hybrid search for RFI notices posted recently",
@@ -258,9 +259,9 @@ class SearchNoticesFunction(BaseFunction):
             # Organization filter - notices are linked via solicitation or directly
             conditions.append(
                 or_(
-                    SamNotice.organization_id == ctx.organization_id,
+                    ctx.org_filter(SamNotice.organization_id),
                     SamNotice.solicitation.has(
-                        SamSolicitation.organization_id == ctx.organization_id
+                        ctx.org_filter(SamSolicitation.organization_id)
                     ),
                 )
             )

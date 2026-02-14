@@ -17,6 +17,7 @@ import {
   RefreshCw,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
+import { usersApi } from '@/lib/api'
 import toast from 'react-hot-toast'
 
 interface User {
@@ -47,8 +48,8 @@ export default function SystemUsersPage() {
     if (!token) return
 
     try {
-      // TODO: Call the admin users endpoint when implemented
-      setUsers([])
+      const data = await usersApi.listAllUsers(token)
+      setUsers(data.users as User[])
     } catch (error) {
       console.error('Failed to load users:', error)
       toast.error('Failed to load users')

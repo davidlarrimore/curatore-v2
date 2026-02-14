@@ -69,36 +69,12 @@ function getOrganizationContext(): string | null {
   return _currentOrgId
 }
 
-/**
- * Build auth headers with optional organization context.
- * Includes X-Organization-Id header for org-scoped requests.
- */
-function authHeaders(token?: string, includeOrgContext = true): HeadersInit {
-  const resolvedToken = token || getAccessToken()
-  const headers: Record<string, string> = {}
-
-  if (resolvedToken) {
-    headers['Authorization'] = `Bearer ${resolvedToken}`
-  }
-
-  // Include org context header for org-scoped API calls
-  if (includeOrgContext) {
-    const orgId = getOrganizationContext()
-    if (orgId) {
-      headers['X-Organization-Id'] = orgId
-    }
-  }
-
-  return headers
-}
 
 function httpError(res: Response, message?: string, detail?: any): never {
   const err = new Error(message || res.statusText || `Request failed with ${res.status}`)
   ;(err as any).status = res.status
   if (detail !== undefined) (err as any).detail = detail
-  if (res.status === 401 && typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('auth:unauthorized'))
-  }
+  // Note: 401 dispatch is handled by apiFetch — not duplicated here
   throw err
 }
 
@@ -137,8 +113,14 @@ async function apiFetch(pathOrUrl: string, options: ApiFetchOptions = {}): Promi
 
   const res = await fetch(url, { ...fetchOptions, headers })
 
+  // Dispatch auth:unauthorized for 401s on non-auth endpoints.
+  // Auth endpoints (/admin/auth/*) handle 401s themselves via the auth context
+  // (e.g., expired access token triggers refresh, not immediate logout).
   if (res.status === 401 && typeof window !== 'undefined') {
-    window.dispatchEvent(new CustomEvent('auth:unauthorized'))
+    const isAuthEndpoint = url.includes('/admin/auth/')
+    if (!isAuthEndpoint) {
+      window.dispatchEvent(new CustomEvent('auth:unauthorized'))
+    }
   }
 
   return res
@@ -1165,7 +1147,7 @@ export const authApi = {
       username: string
       full_name?: string
       role: string
-      organization_id: string
+      organization_id: string | null
     }
   }> {
     const res = await apiFetch('/admin/auth/login', {
@@ -1226,8 +1208,8 @@ export const authApi = {
     username: string
     full_name?: string
     role: string
-    organization_id: string
-    organization_name: string
+    organization_id: string | null
+    organization_name: string | null
     is_active: boolean
   }> {
     const res = await apiFetch('/admin/auth/me', {
@@ -1383,6 +1365,46 @@ export const connectionsApi = {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async listAllConnections(token: string, params?: {
+    connection_type?: string
+    is_active?: boolean
+    organization_id?: string
+    skip?: number
+    limit?: number
+  }): Promise<{
+    connections: Array<{
+      id: string
+      name: string
+      description?: string | null
+      connection_type: string
+      config: Record<string, any>
+      is_active: boolean
+      is_default: boolean
+      is_managed: boolean
+      managed_by?: string | null
+      organization_id: string
+      organization_name?: string | null
+      last_tested_at?: string | null
+      test_status?: string | null
+      scope: string
+      created_at: string
+      updated_at: string
+    }>
+    total: number
+  }> {
+    const searchParams = new URLSearchParams()
+    if (params?.connection_type) searchParams.set('connection_type', params.connection_type)
+    if (params?.is_active !== undefined) searchParams.set('is_active', String(params.is_active))
+    if (params?.organization_id) searchParams.set('organization_id', params.organization_id)
+    if (params?.skip !== undefined) searchParams.set('skip', String(params.skip))
+    if (params?.limit !== undefined) searchParams.set('limit', String(params.limit))
+    const qs = searchParams.toString()
+    const res = await apiFetch(`/admin/connections/all${qs ? `?${qs}` : ''}`, {
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1915,6 +1937,41 @@ export const usersApi = {
       method: 'PUT',
       headers: jsonHeaders,
       body: JSON.stringify({ new_password: newPassword }),
+    })
+    return handleJson(res)
+  },
+
+  async listAllUsers(token: string, params?: {
+    is_active?: boolean
+    role?: string
+    organization_id?: string
+    skip?: number
+    limit?: number
+  }): Promise<{
+    users: Array<{
+      id: string
+      email: string
+      username: string
+      full_name?: string
+      role: string
+      organization_id?: string | null
+      organization_name?: string | null
+      is_active: boolean
+      is_verified: boolean
+      created_at: string
+      last_login_at?: string | null
+    }>
+    total: number
+  }> {
+    const searchParams = new URLSearchParams()
+    if (params?.is_active !== undefined) searchParams.set('is_active', String(params.is_active))
+    if (params?.role) searchParams.set('role', params.role)
+    if (params?.organization_id) searchParams.set('organization_id', params.organization_id)
+    if (params?.skip !== undefined) searchParams.set('skip', String(params.skip))
+    if (params?.limit !== undefined) searchParams.set('limit', String(params.limit))
+    const qs = searchParams.toString()
+    const res = await apiFetch(`/admin/organizations/me/users/all${qs ? `?${qs}` : ''}`, {
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -6621,6 +6678,324 @@ export const metricsApi = {
   },
 }
 
+// -------------------- Data Connections API --------------------
+
+export interface DataConnectionCatalogEntry {
+  source_type: string
+  display_name: string
+  description?: string
+  capabilities?: string[]
+  is_globally_active: boolean
+  enabled_org_count: number
+  total_org_count: number
+}
+
+export interface DataConnectionStatus {
+  source_type: string
+  display_name: string
+  description?: string
+  is_enabled: boolean
+  capabilities?: string[]
+  updated_at?: string
+}
+
+export interface DataConnectionOrgStatusResponse {
+  data_connections: DataConnectionStatus[]
+  organization_id: string
+  organization_name?: string
+}
+
+export const dataConnectionsApi = {
+  async getCatalog(token?: string): Promise<{
+    data_connections: DataConnectionCatalogEntry[]
+    total: number
+  }> {
+    const res = await apiFetch(apiUrl('/admin/data-connections'), {
+      cache: 'no-store',
+      skipOrgContext: true,
+    })
+    return handleJson(res)
+  },
+
+  async getOrgStatus(token?: string, orgId?: string): Promise<DataConnectionOrgStatusResponse> {
+    if (!orgId) throw new Error('orgId is required')
+    const res = await apiFetch(apiUrl(`/admin/data-connections/orgs/${orgId}`), {
+      cache: 'no-store',
+      skipOrgContext: true,
+    })
+    return handleJson(res)
+  },
+
+  async toggleConnection(
+    sourceType: string,
+    orgId: string,
+    isEnabled: boolean,
+    token?: string,
+  ): Promise<{ source_type: string; organization_id: string; is_enabled: boolean; message: string }> {
+    const res = await apiFetch(apiUrl(`/admin/data-connections/${sourceType}/orgs/${orgId}`), {
+      method: 'PUT',
+      headers: jsonHeaders,
+      body: JSON.stringify({ is_enabled: isEnabled }),
+      skipOrgContext: true,
+    })
+    return handleJson(res)
+  },
+
+  async getMyConnections(token?: string): Promise<DataConnectionOrgStatusResponse> {
+    const res = await apiFetch(apiUrl('/admin/data-connections/me'), {
+      cache: 'no-store',
+    })
+    return handleJson(res)
+  },
+}
+
+// =============================================================================
+// SYSTEM CWR API — calls existing CWR endpoints with system org header
+// =============================================================================
+
+export const systemCwrApi = {
+  _systemOrgId: null as string | null,
+
+  async _ensureOrgId(): Promise<string> {
+    if (this._systemOrgId) return this._systemOrgId
+    const res = await apiFetch('/admin/system-cwr/org', { skipOrgContext: true })
+    const data: { id: string; slug: string; name: string } = await handleJson(res)
+    this._systemOrgId = data.id
+    return data.id
+  },
+
+  async _fetch(path: string, options?: ApiFetchOptions): Promise<Response> {
+    const orgId = await this._ensureOrgId()
+    const headers = new Headers(options?.headers)
+    headers.set('X-Organization-Id', orgId)
+    return apiFetch(path, { ...options, skipOrgContext: true, headers })
+  },
+
+  // ---- Functions (read-only catalog) ----
+
+  async listFunctions(): Promise<FunctionListResponse> {
+    const res = await this._fetch('/cwr/functions/', { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  async getCategories(): Promise<{ categories: Record<string, string[]> }> {
+    const res = await this._fetch('/cwr/functions/categories', { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  async getFunction(name: string): Promise<FunctionMeta> {
+    const res = await this._fetch(`/cwr/functions/${name}`, { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  // ---- Procedures ----
+
+  async listProcedures(params?: { is_active?: boolean; tag?: string }): Promise<{ procedures: ProcedureListItem[]; total: number }> {
+    const sp = new URLSearchParams()
+    if (params?.is_active !== undefined) sp.append('is_active', String(params.is_active))
+    if (params?.tag) sp.append('tag', params.tag)
+    const res = await this._fetch(`/cwr/procedures/?${sp.toString()}`, { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  async getProcedure(slug: string): Promise<Procedure> {
+    const res = await this._fetch(`/cwr/procedures/${slug}`, { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  async createProcedure(data: CreateProcedureRequest): Promise<Procedure> {
+    const res = await this._fetch('/cwr/procedures/', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify(data),
+    })
+    if (res.status === 422) {
+      const errorData = await res.json()
+      const error = new Error(errorData.detail?.message || 'Validation failed') as Error & { validation?: ValidationResult }
+      error.validation = errorData.detail?.validation
+      throw error
+    }
+    return handleJson(res)
+  },
+
+  async updateProcedure(slug: string, data: UpdateProcedureRequest): Promise<Procedure> {
+    const res = await this._fetch(`/cwr/procedures/${slug}`, {
+      method: 'PUT',
+      headers: jsonHeaders,
+      body: JSON.stringify(data),
+    })
+    if (res.status === 422) {
+      const errorData = await res.json()
+      const error = new Error(errorData.detail?.message || 'Validation failed') as Error & { validation?: ValidationResult }
+      error.validation = errorData.detail?.validation
+      throw error
+    }
+    return handleJson(res)
+  },
+
+  async deleteProcedure(slug: string): Promise<{ status: string; slug: string }> {
+    const res = await this._fetch(`/cwr/procedures/${slug}`, { method: 'DELETE' })
+    return handleJson(res)
+  },
+
+  async validateProcedure(data: CreateProcedureRequest): Promise<ValidationResult> {
+    const res = await this._fetch('/cwr/procedures/validate', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async reloadProcedures(): Promise<{ status: string; message: string; procedures_loaded: number; slugs: string[] }> {
+    const res = await this._fetch('/cwr/procedures/reload', { method: 'POST' })
+    return handleJson(res)
+  },
+
+  async generateProcedureStream(
+    prompt: string,
+    profile?: string,
+    currentPlan?: Record<string, any>,
+    onEvent?: (event: GenerateStreamEvent) => void,
+  ): Promise<{
+    success: boolean
+    yaml?: string
+    procedure?: Record<string, any>
+    plan_json?: Record<string, any>
+    error?: string
+    attempts: number
+    validation_errors: ValidationError[]
+    validation_warnings?: ValidationError[]
+    profile_used?: string
+    diagnostics?: PlanDiagnostics
+    needs_clarification?: boolean
+    clarification_message?: string
+  }> {
+    const body: Record<string, any> = { prompt, include_examples: true }
+    if (profile) body.profile = profile
+    if (currentPlan) body.current_plan = currentPlan
+
+    const res = await this._fetch('/cwr/procedures/generate', {
+      method: 'POST',
+      headers: jsonHeaders,
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      const errorText = await res.text()
+      throw new Error(errorText || `HTTP ${res.status}`)
+    }
+
+    const reader = res.body?.getReader()
+    if (!reader) throw new Error('No response body')
+
+    const decoder = new TextDecoder()
+    let buffer = ''
+    let finalResult: any = null
+
+    while (true) {
+      const { done, value } = await reader.read()
+      if (done) break
+
+      buffer += decoder.decode(value, { stream: true })
+      const lines = buffer.split('\n')
+      buffer = lines.pop() || ''
+
+      for (const line of lines) {
+        if (line.startsWith('data: ')) {
+          try {
+            const event = JSON.parse(line.slice(6))
+            if (onEvent) onEvent(event)
+            if (event.type === 'complete' || event.type === 'error') {
+              finalResult = event.type === 'complete'
+                ? { success: true, ...event }
+                : { success: false, error: event.error || event.message, attempts: event.attempts || 0, validation_errors: event.validation_errors || [] }
+            }
+          } catch {}
+        }
+      }
+    }
+
+    if (finalResult) return finalResult
+    throw new Error('Stream ended without complete event')
+  },
+
+  async getGenerationProfiles(): Promise<GenerationProfile[]> {
+    const res = await this._fetch('/cwr/procedures/profiles', { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  // ---- Triggers ----
+
+  async listTriggers(slug: string): Promise<ProcedureTrigger[]> {
+    const res = await this._fetch(`/cwr/procedures/${slug}/triggers`, { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  async createTrigger(slug: string, data: {
+    trigger_type: string; cron_expression?: string; event_name?: string;
+    event_filter?: Record<string, any>; trigger_params?: Record<string, any>
+  }): Promise<ProcedureTrigger> {
+    const res = await this._fetch(`/cwr/procedures/${slug}/triggers`, {
+      method: 'POST', headers: jsonHeaders, body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deleteTrigger(slug: string, triggerId: string): Promise<{ status: string; message: string }> {
+    const res = await this._fetch(`/cwr/procedures/${slug}/triggers/${triggerId}`, { method: 'DELETE' })
+    return handleJson(res)
+  },
+
+  // ---- Versions ----
+
+  async listVersions(slug: string): Promise<any[]> {
+    const res = await this._fetch(`/cwr/procedures/${slug}/versions`, { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  async getVersion(slug: string, version: number): Promise<any> {
+    const res = await this._fetch(`/cwr/procedures/${slug}/versions/${version}`, { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  async restoreVersion(slug: string, version: number): Promise<any> {
+    const res = await this._fetch(`/cwr/procedures/${slug}/versions/${version}/restore`, { method: 'POST' })
+    return handleJson(res)
+  },
+
+  // ---- Pipelines ----
+
+  async listPipelines(params?: { is_active?: boolean; tag?: string }): Promise<{ pipelines: PipelineListItem[]; total: number }> {
+    const sp = new URLSearchParams()
+    if (params?.is_active !== undefined) sp.append('is_active', String(params.is_active))
+    if (params?.tag) sp.append('tag', params.tag)
+    const res = await this._fetch(`/cwr/pipelines/?${sp.toString()}`, { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  async getPipeline(slug: string): Promise<Pipeline> {
+    const res = await this._fetch(`/cwr/pipelines/${slug}`, { cache: 'no-store' })
+    return handleJson(res)
+  },
+
+  async updatePipeline(slug: string, data: any): Promise<Pipeline> {
+    const res = await this._fetch(`/cwr/pipelines/${slug}`, {
+      method: 'PUT', headers: jsonHeaders, body: JSON.stringify(data),
+    })
+    return handleJson(res)
+  },
+
+  async deletePipeline(slug: string): Promise<{ status: string; slug: string }> {
+    const res = await this._fetch(`/cwr/pipelines/${slug}`, { method: 'DELETE' })
+    return handleJson(res)
+  },
+
+  async reloadPipelines(): Promise<{ status: string; message: string }> {
+    const res = await this._fetch('/cwr/pipelines/reload', { method: 'POST' })
+    return handleJson(res)
+  },
+}
+
 // Default export with all API modules
 export default {
   API_BASE_URL,
@@ -6650,5 +7025,7 @@ export default {
   metricsApi,
   servicesApi,
   serviceAccountsApi,
+  dataConnectionsApi,
+  systemCwrApi,
   utils,
 }

@@ -74,6 +74,9 @@ class FunctionMeta:
     is_primitive: bool = True
     payload_profile: str = "full"  # "thin" | "full" | "summary"
     exposure_profile: Dict[str, Any] = field(default_factory=lambda: {"procedure": True, "agent": True})
+    # Data source enforcement: if set, at least one of these source types must
+    # be enabled for the org before the function can execute (OR logic).
+    required_data_sources: Optional[List[str]] = None
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert to dictionary for API responses."""
@@ -93,6 +96,7 @@ class FunctionMeta:
             "is_primitive": self.is_primitive,
             "payload_profile": self.payload_profile,
             "exposure_profile": self.exposure_profile,
+            "required_data_sources": self.required_data_sources,
         }
 
     def to_contract_dict(self) -> Dict[str, Any]:
@@ -111,6 +115,7 @@ class FunctionMeta:
             "requires_llm": self.requires_llm,
             "requires_session": self.requires_session,
             "tags": list(self.tags),
+            "required_data_sources": self.required_data_sources,
         }
 
     def as_contract(self) -> "ContractView":

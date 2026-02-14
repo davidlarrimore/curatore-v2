@@ -56,10 +56,14 @@ from app.core.shared.database_service import database_service
 from app.core.shared.run_service import run_service
 from app.core.storage.minio_service import get_minio_service
 from app.core.tasks import salesforce_import_task
-from app.dependencies import get_current_org_id, get_current_user
+from app.dependencies import get_current_org_id, get_current_user, require_data_source_enabled
 
 # Initialize router
-router = APIRouter(prefix="/salesforce", tags=["Salesforce"])
+router = APIRouter(
+    prefix="/salesforce",
+    tags=["Salesforce"],
+    dependencies=[Depends(require_data_source_enabled("salesforce"))],
+)
 
 # Initialize logger
 logger = logging.getLogger("curatore.api.salesforce")
