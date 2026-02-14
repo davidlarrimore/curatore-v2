@@ -7,7 +7,7 @@ Comprehensive reference for Curatore v2's authentication, authorization, and mul
 | Role | Scope | Organization | Data Access | CWR Functions | Procedures | System Config |
 |------|-------|-------------|-------------|---------------|------------|---------------|
 | `admin` | System-wide | `organization_id=NULL`, accesses orgs via `X-Organization-Id` header | All orgs (cross-org in system context, filtered in org context) | All (including side-effect tools); system context sees all tools regardless of data sources | Full CRUD + `admin_full` generation profile + system procedures | Full (services, connections, LLM, orgs) |
-| `member` | Single org | `organization_id=<org_uuid>` | Own org only | All (including side-effect tools); filtered by org's enabled data sources | Run + `workflow_standard` generation profile | None |
+| `member` | Multi-org via memberships | `organization_id=<primary_org_uuid>`, access other orgs via `X-Organization-Id` + membership | Orgs with membership | All (including side-effect tools); filtered by org's enabled data sources | Run + `workflow_standard` generation profile | None |
 
 ---
 
@@ -19,10 +19,12 @@ Comprehensive reference for Curatore v2's authentication, authorization, and mul
 - **System context** (no header): cross-org view — ops dashboards show ALL data
 - **Org context** (with header): filtered view — data scoped to the selected org
 
-### Non-Admin Users
-- Always scoped to their `user.organization_id`
-- The `X-Organization-Id` header is ignored
-- Cannot view or modify data from other organizations
+### Non-Admin Users (Multi-Org Membership)
+- Default org: `user.organization_id` (used when no `X-Organization-Id` header is sent)
+- Can access other orgs via `X-Organization-Id` header **if** they have a `user_organization_memberships` row for that org
+- Membership rows are managed by admins via `PUT /admin/organizations/me/users/memberships/{user_id}`
+- A membership row is automatically created for the user's primary org on user creation
+- Cannot access orgs they don't have membership for (403)
 
 ### Dependencies
 

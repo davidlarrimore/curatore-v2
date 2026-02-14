@@ -34,6 +34,7 @@ from sqlalchemy import (
     String,
     Text,
     TypeDecorator,
+    UniqueConstraint,
     text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
@@ -131,6 +132,9 @@ class Organization(Base):
     )
     api_keys = relationship(
         "ApiKey", back_populates="organization", cascade="all, delete-orphan"
+    )
+    memberships = relationship(
+        "UserOrganizationMembership", back_populates="organization", cascade="all, delete-orphan"
     )
 
     def __repr__(self) -> str:
@@ -270,9 +274,44 @@ class User(Base):
         back_populates="created_by_user",
         foreign_keys="Connection.created_by",
     )
+    memberships = relationship(
+        "UserOrganizationMembership", back_populates="user", cascade="all, delete-orphan"
+    )
 
     def __repr__(self) -> str:
         return f"<User(id={self.id}, username={self.username}, email={self.email})>"
+
+
+class UserOrganizationMembership(Base):
+    """
+    Many-to-many membership linking users to organizations.
+
+    Enables multi-org access: a user can belong to multiple organizations.
+    Admin users have implicit access to all orgs and don't need membership rows.
+    The user's `organization_id` field remains as their "primary/default" org.
+    """
+
+    __tablename__ = "user_organization_memberships"
+
+    id = Column(UUID(), primary_key=True, default=uuid.uuid4)
+    user_id = Column(
+        UUID(), ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    organization_id = Column(
+        UUID(), ForeignKey("organizations.id", ondelete="CASCADE"), nullable=False, index=True
+    )
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        UniqueConstraint("user_id", "organization_id", name="uq_user_org_membership"),
+    )
+
+    # Relationships
+    user = relationship("User", back_populates="memberships")
+    organization = relationship("Organization", back_populates="memberships")
+
+    def __repr__(self) -> str:
+        return f"<UserOrganizationMembership(user_id={self.user_id}, organization_id={self.organization_id})>"
 
 
 class EmailVerificationToken(Base):

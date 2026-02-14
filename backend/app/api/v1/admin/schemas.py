@@ -286,6 +286,8 @@ class UserResponse(BaseModel):
     last_login_at: Optional[datetime] = Field(None, description="Last login timestamp")
     organization_id: Optional[str] = Field(None, description="Organization UUID (included in system-wide listings)")
     organization_name: Optional[str] = Field(None, description="Organization name (included in system-wide listings)")
+    is_member: Optional[bool] = Field(None, description="Whether user is a member of the current org context (included when org context is set)")
+    is_primary_org: Optional[bool] = Field(None, description="Whether the current org is the user's primary organization (included when org context is set)")
 
     class Config:
         json_schema_extra = {
@@ -334,6 +336,7 @@ class UserUpdateRequest(BaseModel):
     """Request to update user details."""
     full_name: Optional[str] = Field(None, max_length=255, description="Full name")
     role: Optional[str] = Field(None, description="Role (admin, member)")
+    is_member: Optional[bool] = Field(None, description="Toggle org membership for this user (current org context)")
 
     class Config:
         json_schema_extra = {

@@ -62,10 +62,14 @@ See [Configuration](docs/CONFIGURATION.md) for the full reference.
 
 See [Auth & Access Model](docs/AUTH_ACCESS_MODEL.md) for the full reference.
 
-**Roles**: `admin` (system-wide, `organization_id=NULL`), `member` (org-scoped).
+**Roles**: `admin` (system-wide, `organization_id=NULL`), `member` (multi-org via memberships).
 
 **Key Rules**:
 - Admin users have `organization_id=NULL` — **never** use `current_user.organization_id` directly
+- Admin users have implicit access to all orgs (no membership rows needed)
+- Non-admin users can access multiple orgs via `user_organization_memberships` table
+- Non-admin users send `X-Organization-Id` header to switch orgs; backend validates membership
+- `user.organization_id` remains as the user's primary/default org (fallback when no header)
 - Use `get_effective_org_id` for cross-org admin views, `get_current_org_id` for org-scoped operations
 - System org (`__system__`) is for CWR procedure ownership only, never for user assignment
 - CWR function visibility is filtered by org's enabled data sources — functions whose `required_data_sources` aren't active for the org are hidden from listings and the AI generator
@@ -262,6 +266,7 @@ mcp/                                 # MCP Gateway (AI tool server)
 | `RunGroup` | Parent-child job tracking for group completion |
 | `RunLogEvent` | Structured logging for runs |
 | `ContentItem` | Universal content wrapper for functions/procedures (in-memory) |
+| `UserOrganizationMembership` | Many-to-many user↔org membership for multi-org access |
 
 ### Integration Models
 | Model | Purpose |

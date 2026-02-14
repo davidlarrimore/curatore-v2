@@ -1,97 +1,96 @@
 'use client'
 
 /**
- * Organization-scoped user management page.
+ * Organization-scoped user membership management page.
+ *
+ * Shows all system users with toggle switches to control
+ * organization membership. Admin users are always shown as members.
  */
 
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useAuth } from '@/lib/auth-context'
 import { useOrgUrl } from '@/lib/org-url-context'
 import { usersApi } from '@/lib/api'
-import { formatDate } from '@/lib/date-utils'
-import { Button } from '@/components/ui/Button'
 import { Badge } from '@/components/ui/Badge'
-import UserInviteForm from '@/components/users/UserInviteForm'
-import UserEditForm from '@/components/users/UserEditForm'
-import { Users, UserPlus, Loader2 } from 'lucide-react'
+import { Users, Search, Loader2, Star } from 'lucide-react'
+import toast from 'react-hot-toast'
 
-interface User {
+interface MembershipUser {
   id: string
   email: string
   username: string
   full_name?: string
   role: string
-  organization_id: string
   is_active: boolean
+  is_member?: boolean | null
+  is_primary_org?: boolean | null
   created_at: string
-  last_login?: string
+  last_login_at?: string | null
 }
 
 export default function UsersPage() {
-  const { token, user: currentUser } = useAuth()
+  const { token } = useAuth()
   const { orgSlug } = useOrgUrl()
-  const [users, setUsers] = useState<User[]>([])
+  const [users, setUsers] = useState<MembershipUser[]>([])
+  const [total, setTotal] = useState(0)
   const [isLoading, setIsLoading] = useState(true)
   const [error, setError] = useState('')
-  const [showInviteForm, setShowInviteForm] = useState(false)
-  const [editingUser, setEditingUser] = useState<User | null>(null)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [toggling, setToggling] = useState<string | null>(null)
+  const [page, setPage] = useState(0)
+  const pageSize = 50
 
-  useEffect(() => {
-    if (token) {
-      loadUsers()
-    }
-  }, [token])
-
-  const loadUsers = async () => {
+  const loadUsers = useCallback(async () => {
     if (!token) return
 
     setIsLoading(true)
     setError('')
 
     try {
-      const response = await usersApi.listUsers(token)
-      setUsers(response.users)
+      const response = await usersApi.listAllUsers(token, {
+        search: searchQuery || undefined,
+        skip: page * pageSize,
+        limit: pageSize,
+      })
+      setUsers(response.users as MembershipUser[])
+      setTotal(response.total)
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to load users'
       setError(message)
     } finally {
       setIsLoading(false)
     }
-  }
+  }, [token, searchQuery, page])
 
-  const handleInviteSuccess = async () => {
-    setShowInviteForm(false)
-    await loadUsers()
-  }
+  useEffect(() => {
+    loadUsers()
+  }, [loadUsers])
 
-  const handleEditSuccess = async () => {
-    setEditingUser(null)
-    await loadUsers()
-  }
+  // Reset page when search changes
+  useEffect(() => {
+    setPage(0)
+  }, [searchQuery])
 
-  const handleToggleActive = async (userId: string, isActive: boolean) => {
+  const handleToggle = async (userId: string, currentIsMember: boolean) => {
     if (!token) return
-    if (!confirm(`Are you sure you want to ${isActive ? 'deactivate' : 'activate'} this user?`)) return
+
+    const newValue = !currentIsMember
+    setToggling(userId)
 
     try {
-      await usersApi.updateUser(token, userId, { is_active: !isActive })
-      await loadUsers()
+      await usersApi.updateUser(token, userId, { is_member: newValue })
+      // Optimistic update
+      setUsers((prev) =>
+        prev.map((u) =>
+          u.id === userId ? { ...u, is_member: newValue } : u
+        )
+      )
+      toast.success(newValue ? 'User added to organization' : 'User removed from organization')
     } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to update user'
-      alert(message)
-    }
-  }
-
-  const handleDelete = async (userId: string) => {
-    if (!token) return
-    if (!confirm('Are you sure you want to delete this user? This action cannot be undone.')) return
-
-    try {
-      await usersApi.deleteUser(token, userId)
-      await loadUsers()
-    } catch (err: unknown) {
-      const message = err instanceof Error ? err.message : 'Failed to delete user'
-      alert(message)
+      const message = err instanceof Error ? err.message : 'Failed to toggle membership'
+      toast.error(message)
+    } finally {
+      setToggling(null)
     }
   }
 
@@ -106,16 +105,7 @@ export default function UsersPage() {
     }
   }
 
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
-        <div className="text-center">
-          <Loader2 className="h-12 w-12 text-indigo-600 dark:text-indigo-400 animate-spin mx-auto" />
-          <p className="mt-4 text-gray-600 dark:text-gray-400">Loading users...</p>
-        </div>
-      </div>
-    )
-  }
+  const totalPages = Math.ceil(total / pageSize)
 
   return (
     <div className="h-full flex flex-col bg-gradient-to-br from-gray-50 via-white to-gray-50 dark:from-gray-950 dark:via-gray-900 dark:to-gray-950">
@@ -128,16 +118,12 @@ export default function UsersPage() {
                 <Users className="h-6 w-6 text-white" />
               </div>
               <div>
-                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">User Management</h1>
+                <h1 className="text-2xl font-bold text-gray-900 dark:text-white">Org Members</h1>
                 <p className="mt-0.5 text-sm text-gray-600 dark:text-gray-400">
-                  Invite users, manage roles, and control access
+                  Toggle user access to this organization
                 </p>
               </div>
             </div>
-            <Button onClick={() => setShowInviteForm(true)} className="inline-flex items-center">
-              <UserPlus className="w-4 h-4 mr-2" />
-              Invite User
-            </Button>
           </div>
         </div>
       </div>
@@ -150,121 +136,154 @@ export default function UsersPage() {
             </div>
           )}
 
-          {showInviteForm && (
-            <div className="mb-8">
-              <UserInviteForm
-                onSuccess={handleInviteSuccess}
-                onCancel={() => setShowInviteForm(false)}
+          {/* Search */}
+          <div className="mb-6">
+            <div className="relative max-w-md">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-gray-400" />
+              <input
+                type="text"
+                placeholder="Search by email, username, or name..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                className="w-full pl-10 pr-4 py-2.5 text-sm border border-gray-200 dark:border-gray-700 rounded-lg bg-white dark:bg-gray-800 text-gray-900 dark:text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
               />
             </div>
-          )}
-
-          {editingUser && (
-            <div className="mb-8">
-              <UserEditForm
-                user={editingUser}
-                onSuccess={handleEditSuccess}
-                onCancel={() => setEditingUser(null)}
-              />
-            </div>
-          )}
+          </div>
 
           {/* Users Table */}
           <div className="bg-white dark:bg-gray-900 rounded-xl border border-gray-200 dark:border-gray-800 shadow-sm overflow-hidden">
-            <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
-              <thead className="bg-gray-50 dark:bg-gray-800/50">
-                <tr>
-                  <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                    User
-                  </th>
-                  <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                    Role
-                  </th>
-                  <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                    Status
-                  </th>
-                  <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                    Last Login
-                  </th>
-                  <th className="px-6 py-3.5 text-right text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
-              <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
-                {users.map((user) => (
-                  <tr key={user.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <div className="flex items-center">
-                        <div>
-                          <div className="text-sm font-medium text-gray-900 dark:text-white">
-                            {user.full_name || user.username}
-                            {user.id === currentUser?.id && (
-                              <span className="ml-2 text-xs text-gray-500 dark:text-gray-400">(You)</span>
-                            )}
-                          </div>
-                          <div className="text-sm text-gray-500 dark:text-gray-400">
-                            {user.email}
-                          </div>
-                          <div className="text-xs text-gray-400 dark:text-gray-500">
-                            @{user.username}
-                          </div>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <Badge variant={getRoleBadgeVariant(user.role)}>
-                        {user.role}
-                      </Badge>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap">
-                      <Badge variant={user.is_active ? 'success' : 'secondary'}>
-                        {user.is_active ? 'Active' : 'Inactive'}
-                      </Badge>
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-500 dark:text-gray-400">
-                      {user.last_login ? formatDate(user.last_login) : 'Never'}
-                    </td>
-                    <td className="px-6 py-4 whitespace-nowrap text-right text-sm font-medium">
-                      <div className="flex justify-end gap-2">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          onClick={() => setEditingUser(user)}
-                        >
-                          Edit
-                        </Button>
-                        {user.id !== currentUser?.id && (
-                          <>
-                            <Button
-                              variant="secondary"
-                              size="sm"
-                              onClick={() => handleToggleActive(user.id, user.is_active)}
-                            >
-                              {user.is_active ? 'Deactivate' : 'Activate'}
-                            </Button>
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              onClick={() => handleDelete(user.id)}
-                            >
-                              Delete
-                            </Button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-
-            {users.length === 0 && (
-              <div className="text-center py-12">
-                <Users className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
-                <p className="text-sm font-medium text-gray-900 dark:text-white mb-1">No users found</p>
-                <p className="text-sm text-gray-500 dark:text-gray-400">Invite users to get started.</p>
+            {isLoading ? (
+              <div className="flex items-center justify-center py-16">
+                <Loader2 className="h-8 w-8 text-indigo-600 dark:text-indigo-400 animate-spin" />
+                <span className="ml-3 text-gray-600 dark:text-gray-400">Loading users...</span>
               </div>
+            ) : (
+              <>
+                <table className="min-w-full divide-y divide-gray-200 dark:divide-gray-700">
+                  <thead className="bg-gray-50 dark:bg-gray-800/50">
+                    <tr>
+                      <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                        User
+                      </th>
+                      <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                        Role
+                      </th>
+                      <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                        Status
+                      </th>
+                      <th className="px-6 py-3.5 text-left text-xs font-semibold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                        Org Access
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white dark:bg-gray-900 divide-y divide-gray-200 dark:divide-gray-700">
+                    {users.map((user) => {
+                      const isAdmin = user.role === 'admin'
+                      const isMember = user.is_member ?? false
+                      const isToggling = toggling === user.id
+                      return (
+                        <tr key={user.id} className="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-sm font-medium text-gray-900 dark:text-white">
+                                  {user.full_name || user.username}
+                                </span>
+                                {user.is_primary_org && (
+                                  <span title="Primary organization" className="text-amber-500">
+                                    <Star className="h-3.5 w-3.5 fill-current" />
+                                  </span>
+                                )}
+                              </div>
+                              <div className="text-sm text-gray-500 dark:text-gray-400">
+                                {user.email}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <Badge variant={getRoleBadgeVariant(user.role)}>
+                              {user.role}
+                            </Badge>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <Badge variant={user.is_active ? 'success' : 'secondary'}>
+                              {user.is_active ? 'Active' : 'Inactive'}
+                            </Badge>
+                          </td>
+                          <td className="px-6 py-4 whitespace-nowrap">
+                            <div className="flex items-center gap-3">
+                              <button
+                                type="button"
+                                role="switch"
+                                aria-checked={isMember}
+                                disabled={isAdmin || isToggling}
+                                onClick={() => handleToggle(user.id, isMember)}
+                                className={`
+                                  relative inline-flex h-6 w-11 flex-shrink-0 cursor-pointer rounded-full border-2 border-transparent
+                                  transition-colors duration-200 ease-in-out focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2
+                                  ${isMember ? 'bg-indigo-600' : 'bg-gray-200 dark:bg-gray-700'}
+                                  ${isAdmin || isToggling ? 'opacity-60 cursor-not-allowed' : ''}
+                                `}
+                              >
+                                <span
+                                  className={`
+                                    pointer-events-none inline-block h-5 w-5 transform rounded-full bg-white shadow ring-0
+                                    transition duration-200 ease-in-out
+                                    ${isMember ? 'translate-x-5' : 'translate-x-0'}
+                                  `}
+                                />
+                              </button>
+                              {isAdmin && (
+                                <span className="text-xs text-gray-500 dark:text-gray-400">
+                                  Always (admin)
+                                </span>
+                              )}
+                              {isToggling && (
+                                <Loader2 className="h-4 w-4 text-indigo-600 animate-spin" />
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+
+                {users.length === 0 && (
+                  <div className="text-center py-12">
+                    <Users className="w-12 h-12 text-gray-300 dark:text-gray-600 mx-auto mb-4" />
+                    <p className="text-sm font-medium text-gray-900 dark:text-white mb-1">No users found</p>
+                    <p className="text-sm text-gray-500 dark:text-gray-400">
+                      {searchQuery ? 'Try a different search term.' : 'No users in the system yet.'}
+                    </p>
+                  </div>
+                )}
+
+                {/* Pagination */}
+                {totalPages > 1 && (
+                  <div className="flex items-center justify-between px-6 py-3 border-t border-gray-200 dark:border-gray-700 bg-gray-50 dark:bg-gray-800/50">
+                    <p className="text-sm text-gray-700 dark:text-gray-300">
+                      Showing {page * pageSize + 1}-{Math.min((page + 1) * pageSize, total)} of {total}
+                    </p>
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => setPage((p) => Math.max(0, p - 1))}
+                        disabled={page === 0}
+                        className="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Prev
+                      </button>
+                      <button
+                        onClick={() => setPage((p) => Math.min(totalPages - 1, p + 1))}
+                        disabled={page >= totalPages - 1}
+                        className="px-3 py-1.5 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-700 border border-gray-300 dark:border-gray-600 rounded-md hover:bg-gray-50 dark:hover:bg-gray-600 disabled:opacity-50 disabled:cursor-not-allowed"
+                      >
+                        Next
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
           </div>
         </div>

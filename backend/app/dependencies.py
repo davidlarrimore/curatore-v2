@@ -49,7 +49,7 @@ from sqlalchemy import select
 
 from app.config import settings
 from app.core.auth.auth_service import auth_service
-from app.core.database.models import ApiKey, Organization, ServiceAccount, User
+from app.core.database.models import ApiKey, Organization, ServiceAccount, User, UserOrganizationMembership
 from app.core.shared.database_service import database_service
 
 # Type alias for authenticated principals (User or ServiceAccount)
@@ -668,9 +668,54 @@ async def _resolve_effective_org_id(
         - If no header, return None (system context)
 
     For non-admin users:
-        - Always use user.organization_id (header is ignored)
+        - If X-Organization-Id header is provided, validate membership and use that org
+        - If no header, use user.organization_id (primary/default org)
     """
     if user.role != "admin":
+        if x_organization_id:
+            try:
+                org_id = UUID_TYPE(x_organization_id)
+            except ValueError:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Invalid organization ID format",
+                )
+
+            async with database_service.get_session() as session:
+                # Validate org exists and is active
+                org_result = await session.execute(
+                    select(Organization).where(Organization.id == org_id)
+                )
+                org = org_result.scalar_one_or_none()
+
+                if not org:
+                    raise HTTPException(
+                        status_code=status.HTTP_404_NOT_FOUND,
+                        detail="Organization not found",
+                    )
+
+                if not org.is_active:
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="Organization is inactive",
+                    )
+
+                # Check membership
+                membership = await session.execute(
+                    select(UserOrganizationMembership).where(
+                        UserOrganizationMembership.user_id == user.id,
+                        UserOrganizationMembership.organization_id == org_id,
+                    )
+                )
+                if not membership.scalar_one_or_none():
+                    raise HTTPException(
+                        status_code=status.HTTP_403_FORBIDDEN,
+                        detail="You do not have access to this organization",
+                    )
+
+                logger.debug(f"User {user.email} using org context: {org.name}")
+                return org_id
+
         return user.organization_id
 
     if x_organization_id:

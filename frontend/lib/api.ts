@@ -1915,6 +1915,7 @@ export const usersApi = {
     full_name?: string
     role?: string
     is_active?: boolean
+    is_member?: boolean
   }): Promise<{
     message: string
     user: JsonRecord
@@ -1952,6 +1953,7 @@ export const usersApi = {
     is_active?: boolean
     role?: string
     organization_id?: string
+    search?: string
     skip?: number
     limit?: number
   }): Promise<{
@@ -1967,6 +1969,8 @@ export const usersApi = {
       is_verified: boolean
       created_at: string
       last_login_at?: string | null
+      is_member?: boolean | null
+      is_primary_org?: boolean | null
     }>
     total: number
   }> {
@@ -1974,6 +1978,7 @@ export const usersApi = {
     if (params?.is_active !== undefined) searchParams.set('is_active', String(params.is_active))
     if (params?.role) searchParams.set('role', params.role)
     if (params?.organization_id) searchParams.set('organization_id', params.organization_id)
+    if (params?.search) searchParams.set('search', params.search)
     if (params?.skip !== undefined) searchParams.set('skip', String(params.skip))
     if (params?.limit !== undefined) searchParams.set('limit', String(params.limit))
     const qs = searchParams.toString()
@@ -1982,6 +1987,7 @@ export const usersApi = {
     })
     return handleJson(res)
   },
+
 }
 
 // -------------------- Roles API --------------------

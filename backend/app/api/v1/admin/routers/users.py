@@ -26,7 +26,7 @@ from datetime import datetime, timedelta
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select
 
 from app.api.v1.admin.schemas import (
     UserInviteRequest,
@@ -36,9 +36,9 @@ from app.api.v1.admin.schemas import (
     UserUpdateRequest,
 )
 from app.core.auth.auth_service import auth_service
-from app.core.database.models import Organization, PasswordResetToken, User
+from app.core.database.models import Organization, PasswordResetToken, User, UserOrganizationMembership
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_org_id, require_admin
+from app.dependencies import get_current_org_id, get_effective_org_id, require_admin
 
 # Initialize router
 router = APIRouter(prefix="/organizations/me/users", tags=["User Management"])
@@ -95,8 +95,23 @@ async def list_organization_users(
     logger.info(f"User list requested by {current_user.email} (org: {org_id})")
 
     async with database_service.get_session() as session:
-        # Build query
-        query = select(User).where(User.organization_id == org_id)
+        # Build query — use membership join to find org members (admins always included)
+        query = (
+            select(User)
+            .outerjoin(
+                UserOrganizationMembership,
+                and_(
+                    UserOrganizationMembership.user_id == User.id,
+                    UserOrganizationMembership.organization_id == org_id,
+                ),
+            )
+            .where(
+                or_(
+                    UserOrganizationMembership.id.isnot(None),
+                    User.role == "admin",
+                )
+            )
+        )
 
         # Apply filters
         if is_active is not None:
@@ -253,6 +268,14 @@ async def invite_user(
 
         session.add(new_user)
 
+        # Create membership row for non-admin users
+        if user_org_id:
+            membership = UserOrganizationMembership(
+                user_id=new_user.id,
+                organization_id=user_org_id,
+            )
+            session.add(membership)
+
         if request.send_email:
             # Generate a password reset token the user can use to set their password
             invitation_token = secrets.token_urlsafe(32)
@@ -325,17 +348,40 @@ async def list_all_users(
     is_active: bool = Query(None, description="Filter by active status (optional)"),
     role: str = Query(None, description="Filter by role (optional)"),
     organization_id: str = Query(None, description="Filter by organization ID (optional)"),
+    search: str = Query(None, description="Search by email, username, or full name"),
     skip: int = Query(0, ge=0, description="Number of users to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Max users to return"),
     current_user: User = Depends(require_admin),
+    effective_org_id: UUID = Depends(get_effective_org_id),
 ) -> UserListResponse:
-    """List all users across all organizations. System admin only."""
+    """List all users across all organizations. System admin only.
+
+    When an org context is set (via X-Organization-Id header), each user includes
+    `is_member` and `is_primary_org` fields indicating their membership status
+    for that organization.
+    """
     logger.info(f"All users list requested by {current_user.email}")
 
     async with database_service.get_session() as session:
-        query = select(User, Organization.display_name, Organization.name).outerjoin(
+        # Base columns: user + org display info
+        columns = [User, Organization.display_name, Organization.name]
+
+        # When org context is set, LEFT JOIN memberships to include membership status
+        if effective_org_id:
+            columns.append(UserOrganizationMembership.id.label("membership_id"))
+
+        query = select(*columns).outerjoin(
             Organization, User.organization_id == Organization.id
         )
+
+        if effective_org_id:
+            query = query.outerjoin(
+                UserOrganizationMembership,
+                and_(
+                    UserOrganizationMembership.user_id == User.id,
+                    UserOrganizationMembership.organization_id == effective_org_id,
+                ),
+            )
 
         if is_active is not None:
             query = query.where(User.is_active == is_active)
@@ -343,14 +389,17 @@ async def list_all_users(
             query = query.where(User.role == role)
         if organization_id:
             query = query.where(User.organization_id == UUID(organization_id))
+        if search:
+            search_pattern = f"%{search}%"
+            query = query.where(
+                or_(
+                    User.email.ilike(search_pattern),
+                    User.username.ilike(search_pattern),
+                    User.full_name.ilike(search_pattern),
+                )
+            )
 
-        count_query = select(func.count()).select_from(
-            select(User).where(
-                *([User.is_active == is_active] if is_active is not None else []),
-                *([User.role == role] if role else []),
-                *([User.organization_id == UUID(organization_id)] if organization_id else []),
-            ).subquery()
-        )
+        count_query = select(func.count()).select_from(query.subquery())
         total_result = await session.execute(count_query)
         total = total_result.scalar() or 0
 
@@ -360,8 +409,19 @@ async def list_all_users(
 
         logger.info(f"Returning {len(rows)} users (total: {total})")
 
-        return UserListResponse(
-            users=[
+        users_out = []
+        for row in rows:
+            if effective_org_id:
+                user, display_name, org_name, membership_id = row
+                is_admin = user.role == "admin"
+                is_member = True if is_admin else (membership_id is not None)
+                is_primary = user.organization_id == effective_org_id
+            else:
+                user, display_name, org_name = row
+                is_member = None
+                is_primary = None
+
+            users_out.append(
                 UserResponse(
                     id=str(user.id),
                     email=user.email,
@@ -374,11 +434,12 @@ async def list_all_users(
                     last_login_at=user.last_login_at,
                     organization_id=str(user.organization_id) if user.organization_id else None,
                     organization_name=display_name or org_name if (display_name or org_name) else None,
+                    is_member=is_member,
+                    is_primary_org=is_primary,
                 )
-                for user, display_name, org_name in rows
-            ],
-            total=total,
-        )
+            )
+
+        return UserListResponse(users=users_out, total=total)
 
 
 @router.get(
@@ -414,10 +475,23 @@ async def get_user(
     logger.info(f"User details requested for {user_id} by {current_user.email}")
 
     async with database_service.get_session() as session:
+        target_user_id = UUID(user_id)
         result = await session.execute(
             select(User)
-            .where(User.id == UUID(user_id))
-            .where(User.organization_id == org_id)
+            .outerjoin(
+                UserOrganizationMembership,
+                and_(
+                    UserOrganizationMembership.user_id == User.id,
+                    UserOrganizationMembership.organization_id == org_id,
+                ),
+            )
+            .where(User.id == target_user_id)
+            .where(
+                or_(
+                    UserOrganizationMembership.id.isnot(None),
+                    User.role == "admin",
+                )
+            )
         )
         user = result.scalar_one_or_none()
 
@@ -502,17 +576,18 @@ async def update_user(
             )
 
     async with database_service.get_session() as session:
+        target_user_id = UUID(user_id)
+
+        # Fetch user by ID directly (admin-only endpoint, so no org scoping needed for lookup)
         result = await session.execute(
-            select(User)
-            .where(User.id == UUID(user_id))
-            .where(User.organization_id == org_id)
+            select(User).where(User.id == target_user_id)
         )
         user = result.scalar_one_or_none()
 
         if not user:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
-                detail="User not found in this organization",
+                detail="User not found",
             )
 
         # Prevent changing own role (avoid lockout)
@@ -542,6 +617,39 @@ async def update_user(
                     )
                 user.organization_id = org_id
             logger.info(f"Updated role from {old_role} to {request.role}")
+
+        # Toggle org membership
+        if request.is_member is not None:
+            if user.role == "admin":
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST,
+                    detail="Admin users always have access to all organizations",
+                )
+
+            membership_result = await session.execute(
+                select(UserOrganizationMembership).where(
+                    UserOrganizationMembership.user_id == target_user_id,
+                    UserOrganizationMembership.organization_id == org_id,
+                )
+            )
+            existing = membership_result.scalar_one_or_none()
+
+            if request.is_member:
+                if not existing:
+                    session.add(UserOrganizationMembership(
+                        user_id=target_user_id,
+                        organization_id=org_id,
+                    ))
+                    logger.info(f"Membership added: user={user_id} org={org_id}")
+            else:
+                if user.organization_id == org_id:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail="Cannot remove membership from user's primary organization. Change their primary organization first.",
+                    )
+                if existing:
+                    await session.delete(existing)
+                    logger.info(f"Membership removed: user={user_id} org={org_id}")
 
         user.updated_at = datetime.utcnow()
 
@@ -599,10 +707,23 @@ async def deactivate_user(
     logger.info(f"User deactivation requested for {user_id} by {current_user.email}")
 
     async with database_service.get_session() as session:
+        target_user_id = UUID(user_id)
         result = await session.execute(
             select(User)
-            .where(User.id == UUID(user_id))
-            .where(User.organization_id == org_id)
+            .outerjoin(
+                UserOrganizationMembership,
+                and_(
+                    UserOrganizationMembership.user_id == User.id,
+                    UserOrganizationMembership.organization_id == org_id,
+                ),
+            )
+            .where(User.id == target_user_id)
+            .where(
+                or_(
+                    UserOrganizationMembership.id.isnot(None),
+                    User.role == "admin",
+                )
+            )
         )
         user = result.scalar_one_or_none()
 
@@ -662,10 +783,23 @@ async def reactivate_user(
     logger.info(f"User reactivation requested for {user_id} by {current_user.email}")
 
     async with database_service.get_session() as session:
+        target_user_id = UUID(user_id)
         result = await session.execute(
             select(User)
-            .where(User.id == UUID(user_id))
-            .where(User.organization_id == org_id)
+            .outerjoin(
+                UserOrganizationMembership,
+                and_(
+                    UserOrganizationMembership.user_id == User.id,
+                    UserOrganizationMembership.organization_id == org_id,
+                ),
+            )
+            .where(User.id == target_user_id)
+            .where(
+                or_(
+                    UserOrganizationMembership.id.isnot(None),
+                    User.role == "admin",
+                )
+            )
         )
         user = result.scalar_one_or_none()
 

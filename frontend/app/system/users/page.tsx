@@ -3,7 +3,7 @@
 /**
  * System Users page.
  *
- * View all users across all organizations.
+ * View all users across all organizations. Includes invite user form.
  */
 
 import { useState, useEffect } from 'react'
@@ -12,12 +12,14 @@ import {
   Search,
   Shield,
   UserCheck,
+  UserPlus,
   Building2,
   Mail,
   RefreshCw,
 } from 'lucide-react'
 import { useAuth } from '@/lib/auth-context'
 import { usersApi } from '@/lib/api'
+import UserInviteForm from '@/components/users/UserInviteForm'
 import toast from 'react-hot-toast'
 
 interface User {
@@ -41,6 +43,7 @@ export default function SystemUsersPage() {
   const [users, setUsers] = useState<User[]>([])
   const [searchQuery, setSearchQuery] = useState('')
   const [isLoading, setIsLoading] = useState(true)
+  const [showInviteForm, setShowInviteForm] = useState(false)
 
   const loadUsers = async () => {
     if (!token) return
@@ -59,6 +62,11 @@ export default function SystemUsersPage() {
   useEffect(() => {
     loadUsers()
   }, [token])
+
+  const handleInviteSuccess = async () => {
+    setShowInviteForm(false)
+    await loadUsers()
+  }
 
   const filteredUsers = searchQuery
     ? users.filter(
@@ -89,14 +97,31 @@ export default function SystemUsersPage() {
             View and manage users across all organizations
           </p>
         </div>
-        <button
-          onClick={loadUsers}
-          className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
-        >
-          <RefreshCw className="h-4 w-4" />
-          Refresh
-        </button>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => setShowInviteForm(!showInviteForm)}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-white bg-indigo-600 rounded-lg hover:bg-indigo-700 transition-colors"
+          >
+            <UserPlus className="h-4 w-4" />
+            Invite User
+          </button>
+          <button
+            onClick={loadUsers}
+            className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-gray-100 dark:bg-gray-700 rounded-lg hover:bg-gray-200 dark:hover:bg-gray-600 transition-colors"
+          >
+            <RefreshCw className="h-4 w-4" />
+            Refresh
+          </button>
+        </div>
       </div>
+
+      {/* Invite Form */}
+      {showInviteForm && (
+        <UserInviteForm
+          onSuccess={handleInviteSuccess}
+          onCancel={() => setShowInviteForm(false)}
+        />
+      )}
 
       {/* Search and Filters */}
       <div className="flex items-center gap-4">
