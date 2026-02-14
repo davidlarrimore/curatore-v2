@@ -21,7 +21,7 @@ from app.core.search.pg_search_service import pg_search_service
 from app.core.shared.config_loader import config_loader
 from app.core.shared.database_service import database_service
 from app.core.tasks import reindex_organization_task
-from app.dependencies import get_current_user, require_org_admin
+from app.dependencies import get_current_org_id, get_current_user, require_org_admin
 
 logger = logging.getLogger("curatore.api.search")
 
@@ -194,7 +194,7 @@ class MetadataSchemaResponse(BaseModel):
 )
 async def search_assets(
     request: SearchRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SearchResponse:
     """
     Execute a hybrid search query combining keyword and semantic search.
@@ -251,7 +251,7 @@ async def search_assets(
             if request.include_facets:
                 results = await pg_search_service.search_with_facets(
                     session=session,
-                    organization_id=current_user.organization_id,
+                    organization_id=org_id,
                     query=request.query,
                     search_mode=request.search_mode or "hybrid",
                     semantic_weight=request.semantic_weight or 0.5,
@@ -269,7 +269,7 @@ async def search_assets(
             else:
                 results = await pg_search_service.search(
                     session=session,
-                    organization_id=current_user.organization_id,
+                    organization_id=org_id,
                     query=request.query,
                     search_mode=request.search_mode or "hybrid",
                     semantic_weight=request.semantic_weight or 0.5,
@@ -350,7 +350,7 @@ async def search_assets_get(
     ),
     limit: int = Query(20, ge=1, le=100, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SearchResponse:
     """
     Execute a hybrid search query using GET parameters.
@@ -372,7 +372,7 @@ async def search_assets_get(
         async with database_service.get_session() as session:
             results = await pg_search_service.search(
                 session=session,
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 query=q,
                 search_mode=mode or "hybrid",
                 source_types=source_type_list,
@@ -421,7 +421,7 @@ async def search_assets_get(
     description="Get statistics about the search index for the organization.",
 )
 async def get_search_stats(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> IndexStatsResponse:
     """
     Get search index statistics.
@@ -430,7 +430,7 @@ async def get_search_stats(
     chunk count, and storage size.
     """
     async with database_service.get_session() as session:
-        health = await pg_index_service.get_index_health(session, current_user.organization_id)
+        health = await pg_index_service.get_index_health(session, org_id)
 
     return IndexStatsResponse(
         enabled=health.get("enabled", False),
@@ -451,6 +451,7 @@ async def get_search_stats(
     status_code=202,
 )
 async def reindex_all_assets(
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ) -> ReindexResponse:
     """
@@ -471,11 +472,11 @@ async def reindex_all_assets(
     try:
         # Queue background task
         task = reindex_organization_task.delay(
-            organization_id=str(current_user.organization_id),
+            organization_id=str(org_id),
         )
 
         logger.info(
-            f"Queued reindex for org {current_user.organization_id}, task_id={task.id}"
+            f"Queued reindex for org {org_id}, task_id={task.id}"
         )
 
         return ReindexResponse(
@@ -498,7 +499,7 @@ async def reindex_all_assets(
     description="Check PostgreSQL + pgvector search health and connectivity.",
 )
 async def check_search_health(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> Dict[str, Any]:
     """
     Check search service health.
@@ -546,7 +547,7 @@ async def check_search_health(
 )
 async def get_metadata_schema(
     max_sample_values: int = Query(20, ge=1, le=50, description="Max sample values per field"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> MetadataSchemaResponse:
     """
     Discover the metadata schema for the organization's search index.
@@ -568,7 +569,7 @@ async def get_metadata_schema(
         async with database_service.get_session() as session:
             schema = await pg_search_service.get_metadata_schema(
                 session=session,
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 max_sample_values=max_sample_values,
             )
 
@@ -620,7 +621,7 @@ class SamSearchRequest(BaseModel):
 )
 async def search_sam(
     request: SamSearchRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SearchResponse:
     """
     Execute a full-text search across SAM.gov data.
@@ -645,7 +646,7 @@ async def search_sam(
         async with database_service.get_session() as session:
             results = await pg_search_service.search_sam(
                 session=session,
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 query=request.query,
                 source_types=request.source_types,
                 notice_types=request.notice_types,
@@ -718,7 +719,7 @@ class SalesforceSearchRequest(BaseModel):
 )
 async def search_salesforce(
     request: SalesforceSearchRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SearchResponse:
     """
     Execute a full-text search across Salesforce CRM data.
@@ -747,7 +748,7 @@ async def search_salesforce(
         async with database_service.get_session() as session:
             results = await pg_search_service.search_salesforce(
                 session=session,
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 query=request.query,
                 entity_types=request.entity_types,
                 account_types=request.account_types,
@@ -807,7 +808,7 @@ async def search_salesforce_get(
     ),
     limit: int = Query(20, ge=1, le=100, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SearchResponse:
     """
     Execute a full-text search across Salesforce data using GET parameters.
@@ -829,7 +830,7 @@ async def search_salesforce_get(
         async with database_service.get_session() as session:
             results = await pg_search_service.search_salesforce(
                 session=session,
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 query=q,
                 entity_types=entity_type_list,
                 account_types=account_type_list,
@@ -889,7 +890,7 @@ async def search_sam_get(
     ),
     limit: int = Query(20, ge=1, le=100, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Pagination offset"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SearchResponse:
     """
     Execute a full-text search across SAM.gov data using GET parameters.
@@ -911,7 +912,7 @@ async def search_sam_get(
         async with database_service.get_session() as session:
             results = await pg_search_service.search_sam(
                 session=session,
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 query=q,
                 source_types=source_type_list,
                 notice_types=notice_type_list,

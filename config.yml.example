@@ -348,6 +348,11 @@ playwright:
   #   - Local: http://localhost:8011
   service_url: http://playwright:8011
 
+  # API key for Playwright service authentication (optional)
+  # When set, sent as Bearer token in Authorization header.
+  # Leave unset for dev mode (no auth required).
+  api_key: ${PLAYWRIGHT_API_KEY}
+
   # Request timeout in seconds (optional, default: 60)
   # Total time allowed for page render + content extraction
   timeout: 60

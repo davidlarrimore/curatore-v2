@@ -80,6 +80,7 @@ class Settings(BaseSettings):
     # Playwright rendering service (for JavaScript-rendered web scraping)
     playwright_service_url: Optional[str] = Field(default=None, description="Base URL for Playwright rendering service")
     playwright_timeout: float = Field(default=60.0, description="Timeout (s) for Playwright requests")
+    playwright_api_key: Optional[str] = Field(default=None, description="Bearer token for Playwright service")
 
     # =========================================================================
     # DATABASE CONFIGURATION

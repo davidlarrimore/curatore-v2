@@ -150,6 +150,7 @@ class PlaywrightClient(ServiceAdapter):
                 config = connection.config
                 return cls(
                     base_url=config.get("service_url"),
+                    api_key=config.get("api_key"),
                     timeout=config.get("timeout"),
                     max_retries=config.get("max_retries"),
                     default_viewport_width=config.get("default_viewport_width"),
@@ -167,6 +168,7 @@ class PlaywrightClient(ServiceAdapter):
     def __init__(
         self,
         base_url: Optional[str] = None,
+        api_key: Optional[str] = None,
         timeout: Optional[float] = None,
         max_retries: Optional[int] = None,
         default_viewport_width: Optional[int] = None,
@@ -185,6 +187,14 @@ class PlaywrightClient(ServiceAdapter):
             self.base_url = yaml_config.service_url
         else:
             self.base_url = settings.playwright_service_url
+
+        # Resolve api_key: param > config.yml > env
+        if api_key is not None:
+            self.api_key = api_key
+        elif yaml_config and getattr(yaml_config, "api_key", None):
+            self.api_key = yaml_config.api_key
+        else:
+            self.api_key = settings.playwright_api_key
 
         # Resolve timeout
         if timeout is not None:
@@ -246,9 +256,15 @@ class PlaywrightClient(ServiceAdapter):
                 "Set PLAYWRIGHT_SERVICE_URL in config.yml or environment"
             )
 
-        self._http_client = httpx.AsyncClient(
+    def _get_client(self) -> httpx.AsyncClient:
+        """Create a fresh HTTP client per call to avoid event-loop-closed errors in Celery."""
+        headers = {}
+        if self.api_key:
+            headers["Authorization"] = f"Bearer {self.api_key}"
+        return httpx.AsyncClient(
             base_url=self.base_url,
             timeout=self.timeout,
+            headers=headers,
         )
 
     # ========================================================================
@@ -262,6 +278,7 @@ class PlaywrightClient(ServiceAdapter):
         if yaml_config:
             return {
                 "service_url": yaml_config.service_url or settings.playwright_service_url,
+                "api_key": getattr(yaml_config, "api_key", None) or settings.playwright_api_key,
                 "timeout": yaml_config.timeout,
                 "max_retries": yaml_config.max_retries,
                 "default_viewport_width": yaml_config.default_viewport_width,
@@ -273,6 +290,7 @@ class PlaywrightClient(ServiceAdapter):
 
         return {
             "service_url": settings.playwright_service_url,
+            "api_key": settings.playwright_api_key,
             "timeout": settings.playwright_timeout,
             "max_retries": 3,
             "default_viewport_width": 1920,
@@ -316,10 +334,6 @@ class PlaywrightClient(ServiceAdapter):
     # ========================================================================
     # Playwright-specific methods
     # ========================================================================
-
-    async def aclose(self) -> None:
-        """Close the HTTP client."""
-        await self._http_client.aclose()
 
     async def render_page(
         self,
@@ -380,7 +394,8 @@ class PlaywrightClient(ServiceAdapter):
 
         while attempt <= retries:
             try:
-                response = await self._http_client.post("/api/v1/render", json=payload)
+                async with self._get_client() as client:
+                    response = await client.post("/api/v1/render", json=payload)
 
                 if response.status_code >= 400:
                     error_detail = response.text[:500]
@@ -420,12 +435,18 @@ class PlaywrightClient(ServiceAdapter):
         """
         Check if the Playwright service is healthy.
 
+        Health endpoints are exempt from auth in the Playwright service.
+        Uses a short 5s timeout independent of the render timeout.
+
         Returns:
             True if healthy, False otherwise
         """
         try:
-            response = await self._http_client.get("/health")
-            return response.status_code == 200
+            async with httpx.AsyncClient(
+                base_url=self.base_url, timeout=5.0,
+            ) as client:
+                response = await client.get("/health")
+                return response.status_code == 200
         except Exception:
             return False
 

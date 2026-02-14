@@ -696,6 +696,7 @@ class PlaywrightConfigSchema(BaseModel):
     """Playwright rendering service configuration schema."""
 
     service_url: str = Field(..., description="Playwright service URL")
+    api_key: Optional[str] = Field(default=None, description="Bearer token for Playwright service API authentication")
     timeout: int = Field(default=60, ge=1, le=600, description="Request timeout in seconds")
     max_retries: int = Field(default=3, ge=0, le=10, description="Maximum retry attempts")
     browser_pool_size: int = Field(default=3, ge=1, le=20, description="Browser pool size")
@@ -726,6 +727,12 @@ class PlaywrightConnectionType(BaseConnectionType):
                     "title": "Service URL",
                     "description": "Playwright service URL (e.g., http://playwright:8011)",
                     "default": "http://playwright:8011"
+                },
+                "api_key": {
+                    "type": "string",
+                    "title": "API Key",
+                    "description": "Bearer token for Playwright service API authentication (optional, leave empty for dev mode)",
+                    "format": "password"
                 },
                 "timeout": {
                     "type": "integer",

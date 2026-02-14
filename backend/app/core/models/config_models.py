@@ -528,6 +528,10 @@ class PlaywrightConfig(BaseModel):
         default=[".pdf", ".docx", ".doc", ".xlsx", ".xls", ".pptx", ".ppt"],
         description="File extensions to identify as downloadable documents"
     )
+    api_key: Optional[str] = Field(
+        default=None,
+        description="Bearer token for Playwright service API authentication"
+    )
 
 
 class SamConfig(BaseModel):

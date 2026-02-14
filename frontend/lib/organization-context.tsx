@@ -17,7 +17,7 @@
 import React, { createContext, useContext, useState, useEffect, useCallback } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import { useAuth } from './auth-context'
-import { organizationsApi } from './api'
+import { organizationsApi, setOrgContext } from './api'
 import toast from 'react-hot-toast'
 
 export interface Organization {
@@ -61,8 +61,7 @@ interface OrganizationContextType {
 
 const OrganizationContext = createContext<OrganizationContextType | undefined>(undefined)
 
-// Key for API header compatibility during migration
-const ORG_CONTEXT_KEY = 'curatore_org_context'
+// ORG_CONTEXT_KEY removed — org context now managed via setOrgContext() in api.ts
 
 export function OrganizationProvider({ children }: { children: React.ReactNode }) {
   const router = useRouter()
@@ -114,10 +113,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
           try {
             const org = await organizationsApi.getCurrentOrganization(token!)
             setCurrentOrganization(org)
-            // Set for API header compatibility
-            if (typeof window !== 'undefined') {
-              localStorage.setItem(ORG_CONTEXT_KEY, org.id)
-            }
+            setOrgContext(org.id)
           } catch {
             // Fallback to basic info from user
             setCurrentOrganization({
@@ -127,9 +123,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
               slug: '',
               is_active: true,
             })
-            if (typeof window !== 'undefined') {
-              localStorage.setItem(ORG_CONTEXT_KEY, user.organization_id)
-            }
+            setOrgContext(user.organization_id)
           }
         }
         setMode('organization')
@@ -155,9 +149,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
       if (mode !== 'system') {
         setCurrentOrganization(null)
         setMode('system')
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(ORG_CONTEXT_KEY, 'system')
-        }
+        setOrgContext(null)
       }
     } else if (urlOrgSlug) {
       // Org route - find org by slug
@@ -165,9 +157,7 @@ export function OrganizationProvider({ children }: { children: React.ReactNode }
       if (org && currentOrganization?.id !== org.id) {
         setCurrentOrganization(org)
         setMode('organization')
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(ORG_CONTEXT_KEY, org.id)
-        }
+        setOrgContext(org.id)
       }
     }
   }, [urlOrgSlug, isSystemRoute, availableOrganizations, currentOrganization, isAuthenticated, isAdmin, isLoading, mode])

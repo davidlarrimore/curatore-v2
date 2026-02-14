@@ -47,9 +47,10 @@ services:
       - DOCUMENT_SERVICE_TIMEOUT=${DOCUMENT_SERVICE_TIMEOUT:-180}
       - DOCUMENT_SERVICE_VERIFY_SSL=false
       - DOCUMENT_SERVICE_API_KEY=${DOCUMENT_SERVICE_API_KEY:-doc-svc-dev-key-2026}
-      # Playwright rendering service (for JavaScript-rendered web scraping)
+      # Playwright rendering service (separate Docker Compose project on curatore-network)
       - PLAYWRIGHT_SERVICE_URL=http://playwright:8011
       - PLAYWRIGHT_TIMEOUT=${PLAYWRIGHT_TIMEOUT:-60}
+      - PLAYWRIGHT_API_KEY=${PLAYWRIGHT_API_KEY:-playwright-dev-key-2026}
       # SharePoint / Microsoft Graph
       - MS_TENANT_ID=${MS_TENANT_ID:-}
       - MS_CLIENT_ID=${MS_CLIENT_ID:-}
@@ -123,9 +124,10 @@ services:
       - DOCUMENT_SERVICE_TIMEOUT=${DOCUMENT_SERVICE_TIMEOUT:-180}
       - DOCUMENT_SERVICE_VERIFY_SSL=false
       - DOCUMENT_SERVICE_API_KEY=${DOCUMENT_SERVICE_API_KEY:-doc-svc-dev-key-2026}
-      # Playwright rendering service (match backend)
+      # Playwright rendering service (separate Docker Compose project on curatore-network)
       - PLAYWRIGHT_SERVICE_URL=http://playwright:8011
       - PLAYWRIGHT_TIMEOUT=${PLAYWRIGHT_TIMEOUT:-60}
+      - PLAYWRIGHT_API_KEY=${PLAYWRIGHT_API_KEY:-playwright-dev-key-2026}
       # SharePoint / Microsoft Graph
       - MS_TENANT_ID=${MS_TENANT_ID:-}
       - MS_CLIENT_ID=${MS_CLIENT_ID:-}
@@ -247,41 +249,9 @@ services:
 
 
   # --------------------------------------------------------------------------
-  # PLAYWRIGHT: Browser rendering service for JavaScript-heavy web scraping
+  # PLAYWRIGHT: Replaced by curatore-playwright-service (separate Docker Compose)
+  # Start it with: cd ../curatore-playwright-service && docker compose up -d
   # --------------------------------------------------------------------------
-  playwright:
-    build:
-      context: ./playwright-service
-      dockerfile: Dockerfile
-    container_name: curatore-playwright
-    restart: unless-stopped
-    ports:
-      - "8011:8011"
-    environment:
-      - PYTHONUNBUFFERED=1
-      - DEBUG=${DEBUG:-false}
-      - BROWSER_POOL_SIZE=${PLAYWRIGHT_BROWSER_POOL_SIZE:-3}
-      - BROWSER_HEADLESS=true
-      - DEFAULT_TIMEOUT_MS=${PLAYWRIGHT_DEFAULT_TIMEOUT_MS:-60000}
-      - DEFAULT_WAIT_TIMEOUT_MS=${PLAYWRIGHT_DEFAULT_WAIT_TIMEOUT_MS:-5000}
-    volumes:
-      # Hot-reload playwright service code
-      - ./playwright-service/app:/app/app
-    deploy:
-      resources:
-        limits:
-          memory: 4G
-        reservations:
-          memory: 2G
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8011/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-    # Run with reload for live dev edits
-    command: uvicorn app.main:app --host 0.0.0.0 --port 8011 --reload
-    networks:
-      - curatore-network
 
   # --------------------------------------------------------------------------
   # MCP: Model Context Protocol Gateway for Open WebUI integration

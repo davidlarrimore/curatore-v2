@@ -112,15 +112,10 @@ interface ApiFetchOptions extends RequestInit {
 /**
  * Centralized fetch wrapper that auto-attaches Authorization and
  * X-Organization-Id headers to every API request.
- *
- * Accepts either a relative path (e.g. '/data/assets') which gets prefixed
- * with the API base URL, or a full URL string (for cases where query params
- * are built with URL/URLSearchParams).
  */
-async function apiFetch(pathOrUrl: string, options: ApiFetchOptions = {}): Promise<Response> {
+async function apiFetch(path: string, options: ApiFetchOptions = {}): Promise<Response> {
   const { skipOrgContext, ...fetchOptions } = options
-  // If it's already a full URL (starts with http), use as-is; otherwise prefix with API base
-  const url = pathOrUrl.startsWith('http') ? pathOrUrl : apiUrl(pathOrUrl)
+  const url = apiUrl(path)
   const headers = new Headers(fetchOptions.headers)
 
   // Auto-attach auth
@@ -129,8 +124,8 @@ async function apiFetch(pathOrUrl: string, options: ApiFetchOptions = {}): Promi
     headers.set('Authorization', `Bearer ${token}`)
   }
 
-  // Auto-attach org context (unless opted out or explicitly provided)
-  if (!skipOrgContext && !headers.has('X-Organization-Id')) {
+  // Auto-attach org context (unless opted out)
+  if (!skipOrgContext) {
     const orgId = getOrgContext()
     if (orgId) headers.set('X-Organization-Id', orgId)
   }
@@ -192,7 +187,7 @@ function validateAndEncodeDocumentId(documentId: string): string {
 // -------------------- System API --------------------
 export const systemApi = {
   async getHealth(): Promise<{ status: string; llm_connected: boolean; version: string } & Record<string, any>> {
-    const res = await apiFetch('/admin/system/health/comprehensive', { cache: 'no-store' })
+    const res = await fetch(apiUrl('/admin/system/health/comprehensive'), { cache: 'no-store', headers: authHeaders() })
     const data = await handleJson(res)
     return {
       ...data,
@@ -204,7 +199,7 @@ export const systemApi = {
 
   async checkAvailability(): Promise<boolean> {
     try {
-      const res = await apiFetch('/admin/system/health/backend', { cache: 'no-store' })
+      const res = await fetch(apiUrl('/admin/system/health/backend'), { cache: 'no-store' })
       return res.ok || res.status === 401 || res.status === 403
     } catch {
       return false
@@ -212,20 +207,20 @@ export const systemApi = {
   },
 
   async getBackendHealth(): Promise<{ status: string; version: string }> {
-    const res = await apiFetch('/admin/system/health/backend', { cache: 'no-store' })
+    const res = await fetch(apiUrl('/admin/system/health/backend'), { cache: 'no-store', headers: authHeaders() })
     const data = await handleJson(res)
     return { status: data.status ?? 'unknown', version: data.version ?? '' }
   },
 
   async getSupportedFormats(): Promise<{ supported_extensions: string[]; max_file_size: number }> {
-    const res = await apiFetch('/admin/config/supported-formats', { cache: 'no-store' })
+    const res = await fetch(apiUrl('/admin/config/supported-formats'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getConfig(): Promise<{
     ocr_settings: { language: string; psm: number }
   }> {
-    const res = await apiFetch('/admin/config/defaults', { cache: 'no-store' })
+    const res = await fetch(apiUrl('/admin/config/defaults'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
@@ -244,12 +239,12 @@ export const systemApi = {
     default_engine: string | null
     default_engine_source: string | null
   }> {
-    const res = await apiFetch('/admin/config/extraction-engines', { cache: 'no-store' })
+    const res = await fetch(apiUrl('/admin/config/extraction-engines'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getLLMStatus(): Promise<LLMConnectionStatus> {
-    const res = await apiFetch('/admin/system/health/llm', { cache: 'no-store' })
+    const res = await fetch(apiUrl('/admin/system/health/llm'), { cache: 'no-store', headers: authHeaders() })
     const data = await handleJson(res)
     return {
       connected: data.status === 'healthy',
@@ -262,41 +257,41 @@ export const systemApi = {
   },
 
   async resetSystem(): Promise<{ success: boolean; message?: string }> {
-    const res = await apiFetch('/admin/system/reset', { method: 'POST' })
+    const res = await fetch(apiUrl('/admin/system/reset'), { method: 'POST', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getQueueHealth(): Promise<{ pending: number; running: number; processed: number; total: number } & Record<string, any>> {
-    const res = await apiFetch('/admin/system/queues', { cache: 'no-store' })
+    const res = await fetch(apiUrl('/admin/system/queues'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getQueueSummaryByJobs(jobIds: string[]): Promise<{ queued: number; running: number; done: number; total: number } & Record<string, any>> {
     const url = new URL(apiUrl('/admin/system/queues/summary'))
     url.searchParams.set('job_ids', jobIds.join(','))
-    const res = await apiFetch(url.toString(), { cache: 'no-store' })
+    const res = await fetch(url.toString(), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getQueueSummaryByBatch(batchId: string): Promise<{ queued: number; running: number; done: number; total: number } & Record<string, any>> {
     const url = new URL(apiUrl('/admin/system/queues/summary'))
     url.searchParams.set('batch_id', batchId)
-    const res = await apiFetch(url.toString(), { cache: 'no-store' })
+    const res = await fetch(url.toString(), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getComprehensiveHealth(): Promise<any> {
-    const res = await apiFetch('/admin/system/health/comprehensive', { cache: 'no-store' })
+    const res = await fetch(apiUrl('/admin/system/health/comprehensive'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getComponentHealth(component: 'backend' | 'database' | 'redis' | 'celery' | 'extraction' | 'llm' | 'sharepoint'): Promise<any> {
-    const res = await apiFetch(`/admin/system/health/${component}`, { cache: 'no-store' })
+    const res = await fetch(apiUrl(`/admin/system/health/${component}`), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 
   async getSystemSettings(): Promise<Record<string, any>> {
-    const res = await apiFetch('/admin/config/system-settings', { cache: 'no-store' })
+    const res = await fetch(apiUrl('/admin/config/system-settings'), { cache: 'no-store', headers: authHeaders() })
     return handleJson(res)
   },
 }
@@ -352,7 +347,7 @@ export const fileApi = {
     // Fall back to proxy upload (through backend)
     const form = new FormData()
     form.append('file', file)
-    const res = await apiFetch('/data/storage/upload/proxy', { method: 'POST', body: form })
+    const res = await fetch(apiUrl('/data/storage/upload/proxy'), { method: 'POST', body: form, headers: authHeaders() })
     return handleJson(res)
   },
 
@@ -372,13 +367,13 @@ export const fileApi = {
     if (jobId) {
       url += `?job_id=${encodeURIComponent(jobId)}`
     }
-    const res = await apiFetch(url, {})
+    const res = await fetch(url, { headers: authHeaders() })
     return handleBlob(res)
   },
 
   async deleteDocument(documentId: string): Promise<{ success: boolean; message?: string }> {
     const encodedDocId = validateAndEncodeDocumentId(documentId)
-    const res = await apiFetch(`/data/assets/${encodedDocId}`, { method: 'DELETE' })
+    const res = await fetch(apiUrl(`/data/assets/${encodedDocId}`), { method: 'DELETE', headers: authHeaders() })
     return handleJson(res)
   },
 
@@ -399,9 +394,9 @@ export const fileApi = {
       custom_filename: zipName,
       zip_name: zipName,
     }
-    const res = await apiFetch('/data/assets/download/bulk', {
+    const res = await fetch(apiUrl('/data/assets/download/bulk'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders() },
       body: JSON.stringify(body),
     })
     return handleBlob(res)
@@ -411,7 +406,7 @@ export const fileApi = {
     const url = new URL(apiUrl('/data/assets/download/rag-ready'))
     if (zipName) url.searchParams.set('zip_name', zipName)
     url.searchParams.set('include_summary', 'true')
-    const res = await apiFetch(url.toString(), {})
+    const res = await fetch(url.toString(), { headers: authHeaders() })
     return handleBlob(res)
   },
 }
@@ -444,17 +439,17 @@ export interface OrganizationListResponse {
 // -------------------- Organizations API --------------------
 export const organizationsApi = {
   async getCurrentOrganization(token?: string): Promise<Organization> {
-    const res = await apiFetch('/admin/organizations/me', {
+    const res = await fetch(apiUrl('/admin/organizations/me'), {
       cache: 'no-store',
-      
+      headers: authHeaders(token)
     })
     return handleJson(res)
   },
 
   async updateOrganization(token: string, data: { display_name?: string; slug?: string }): Promise<Organization> {
-    const res = await apiFetch('/admin/organizations/me', {
+    const res = await fetch(apiUrl('/admin/organizations/me'), {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -462,9 +457,9 @@ export const organizationsApi = {
 
   // Get organization by slug (for URL-based routing)
   async getOrganizationBySlug(token: string, slug: string): Promise<Organization> {
-    const res = await apiFetch(`/admin/organizations/by-slug/${encodeURIComponent(slug)}`, {
+    const res = await fetch(apiUrl(`/admin/organizations/by-slug/${encodeURIComponent(slug)}`), {
       cache: 'no-store',
-      skipOrgContext: true,
+      headers: authHeaders(token, false) // Don't include org context - we're looking up by slug
     })
     return handleJson(res)
   },
@@ -482,18 +477,18 @@ export const organizationsApi = {
     if (params?.skip !== undefined) url.searchParams.set('skip', String(params.skip))
     if (params?.limit !== undefined) url.searchParams.set('limit', String(params.limit))
 
-    const res = await apiFetch(url.toString(), {
+    const res = await fetch(url.toString(), {
       cache: 'no-store',
-      
+      headers: authHeaders(token)
     })
     return handleJson(res)
   },
 
   // Admin-only: Get organization by ID
   async getOrganization(token: string, orgId: string): Promise<OrganizationAdmin> {
-    const res = await apiFetch(`/admin/organizations/${orgId}`, {
+    const res = await fetch(apiUrl(`/admin/organizations/${orgId}`), {
       cache: 'no-store',
-      
+      headers: authHeaders(token)
     })
     return handleJson(res)
   },
@@ -505,9 +500,9 @@ export const organizationsApi = {
     slug: string
     settings?: Record<string, any>
   }): Promise<OrganizationAdmin> {
-    const res = await apiFetch('/admin/organizations', {
+    const res = await fetch(apiUrl('/admin/organizations'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -518,9 +513,9 @@ export const organizationsApi = {
     display_name?: string
     slug?: string
   }): Promise<OrganizationAdmin> {
-    const res = await apiFetch(`/admin/organizations/${orgId}`, {
+    const res = await fetch(apiUrl(`/admin/organizations/${orgId}`), {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -733,8 +728,9 @@ export const runsApi = {
    * Get run statistics for the organization
    */
   async getStats(token?: string): Promise<RunStats> {
-    const res = await apiFetch('/ops/runs/stats', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/ops/runs/stats'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -764,8 +760,9 @@ export const runsApi = {
     const queryStr = query.toString()
     const url = queryStr ? `/ops/runs?${queryStr}` : '/ops/runs'
 
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(url), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -774,8 +771,9 @@ export const runsApi = {
    * Get a single run by ID
    */
   async getRun(runId: string, token?: string): Promise<Run> {
-    const res = await apiFetch(`/ops/runs/${runId}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/ops/runs/${runId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -796,8 +794,9 @@ export const runsApi = {
     const queryStr = query.toString()
     const url = queryStr ? `/ops/runs/${runId}/logs?${queryStr}` : `/ops/runs/${runId}/logs`
 
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(url), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -806,9 +805,9 @@ export const runsApi = {
    * Retry a failed extraction run
    */
   async retryRun(runId: string, token?: string): Promise<Run> {
-    const res = await apiFetch(`/ops/runs/${runId}/retry`, {
+    const res = await fetch(apiUrl(`/ops/runs/${runId}/retry`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -1003,8 +1002,9 @@ export const queueAdminApi = {
    * @deprecated Use getUnifiedStats() instead
    */
   async getStats(token?: string): Promise<ExtractionQueueStats> {
-    const res = await apiFetch('/ops/queue/stats', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/ops/queue/stats'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1014,8 +1014,9 @@ export const queueAdminApi = {
    * This is the preferred method for fetching queue stats.
    */
   async getUnifiedStats(token?: string): Promise<UnifiedQueueStats> {
-    const res = await apiFetch('/ops/queue/unified', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/ops/queue/unified'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1036,8 +1037,9 @@ export const queueAdminApi = {
     const queryStr = query.toString()
     const url = queryStr ? `/ops/queue/active?${queryStr}` : '/ops/queue/active'
 
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(url), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1050,9 +1052,9 @@ export const queueAdminApi = {
     run_id: string
     reason?: string
   }> {
-    const res = await apiFetch(`/ops/queue/${runId}/cancel`, {
+    const res = await fetch(apiUrl(`/ops/queue/${runId}/cancel`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -1066,9 +1068,9 @@ export const queueAdminApi = {
     total_requested: number
     total_cancelled: number
   }> {
-    const res = await apiFetch('/ops/queue/cancel-bulk', {
+    const res = await fetch(apiUrl('/ops/queue/cancel-bulk'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ run_ids: runIds }),
     })
     return handleJson(res)
@@ -1078,8 +1080,9 @@ export const queueAdminApi = {
    * Get queue configuration
    */
   async getConfig(token?: string): Promise<QueueConfig> {
-    const res = await apiFetch('/ops/queue/config', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/ops/queue/config'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1090,8 +1093,9 @@ export const queueAdminApi = {
    * Get queue registry with all queue definitions and capabilities
    */
   async getRegistry(token?: string): Promise<QueueRegistryResponse> {
-    const res = await apiFetch('/ops/queue/registry', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/ops/queue/registry'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1114,8 +1118,9 @@ export const queueAdminApi = {
     const queryStr = query.toString()
     const url = queryStr ? `/ops/queue/jobs?${queryStr}` : '/ops/queue/jobs'
 
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(url), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1128,9 +1133,9 @@ export const queueAdminApi = {
     run_id: string
     reason?: string
   }> {
-    const res = await apiFetch(`/ops/queue/jobs/${runId}/cancel`, {
+    const res = await fetch(apiUrl(`/ops/queue/jobs/${runId}/cancel`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -1145,9 +1150,9 @@ export const queueAdminApi = {
     connections_terminated: number
     celery_task_revoked: boolean
   }> {
-    const res = await apiFetch(`/ops/queue/jobs/${runId}/force-kill`, {
+    const res = await fetch(apiUrl(`/ops/queue/jobs/${runId}/force-kill`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -1168,7 +1173,7 @@ export const authApi = {
       organization_id: string
     }
   }> {
-    const res = await apiFetch('/admin/auth/login', {
+    const res = await fetch(apiUrl('/admin/auth/login'), {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify({ email_or_username: emailOrUsername, password }),
@@ -1187,7 +1192,7 @@ export const authApi = {
     refresh_token: string
     user: any
   }> {
-    const res = await apiFetch('/admin/auth/register', {
+    const res = await fetch(apiUrl('/admin/auth/register'), {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify(data),
@@ -1200,7 +1205,7 @@ export const authApi = {
     refresh_token: string
     token_type: string
   }> {
-    const res = await apiFetch('/admin/auth/refresh', {
+    const res = await fetch(apiUrl('/admin/auth/refresh'), {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify({ refresh_token: refreshToken }),
@@ -1213,9 +1218,9 @@ export const authApi = {
     refresh_token: string
     token_type: string
   }> {
-    const res = await apiFetch('/admin/auth/extend-session', {
+    const res = await fetch(apiUrl('/admin/auth/extend-session'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
     })
     return handleJson(res)
   },
@@ -1230,14 +1235,14 @@ export const authApi = {
     organization_name: string
     is_active: boolean
   }> {
-    const res = await apiFetch('/admin/auth/me', {
-      
+    const res = await fetch(apiUrl('/admin/auth/me'), {
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
     return handleJson(res)
   },
   async forgotPassword(email: string): Promise<{ message: string }> {
-    const res = await apiFetch('/admin/auth/forgot-password', {
+    const res = await fetch(apiUrl('/admin/auth/forgot-password'), {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify({ email }),
@@ -1246,14 +1251,14 @@ export const authApi = {
   },
 
   async validateResetToken(token: string): Promise<{ valid: boolean; email?: string }> {
-    const res = await apiFetch(`/admin/auth/validate-reset-token?token=${encodeURIComponent(token)}`, {
+    const res = await fetch(apiUrl(`/admin/auth/validate-reset-token?token=${encodeURIComponent(token)}`), {
       headers: jsonHeaders,
     })
     return handleJson(res)
   },
 
   async resetPassword(token: string, newPassword: string): Promise<{ message: string }> {
-    const res = await apiFetch('/admin/auth/reset-password', {
+    const res = await fetch(apiUrl('/admin/auth/reset-password'), {
       method: 'POST',
       headers: jsonHeaders,
       body: JSON.stringify({ token, new_password: newPassword }),
@@ -1278,16 +1283,16 @@ export const connectionsApi = {
       updated_at: string
     }>
   }> {
-    const res = await apiFetch('/admin/connections', {
-      
+    const res = await fetch(apiUrl('/admin/connections'), {
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getConnection(token: string, connectionId: string): Promise<any> {
-    const res = await apiFetch(`/admin/connections/${connectionId}`, {
-      
+    const res = await fetch(apiUrl(`/admin/connections/${connectionId}`), {
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
     return handleJson(res)
@@ -1300,9 +1305,9 @@ export const connectionsApi = {
     is_default?: boolean
     test_on_save?: boolean
   }): Promise<any> {
-    const res = await apiFetch('/admin/connections', {
+    const res = await fetch(apiUrl('/admin/connections'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -1314,18 +1319,18 @@ export const connectionsApi = {
     is_active?: boolean
     test_on_save?: boolean
   }): Promise<any> {
-    const res = await apiFetch(`/admin/connections/${connectionId}`, {
+    const res = await fetch(apiUrl(`/admin/connections/${connectionId}`), {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
     })
     return handleJson(res)
   },
 
   async deleteConnection(token: string, connectionId: string): Promise<{ message: string }> {
-    const res = await apiFetch(`/admin/connections/${connectionId}`, {
+    const res = await fetch(apiUrl(`/admin/connections/${connectionId}`), {
       method: 'DELETE',
-      
+      headers: { Authorization: `Bearer ${token}` },
     })
     return handleJson(res)
   },
@@ -1337,17 +1342,17 @@ export const connectionsApi = {
     details?: any
     error?: string
   }> {
-    const res = await apiFetch(`/admin/connections/${connectionId}/test`, {
+    const res = await fetch(apiUrl(`/admin/connections/${connectionId}/test`), {
       method: 'POST',
-      
+      headers: { Authorization: `Bearer ${token}` },
     })
     return handleJson(res)
   },
 
   async setDefaultConnection(token: string, connectionId: string): Promise<{ message: string }> {
-    const res = await apiFetch(`/admin/connections/${connectionId}/set-default`, {
+    const res = await fetch(apiUrl(`/admin/connections/${connectionId}/set-default`), {
       method: 'POST',
-      
+      headers: { Authorization: `Bearer ${token}` },
     })
     return handleJson(res)
   },
@@ -1361,7 +1366,9 @@ export const connectionsApi = {
       example_config: Record<string, any>
     }>
   }> {
-    const res = await apiFetch('/admin/connections/types', {
+    const headers = token ? { Authorization: `Bearer ${token}` } : undefined
+    const res = await fetch(apiUrl('/admin/connections/types'), {
+      headers,
       cache: 'no-store',
     })
     return handleJson(res)
@@ -1379,9 +1386,9 @@ export const connectionsApi = {
     error?: string
     requires_manual_model?: boolean
   }> {
-    const res = await apiFetch('/admin/connections/test-credentials', {
+    const res = await fetch(apiUrl('/admin/connections/test-credentials'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -1393,8 +1400,9 @@ export const settingsApi = {
   async getOrganizationSettings(token: string): Promise<{
     settings: Record<string, any>
   }> {
-    const res = await apiFetch('/admin/organizations/me/settings', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/admin/organizations/me/settings'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1402,9 +1410,9 @@ export const settingsApi = {
   async updateOrganizationSettings(token: string, settings: Record<string, any>): Promise<{
     settings: Record<string, any>
   }> {
-    const res = await apiFetch('/admin/organizations/me/settings', {
+    const res = await fetch(apiUrl('/admin/organizations/me/settings'), {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ settings }),
     })
     return handleJson(res)
@@ -1413,8 +1421,9 @@ export const settingsApi = {
   async getUserSettings(token: string): Promise<{
     settings: Record<string, any>
   }> {
-    const res = await apiFetch('/admin/users/me/settings', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/admin/users/me/settings'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1422,9 +1431,9 @@ export const settingsApi = {
   async updateUserSettings(token: string, settings: Record<string, any>): Promise<{
     settings: Record<string, any>
   }> {
-    const res = await apiFetch('/admin/users/me/settings', {
+    const res = await fetch(apiUrl('/admin/users/me/settings'), {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ settings }),
     })
     return handleJson(res)
@@ -1445,8 +1454,9 @@ export const objectStorageApi = {
    */
   async isEnabled(): Promise<boolean> {
     try {
-      const res = await apiFetch('/data/storage/health', {
-                cache: 'no-store',
+      const res = await fetch(apiUrl('/data/storage/health'), {
+        headers: authHeaders(),
+        cache: 'no-store',
       })
       const data = await handleJson<{ status: string; enabled: boolean }>(res)
       return data.enabled && data.status !== 'disabled'
@@ -1465,8 +1475,9 @@ export const objectStorageApi = {
     buckets: string[] | null
     error: string | null
   }> {
-    const res = await apiFetch('/data/storage/health', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/storage/health'), {
+      headers: authHeaders(),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1487,9 +1498,9 @@ export const objectStorageApi = {
     const formData = new FormData()
     formData.append('file', file)
 
-    const res = await apiFetch('/data/storage/upload/proxy', {
+    const res = await fetch(apiUrl('/data/storage/upload/proxy'), {
       method: 'POST',
-      
+      headers: { Authorization: `Bearer ${token}` },
       body: formData,
     })
 
@@ -1536,8 +1547,9 @@ export const objectStorageApi = {
     expires_at: string | null
   }>> {
     const encodedDocId = validateAndEncodeDocumentId(documentId)
-    const res = await apiFetch(`/data/storage/artifacts/document/${encodedDocId}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/storage/artifacts/document/${encodedDocId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1562,7 +1574,8 @@ export const objectStorageApi = {
     updated_at: string
     expires_at: string | null
   }> {
-    const res = await apiFetch(`/data/storage/artifacts/${encodeURIComponent(artifactId)}`, {
+    const res = await fetch(apiUrl(`/data/storage/artifacts/${encodeURIComponent(artifactId)}`), {
+      headers: authHeaders(token),
       cache: 'no-store',
     })
     return handleJson(res)
@@ -1576,8 +1589,9 @@ export const objectStorageApi = {
     artifact_id: string
     document_id: string
   }> {
-    const res = await apiFetch(`/data/storage/artifacts/${encodeURIComponent(artifactId)}`, {
+    const res = await fetch(apiUrl(`/data/storage/artifacts/${encodeURIComponent(artifactId)}`), {
       method: 'DELETE',
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -1614,8 +1628,9 @@ export const objectStorageApi = {
     url.searchParams.set('limit', limit.toString())
     url.searchParams.set('offset', offset.toString())
 
-    const res = await apiFetch(url.toString(), {
-            cache: 'no-store',
+    const res = await fetch(url.toString(), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1634,9 +1649,9 @@ export const objectStorageApi = {
       error: string | null
     }>
   }> {
-    const res = await apiFetch('/data/storage/artifacts/bulk-delete', {
+    const res = await fetch(apiUrl('/data/storage/artifacts/bulk-delete'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ artifact_ids: artifactIds }),
     })
     return handleJson(res)
@@ -1656,8 +1671,9 @@ export const objectStorageApi = {
     }>
     default_bucket: string
   }> {
-    const res = await apiFetch('/data/storage/browse', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/storage/browse'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1686,8 +1702,9 @@ export const objectStorageApi = {
     if (prefix) {
       url.searchParams.set('prefix', prefix)
     }
-    const res = await apiFetch(url.toString(), {
-            cache: 'no-store',
+    const res = await fetch(url.toString(), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1698,8 +1715,9 @@ export const objectStorageApi = {
   async getProtectedBuckets(token?: string): Promise<{
     protected_buckets: string[]
   }> {
-    const res = await apiFetch('/data/storage/buckets/protected', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/storage/buckets/protected'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -1714,9 +1732,9 @@ export const objectStorageApi = {
     bucket: string
     path: string
   }> {
-    const res = await apiFetch('/data/storage/folders', {
+    const res = await fetch(apiUrl('/data/storage/folders'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ bucket, path }),
     })
     return handleJson(res)
@@ -1738,9 +1756,9 @@ export const objectStorageApi = {
     formData.append('prefix', prefix)
     formData.append('file', file)
 
-    const res = await apiFetch('/data/storage/folders/upload', {
+    const res = await fetch(apiUrl('/data/storage/folders/upload'), {
       method: 'POST',
-      
+      headers: authHeaders(token),
       body: formData,
     })
     return handleJson(res)
@@ -1758,9 +1776,9 @@ export const objectStorageApi = {
   }> {
     const url = new URL(apiUrl(`/data/storage/folders/${encodeURIComponent(bucket)}/${path}`))
     url.searchParams.set('recursive', String(recursive))
-    const res = await apiFetch(url.toString(), {
+    const res = await fetch(url.toString(), {
       method: 'DELETE',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -1774,9 +1792,9 @@ export const objectStorageApi = {
     key: string
     artifact_deleted: boolean
   }> {
-    const res = await apiFetch(`/data/storage/files/${encodeURIComponent(bucket)}/${key}`, {
+    const res = await fetch(apiUrl(`/data/storage/files/${encodeURIComponent(bucket)}/${key}`), {
       method: 'DELETE',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -1797,9 +1815,9 @@ export const objectStorageApi = {
     moved_artifacts: string[]
     failed_artifacts: string[]
   }> {
-    const res = await apiFetch('/data/storage/files/move', {
+    const res = await fetch(apiUrl('/data/storage/files/move'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({
         artifact_ids: artifactIds,
         destination_bucket: destinationBucket,
@@ -1819,9 +1837,9 @@ export const objectStorageApi = {
     new_name: string
     new_key: string
   }> {
-    const res = await apiFetch('/data/storage/files/rename', {
+    const res = await fetch(apiUrl('/data/storage/files/rename'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({
         artifact_id: artifactId,
         new_name: newName,
@@ -1846,16 +1864,16 @@ export const usersApi = {
       last_login?: string
     }>
   }> {
-    const res = await apiFetch('/admin/organizations/me/users', {
-      
+    const res = await fetch(apiUrl('/admin/organizations/me/users'), {
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getUser(token: string, userId: string): Promise<any> {
-    const res = await apiFetch(`/admin/organizations/me/users/${userId}`, {
-      
+    const res = await fetch(apiUrl(`/admin/organizations/me/users/${userId}`), {
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
     return handleJson(res)
@@ -1872,9 +1890,9 @@ export const usersApi = {
     user: any
     temporary_password?: string
   }> {
-    const res = await apiFetch('/admin/organizations/me/users', {
+    const res = await fetch(apiUrl('/admin/organizations/me/users'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -1890,9 +1908,9 @@ export const usersApi = {
     message: string
     user: any
   }> {
-    const res = await apiFetch(`/admin/organizations/me/users/${userId}`, {
+    const res = await fetch(apiUrl(`/admin/organizations/me/users/${userId}`), {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -1901,9 +1919,9 @@ export const usersApi = {
   async deleteUser(token: string, userId: string): Promise<{
     message: string
   }> {
-    const res = await apiFetch(`/admin/organizations/me/users/${userId}`, {
+    const res = await fetch(apiUrl(`/admin/organizations/me/users/${userId}`), {
       method: 'DELETE',
-      
+      headers: { Authorization: `Bearer ${token}` },
     })
     return handleJson(res)
   },
@@ -1911,9 +1929,9 @@ export const usersApi = {
   async changePassword(token: string, userId: string, newPassword: string): Promise<{
     message: string
   }> {
-    const res = await apiFetch(`/admin/organizations/me/users/${userId}/password`, {
+    const res = await fetch(apiUrl(`/admin/organizations/me/users/${userId}/password`), {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, Authorization: `Bearer ${token}` },
       body: JSON.stringify({ new_password: newPassword }),
     })
     return handleJson(res)
@@ -1937,16 +1955,16 @@ export const rolesApi = {
     roles: Role[]
     total: number
   }> {
-    const res = await apiFetch('/admin/roles', {
-      
+    const res = await fetch(apiUrl('/admin/roles'), {
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getRole(token: string, roleName: string): Promise<Role> {
-    const res = await apiFetch(`/admin/roles/${roleName}`, {
-      
+    const res = await fetch(apiUrl(`/admin/roles/${roleName}`), {
+      headers: { Authorization: `Bearer ${token}` },
       cache: 'no-store',
     })
     return handleJson(res)
@@ -2199,8 +2217,8 @@ export const assetsApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/assets?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2210,8 +2228,8 @@ export const assetsApi = {
    */
   async getAsset(token: string | undefined, assetId: string): Promise<Asset> {
     const url = apiUrl(`/data/assets/${assetId}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2221,8 +2239,8 @@ export const assetsApi = {
    */
   async getAssetWithExtraction(token: string | undefined, assetId: string): Promise<AssetWithExtraction> {
     const url = apiUrl(`/data/assets/${assetId}/extraction`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2232,8 +2250,8 @@ export const assetsApi = {
    */
   async getAssetRuns(token: string | undefined, assetId: string): Promise<Run[]> {
     const url = apiUrl(`/data/assets/${assetId}/runs`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2243,9 +2261,9 @@ export const assetsApi = {
    */
   async reextractAsset(token: string | undefined, assetId: string): Promise<Run> {
     const url = apiUrl(`/data/assets/${assetId}/reextract`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2255,8 +2273,8 @@ export const assetsApi = {
    */
   async getAssetQueueInfo(token: string | undefined, assetId: string): Promise<AssetQueueInfo> {
     const url = apiUrl(`/data/assets/${assetId}/queue-info`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2266,8 +2284,8 @@ export const assetsApi = {
    */
   async getAssetVersions(token: string | undefined, assetId: string): Promise<AssetVersionHistory> {
     const url = apiUrl(`/data/assets/${assetId}/versions`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2277,8 +2295,8 @@ export const assetsApi = {
    */
   async getAssetVersion(token: string | undefined, assetId: string, versionNumber: number): Promise<AssetVersion> {
     const url = apiUrl(`/data/assets/${assetId}/versions/${versionNumber}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2299,8 +2317,8 @@ export const assetsApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/ops/runs/${runId}/logs?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2313,9 +2331,9 @@ export const assetsApi = {
     files.forEach(file => formData.append('files', file))
 
     const url = apiUrl(`/data/assets/bulk-upload/preview?source_type=${sourceType}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: formData,
     })
     return handleJson(res)
@@ -2334,9 +2352,9 @@ export const assetsApi = {
     files.forEach(file => formData.append('files', file))
 
     const url = apiUrl(`/data/assets/bulk-upload/apply?source_type=${sourceType}&mark_missing_inactive=${markMissingInactive}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: formData,
     })
     return handleJson(res)
@@ -2347,8 +2365,8 @@ export const assetsApi = {
    */
   async getCollectionHealth(token: string | undefined): Promise<CollectionHealth> {
     const url = apiUrl('/data/assets/health')
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2362,8 +2380,8 @@ export const assetsApi = {
    */
   async getAssetMetadata(token: string | undefined, assetId: string, includeSupersceded: boolean = false): Promise<AssetMetadataList> {
     const url = apiUrl(`/data/assets/${assetId}/metadata?include_superseded=${includeSupersceded}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2373,9 +2391,9 @@ export const assetsApi = {
    */
   async createAssetMetadata(token: string | undefined, assetId: string, request: AssetMetadataCreateRequest): Promise<AssetMetadata> {
     const url = apiUrl(`/data/assets/${assetId}/metadata`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(request),
     })
     return handleJson(res)
@@ -2386,8 +2404,8 @@ export const assetsApi = {
    */
   async getSpecificMetadata(token: string | undefined, assetId: string, metadataId: string): Promise<AssetMetadata> {
     const url = apiUrl(`/data/assets/${assetId}/metadata/${metadataId}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2397,9 +2415,9 @@ export const assetsApi = {
    */
   async deleteMetadata(token: string | undefined, assetId: string, metadataId: string): Promise<{ message: string; metadata_id: string }> {
     const url = apiUrl(`/data/assets/${assetId}/metadata/${metadataId}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'DELETE',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2411,8 +2429,8 @@ export const assetsApi = {
     const url = new URL(apiUrl(`/data/assets/${assetId}/original`))
     url.searchParams.set('inline', String(inline))
 
-    const res = await apiFetch(url.toString(), {
-      
+    const res = await fetch(url.toString(), {
+      headers: { Authorization: `Bearer ${token}` },
     })
     return handleBlob(res)
   },
@@ -2530,8 +2548,8 @@ export const scrapeApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/scrape/collections?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2541,9 +2559,9 @@ export const scrapeApi = {
    */
   async createCollection(token: string | undefined, request: ScrapeCollectionCreateRequest): Promise<ScrapeCollection> {
     const url = apiUrl('/data/scrape/collections')
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(request),
     })
     return handleJson(res)
@@ -2554,8 +2572,8 @@ export const scrapeApi = {
    */
   async getCollection(token: string | undefined, collectionId: string): Promise<ScrapeCollection> {
     const url = apiUrl(`/data/scrape/collections/${collectionId}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2565,9 +2583,9 @@ export const scrapeApi = {
    */
   async updateCollection(token: string | undefined, collectionId: string, request: ScrapeCollectionUpdateRequest): Promise<ScrapeCollection> {
     const url = apiUrl(`/data/scrape/collections/${collectionId}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(request),
     })
     return handleJson(res)
@@ -2579,9 +2597,9 @@ export const scrapeApi = {
    */
   async deleteCollection(token: string | undefined, collectionId: string): Promise<{ message: string; run_id: string; status: string }> {
     const url = apiUrl(`/data/scrape/collections/${collectionId}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'DELETE',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     if (!res.ok) {
       const error = await res.text()
@@ -2597,9 +2615,9 @@ export const scrapeApi = {
    */
   async startCrawl(token: string | undefined, collectionId: string, maxPages?: number): Promise<{ run_id: string; collection_id: string; status: string; message: string }> {
     const url = apiUrl(`/data/scrape/collections/${collectionId}/crawl`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: maxPages ? JSON.stringify({ max_pages: maxPages }) : '{}',
     })
     return handleJson(res)
@@ -2610,8 +2628,8 @@ export const scrapeApi = {
    */
   async getCrawlStatus(token: string | undefined, collectionId: string): Promise<CrawlStatus> {
     const url = apiUrl(`/data/scrape/collections/${collectionId}/crawl/status`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2626,8 +2644,8 @@ export const scrapeApi = {
     if (isActive !== undefined) searchParams.append('is_active', isActive.toString())
 
     const url = apiUrl(`/data/scrape/collections/${collectionId}/sources?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2637,9 +2655,9 @@ export const scrapeApi = {
    */
   async addSource(token: string | undefined, collectionId: string, url_source: string, sourceType: string = 'seed', crawlConfig?: Record<string, any>): Promise<ScrapeSource> {
     const url = apiUrl(`/data/scrape/collections/${collectionId}/sources`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify({ url: url_source, source_type: sourceType, crawl_config: crawlConfig }),
     })
     return handleJson(res)
@@ -2650,9 +2668,9 @@ export const scrapeApi = {
    */
   async deleteSource(token: string | undefined, collectionId: string, sourceId: string): Promise<void> {
     const url = apiUrl(`/data/scrape/collections/${collectionId}/sources/${sourceId}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'DELETE',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     if (!res.ok) {
       const error = await res.text()
@@ -2680,8 +2698,8 @@ export const scrapeApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/scrape/collections/${collectionId}/assets?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2691,8 +2709,8 @@ export const scrapeApi = {
    */
   async getScrapedAsset(token: string | undefined, collectionId: string, scrapedAssetId: string): Promise<ScrapedAsset> {
     const url = apiUrl(`/data/scrape/collections/${collectionId}/assets/${scrapedAssetId}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2702,9 +2720,9 @@ export const scrapeApi = {
    */
   async promoteToRecord(token: string | undefined, collectionId: string, scrapedAssetId: string): Promise<{ scraped_asset: ScrapedAsset; message: string }> {
     const url = apiUrl(`/data/scrape/collections/${collectionId}/assets/${scrapedAssetId}/promote`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2714,8 +2732,8 @@ export const scrapeApi = {
    */
   async getScrapedAssetContent(token: string | undefined, collectionId: string, scrapedAssetId: string): Promise<string> {
     const url = apiUrl(`/data/scrape/collections/${collectionId}/assets/${scrapedAssetId}/content`)
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     if (!res.ok) {
       let text: string | undefined
@@ -2735,8 +2753,8 @@ export const scrapeApi = {
     searchParams.append('path_prefix', pathPrefix)
 
     const url = apiUrl(`/data/scrape/collections/${collectionId}/tree?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2798,8 +2816,8 @@ export const scheduledTasksApi = {
     if (enabledOnly !== undefined) searchParams.append('enabled_only', enabledOnly.toString())
 
     const url = apiUrl(`/admin/scheduled-tasks?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2812,8 +2830,8 @@ export const scheduledTasksApi = {
     if (days !== undefined) searchParams.append('days', days.toString())
 
     const url = apiUrl(`/admin/scheduled-tasks/stats?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2823,8 +2841,8 @@ export const scheduledTasksApi = {
    */
   async getTask(token: string | undefined, taskId: string): Promise<ScheduledTask> {
     const url = apiUrl(`/admin/scheduled-tasks/${taskId}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2838,8 +2856,8 @@ export const scheduledTasksApi = {
     if (offset !== undefined) searchParams.append('offset', offset.toString())
 
     const url = apiUrl(`/admin/scheduled-tasks/${taskId}/runs?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-      headers: jsonHeaders,
+    const res = await fetch(url, {
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2849,9 +2867,9 @@ export const scheduledTasksApi = {
    */
   async enableTask(token: string | undefined, taskId: string): Promise<{ message: string; task_id: string; task_name: string; enabled: boolean; next_run_at: string | null }> {
     const url = apiUrl(`/admin/scheduled-tasks/${taskId}/enable`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2861,9 +2879,9 @@ export const scheduledTasksApi = {
    */
   async disableTask(token: string | undefined, taskId: string): Promise<{ message: string; task_id: string; task_name: string; enabled: boolean; next_run_at: string | null }> {
     const url = apiUrl(`/admin/scheduled-tasks/${taskId}/disable`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -2873,9 +2891,9 @@ export const scheduledTasksApi = {
    */
   async triggerTask(token: string | undefined, taskId: string, configOverrides?: Record<string, any>): Promise<{ message: string; task_id: string; task_name: string; run_id: string }> {
     const url = apiUrl(`/admin/scheduled-tasks/${taskId}/trigger`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(configOverrides ? { config_overrides: configOverrides } : {}),
     })
     return handleJson(res)
@@ -3026,9 +3044,9 @@ export const searchApi = {
    */
   async search(token: string | undefined, request: SearchRequest): Promise<SearchResponse> {
     const url = apiUrl('/data/search')
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(request),
     })
     return handleJson(res)
@@ -3062,8 +3080,8 @@ export const searchApi = {
     }
 
     const url = apiUrl(`/data/search?${params.toString()}`)
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3073,8 +3091,8 @@ export const searchApi = {
    */
   async getStats(token: string | undefined): Promise<IndexStatsResponse> {
     const url = apiUrl('/data/search/stats')
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3084,9 +3102,9 @@ export const searchApi = {
    */
   async reindexAll(token: string | undefined): Promise<ReindexResponse> {
     const url = apiUrl('/data/search/reindex')
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3096,8 +3114,8 @@ export const searchApi = {
    */
   async getHealth(token: string | undefined): Promise<SearchHealthResponse> {
     const url = apiUrl('/data/search/health')
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3107,8 +3125,8 @@ export const searchApi = {
    */
   async getMetadataSchema(token: string | undefined): Promise<MetadataSchemaResponse> {
     const url = apiUrl('/data/search/metadata-schema')
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3175,16 +3193,16 @@ export const collectionsApi = {
     if (params?.offset) query.set('offset', String(params.offset))
     const qs = query.toString()
     const url = apiUrl(`/data/collections${qs ? `?${qs}` : ''}`)
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async getCollection(token: string | undefined, id: string): Promise<SearchCollection> {
     const url = apiUrl(`/data/collections/${id}`)
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3201,9 +3219,12 @@ export const collectionsApi = {
     }
   ): Promise<SearchCollection> {
     const url = apiUrl('/data/collections')
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3221,9 +3242,12 @@ export const collectionsApi = {
     }
   ): Promise<SearchCollection> {
     const url = apiUrl(`/data/collections/${id}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3231,17 +3255,17 @@ export const collectionsApi = {
 
   async deleteCollection(token: string | undefined, id: string): Promise<void> {
     const url = apiUrl(`/data/collections/${id}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'DELETE',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     if (!res.ok) throw new Error(`Failed to delete collection: ${res.status}`)
   },
 
   async listVectorSyncs(token: string | undefined, collectionId: string): Promise<VectorSync[]> {
     const url = apiUrl(`/data/collections/${collectionId}/syncs`)
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3252,9 +3276,12 @@ export const collectionsApi = {
     data: { connection_id: string; sync_config?: Record<string, unknown> }
   ): Promise<VectorSync> {
     const url = apiUrl(`/data/collections/${collectionId}/syncs`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3266,9 +3293,9 @@ export const collectionsApi = {
     syncId: string
   ): Promise<void> {
     const url = apiUrl(`/data/collections/${collectionId}/syncs/${syncId}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'DELETE',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     if (!res.ok) throw new Error(`Failed to remove vector sync: ${res.status}`)
   },
@@ -3279,9 +3306,12 @@ export const collectionsApi = {
     data: { asset_ids: string[] }
   ): Promise<{ added: number; skipped: number; total: number }> {
     const url = apiUrl(`/data/collections/${collectionId}/populate`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3293,9 +3323,12 @@ export const collectionsApi = {
     data: { asset_ids: string[]; chunk_size?: number; chunk_overlap?: number }
   ): Promise<{ run_id: string; message: string }> {
     const url = apiUrl(`/data/collections/${collectionId}/populate/fresh`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3307,9 +3340,12 @@ export const collectionsApi = {
     data: { asset_ids: string[] }
   ): Promise<{ removed: number }> {
     const url = apiUrl(`/data/collections/${collectionId}/assets`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'DELETE',
-      headers: jsonHeaders,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3320,9 +3356,9 @@ export const collectionsApi = {
     collectionId: string
   ): Promise<{ removed: number }> {
     const url = apiUrl(`/data/collections/${collectionId}/clear`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3488,8 +3524,8 @@ export const metadataApi = {
    */
   async getCatalog(token: string | undefined): Promise<MetadataCatalog> {
     const url = apiUrl('/data/metadata/catalog')
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3499,8 +3535,8 @@ export const metadataApi = {
    */
   async getNamespaces(token: string | undefined): Promise<MetadataNamespace[]> {
     const url = apiUrl('/data/metadata/namespaces')
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3510,8 +3546,8 @@ export const metadataApi = {
    */
   async getNamespaceFields(token: string | undefined, namespace: string): Promise<MetadataFieldDefinition[]> {
     const url = apiUrl(`/data/metadata/namespaces/${namespace}/fields`)
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3521,8 +3557,8 @@ export const metadataApi = {
    */
   async getFieldStats(token: string | undefined, namespace: string, fieldName: string): Promise<MetadataFieldStats> {
     const url = apiUrl(`/data/metadata/fields/${namespace}/${fieldName}/stats`)
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3532,8 +3568,8 @@ export const metadataApi = {
    */
   async getFacets(token: string | undefined): Promise<FacetDefinition[]> {
     const url = apiUrl('/data/metadata/facets')
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3542,9 +3578,9 @@ export const metadataApi = {
 
   async createField(token: string | undefined, namespace: string, data: MetadataFieldCreateRequest): Promise<any> {
     const url = apiUrl(`/data/metadata/fields/${namespace}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3552,9 +3588,9 @@ export const metadataApi = {
 
   async updateField(token: string | undefined, namespace: string, fieldName: string, data: MetadataFieldUpdateRequest): Promise<any> {
     const url = apiUrl(`/data/metadata/fields/${namespace}/${fieldName}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'PATCH',
-      headers: jsonHeaders,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3562,18 +3598,18 @@ export const metadataApi = {
 
   async deleteField(token: string | undefined, namespace: string, fieldName: string): Promise<any> {
     const url = apiUrl(`/data/metadata/fields/${namespace}/${fieldName}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'DELETE',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async createFacet(token: string | undefined, data: FacetCreateRequest): Promise<any> {
     const url = apiUrl('/data/metadata/facets')
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3581,9 +3617,9 @@ export const metadataApi = {
 
   async updateFacet(token: string | undefined, facetName: string, data: FacetUpdateRequest): Promise<any> {
     const url = apiUrl(`/data/metadata/facets/${facetName}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'PATCH',
-      headers: jsonHeaders,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3591,18 +3627,18 @@ export const metadataApi = {
 
   async deleteFacet(token: string | undefined, facetName: string): Promise<any> {
     const url = apiUrl(`/data/metadata/facets/${facetName}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'DELETE',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async addFacetMapping(token: string | undefined, facetName: string, data: FacetMappingCreateRequest): Promise<any> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/mappings`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3610,18 +3646,18 @@ export const metadataApi = {
 
   async removeFacetMapping(token: string | undefined, facetName: string, contentType: string): Promise<any> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/mappings/${contentType}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'DELETE',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async invalidateCache(token: string | undefined): Promise<any> {
     const url = apiUrl('/data/metadata/cache/invalidate')
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3630,25 +3666,25 @@ export const metadataApi = {
 
   async autocomplete(token: string | undefined, facetName: string, query: string, limit: number = 10): Promise<FacetAutocompleteResult[]> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/autocomplete?q=${encodeURIComponent(query)}&limit=${limit}`)
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async getReferenceValues(token: string | undefined, facetName: string, includeSuggested: boolean = false): Promise<FacetReferenceValue[]> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values?include_suggested=${includeSuggested}`)
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async createReferenceValue(token: string | undefined, facetName: string, data: { canonical_value: string; display_label?: string; description?: string; aliases?: string[] }): Promise<any> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3656,9 +3692,9 @@ export const metadataApi = {
 
   async updateReferenceValue(token: string | undefined, facetName: string, valueId: string, data: { canonical_value?: string; display_label?: string; description?: string; sort_order?: number; status?: string }): Promise<any> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'PATCH',
-      headers: jsonHeaders,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3666,18 +3702,18 @@ export const metadataApi = {
 
   async deleteReferenceValue(token: string | undefined, facetName: string, valueId: string): Promise<any> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'DELETE',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async addReferenceAlias(token: string | undefined, facetName: string, valueId: string, data: { alias_value: string; source_hint?: string }): Promise<any> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/aliases`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -3685,71 +3721,71 @@ export const metadataApi = {
 
   async removeReferenceAlias(token: string | undefined, facetName: string, valueId: string, aliasId: string): Promise<any> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/aliases/${aliasId}`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'DELETE',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async discoverReferenceValues(token: string | undefined, facetName: string): Promise<FacetDiscoverResult> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/discover`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async approveReferenceValue(token: string | undefined, facetName: string, valueId: string): Promise<any> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/approve`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async rejectReferenceValue(token: string | undefined, facetName: string, valueId: string): Promise<any> {
     const url = apiUrl(`/data/metadata/facets/${facetName}/reference-values/${valueId}/reject`)
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async exportFacetsBaseline(token: string | undefined): Promise<{ facets_exported: number; mappings_exported: number }> {
     const url = apiUrl('/data/metadata/facets/export-baseline')
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async rebuildFromYaml(token: string | undefined): Promise<{ fields_synced: number; facets_synced: number; mappings_synced: number; reference_values_seeded: number; reference_aliases_seeded: number }> {
     const url = apiUrl('/data/metadata/rebuild-from-yaml')
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async exportReferenceBaseline(token: string | undefined): Promise<{ facets_exported: number; values_exported: number; aliases_exported: number }> {
     const url = apiUrl('/data/metadata/reference-data/export-baseline')
-    const res = await apiFetch(url, {
+    const res = await fetch(url, {
       method: 'POST',
-      
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
 
   async getPendingSuggestionCount(token: string | undefined): Promise<FacetPendingSuggestions> {
     const url = apiUrl('/data/metadata/facets/pending-suggestions')
-    const res = await apiFetch(url, {
-      
+    const res = await fetch(url, {
+      headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}) },
     })
     return handleJson(res)
   },
@@ -3997,8 +4033,9 @@ export const samApi = {
   // ========== Dashboard (Phase 7.6) ==========
 
   async getDashboardStats(token: string | undefined): Promise<SamDashboardStats> {
-    const res = await apiFetch('/data/sam/dashboard', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/sam/dashboard'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4019,8 +4056,9 @@ export const samApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/sam/notices?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4040,16 +4078,18 @@ export const samApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/sam/searches?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getSearch(token: string | undefined, searchId: string): Promise<SamSearch> {
     console.log('[SAM API] getSearch - Request:', { searchId })
-    const res = await apiFetch(`/data/sam/searches/${searchId}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/sam/searches/${searchId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     const result = await handleJson(res) as SamSearch
     console.log('[SAM API] getSearch - Response:', result)
@@ -4063,9 +4103,9 @@ export const samApi = {
     pull_frequency?: string
   }): Promise<SamSearch> {
     console.log('[SAM API] createSearch - Request:', data)
-    const res = await apiFetch('/data/sam/searches', {
+    const res = await fetch(apiUrl('/data/sam/searches'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     const result = await handleJson(res) as SamSearch
@@ -4081,18 +4121,18 @@ export const samApi = {
     is_active?: boolean
     pull_frequency?: string
   }): Promise<SamSearch> {
-    const res = await apiFetch(`/data/sam/searches/${searchId}`, {
+    const res = await fetch(apiUrl(`/data/sam/searches/${searchId}`), {
       method: 'PATCH',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
   },
 
   async deleteSearch(token: string | undefined, searchId: string): Promise<void> {
-    const res = await apiFetch(`/data/sam/searches/${searchId}`, {
+    const res = await fetch(apiUrl(`/data/sam/searches/${searchId}`), {
       method: 'DELETE',
-      
+      headers: authHeaders(token),
     })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
@@ -4105,9 +4145,9 @@ export const samApi = {
     page_size?: number
   }): Promise<Record<string, any>> {
     console.log('[SAM API] triggerPull - Request:', { searchId, params })
-    const res = await apiFetch(`/data/sam/searches/${searchId}/pull`, {
+    const res = await fetch(apiUrl(`/data/sam/searches/${searchId}/pull`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(params || {}),
     })
     const result = await handleJson(res) as Record<string, any>
@@ -4125,8 +4165,9 @@ export const samApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/sam/searches/${searchId}/pulls?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     type PullHistoryResponse = { items: SamPullHistoryItem[]; total: number }
     const result = await handleJson(res) as PullHistoryResponse
@@ -4148,9 +4189,9 @@ export const samApi = {
     remaining_calls?: number
   }> {
     console.log('[SAM API] previewSearch - Request:', data)
-    const res = await apiFetch('/data/sam/searches/preview', {
+    const res = await fetch(apiUrl('/data/sam/searches/preview'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     type PreviewResponse = {
@@ -4186,8 +4227,9 @@ export const samApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/sam/solicitations?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     type ListResponse = { items: SamSolicitation[]; total: number; limit: number; offset: number }
     const result = await handleJson(res) as ListResponse
@@ -4196,15 +4238,17 @@ export const samApi = {
   },
 
   async getSolicitation(token: string | undefined, solicitationId: string): Promise<SamSolicitation> {
-    const res = await apiFetch(`/data/sam/solicitations/${solicitationId}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/sam/solicitations/${solicitationId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getSolicitationNotices(token: string | undefined, solicitationId: string): Promise<SamNotice[]> {
-    const res = await apiFetch(`/data/sam/solicitations/${solicitationId}/notices`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/sam/solicitations/${solicitationId}/notices`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4221,9 +4265,9 @@ export const samApi = {
     console.log('[SAM API] refreshSolicitation - Request:', { solicitationId, downloadAttachments })
     const params = new URLSearchParams()
     params.append('download_attachments', String(downloadAttachments))
-    const res = await apiFetch(`/data/sam/solicitations/${solicitationId}/refresh?${params.toString()}`, {
+    const res = await fetch(apiUrl(`/data/sam/solicitations/${solicitationId}/refresh?${params.toString()}`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     type RefreshResponse = {
       run_id: string
@@ -4243,8 +4287,9 @@ export const samApi = {
     if (params?.download_status) searchParams.append('download_status', params.download_status)
 
     const url = apiUrl(`/data/sam/solicitations/${solicitationId}/attachments?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4256,8 +4301,9 @@ export const samApi = {
     if (params?.summary_type) searchParams.append('summary_type', params.summary_type)
 
     const url = apiUrl(`/data/sam/solicitations/${solicitationId}/summaries?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4267,9 +4313,9 @@ export const samApi = {
     model?: string
     include_attachments?: boolean
   }): Promise<SamSummary> {
-    const res = await apiFetch(`/data/sam/solicitations/${solicitationId}/summarize`, {
+    const res = await fetch(apiUrl(`/data/sam/solicitations/${solicitationId}/summarize`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -4277,17 +4323,17 @@ export const samApi = {
 
   // Phase 7.6: Regenerate auto-summary
   async regenerateSummary(token: string | undefined, solicitationId: string): Promise<SamSolicitation> {
-    const res = await apiFetch(`/data/sam/solicitations/${solicitationId}/regenerate-summary`, {
+    const res = await fetch(apiUrl(`/data/sam/solicitations/${solicitationId}/regenerate-summary`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
 
   async downloadAllAttachments(token: string | undefined, solicitationId: string): Promise<Record<string, any>> {
-    const res = await apiFetch(`/data/sam/solicitations/${solicitationId}/download-attachments`, {
+    const res = await fetch(apiUrl(`/data/sam/solicitations/${solicitationId}/download-attachments`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -4300,8 +4346,9 @@ export const samApi = {
     const params = new URLSearchParams()
     if (options?.includeMetadata) params.append('include_metadata', 'true')
     const url = apiUrl(`/data/sam/notices/${noticeId}${params.toString() ? '?' + params.toString() : ''}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4310,9 +4357,9 @@ export const samApi = {
     notice_id: string
     changes_summary: string
   }> {
-    const res = await apiFetch(`/data/sam/notices/${noticeId}/generate-changes`, {
+    const res = await fetch(apiUrl(`/data/sam/notices/${noticeId}/generate-changes`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -4323,9 +4370,9 @@ export const samApi = {
     error?: string
   }> {
     console.log('[samApi.refreshNotice] Refreshing notice:', noticeId)
-    const res = await apiFetch(`/data/sam/notices/${noticeId}/refresh`, {
+    const res = await fetch(apiUrl(`/data/sam/notices/${noticeId}/refresh`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     const result = await handleJson(res)
     console.log('[samApi.refreshNotice] Result:', result)
@@ -4341,9 +4388,9 @@ export const samApi = {
     status: string
     message: string
   }> {
-    const res = await apiFetch(`/data/sam/notices/${noticeId}/regenerate-summary`, {
+    const res = await fetch(apiUrl(`/data/sam/notices/${noticeId}/regenerate-summary`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -4354,9 +4401,9 @@ export const samApi = {
     failed: number
     errors: Array<{ attachment_id: string; error: string }>
   }> {
-    const res = await apiFetch(`/data/sam/notices/${noticeId}/download-attachments`, {
+    const res = await fetch(apiUrl(`/data/sam/notices/${noticeId}/download-attachments`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -4369,8 +4416,9 @@ export const samApi = {
     const params = new URLSearchParams()
     if (downloadStatus) params.append('download_status', downloadStatus)
     const url = apiUrl(`/data/sam/notices/${noticeId}/attachments?${params.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4379,8 +4427,9 @@ export const samApi = {
     notice_id: string
     description: string | null
   }> {
-    const res = await apiFetch(`/data/sam/notices/${noticeId}/description`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/sam/notices/${noticeId}/description`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4388,8 +4437,9 @@ export const samApi = {
   // ========== Attachments ==========
 
   async getAttachment(token: string | undefined, attachmentId: string): Promise<SamAttachment> {
-    const res = await apiFetch(`/data/sam/attachments/${attachmentId}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/sam/attachments/${attachmentId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4400,9 +4450,9 @@ export const samApi = {
     status: string
     error?: string
   }> {
-    const res = await apiFetch(`/data/sam/attachments/${attachmentId}/download`, {
+    const res = await fetch(apiUrl(`/data/sam/attachments/${attachmentId}/download`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -4410,24 +4460,25 @@ export const samApi = {
   // ========== Summaries ==========
 
   async getSummary(token: string | undefined, summaryId: string): Promise<SamSummary> {
-    const res = await apiFetch(`/data/sam/summaries/${summaryId}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/sam/summaries/${summaryId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async promoteSummary(token: string | undefined, summaryId: string): Promise<SamSummary> {
-    const res = await apiFetch(`/data/sam/summaries/${summaryId}/promote`, {
+    const res = await fetch(apiUrl(`/data/sam/summaries/${summaryId}/promote`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
 
   async deleteSummary(token: string | undefined, summaryId: string): Promise<void> {
-    const res = await apiFetch(`/data/sam/summaries/${summaryId}`, {
+    const res = await fetch(apiUrl(`/data/sam/summaries/${summaryId}`), {
       method: 'DELETE',
-      
+      headers: authHeaders(token),
     })
     if (!res.ok) {
       const body = await res.json().catch(() => ({}))
@@ -4438,8 +4489,9 @@ export const samApi = {
   // ========== Agencies ==========
 
   async listAgencies(token: string | undefined): Promise<SamAgency[]> {
-    const res = await apiFetch('/data/sam/agencies', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/sam/agencies'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4447,8 +4499,9 @@ export const samApi = {
   // ========== API Usage ==========
 
   async getUsage(token: string | undefined): Promise<SamApiUsage> {
-    const res = await apiFetch('/data/sam/usage', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/sam/usage'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4457,8 +4510,9 @@ export const samApi = {
     items: Array<Record<string, any>>
     days: number
   }> {
-    const res = await apiFetch(`/data/sam/usage/history?days=${days}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/sam/usage/history?days=${days}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4476,24 +4530,26 @@ export const samApi = {
     will_exceed_limit: boolean
     daily_limit: number
   }> {
-    const res = await apiFetch('/data/sam/usage/estimate', {
+    const res = await fetch(apiUrl('/data/sam/usage/estimate'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
   },
 
   async getApiStatus(token: string | undefined, historyDays: number = 7): Promise<SamApiStatus> {
-    const res = await apiFetch(`/data/sam/usage/status?history_days=${historyDays}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/sam/usage/status?history_days=${historyDays}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getQueueStats(token: string | undefined): Promise<SamQueueStats> {
-    const res = await apiFetch('/data/sam/queue', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/sam/queue'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4526,9 +4582,9 @@ export const samApi = {
       highlights: Record<string, string[]>
     }>
   }> {
-    const res = await apiFetch('/data/search/sam', {
+    const res = await fetch(apiUrl('/data/search/sam'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(params),
     })
     return handleJson(res)
@@ -4630,8 +4686,9 @@ export const sharepointSyncApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/sharepoint-sync/configs?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4640,8 +4697,9 @@ export const sharepointSyncApi = {
     token: string | undefined,
     configId: string
   ): Promise<SharePointSyncConfig> {
-    const res = await apiFetch(`/data/sharepoint-sync/configs/${configId}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4658,9 +4716,9 @@ export const sharepointSyncApi = {
       site_name?: string
     }
   ): Promise<SharePointSyncConfig> {
-    const res = await apiFetch('/data/sharepoint-sync/configs', {
+    const res = await fetch(apiUrl('/data/sharepoint-sync/configs'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -4679,9 +4737,9 @@ export const sharepointSyncApi = {
       reset_existing_assets?: boolean
     }
   ): Promise<SharePointSyncConfig> {
-    const res = await apiFetch(`/data/sharepoint-sync/configs/${configId}`, {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}`), {
       method: 'PATCH',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -4692,9 +4750,9 @@ export const sharepointSyncApi = {
     run_id: string
     status: string
   }> {
-    const res = await apiFetch(`/data/sharepoint-sync/configs/${configId}`, {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}`), {
       method: 'DELETE',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -4706,9 +4764,9 @@ export const sharepointSyncApi = {
       errors: string[]
     }
   }> {
-    const res = await apiFetch(`/data/sharepoint-sync/configs/${configId}/archive`, {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}/archive`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -4725,9 +4783,9 @@ export const sharepointSyncApi = {
     status: string
     message: string
   }> {
-    const res = await apiFetch(`/data/sharepoint-sync/configs/${configId}/sync`, {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}/sync`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ full_sync: fullSync }),
     })
     return handleJson(res)
@@ -4741,9 +4799,9 @@ export const sharepointSyncApi = {
     cancelled_count: number
     run_ids: string[]
   }> {
-    const res = await apiFetch(`/data/sharepoint-sync/configs/${configId}/cancel-stuck`, {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}/cancel-stuck`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
     })
     return handleJson(res)
   },
@@ -4777,8 +4835,9 @@ export const sharepointSyncApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/sharepoint-sync/configs/${configId}/history?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4805,8 +4864,9 @@ export const sharepointSyncApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/sharepoint-sync/configs/${configId}/documents?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -4821,9 +4881,9 @@ export const sharepointSyncApi = {
     assets_deleted: number
     message: string
   }> {
-    const res = await apiFetch(`/data/sharepoint-sync/configs/${configId}/cleanup`, {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}/cleanup`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ delete_assets: deleteAssets }),
     })
     return handleJson(res)
@@ -4848,9 +4908,9 @@ export const sharepointSyncApi = {
     total_items: number
     site_name: string | null
   }> {
-    const res = await apiFetch('/data/sharepoint-sync/browse', {
+    const res = await fetch(apiUrl('/data/sharepoint-sync/browse'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -4885,9 +4945,9 @@ export const sharepointSyncApi = {
     message: string
     selected_count: number
   }> {
-    const res = await apiFetch('/data/sharepoint-sync/import', {
+    const res = await fetch(apiUrl('/data/sharepoint-sync/import'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -4904,9 +4964,9 @@ export const sharepointSyncApi = {
     assets_deleted: number
     message: string
   }> {
-    const res = await apiFetch(`/data/sharepoint-sync/configs/${configId}/remove-items`, {
+    const res = await fetch(apiUrl(`/data/sharepoint-sync/configs/${configId}/remove-items`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({
         item_ids: itemIds,
         delete_assets: deleteAssets,
@@ -5020,22 +5080,25 @@ export interface FunctionExecuteResult {
 
 export const functionsApi = {
   async listFunctions(token?: string): Promise<FunctionListResponse> {
-    const res = await apiFetch('/cwr/functions/', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/cwr/functions/'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getCategories(token?: string): Promise<{ categories: Record<string, string[]> }> {
-    const res = await apiFetch('/cwr/functions/categories', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/cwr/functions/categories'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getFunction(token: string | undefined, name: string): Promise<FunctionMeta> {
-    const res = await apiFetch(`/cwr/functions/${name}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/functions/${name}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -5046,9 +5109,9 @@ export const functionsApi = {
     params: Record<string, any> = {},
     dryRun: boolean = false
   ): Promise<FunctionExecuteResult> {
-    const res = await apiFetch(`/cwr/functions/${name}/execute`, {
+    const res = await fetch(apiUrl(`/cwr/functions/${name}/execute`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ params, dry_run: dryRun }),
     })
     return handleJson(res)
@@ -5090,29 +5153,33 @@ export const contractsApi = {
     if (filters?.side_effects !== undefined) params.set('side_effects', String(filters.side_effects))
     if (filters?.payload_profile) params.set('payload_profile', filters.payload_profile)
     const qs = params.toString()
-    const res = await apiFetch(`/cwr/contracts/${qs ? `?${qs}` : ''}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/contracts/${qs ? `?${qs}` : ''}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getContract(token: string | undefined, name: string): Promise<ToolContract> {
-    const res = await apiFetch(`/cwr/contracts/${name}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/contracts/${name}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getInputSchema(token: string | undefined, name: string): Promise<Record<string, any>> {
-    const res = await apiFetch(`/cwr/contracts/${name}/input-schema`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/contracts/${name}/input-schema`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getOutputSchema(token: string | undefined, name: string): Promise<Record<string, any>> {
-    const res = await apiFetch(`/cwr/contracts/${name}/output-schema`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/contracts/${name}/output-schema`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -5296,15 +5363,17 @@ export const proceduresApi = {
     if (params?.is_active !== undefined) searchParams.append('is_active', String(params.is_active))
     if (params?.tag) searchParams.append('tag', params.tag)
 
-    const res = await apiFetch(`/cwr/procedures/?${searchParams.toString()}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/procedures/?${searchParams.toString()}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getProcedure(token: string | undefined, slug: string): Promise<Procedure> {
-    const res = await apiFetch(`/cwr/procedures/${slug}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -5316,33 +5385,34 @@ export const proceduresApi = {
     dryRun: boolean = false,
     asyncExecution: boolean = true
   ): Promise<ProcedureRunResponse> {
-    const res = await apiFetch(`/cwr/procedures/${slug}/run`, {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}/run`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ params, dry_run: dryRun, async_execution: asyncExecution }),
     })
     return handleJson(res)
   },
 
   async enableProcedure(token: string | undefined, slug: string): Promise<{ status: string; message: string }> {
-    const res = await apiFetch(`/cwr/procedures/${slug}/enable`, {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}/enable`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
 
   async disableProcedure(token: string | undefined, slug: string): Promise<{ status: string; message: string }> {
-    const res = await apiFetch(`/cwr/procedures/${slug}/disable`, {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}/disable`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
 
   async listTriggers(token: string | undefined, slug: string): Promise<ProcedureTrigger[]> {
-    const res = await apiFetch(`/cwr/procedures/${slug}/triggers`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}/triggers`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -5358,26 +5428,26 @@ export const proceduresApi = {
       trigger_params?: Record<string, any>
     }
   ): Promise<ProcedureTrigger> {
-    const res = await apiFetch(`/cwr/procedures/${slug}/triggers`, {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}/triggers`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
   },
 
   async deleteTrigger(token: string | undefined, slug: string, triggerId: string): Promise<{ status: string; message: string }> {
-    const res = await apiFetch(`/cwr/procedures/${slug}/triggers/${triggerId}`, {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}/triggers/${triggerId}`), {
       method: 'DELETE',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
 
   async createProcedure(token: string | undefined, data: CreateProcedureRequest): Promise<Procedure> {
-    const res = await apiFetch('/cwr/procedures/', {
+    const res = await fetch(apiUrl('/cwr/procedures/'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     if (res.status === 422) {
@@ -5390,9 +5460,9 @@ export const proceduresApi = {
   },
 
   async updateProcedure(token: string | undefined, slug: string, data: UpdateProcedureRequest): Promise<Procedure> {
-    const res = await apiFetch(`/cwr/procedures/${slug}`, {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}`), {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     if (res.status === 422) {
@@ -5405,26 +5475,26 @@ export const proceduresApi = {
   },
 
   async deleteProcedure(token: string | undefined, slug: string): Promise<{ status: string; slug: string }> {
-    const res = await apiFetch(`/cwr/procedures/${slug}`, {
+    const res = await fetch(apiUrl(`/cwr/procedures/${slug}`), {
       method: 'DELETE',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
 
   async validateProcedure(token: string | undefined, data: CreateProcedureRequest): Promise<ValidationResult> {
-    const res = await apiFetch('/cwr/procedures/validate', {
+    const res = await fetch(apiUrl('/cwr/procedures/validate'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
   },
 
   async reloadProcedures(token: string | undefined): Promise<{ status: string; message: string; procedures_loaded: number; slugs: string[] }> {
-    const res = await apiFetch('/cwr/procedures/reload', {
+    const res = await fetch(apiUrl('/cwr/procedures/reload'), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -5472,9 +5542,9 @@ export const proceduresApi = {
       body.current_plan = currentPlan
     }
 
-    const res = await apiFetch('/cwr/procedures/generate', {
+    const res = await fetch(apiUrl('/cwr/procedures/generate'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(body),
     })
 
@@ -5552,8 +5622,9 @@ export const proceduresApi = {
   },
 
   async getGenerationProfiles(token?: string): Promise<GenerationProfile[]> {
-    const res = await apiFetch('/cwr/procedures/profiles', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/cwr/procedures/profiles'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -5567,9 +5638,9 @@ export const proceduresApi = {
     if (profile) {
       body.profile = profile
     }
-    const res = await apiFetch('/cwr/procedures/drafts/validate', {
+    const res = await fetch(apiUrl('/cwr/procedures/drafts/validate'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(body),
     })
     return handleJson(res)
@@ -5674,15 +5745,17 @@ export const pipelinesApi = {
     if (params?.is_active !== undefined) searchParams.append('is_active', String(params.is_active))
     if (params?.tag) searchParams.append('tag', params.tag)
 
-    const res = await apiFetch(`/cwr/pipelines/?${searchParams.toString()}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/pipelines/?${searchParams.toString()}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getPipeline(token: string | undefined, slug: string): Promise<Pipeline> {
-    const res = await apiFetch(`/cwr/pipelines/${slug}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -5694,9 +5767,9 @@ export const pipelinesApi = {
     dryRun: boolean = false,
     asyncExecution: boolean = true
   ): Promise<PipelineRunResponse> {
-    const res = await apiFetch(`/cwr/pipelines/${slug}/run`, {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/run`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ params, dry_run: dryRun, async_execution: asyncExecution }),
     })
     return handleJson(res)
@@ -5712,8 +5785,9 @@ export const pipelinesApi = {
     if (params?.limit) searchParams.append('limit', String(params.limit))
     if (params?.offset) searchParams.append('offset', String(params.offset))
 
-    const res = await apiFetch(`/cwr/pipelines/${slug}/runs?${searchParams.toString()}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/runs?${searchParams.toString()}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -5730,8 +5804,9 @@ export const pipelinesApi = {
     if (params?.limit) searchParams.append('limit', String(params.limit))
     if (params?.offset) searchParams.append('offset', String(params.offset))
 
-    const res = await apiFetch(`/cwr/pipelines/${slug}/runs/${runId}/items?${searchParams.toString()}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/runs/${runId}/items?${searchParams.toString()}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -5742,33 +5817,34 @@ export const pipelinesApi = {
     runId: string,
     fromStage?: number
   ): Promise<PipelineRunResponse> {
-    const res = await apiFetch(`/cwr/pipelines/${slug}/runs/${runId}/resume`, {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/runs/${runId}/resume`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify({ from_stage: fromStage }),
     })
     return handleJson(res)
   },
 
   async enablePipeline(token: string | undefined, slug: string): Promise<{ status: string; message: string }> {
-    const res = await apiFetch(`/cwr/pipelines/${slug}/enable`, {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/enable`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
 
   async disablePipeline(token: string | undefined, slug: string): Promise<{ status: string; message: string }> {
-    const res = await apiFetch(`/cwr/pipelines/${slug}/disable`, {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/disable`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
 
   async listTriggers(token: string | undefined, slug: string): Promise<PipelineTrigger[]> {
-    const res = await apiFetch(`/cwr/pipelines/${slug}/triggers`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/triggers`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -5784,18 +5860,18 @@ export const pipelinesApi = {
       trigger_params?: Record<string, any>
     }
   ): Promise<PipelineTrigger> {
-    const res = await apiFetch(`/cwr/pipelines/${slug}/triggers`, {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/triggers`), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
   },
 
   async deleteTrigger(token: string | undefined, slug: string, triggerId: string): Promise<{ status: string; message: string }> {
-    const res = await apiFetch(`/cwr/pipelines/${slug}/triggers/${triggerId}`, {
+    const res = await fetch(apiUrl(`/cwr/pipelines/${slug}/triggers/${triggerId}`), {
       method: 'DELETE',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -5923,9 +5999,9 @@ export const salesforceApi = {
     const formData = new FormData()
     formData.append('file', file)
 
-    const res = await apiFetch('/data/salesforce/import', {
+    const res = await fetch(apiUrl('/data/salesforce/import'), {
       method: 'POST',
-      
+      headers: authHeaders(token),
       body: formData,
     })
     return handleJson(res)
@@ -5934,8 +6010,9 @@ export const salesforceApi = {
   // ========== Statistics ==========
 
   async getStats(token: string | undefined): Promise<SalesforceStats> {
-    const res = await apiFetch('/data/salesforce/stats', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/salesforce/stats'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -5960,15 +6037,17 @@ export const salesforceApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/salesforce/accounts?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getAccount(token: string | undefined, accountId: string): Promise<SalesforceAccount> {
-    const res = await apiFetch(`/data/salesforce/accounts/${accountId}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/salesforce/accounts/${accountId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -5983,8 +6062,9 @@ export const salesforceApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/salesforce/accounts/${accountId}/contacts?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -5999,8 +6079,9 @@ export const salesforceApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/salesforce/accounts/${accountId}/opportunities?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -6025,15 +6106,17 @@ export const salesforceApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/salesforce/contacts?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getContact(token: string | undefined, contactId: string): Promise<SalesforceContact> {
-    const res = await apiFetch(`/data/salesforce/contacts/${contactId}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/salesforce/contacts/${contactId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -6062,15 +6145,17 @@ export const salesforceApi = {
     if (params?.offset) searchParams.append('offset', params.offset.toString())
 
     const url = apiUrl(`/data/salesforce/opportunities?${searchParams.toString()}`)
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(url, {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getOpportunity(token: string | undefined, opportunityId: string): Promise<SalesforceOpportunity> {
-    const res = await apiFetch(`/data/salesforce/opportunities/${opportunityId}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/salesforce/opportunities/${opportunityId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -6078,29 +6163,33 @@ export const salesforceApi = {
   // ========== Filter Options ==========
 
   async getAccountTypes(token: string | undefined): Promise<FilterOptionsResponse> {
-    const res = await apiFetch('/data/salesforce/filters/account-types', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/salesforce/filters/account-types'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getIndustries(token: string | undefined): Promise<FilterOptionsResponse> {
-    const res = await apiFetch('/data/salesforce/filters/industries', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/salesforce/filters/industries'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getStages(token: string | undefined): Promise<FilterOptionsResponse> {
-    const res = await apiFetch('/data/salesforce/filters/stages', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/salesforce/filters/stages'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getOpportunityTypes(token: string | undefined): Promise<FilterOptionsResponse> {
-    const res = await apiFetch('/data/salesforce/filters/opportunity-types', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/salesforce/filters/opportunity-types'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -6233,8 +6322,9 @@ export const forecastsApi = {
     const url = queryParams.toString()
       ? `/data/forecasts/syncs?${queryParams.toString()}`
       : '/data/forecasts/syncs'
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(url), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -6243,17 +6333,18 @@ export const forecastsApi = {
     token: string | undefined,
     data: ForecastSyncCreateRequest
   ): Promise<ForecastSync> {
-    const res = await apiFetch('/data/forecasts/syncs', {
+    const res = await fetch(apiUrl('/data/forecasts/syncs'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
   },
 
   async getSync(token: string | undefined, syncId: string): Promise<ForecastSync> {
-    const res = await apiFetch(`/data/forecasts/syncs/${syncId}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/forecasts/syncs/${syncId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -6263,18 +6354,18 @@ export const forecastsApi = {
     syncId: string,
     data: ForecastSyncUpdateRequest
   ): Promise<ForecastSync> {
-    const res = await apiFetch(`/data/forecasts/syncs/${syncId}`, {
+    const res = await fetch(apiUrl(`/data/forecasts/syncs/${syncId}`), {
       method: 'PATCH',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
   },
 
   async deleteSync(token: string | undefined, syncId: string): Promise<void> {
-    const res = await apiFetch(`/data/forecasts/syncs/${syncId}`, {
+    const res = await fetch(apiUrl(`/data/forecasts/syncs/${syncId}`), {
       method: 'DELETE',
-      
+      headers: authHeaders(token),
     })
     if (!res.ok) {
       const error = await res.json().catch(() => ({}))
@@ -6286,9 +6377,9 @@ export const forecastsApi = {
     token: string | undefined,
     syncId: string
   ): Promise<{ run_id: string; sync_id: string; status: string; message: string }> {
-    const res = await apiFetch(`/data/forecasts/syncs/${syncId}/pull`, {
+    const res = await fetch(apiUrl(`/data/forecasts/syncs/${syncId}/pull`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -6297,9 +6388,9 @@ export const forecastsApi = {
     token: string | undefined,
     syncId: string
   ): Promise<{ sync_id: string; deleted_count: number; message: string }> {
-    const res = await apiFetch(`/data/forecasts/syncs/${syncId}/clear`, {
+    const res = await fetch(apiUrl(`/data/forecasts/syncs/${syncId}/clear`), {
       method: 'POST',
-      
+      headers: authHeaders(token),
     })
     return handleJson(res)
   },
@@ -6335,8 +6426,9 @@ export const forecastsApi = {
     const url = queryParams.toString()
       ? `/data/forecasts?${queryParams.toString()}`
       : '/data/forecasts'
-    const res = await apiFetch(url, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(url), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -6345,15 +6437,17 @@ export const forecastsApi = {
     token: string | undefined,
     forecastId: string
   ): Promise<Forecast> {
-    const res = await apiFetch(`/data/forecasts/${forecastId}`, {
-            cache: 'no-store',
+    const res = await fetch(apiUrl(`/data/forecasts/${forecastId}`), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
 
   async getStats(token: string | undefined): Promise<ForecastStatsResponse> {
-    const res = await apiFetch('/data/forecasts/stats', {
-            cache: 'no-store',
+    const res = await fetch(apiUrl('/data/forecasts/stats'), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },
@@ -6392,17 +6486,17 @@ export const servicesApi = {
     if (params?.skip !== undefined) url.searchParams.set('skip', String(params.skip))
     if (params?.limit !== undefined) url.searchParams.set('limit', String(params.limit))
 
-    const res = await apiFetch(url.toString(), {
+    const res = await fetch(url.toString(), {
       cache: 'no-store',
-      
+      headers: authHeaders(token)
     })
     return handleJson(res)
   },
 
   async get(token: string, serviceId: string): Promise<Service> {
-    const res = await apiFetch(`/admin/services/${serviceId}`, {
+    const res = await fetch(apiUrl(`/admin/services/${serviceId}`), {
       cache: 'no-store',
-      
+      headers: authHeaders(token)
     })
     return handleJson(res)
   },
@@ -6414,9 +6508,9 @@ export const servicesApi = {
     config?: Record<string, any>
     is_active?: boolean
   }): Promise<Service> {
-    const res = await apiFetch('/admin/services', {
+    const res = await fetch(apiUrl('/admin/services'), {
       method: 'POST',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
@@ -6427,18 +6521,18 @@ export const servicesApi = {
     config?: Record<string, any>
     is_active?: boolean
   }): Promise<Service> {
-    const res = await apiFetch(`/admin/services/${serviceId}`, {
+    const res = await fetch(apiUrl(`/admin/services/${serviceId}`), {
       method: 'PUT',
-      headers: jsonHeaders,
+      headers: { ...jsonHeaders, ...authHeaders(token) },
       body: JSON.stringify(data),
     })
     return handleJson(res)
   },
 
   async delete(token: string, serviceId: string): Promise<void> {
-    const res = await apiFetch(`/admin/services/${serviceId}`, {
+    const res = await fetch(apiUrl(`/admin/services/${serviceId}`), {
       method: 'DELETE',
-      
+      headers: authHeaders(token),
     })
     if (!res.ok) {
       httpError(res)
@@ -6487,17 +6581,27 @@ export const serviceAccountsApi = {
     if (params?.skip !== undefined) url.searchParams.set('skip', String(params.skip))
     if (params?.limit !== undefined) url.searchParams.set('limit', String(params.limit))
 
-    const res = await apiFetch(url.toString(), {
+    const headers: HeadersInit = authHeaders(token)
+    if (orgHeader) {
+      (headers as Record<string, string>)['X-Organization-Id'] = orgHeader
+    }
+
+    const res = await fetch(url.toString(), {
       cache: 'no-store',
-      headers: orgHeader ? { 'X-Organization-Id': orgHeader } : undefined,
+      headers,
     })
     return handleJson(res)
   },
 
   async get(token: string, serviceAccountId: string, orgHeader?: string): Promise<ServiceAccount> {
-    const res = await apiFetch(`/admin/service-accounts/${serviceAccountId}`, {
+    const headers: HeadersInit = authHeaders(token)
+    if (orgHeader) {
+      (headers as Record<string, string>)['X-Organization-Id'] = orgHeader
+    }
+
+    const res = await fetch(apiUrl(`/admin/service-accounts/${serviceAccountId}`), {
       cache: 'no-store',
-      headers: orgHeader ? { 'X-Organization-Id': orgHeader } : undefined,
+      headers,
     })
     return handleJson(res)
   },
@@ -6507,10 +6611,11 @@ export const serviceAccountsApi = {
     description?: string
     role?: string
   }): Promise<ServiceAccount> {
-    const res = await apiFetch('/admin/service-accounts', {
+    const res = await fetch(apiUrl('/admin/service-accounts'), {
       method: 'POST',
       headers: {
         ...jsonHeaders,
+        ...authHeaders(token),
         'X-Organization-Id': orgHeader,
       },
       body: JSON.stringify(data),
@@ -6524,10 +6629,11 @@ export const serviceAccountsApi = {
     role?: string
     is_active?: boolean
   }): Promise<ServiceAccount> {
-    const res = await apiFetch(`/admin/service-accounts/${serviceAccountId}`, {
+    const res = await fetch(apiUrl(`/admin/service-accounts/${serviceAccountId}`), {
       method: 'PUT',
       headers: {
         ...jsonHeaders,
+        ...authHeaders(token),
         'X-Organization-Id': orgHeader,
       },
       body: JSON.stringify(data),
@@ -6536,9 +6642,10 @@ export const serviceAccountsApi = {
   },
 
   async delete(token: string, serviceAccountId: string, orgHeader: string): Promise<void> {
-    const res = await apiFetch(`/admin/service-accounts/${serviceAccountId}`, {
+    const res = await fetch(apiUrl(`/admin/service-accounts/${serviceAccountId}`), {
       method: 'DELETE',
       headers: {
+        ...authHeaders(token),
         'X-Organization-Id': orgHeader,
       },
     })
@@ -6559,9 +6666,10 @@ export const serviceAccountsApi = {
     }>
     total: number
   }> {
-    const res = await apiFetch(`/admin/service-accounts/${serviceAccountId}/api-keys`, {
+    const res = await fetch(apiUrl(`/admin/service-accounts/${serviceAccountId}/api-keys`), {
       cache: 'no-store',
       headers: {
+        ...authHeaders(token),
         'X-Organization-Id': orgHeader,
       },
     })
@@ -6574,10 +6682,11 @@ export const serviceAccountsApi = {
     orgHeader: string,
     data: { name: string; expires_days?: number }
   ): Promise<ServiceAccountApiKeyCreate> {
-    const res = await apiFetch(`/admin/service-accounts/${serviceAccountId}/api-keys`, {
+    const res = await fetch(apiUrl(`/admin/service-accounts/${serviceAccountId}/api-keys`), {
       method: 'POST',
       headers: {
         ...jsonHeaders,
+        ...authHeaders(token),
         'X-Organization-Id': orgHeader,
       },
       body: JSON.stringify(data),
@@ -6591,9 +6700,10 @@ export const serviceAccountsApi = {
     apiKeyId: string,
     orgHeader: string
   ): Promise<void> {
-    const res = await apiFetch(`/admin/service-accounts/${serviceAccountId}/api-keys/${apiKeyId}`, {
+    const res = await fetch(apiUrl(`/admin/service-accounts/${serviceAccountId}/api-keys/${apiKeyId}`), {
       method: 'DELETE',
       headers: {
+        ...authHeaders(token),
         'X-Organization-Id': orgHeader,
       },
     })
@@ -6614,8 +6724,9 @@ export const metricsApi = {
   }> {
     const url = new URL(apiUrl('/ops/metrics/procedures'))
     url.searchParams.set('days', String(days))
-    const res = await apiFetch(url.toString(), {
-            cache: 'no-store',
+    const res = await fetch(url.toString(), {
+      headers: authHeaders(token),
+      cache: 'no-store',
     })
     return handleJson(res)
   },

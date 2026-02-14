@@ -307,8 +307,8 @@ class TestConnectionStatus:
             service = LLMService(adapter=adapter)
 
             mock_client = MagicMock()
-            mock_client.chat.completions.create.side_effect = Exception("Connection failed")
-            service._client = mock_client
+            mock_client.models.list.side_effect = Exception("Connection failed")
+            adapter._client = mock_client
 
             status = await service.test_connection()
 

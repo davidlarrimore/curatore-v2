@@ -56,7 +56,7 @@ from app.core.shared.database_service import database_service
 from app.core.shared.run_service import run_service
 from app.core.storage.minio_service import get_minio_service
 from app.core.tasks import salesforce_import_task
-from app.dependencies import get_current_user
+from app.dependencies import get_current_org_id, get_current_user
 
 # Initialize router
 router = APIRouter(prefix="/salesforce", tags=["Salesforce"])
@@ -315,6 +315,7 @@ def _opportunity_to_response(
 )
 async def import_salesforce_data(
     file: UploadFile = File(..., description="Salesforce export zip file"),
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> SalesforceImportResponse:
     """
@@ -347,7 +348,7 @@ async def import_salesforce_data(
 
     # Upload to MinIO temp bucket for worker access
     # This enables horizontal scaling since all workers can access MinIO
-    minio_key = f"{current_user.organization_id}/salesforce/imports/{uuid_module.uuid4().hex}.zip"
+    minio_key = f"{org_id}/salesforce/imports/{uuid_module.uuid4().hex}.zip"
 
     try:
         minio.put_object(
@@ -371,7 +372,7 @@ async def import_salesforce_data(
             # Create run record
             run = await run_service.create_run(
                 session=session,
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 run_type="salesforce_import",
                 created_by=current_user.id,
                 config={
@@ -385,7 +386,7 @@ async def import_salesforce_data(
             # Queue the import task with MinIO key (not file path)
             salesforce_import_task.delay(
                 run_id=str(run.id),
-                organization_id=str(current_user.organization_id),
+                organization_id=str(org_id),
                 minio_key=minio_key,
             )
 
@@ -422,13 +423,13 @@ async def import_salesforce_data(
     description="Get aggregated statistics for accounts, contacts, and opportunities.",
 )
 async def get_salesforce_stats(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SalesforceStatsResponse:
     """Get aggregated Salesforce statistics."""
     async with database_service.get_session() as session:
         stats = await salesforce_service.get_dashboard_stats(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         return SalesforceStatsResponse(**stats)
 
@@ -450,13 +451,13 @@ async def list_accounts(
     keyword: Optional[str] = Query(None, description="Search in name and description"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Number to skip"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SalesforceAccountListResponse:
     """List Salesforce accounts."""
     async with database_service.get_session() as session:
         accounts, total = await salesforce_service.list_accounts(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             account_type=account_type,
             industry=industry,
             keyword=keyword,
@@ -480,13 +481,13 @@ async def list_accounts(
 )
 async def get_account(
     account_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SalesforceAccountResponse:
     """Get Salesforce account details."""
     async with database_service.get_session() as session:
         account = await salesforce_service.get_account(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             account_id=account_id,
             include_contacts=True,
             include_opportunities=True,
@@ -511,13 +512,13 @@ async def get_account_contacts(
     account_id: UUID,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SalesforceContactListResponse:
     """Get contacts for a specific account."""
     async with database_service.get_session() as session:
         contacts, total = await salesforce_service.list_contacts(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             account_id=account_id,
             limit=limit,
             offset=offset,
@@ -541,13 +542,13 @@ async def get_account_opportunities(
     account_id: UUID,
     limit: int = Query(100, ge=1, le=1000),
     offset: int = Query(0, ge=0),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SalesforceOpportunityListResponse:
     """Get opportunities for a specific account."""
     async with database_service.get_session() as session:
         opportunities, total = await salesforce_service.list_opportunities(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             account_id=account_id,
             limit=limit,
             offset=offset,
@@ -578,13 +579,13 @@ async def list_contacts(
     current_only: bool = Query(False, description="Only show current employees"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Number to skip"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SalesforceContactListResponse:
     """List Salesforce contacts."""
     async with database_service.get_session() as session:
         contacts, total = await salesforce_service.list_contacts(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             account_id=account_id,
             keyword=keyword,
             current_only=current_only,
@@ -608,13 +609,13 @@ async def list_contacts(
 )
 async def get_contact(
     contact_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SalesforceContactResponse:
     """Get Salesforce contact details."""
     async with database_service.get_session() as session:
         contact = await salesforce_service.get_contact(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             contact_id=contact_id,
             include_account=True,
         )
@@ -647,13 +648,13 @@ async def list_opportunities(
     keyword: Optional[str] = Query(None, description="Search in name and description"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Number to skip"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SalesforceOpportunityListResponse:
     """List Salesforce opportunities."""
     async with database_service.get_session() as session:
         opportunities, total = await salesforce_service.list_opportunities(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             account_id=account_id,
             stage_name=stage_name,
             opportunity_type=opportunity_type,
@@ -679,13 +680,13 @@ async def list_opportunities(
 )
 async def get_opportunity(
     opportunity_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SalesforceOpportunityResponse:
     """Get Salesforce opportunity details."""
     async with database_service.get_session() as session:
         opportunity = await salesforce_service.get_opportunity(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             opportunity_id=opportunity_id,
             include_account=True,
         )
@@ -711,13 +712,13 @@ async def get_opportunity(
     description="Get distinct account types for filter dropdowns.",
 )
 async def get_account_types(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> FilterOptionsResponse:
     """Get distinct account types."""
     async with database_service.get_session() as session:
         types = await salesforce_service.get_account_types(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         return FilterOptionsResponse(options=types)
 
@@ -729,13 +730,13 @@ async def get_account_types(
     description="Get distinct industries for filter dropdowns.",
 )
 async def get_industries(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> FilterOptionsResponse:
     """Get distinct industries."""
     async with database_service.get_session() as session:
         industries = await salesforce_service.get_industries(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         return FilterOptionsResponse(options=industries)
 
@@ -747,13 +748,13 @@ async def get_industries(
     description="Get distinct opportunity stages for filter dropdowns.",
 )
 async def get_stages(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> FilterOptionsResponse:
     """Get distinct opportunity stages."""
     async with database_service.get_session() as session:
         stages = await salesforce_service.get_stage_names(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         return FilterOptionsResponse(options=stages)
 
@@ -765,13 +766,13 @@ async def get_stages(
     description="Get distinct opportunity types for filter dropdowns.",
 )
 async def get_opportunity_types(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> FilterOptionsResponse:
     """Get distinct opportunity types."""
     async with database_service.get_session() as session:
         types = await salesforce_service.get_opportunity_types(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         return FilterOptionsResponse(options=types)
 
@@ -797,7 +798,7 @@ class ReindexResponse(BaseModel):
     description="Trigger a reindex of all Salesforce accounts, contacts, and opportunities for search.",
 )
 async def reindex_salesforce(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> ReindexResponse:
     """
     Reindex all Salesforce data for search.
@@ -811,11 +812,11 @@ async def reindex_salesforce(
     try:
         # Queue background task
         task = reindex_salesforce_organization_task.delay(
-            organization_id=str(current_user.organization_id),
+            organization_id=str(org_id),
         )
 
         logger.info(
-            f"Queued Salesforce reindex for org {current_user.organization_id}, task_id={task.id}"
+            f"Queued Salesforce reindex for org {org_id}, task_id={task.id}"
         )
 
         return ReindexResponse(

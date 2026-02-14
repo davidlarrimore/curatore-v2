@@ -49,7 +49,7 @@ from app.core.database.models import Asset, Connection, Run, SharePointSyncConfi
 from app.core.shared.database_service import database_service
 from app.core.shared.run_service import run_service
 from app.core.tasks import async_delete_sync_config_task, sharepoint_import_task, sharepoint_sync_task
-from app.dependencies import get_current_user, require_org_admin
+from app.dependencies import get_current_org_id, get_current_user, require_org_admin
 
 # Initialize router
 router = APIRouter(prefix="/sharepoint-sync", tags=["SharePoint Sync"])
@@ -213,13 +213,13 @@ async def list_sync_configs(
     status: Optional[str] = Query(None, description="Filter by status (active, paused, archived)"),
     limit: int = Query(50, ge=1, le=100, description="Page size"),
     offset: int = Query(0, ge=0, description="Offset"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """List SharePoint sync configs for the organization."""
     async with database_service.get_session() as session:
         configs, total = await sharepoint_sync_service.list_sync_configs(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             status=status,
             limit=limit,
             offset=offset,
@@ -242,6 +242,7 @@ async def list_sync_configs(
 @router.post("/configs", response_model=SharePointSyncConfigResponse, status_code=status.HTTP_201_CREATED)
 async def create_sync_config(
     request: SharePointSyncConfigCreateRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """Create a new SharePoint sync config."""
@@ -249,7 +250,7 @@ async def create_sync_config(
         try:
             config = await sharepoint_sync_service.create_sync_config(
                 session=session,
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 connection_id=UUID(request.connection_id) if request.connection_id else None,
                 name=request.name,
                 folder_url=request.folder_url,
@@ -270,7 +271,7 @@ async def create_sync_config(
 @router.get("/configs/{config_id}", response_model=SharePointSyncConfigResponse)
 async def get_sync_config(
     config_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Get a SharePoint sync config by ID."""
     async with database_service.get_session() as session:
@@ -279,7 +280,7 @@ async def get_sync_config(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         is_syncing, sync_status = await _check_active_sync(session, config.id)
@@ -293,6 +294,7 @@ async def get_sync_config(
 async def update_sync_config(
     config_id: UUID,
     request: SharePointSyncConfigUpdateRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """
@@ -317,7 +319,7 @@ async def update_sync_config(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Check if sync is currently running
@@ -421,6 +423,7 @@ async def update_sync_config(
 @router.post("/configs/{config_id}/archive")
 async def archive_sync_config(
     config_id: UUID,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """
@@ -443,7 +446,7 @@ async def archive_sync_config(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Must be disabled before archiving
@@ -471,7 +474,7 @@ async def archive_sync_config(
         stats = await sharepoint_sync_service.archive_sync_config_with_search_cleanup(
             session=session,
             sync_config_id=config_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         logger.info(
@@ -488,6 +491,7 @@ async def archive_sync_config(
 @router.delete("/configs/{config_id}")
 async def delete_sync_config(
     config_id: UUID,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """
@@ -517,7 +521,7 @@ async def delete_sync_config(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Check if deletion is already in progress
@@ -548,7 +552,7 @@ async def delete_sync_config(
         # Create Run record for tracking
         run = await run_service.create_run(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             run_type="sharepoint_delete",
             origin="user",
             config={
@@ -563,7 +567,7 @@ async def delete_sync_config(
         # Queue Celery task
         async_delete_sync_config_task.delay(
             sync_config_id=str(config_id),
-            organization_id=str(current_user.organization_id),
+            organization_id=str(org_id),
             run_id=str(run.id),
             config_name=config.name,
         )
@@ -589,6 +593,7 @@ async def trigger_sync(
     config_id: UUID,
     request: SharePointSyncTriggerRequest = SharePointSyncTriggerRequest(),
     background_tasks: BackgroundTasks = None,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ):
     """Trigger a manual sync for a config."""
@@ -598,7 +603,7 @@ async def trigger_sync(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         if config.status != "active" or not config.is_active:
@@ -618,7 +623,7 @@ async def trigger_sync(
         # Create run for tracking
         run = await run_service.create_run(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             run_type="sharepoint_sync",
             origin="user",
             config={
@@ -632,7 +637,7 @@ async def trigger_sync(
         # Queue Celery task
         sharepoint_sync_task.delay(
             sync_config_id=str(config_id),
-            organization_id=str(current_user.organization_id),
+            organization_id=str(org_id),
             run_id=str(run.id),
             full_sync=request.full_sync,
         )
@@ -650,6 +655,7 @@ async def trigger_sync(
 @router.post("/configs/{config_id}/cancel-stuck")
 async def cancel_stuck_runs(
     config_id: UUID,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """
@@ -664,7 +670,7 @@ async def cancel_stuck_runs(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Find and cancel stuck runs
@@ -701,7 +707,7 @@ async def get_sync_history(
     config_id: UUID,
     limit: int = Query(20, ge=1, le=100, description="Page size"),
     offset: int = Query(0, ge=0, description="Offset"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Get sync run history for a config."""
     async with database_service.get_session() as session:
@@ -710,7 +716,7 @@ async def get_sync_history(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Get runs for this config
@@ -766,7 +772,7 @@ async def list_synced_documents(
     sync_status: Optional[str] = Query(None, description="Filter by status (synced, deleted_in_source, orphaned)"),
     limit: int = Query(100, ge=1, le=1000, description="Page size"),
     offset: int = Query(0, ge=0, description="Offset"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """List synced documents for a config."""
     async with database_service.get_session() as session:
@@ -775,7 +781,7 @@ async def list_synced_documents(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         docs, total = await sharepoint_sync_service.list_synced_documents(
@@ -807,7 +813,8 @@ async def list_synced_documents(
 async def cleanup_deleted_documents(
     config_id: UUID,
     request: SharePointCleanupRequest = SharePointCleanupRequest(),
-    current_user: User = Depends(require_org_admin),
+    org_id: UUID = Depends(get_current_org_id),
+    _admin: User = Depends(require_org_admin),
 ):
     """Cleanup documents marked as deleted in source."""
     async with database_service.get_session() as session:
@@ -816,7 +823,7 @@ async def cleanup_deleted_documents(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         result = await sharepoint_sync_service.cleanup_deleted_documents(
@@ -845,7 +852,8 @@ async def cleanup_deleted_documents(
 async def remove_synced_items(
     config_id: UUID,
     request: SharePointRemoveItemsRequest,
-    current_user: User = Depends(require_org_admin),
+    org_id: UUID = Depends(get_current_org_id),
+    _admin: User = Depends(require_org_admin),
 ):
     """
     Remove specific synced items from a sync config.
@@ -864,7 +872,7 @@ async def remove_synced_items(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         if not request.item_ids:
@@ -902,7 +910,7 @@ async def remove_synced_items(
 @router.post("/browse", response_model=SharePointBrowseFolderResponse)
 async def browse_sharepoint_folder(
     request: SharePointBrowseFolderRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Browse a SharePoint folder for the import wizard."""
     from app.connectors.sharepoint.sharepoint_service import get_site_metadata, sharepoint_inventory
@@ -915,7 +923,7 @@ async def browse_sharepoint_folder(
                 include_folders=request.include_folders,
                 page_size=100,
                 max_items=500,  # Limit for browsing
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 session=session,
             )
         except Exception as e:
@@ -933,7 +941,7 @@ async def browse_sharepoint_folder(
         try:
             site_meta = await get_site_metadata(
                 folder_url=request.folder_url,
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 session=session,
             )
             if site_meta:
@@ -955,6 +963,7 @@ async def browse_sharepoint_folder(
 @router.post("/import", response_model=SharePointImportResponse)
 async def import_sharepoint_files(
     request: SharePointImportRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ):
     """Import selected files from SharePoint.
@@ -974,7 +983,7 @@ async def import_sharepoint_files(
             )
             if not config:
                 raise HTTPException(status_code=404, detail="Sync config not found")
-            if config.organization_id != current_user.organization_id:
+            if config.organization_id != org_id:
                 raise HTTPException(status_code=403, detail="Access denied")
             sync_config_id = request.sync_config_id
 
@@ -1022,7 +1031,7 @@ async def import_sharepoint_files(
             try:
                 config = await sharepoint_sync_service.create_sync_config(
                     session=session,
-                    organization_id=current_user.organization_id,
+                    organization_id=org_id,
                     connection_id=UUID(request.connection_id) if request.connection_id else None,
                     name=request.sync_config_name,
                     folder_url=request.folder_url,
@@ -1039,7 +1048,7 @@ async def import_sharepoint_files(
         # Create run for tracking
         run = await run_service.create_run(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             run_type="sharepoint_import",
             origin="user",
             config={
@@ -1054,7 +1063,7 @@ async def import_sharepoint_files(
         # Queue Celery task
         sharepoint_import_task.delay(
             connection_id=request.connection_id,
-            organization_id=str(current_user.organization_id),
+            organization_id=str(org_id),
             folder_url=request.folder_url,
             selected_items=request.selected_items,
             sync_config_id=sync_config_id,
@@ -1082,7 +1091,8 @@ async def import_sharepoint_files(
 @router.post("/configs/{config_id}/reset-delta")
 async def reset_delta_token(
     config_id: UUID,
-    current_user: User = Depends(require_org_admin),
+    org_id: UUID = Depends(get_current_org_id),
+    _admin: User = Depends(require_org_admin),
 ):
     """
     Reset delta token to force full re-scan on next sync.
@@ -1102,7 +1112,7 @@ async def reset_delta_token(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Clear delta token
@@ -1126,7 +1136,8 @@ async def reset_delta_token(
 async def update_delta_setting(
     config_id: UUID,
     enabled: bool = Query(..., description="Enable or disable delta query for this sync config"),
-    current_user: User = Depends(require_org_admin),
+    org_id: UUID = Depends(get_current_org_id),
+    _admin: User = Depends(require_org_admin),
 ):
     """
     Enable or disable delta query for a sync config.
@@ -1149,7 +1160,7 @@ async def update_delta_setting(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Update delta_enabled setting
@@ -1185,7 +1196,7 @@ async def update_delta_setting(
 @router.get("/configs/{config_id}/delta-status")
 async def get_delta_status(
     config_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     Get delta query status for a sync config.
@@ -1198,7 +1209,7 @@ async def get_delta_status(
         if not config:
             raise HTTPException(status_code=404, detail="Sync config not found")
 
-        if config.organization_id != current_user.organization_id:
+        if config.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         return {

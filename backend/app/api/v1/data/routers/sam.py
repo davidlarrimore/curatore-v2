@@ -77,7 +77,7 @@ from app.core.database.models import (
 from app.core.shared.database_service import database_service
 from app.core.shared.run_service import run_service
 from app.core.tasks import sam_pull_task, sam_refresh_notice_task, sam_refresh_solicitation_task
-from app.dependencies import get_current_user, require_org_admin_or_above
+from app.dependencies import get_current_org_id, get_current_user, require_org_admin_or_above
 
 # Initialize router
 router = APIRouter(prefix="/sam", tags=["SAM.gov"])
@@ -694,7 +694,7 @@ def _summary_to_response(summary: SamSolicitationSummary) -> SamSummaryResponse:
     description="Get dashboard statistics including totals and recent activity.",
 )
 async def get_dashboard_stats(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamDashboardStatsResponse:
     """
     Get dashboard statistics for the organization.
@@ -706,12 +706,12 @@ async def get_dashboard_stats(
         # Get dashboard stats
         stats = await sam_service.get_dashboard_stats(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         # Get API usage
         usage = await sam_api_usage_service.get_usage(
-            session, current_user.organization_id
+            session, org_id
         )
 
         return SamDashboardStatsResponse(
@@ -731,7 +731,8 @@ async def get_dashboard_stats(
     status_code=202,
 )
 async def reindex_sam_data(
-    current_user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
+    _admin: User = Depends(require_org_admin_or_above),
 ):
     """
     Trigger reindexing of all SAM.gov data to search index.
@@ -755,11 +756,11 @@ async def reindex_sam_data(
 
     # Queue background task
     task = reindex_sam_organization_task.delay(
-        organization_id=str(current_user.organization_id),
+        organization_id=str(org_id),
     )
 
     logger.info(
-        f"Queued SAM reindex for org {current_user.organization_id}, task_id={task.id}"
+        f"Queued SAM reindex for org {org_id}, task_id={task.id}"
     )
 
     return {
@@ -785,7 +786,7 @@ async def list_all_notices(
     keyword: Optional[str] = Query(None, description="Search by title, description, or solicitation number"),
     limit: int = Query(50, ge=1, le=500, description="Maximum results (up to 500 for facet counting)"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamNoticeListResponse:
     """
     List all notices across all SAM searches for the organization.
@@ -799,7 +800,7 @@ async def list_all_notices(
     async with database_service.get_session() as session:
         notices, total = await sam_service.list_all_notices(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             agency=agency,
             sub_agency=sub_agency,
             office=office,
@@ -860,7 +861,7 @@ async def list_all_notices(
 )
 async def preview_search(
     request: PreviewSearchRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> PreviewSearchResponse:
     """
     Preview/test a search configuration before saving.
@@ -874,7 +875,7 @@ async def preview_search(
     async with database_service.get_session() as session:
         result = await sam_pull_service.preview_search(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             search_config=request.search_config,
             limit=request.limit,
             check_rate_limit=True,
@@ -931,7 +932,7 @@ async def list_searches(
     is_active: Optional[bool] = Query(None, description="Filter by active state"),
     limit: int = Query(50, ge=1, le=100, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamSearchListResponse:
     """List SAM searches for the organization."""
     from sqlalchemy import select
@@ -939,7 +940,7 @@ async def list_searches(
     async with database_service.get_session() as session:
         searches, total = await sam_service.list_searches(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             status=status,
             is_active=is_active,
             limit=limit,
@@ -975,13 +976,14 @@ async def list_searches(
 )
 async def create_search(
     request: SamSearchCreateRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin_or_above),
 ) -> SamSearchResponse:
     """Create a new SAM search."""
     async with database_service.get_session() as session:
         search = await sam_service.create_search(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             name=request.name,
             description=request.description,
             search_config=request.search_config,
@@ -1000,7 +1002,7 @@ async def create_search(
 )
 async def get_search(
     search_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamSearchResponse:
     """Get SAM search by ID."""
     from sqlalchemy import select
@@ -1014,7 +1016,7 @@ async def get_search(
                 detail="Search not found",
             )
 
-        if search.organization_id != current_user.organization_id:
+        if search.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1040,7 +1042,8 @@ async def get_search(
 async def update_search(
     search_id: UUID,
     request: SamSearchUpdateRequest,
-    current_user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
+    _admin: User = Depends(require_org_admin_or_above),
 ) -> SamSearchResponse:
     """Update SAM search."""
     from sqlalchemy import select
@@ -1054,7 +1057,7 @@ async def update_search(
                 detail="Search not found",
             )
 
-        if search.organization_id != current_user.organization_id:
+        if search.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1090,7 +1093,8 @@ async def update_search(
 )
 async def delete_search(
     search_id: UUID,
-    current_user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
+    _admin: User = Depends(require_org_admin_or_above),
 ):
     """Archive SAM search."""
     async with database_service.get_session() as session:
@@ -1102,7 +1106,7 @@ async def delete_search(
                 detail="Search not found",
             )
 
-        if search.organization_id != current_user.organization_id:
+        if search.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1121,6 +1125,7 @@ async def pull_search(
     search_id: UUID,
     request: PullRequest,
     background_tasks: BackgroundTasks,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin_or_above),
 ) -> PullResponse:
     """Pull opportunities from SAM.gov.
@@ -1143,7 +1148,7 @@ async def pull_search(
                 detail="Search not found",
             )
 
-        if search.organization_id != current_user.organization_id:
+        if search.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1189,7 +1194,7 @@ async def pull_search(
         # Create the Run record BEFORE dispatching the task
         # This ensures the frontend can see the "pulling" indicator immediately
         run = Run(
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             run_type="sam_pull",
             origin="user",
             status="pending",
@@ -1211,7 +1216,7 @@ async def pull_search(
         # Now dispatch the Celery task with the pre-created run_id
         task = sam_pull_task.delay(
             search_id=str(search_id),
-            organization_id=str(current_user.organization_id),
+            organization_id=str(org_id),
             max_pages=request.max_pages,
             page_size=request.page_size,
             auto_download_attachments=request.download_attachments,
@@ -1236,7 +1241,7 @@ async def pull_search(
 )
 async def get_search_stats(
     search_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> Dict[str, Any]:
     """Get statistics for a search."""
     async with database_service.get_session() as session:
@@ -1248,7 +1253,7 @@ async def get_search_stats(
                 detail="Search not found",
             )
 
-        if search.organization_id != current_user.organization_id:
+        if search.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1284,7 +1289,7 @@ async def get_pull_history(
     search_id: UUID,
     limit: int = Query(20, ge=1, le=100, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> PullHistoryResponse:
     """Get pull history for a search."""
     async with database_service.get_session() as session:
@@ -1296,7 +1301,7 @@ async def get_pull_history(
                 detail="Search not found",
             )
 
-        if search.organization_id != current_user.organization_id:
+        if search.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1308,7 +1313,7 @@ async def get_pull_history(
         # This ensures database compatibility (SQLite vs PostgreSQL have different JSON syntax)
         query = (
             select(Run)
-            .where(Run.organization_id == current_user.organization_id)
+            .where(Run.organization_id == org_id)
             .where(Run.run_type == "sam_pull")
             .order_by(desc(Run.started_at))
         )
@@ -1361,13 +1366,13 @@ async def list_solicitations(
     keyword: Optional[str] = Query(None, description="Search keyword"),
     limit: int = Query(50, ge=1, le=500, description="Maximum results (up to 500 for facet counting)"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamSolicitationListResponse:
     """List solicitations with filters."""
     async with database_service.get_session() as session:
         solicitations, total = await sam_service.list_solicitations(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             status=status,
             notice_type=notice_type,
             naics_code=naics_code,
@@ -1392,7 +1397,7 @@ async def list_solicitations(
 )
 async def get_solicitation(
     solicitation_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamSolicitationWithSummaryResponse:
     """Get solicitation by ID with summary status."""
     async with database_service.get_session() as session:
@@ -1406,7 +1411,7 @@ async def get_solicitation(
                 detail="Solicitation not found",
             )
 
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1423,7 +1428,7 @@ async def get_solicitation(
 async def refresh_solicitation(
     solicitation_id: UUID,
     download_attachments: bool = Query(True, description="Download attachments after refresh"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> Dict[str, Any]:
     """
     Refresh a solicitation by re-fetching data from SAM.gov.
@@ -1439,7 +1444,7 @@ async def refresh_solicitation(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Solicitation not found",
             )
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1449,7 +1454,7 @@ async def refresh_solicitation(
         run = await run_service.create_run(
             session=session,
             run_type="sam_refresh",
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             config={
                 "solicitation_id": str(solicitation_id),
                 "solicitation_number": sol.solicitation_number,
@@ -1461,7 +1466,7 @@ async def refresh_solicitation(
         # Queue the background task
         sam_refresh_solicitation_task.delay(
             solicitation_id=str(solicitation_id),
-            organization_id=str(current_user.organization_id),
+            organization_id=str(org_id),
             download_attachments=download_attachments,
             run_id=str(run.id),
         )
@@ -1487,7 +1492,7 @@ async def refresh_solicitation(
 )
 async def list_solicitation_notices(
     solicitation_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> List[SamNoticeResponse]:
     """List notices for a solicitation."""
     async with database_service.get_session() as session:
@@ -1499,7 +1504,7 @@ async def list_solicitation_notices(
                 detail="Solicitation not found",
             )
 
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1518,7 +1523,7 @@ async def list_solicitation_notices(
 async def list_solicitation_attachments(
     solicitation_id: UUID,
     download_status: Optional[str] = Query(None, description="Filter by download status"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> List[SamAttachmentResponse]:
     """List attachments for a solicitation."""
     async with database_service.get_session() as session:
@@ -1530,7 +1535,7 @@ async def list_solicitation_attachments(
                 detail="Solicitation not found",
             )
 
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1551,7 +1556,7 @@ async def list_solicitation_attachments(
 async def list_solicitation_summaries(
     solicitation_id: UUID,
     summary_type: Optional[str] = Query(None, description="Filter by summary type"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> List[SamSummaryResponse]:
     """List summaries for a solicitation."""
     async with database_service.get_session() as session:
@@ -1563,7 +1568,7 @@ async def list_solicitation_summaries(
                 detail="Solicitation not found",
             )
 
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1585,7 +1590,7 @@ async def list_solicitation_summaries(
 async def summarize_solicitation(
     solicitation_id: UUID,
     request: SummarizeRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamSummaryResponse:
     """Generate summary for a solicitation."""
     async with database_service.get_session() as session:
@@ -1597,7 +1602,7 @@ async def summarize_solicitation(
                 detail="Solicitation not found",
             )
 
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1606,7 +1611,7 @@ async def summarize_solicitation(
         summary = await sam_summarization_service.summarize_solicitation(
             session=session,
             solicitation_id=solicitation_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             summary_type=request.summary_type,
             model=request.model,
             include_attachments=request.include_attachments,
@@ -1629,7 +1634,7 @@ async def summarize_solicitation(
 )
 async def regenerate_solicitation_summary(
     solicitation_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamSolicitationWithSummaryResponse:
     """
     Regenerate the auto-summary for a solicitation.
@@ -1649,7 +1654,7 @@ async def regenerate_solicitation_summary(
                 detail="Solicitation not found",
             )
 
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1663,7 +1668,7 @@ async def regenerate_solicitation_summary(
         # Trigger async summary generation
         sam_auto_summarize_task.delay(
             solicitation_id=str(solicitation_id),
-            organization_id=str(current_user.organization_id),
+            organization_id=str(org_id),
         )
 
         # Refresh and return
@@ -1678,7 +1683,7 @@ async def regenerate_solicitation_summary(
 )
 async def download_solicitation_attachments(
     solicitation_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> Dict[str, Any]:
     """Download all pending attachments."""
     async with database_service.get_session() as session:
@@ -1690,7 +1695,7 @@ async def download_solicitation_attachments(
                 detail="Solicitation not found",
             )
 
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1699,7 +1704,7 @@ async def download_solicitation_attachments(
         result = await sam_pull_service.download_all_attachments(
             session=session,
             solicitation_id=solicitation_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         return result
@@ -1719,7 +1724,7 @@ async def download_solicitation_attachments(
 async def get_notice(
     notice_id: UUID,
     include_metadata: bool = Query(False, description="Include raw SAM.gov API response"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamNoticeResponse:
     """Get notice by ID."""
     async with database_service.get_session() as session:
@@ -1734,7 +1739,7 @@ async def get_notice(
         # Check access - either via solicitation or via organization (standalone notices)
         if notice.solicitation_id:
             sol = await sam_service.get_solicitation(session, notice.solicitation_id)
-            if sol.organization_id != current_user.organization_id:
+            if sol.organization_id != org_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied",
@@ -1750,7 +1755,7 @@ async def get_notice(
                 notice.raw_data = sol.raw_data
         elif notice.organization_id:
             # Standalone notice - check organization directly
-            if notice.organization_id != current_user.organization_id:
+            if notice.organization_id != org_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied",
@@ -1771,6 +1776,7 @@ async def get_notice(
 )
 async def refresh_notice(
     notice_id: UUID,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -1798,7 +1804,7 @@ async def refresh_notice(
             solicitation = await sam_service.get_solicitation(session, notice.solicitation_id)
             org_id = solicitation.organization_id
 
-        if org_id != current_user.organization_id:
+        if org_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1811,7 +1817,7 @@ async def refresh_notice(
                 refresh_results = await sam_pull_service.refresh_solicitation(
                     session=session,
                     solicitation_id=solicitation.id,
-                    organization_id=current_user.organization_id,
+                    organization_id=org_id,
                 )
 
                 return {
@@ -1826,7 +1832,7 @@ async def refresh_notice(
             # Standalone notice - create a job to refresh from SAM.gov
             # Create Run record for tracking
             run = Run(
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 run_type="sam_refresh",
                 origin="user",
                 status="pending",
@@ -1842,7 +1848,7 @@ async def refresh_notice(
             # Dispatch the Celery task
             task = sam_refresh_notice_task.delay(
                 notice_id=str(notice_id),
-                organization_id=str(current_user.organization_id),
+                organization_id=str(org_id),
                 run_id=str(run.id),
             )
 
@@ -1870,7 +1876,7 @@ async def refresh_notice(
 )
 async def regenerate_notice_summary(
     notice_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> Dict[str, Any]:
     """Trigger AI summary regeneration for any notice.
 
@@ -1899,7 +1905,7 @@ async def regenerate_notice_summary(
                 detail="Cannot determine organization for notice",
             )
 
-        if org_id != current_user.organization_id:
+        if org_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -1931,7 +1937,7 @@ async def regenerate_notice_summary(
 async def list_notice_attachments(
     notice_id: UUID,
     download_status: Optional[str] = Query(None, description="Filter by download status"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> List[SamAttachmentResponse]:
     """List attachments for a notice.
 
@@ -1949,14 +1955,14 @@ async def list_notice_attachments(
         # Check access - either via solicitation or organization for standalone
         if notice.solicitation_id:
             sol = await sam_service.get_solicitation(session, notice.solicitation_id)
-            if sol.organization_id != current_user.organization_id:
+            if sol.organization_id != org_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied",
                 )
         else:
             # Standalone notice - check organization_id directly
-            if notice.organization_id != current_user.organization_id:
+            if notice.organization_id != org_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied",
@@ -1975,7 +1981,7 @@ async def list_notice_attachments(
 )
 async def download_notice_attachments(
     notice_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> Dict[str, Any]:
     """Download all pending attachments for a notice.
 
@@ -1993,14 +1999,14 @@ async def download_notice_attachments(
         # Check access - either via solicitation or organization for standalone
         if notice.solicitation_id:
             sol = await sam_service.get_solicitation(session, notice.solicitation_id)
-            if sol.organization_id != current_user.organization_id:
+            if sol.organization_id != org_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied",
                 )
         else:
             # Standalone notice - check organization_id directly
-            if notice.organization_id != current_user.organization_id:
+            if notice.organization_id != org_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied",
@@ -2009,7 +2015,7 @@ async def download_notice_attachments(
         result = await sam_pull_service.download_all_notice_attachments(
             session=session,
             notice_id=notice_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         return result
@@ -2022,7 +2028,7 @@ async def download_notice_attachments(
 )
 async def get_notice_description(
     notice_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> Dict[str, Any]:
     """Get full notice description (not truncated)."""
     async with database_service.get_session() as session:
@@ -2037,13 +2043,13 @@ async def get_notice_description(
         # Check access
         if notice.solicitation_id:
             sol = await sam_service.get_solicitation(session, notice.solicitation_id)
-            if sol.organization_id != current_user.organization_id:
+            if sol.organization_id != org_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied",
                 )
         else:
-            if notice.organization_id != current_user.organization_id:
+            if notice.organization_id != org_id:
                 raise HTTPException(
                     status_code=status.HTTP_403_FORBIDDEN,
                     detail="Access denied",
@@ -2062,7 +2068,7 @@ async def get_notice_description(
 )
 async def generate_notice_changes(
     notice_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> Dict[str, Any]:
     """Generate change summary for a notice."""
     async with database_service.get_session() as session:
@@ -2076,7 +2082,7 @@ async def generate_notice_changes(
 
         # Check access via solicitation
         sol = await sam_service.get_solicitation(session, notice.solicitation_id)
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -2085,7 +2091,7 @@ async def generate_notice_changes(
         summary = await sam_summarization_service.generate_change_summary(
             session=session,
             notice_id=notice_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         return {
@@ -2107,7 +2113,7 @@ async def generate_notice_changes(
 )
 async def get_attachment(
     attachment_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamAttachmentResponse:
     """Get attachment by ID."""
     async with database_service.get_session() as session:
@@ -2121,7 +2127,7 @@ async def get_attachment(
 
         # Check access via solicitation
         sol = await sam_service.get_solicitation(session, attachment.solicitation_id)
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -2137,7 +2143,7 @@ async def get_attachment(
 )
 async def download_attachment(
     attachment_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> Dict[str, Any]:
     """Download a specific attachment."""
     async with database_service.get_session() as session:
@@ -2151,7 +2157,7 @@ async def download_attachment(
 
         # Check access via solicitation
         sol = await sam_service.get_solicitation(session, attachment.solicitation_id)
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -2160,7 +2166,7 @@ async def download_attachment(
         asset = await sam_pull_service.download_attachment(
             session=session,
             attachment_id=attachment_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         if asset:
@@ -2190,7 +2196,7 @@ async def download_attachment(
 )
 async def get_summary(
     summary_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamSummaryResponse:
     """Get summary by ID."""
     async with database_service.get_session() as session:
@@ -2204,7 +2210,7 @@ async def get_summary(
 
         # Check access via solicitation
         sol = await sam_service.get_solicitation(session, summary.solicitation_id)
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -2221,7 +2227,8 @@ async def get_summary(
 )
 async def promote_summary(
     summary_id: UUID,
-    current_user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
+    _admin: User = Depends(require_org_admin_or_above),
 ) -> SamSummaryResponse:
     """Promote summary to canonical."""
     async with database_service.get_session() as session:
@@ -2235,7 +2242,7 @@ async def promote_summary(
 
         # Check access via solicitation
         sol = await sam_service.get_solicitation(session, summary.solicitation_id)
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -2253,7 +2260,8 @@ async def promote_summary(
 )
 async def delete_summary(
     summary_id: UUID,
-    current_user: User = Depends(require_org_admin_or_above),
+    org_id: UUID = Depends(get_current_org_id),
+    _admin: User = Depends(require_org_admin_or_above),
 ):
     """Delete experimental summary."""
     async with database_service.get_session() as session:
@@ -2267,7 +2275,7 @@ async def delete_summary(
 
         # Check access via solicitation
         sol = await sam_service.get_solicitation(session, summary.solicitation_id)
-        if sol.organization_id != current_user.organization_id:
+        if sol.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail="Access denied",
@@ -2294,7 +2302,7 @@ async def delete_summary(
     description="List all SAM.gov agencies.",
 )
 async def list_agencies(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> List[SamAgencyResponse]:
     """List all agencies."""
     async with database_service.get_session() as session:
@@ -2322,12 +2330,12 @@ async def list_agencies(
     description="Get today's SAM.gov API usage statistics.",
 )
 async def get_api_usage(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamApiUsageResponse:
     """Get today's API usage for the organization."""
     async with database_service.get_session() as session:
         usage = await sam_api_usage_service.get_usage(
-            session, current_user.organization_id
+            session, org_id
         )
         return SamApiUsageResponse(**usage)
 
@@ -2340,12 +2348,12 @@ async def get_api_usage(
 )
 async def get_api_usage_history(
     days: int = Query(default=30, ge=1, le=90, description="Number of days"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamApiUsageHistoryResponse:
     """Get API usage history."""
     async with database_service.get_session() as session:
         history = await sam_api_usage_service.get_usage_history(
-            session, current_user.organization_id, days
+            session, org_id, days
         )
         return SamApiUsageHistoryResponse(items=history, days=days)
 
@@ -2358,7 +2366,7 @@ async def get_api_usage_history(
 )
 async def estimate_api_impact(
     request: EstimateImpactRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamApiImpactResponse:
     """Estimate API impact of a search configuration."""
     async with database_service.get_session() as session:
@@ -2369,7 +2377,7 @@ async def estimate_api_impact(
             "page_size": request.page_size,
         }
         impact = await sam_api_usage_service.estimate_impact(
-            session, current_user.organization_id, search_params
+            session, org_id, search_params
         )
         return SamApiImpactResponse(**impact)
 
@@ -2382,23 +2390,23 @@ async def estimate_api_impact(
 )
 async def get_api_status(
     history_days: int = Query(default=7, ge=1, le=30, description="Days of history"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamApiStatusResponse:
     """Get full API status for dashboard display."""
     async with database_service.get_session() as session:
         # Get today's usage
         usage = await sam_api_usage_service.get_usage(
-            session, current_user.organization_id
+            session, org_id
         )
 
         # Get queue stats
         queue = await sam_api_usage_service.get_queue_stats(
-            session, current_user.organization_id
+            session, org_id
         )
 
         # Get recent history
         history = await sam_api_usage_service.get_usage_history(
-            session, current_user.organization_id, history_days
+            session, org_id, history_days
         )
 
         return SamApiStatusResponse(
@@ -2415,11 +2423,11 @@ async def get_api_status(
     description="Get statistics about queued API requests.",
 )
 async def get_queue_stats(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> SamQueueStatsResponse:
     """Get queue statistics for the organization."""
     async with database_service.get_session() as session:
         stats = await sam_api_usage_service.get_queue_stats(
-            session, current_user.organization_id
+            session, org_id
         )
         return SamQueueStatsResponse(**stats)

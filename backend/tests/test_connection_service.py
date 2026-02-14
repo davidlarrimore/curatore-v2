@@ -438,7 +438,7 @@ class TestExtractionConnectionType:
         ext_type = ExtractionConnectionType()
 
         assert ext_type.connection_type == "extraction"
-        assert "Extraction" in ext_type.display_name
+        assert "Document Service" in ext_type.display_name
         assert len(ext_type.description) > 0
 
     def test_get_config_schema(self):

@@ -46,7 +46,7 @@ from app.core.shared.forecast_service import forecast_service
 from app.core.shared.forecast_sync_service import forecast_sync_service
 from app.core.shared.run_service import run_service
 from app.core.tasks import forecast_sync_task
-from app.dependencies import get_current_user, require_org_admin
+from app.dependencies import get_current_org_id, get_current_user, require_org_admin
 
 # Initialize router
 router = APIRouter(prefix="/forecasts", tags=["Acquisition Forecasts"])
@@ -195,13 +195,13 @@ async def list_syncs(
     source_type: Optional[str] = Query(None, description="Filter by source type"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """List forecast syncs for the organization."""
     async with database_service.get_session() as session:
         syncs, total = await forecast_sync_service.list_syncs(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             status=status,
             source_type=source_type,
             limit=limit,
@@ -225,6 +225,7 @@ async def list_syncs(
 @router.post("/syncs", response_model=ForecastSyncResponse, status_code=status.HTTP_201_CREATED)
 async def create_sync(
     request: ForecastSyncCreateRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """Create a new forecast sync."""
@@ -239,7 +240,7 @@ async def create_sync(
         try:
             sync = await forecast_sync_service.create_sync(
                 session=session,
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 name=request.name,
                 source_type=request.source_type,
                 filter_config=request.filter_config,
@@ -261,14 +262,14 @@ async def create_sync(
 @router.get("/syncs/{sync_id}", response_model=ForecastSyncResponse)
 async def get_sync(
     sync_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Get forecast sync details."""
     async with database_service.get_session() as session:
         sync = await forecast_sync_service.get_sync(
             session=session,
             sync_id=sync_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         if not sync:
@@ -284,14 +285,15 @@ async def get_sync(
 async def update_sync(
     sync_id: UUID,
     request: ForecastSyncUpdateRequest,
-    current_user: User = Depends(require_org_admin),
+    org_id: UUID = Depends(get_current_org_id),
+    _admin: User = Depends(require_org_admin),
 ):
     """Update a forecast sync."""
     async with database_service.get_session() as session:
         sync = await forecast_sync_service.get_sync(
             session=session,
             sync_id=sync_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         if not sync:
@@ -329,14 +331,15 @@ async def update_sync(
 @router.delete("/syncs/{sync_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_sync(
     sync_id: UUID,
-    current_user: User = Depends(require_org_admin),
+    org_id: UUID = Depends(get_current_org_id),
+    _admin: User = Depends(require_org_admin),
 ):
     """Delete a forecast sync and all associated forecasts."""
     async with database_service.get_session() as session:
         sync = await forecast_sync_service.get_sync(
             session=session,
             sync_id=sync_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         if not sync:
@@ -352,14 +355,14 @@ async def delete_sync(
 @router.post("/syncs/{sync_id}/pull")
 async def trigger_sync_pull(
     sync_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Trigger a manual sync pull."""
     async with database_service.get_session() as session:
         sync = await forecast_sync_service.get_sync(
             session=session,
             sync_id=sync_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         if not sync:
@@ -386,7 +389,7 @@ async def trigger_sync_pull(
         run = await run_service.create_run(
             session=session,
             run_type="forecast_sync",
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             config={
                 "sync_id": str(sync_id),
                 "sync_name": sync.name,
@@ -399,7 +402,7 @@ async def trigger_sync_pull(
         # Queue Celery task (sync_id, organization_id, run_id)
         forecast_sync_task.delay(
             str(sync_id),
-            str(current_user.organization_id),
+            str(org_id),
             str(run.id),
         )
 
@@ -418,7 +421,8 @@ async def trigger_sync_pull(
 @router.post("/syncs/{sync_id}/clear")
 async def clear_sync_forecasts(
     sync_id: UUID,
-    current_user: User = Depends(require_org_admin),
+    org_id: UUID = Depends(get_current_org_id),
+    _admin: User = Depends(require_org_admin),
 ):
     """
     Clear all forecasts for a sync (delete forecast data but keep sync config).
@@ -430,7 +434,7 @@ async def clear_sync_forecasts(
         sync = await forecast_sync_service.get_sync(
             session=session,
             sync_id=sync_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         if not sync:
@@ -489,7 +493,7 @@ async def list_forecasts(
     ),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """List forecasts from all sources (unified view)."""
     async with database_service.get_session() as session:
@@ -498,7 +502,7 @@ async def list_forecasts(
 
         forecasts, total = await forecast_service.list_forecasts(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             source_types=source_types,
             sync_id=sync_id,
             agency_name=agency_name,
@@ -522,18 +526,18 @@ async def list_forecasts(
 
 @router.get("/stats", response_model=ForecastStatsResponse)
 async def get_forecast_stats(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Get forecast dashboard statistics."""
     async with database_service.get_session() as session:
         stats = await forecast_service.get_stats(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         sync_stats = await forecast_sync_service.get_stats(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
 
         return ForecastStatsResponse(
@@ -549,13 +553,13 @@ async def get_forecast_stats(
 @router.get("/{forecast_id}", response_model=ForecastResponse)
 async def get_forecast_by_id(
     forecast_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Get a specific forecast by UUID."""
     async with database_service.get_session() as session:
         forecast, source_type = await forecast_service.get_forecast_by_uuid(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             forecast_id=forecast_id,
         )
 

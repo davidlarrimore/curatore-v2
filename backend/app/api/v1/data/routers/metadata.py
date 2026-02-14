@@ -37,12 +37,11 @@ from app.api.v1.data.schemas import (
     MetadataFieldUpdateRequest,
     MetadataNamespaceResponse,
 )
-from app.core.database.models import User
 from app.core.metadata.facet_reference_service import facet_reference_service
 from app.core.metadata.registry_service import metadata_registry_service
 from app.core.search.pg_search_service import pg_search_service
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_user
+from app.dependencies import get_current_org_id
 
 logger = logging.getLogger("curatore.api.metadata")
 
@@ -50,14 +49,14 @@ router = APIRouter(prefix="/metadata", tags=["metadata"])
 
 
 @router.get("/catalog", response_model=MetadataCatalogResponse)
-async def get_catalog(current_user: User = Depends(get_current_user)):
+async def get_catalog(org_id: UUID = Depends(get_current_org_id)):
     """
     Get the full metadata catalog: all namespaces, fields, and facets.
 
     Returns the complete governance catalog for the current organization,
     merging global baseline with any org-level overrides.
     """
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     # Get namespace doc counts (lightweight — no sample value queries)
     async with database_service.get_session() as session:
@@ -121,9 +120,9 @@ async def get_catalog(current_user: User = Depends(get_current_user)):
 
 
 @router.get("/namespaces", response_model=List[MetadataNamespaceResponse])
-async def list_namespaces(current_user: User = Depends(get_current_user)):
+async def list_namespaces(org_id: UUID = Depends(get_current_org_id)):
     """List all metadata namespaces with document counts."""
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         doc_counts = await pg_search_service.get_doc_counts(session, org_id)
@@ -145,7 +144,7 @@ async def list_namespaces(current_user: User = Depends(get_current_user)):
 @router.get("/namespaces/{namespace}/fields", response_model=List[MetadataFieldDefinitionResponse])
 async def get_namespace_fields(
     namespace: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Get all field definitions for a namespace."""
     ns_fields = metadata_registry_service.get_namespace_fields(namespace)
@@ -171,7 +170,7 @@ async def get_namespace_fields(
 async def get_field_detail(
     namespace: str,
     field_name: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Get a single field definition."""
     ns_fields = metadata_registry_service.get_namespace_fields(namespace)
@@ -195,10 +194,10 @@ async def get_field_detail(
 async def get_field_stats(
     namespace: str,
     field_name: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Get sample values and statistics for a metadata field."""
-    org_id = current_user.organization_id
+    # org_id from dependency
     ns_source_types = metadata_registry_service.get_namespace_source_types().get(namespace, [])
 
     async with database_service.get_session() as session:
@@ -232,7 +231,7 @@ async def get_field_stats(
 
 
 @router.get("/facets", response_model=List[FacetDefinitionResponse])
-async def list_facets(current_user: User = Depends(get_current_user)):
+async def list_facets(org_id: UUID = Depends(get_current_org_id)):
     """List all facet definitions with their cross-domain mappings."""
     registry_facets = metadata_registry_service.get_facet_definitions()
 
@@ -255,7 +254,7 @@ async def list_facets(current_user: User = Depends(get_current_user)):
 @router.get("/facets/{facet_name}/mappings", response_model=List[FacetMappingResponse])
 async def get_facet_mappings(
     facet_name: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Get mappings for a specific facet across content types."""
     mappings = metadata_registry_service.resolve_facet(facet_name)
@@ -277,7 +276,7 @@ async def get_facet_mappings(
 async def create_field(
     namespace: str,
     request: MetadataFieldCreateRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     Create an org-level metadata field definition in the specified namespace.
@@ -285,7 +284,7 @@ async def create_field(
     The namespace must exist in the global baseline. Org-level fields override
     or extend the baseline for the current organization.
     """
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         try:
@@ -313,14 +312,14 @@ async def update_field(
     namespace: str,
     field_name: str,
     request: MetadataFieldUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     Update an org-level metadata field definition.
 
     Only org-level fields (not global baseline) can be modified.
     """
-    org_id = current_user.organization_id
+    # org_id from dependency
     updates = request.model_dump(exclude_none=True)
 
     async with database_service.get_session() as session:
@@ -342,7 +341,7 @@ async def update_field(
 async def deactivate_field(
     namespace: str,
     field_name: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     Deactivate (soft-delete) an org-level metadata field.
@@ -350,7 +349,7 @@ async def deactivate_field(
     Sets status to 'inactive'. The field will no longer appear in the
     effective registry for this organization.
     """
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         try:
@@ -369,7 +368,7 @@ async def deactivate_field(
 @router.post("/facets", status_code=201)
 async def create_facet(
     request: FacetCreateRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     Create an org-level facet definition with optional content type mappings.
@@ -377,7 +376,7 @@ async def create_facet(
     Facets define cross-domain filter abstractions that map to different
     JSON paths per content type.
     """
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         try:
@@ -401,14 +400,14 @@ async def create_facet(
 async def update_facet(
     facet_name: str,
     request: FacetUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     Update an org-level facet definition.
 
     Only org-level facets (not global baseline) can be modified.
     """
-    org_id = current_user.organization_id
+    # org_id from dependency
     updates = request.model_dump(exclude_none=True)
 
     async with database_service.get_session() as session:
@@ -428,7 +427,7 @@ async def update_facet(
 @router.delete("/facets/{facet_name}")
 async def deactivate_facet(
     facet_name: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     Deactivate (soft-delete) an org-level facet.
@@ -436,7 +435,7 @@ async def deactivate_facet(
     Sets status to 'inactive'. The facet will no longer appear in the
     effective registry for this organization.
     """
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         try:
@@ -455,10 +454,10 @@ async def deactivate_facet(
 async def add_facet_mapping(
     facet_name: str,
     request: FacetMappingCreateRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Add a content type mapping to an org-level facet."""
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         try:
@@ -479,10 +478,10 @@ async def add_facet_mapping(
 async def remove_facet_mapping(
     facet_name: str,
     content_type: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Remove a content type mapping from an org-level facet."""
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         try:
@@ -508,7 +507,7 @@ async def facet_autocomplete(
     facet_name: str,
     q: str = "",
     limit: int = 10,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     Autocomplete suggestions for a facet value.
@@ -516,7 +515,7 @@ async def facet_autocomplete(
     Searches across canonical values, display labels, and aliases.
     Returns matches sorted by relevance.
     """
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     if not q or len(q) < 1:
         return []
@@ -533,10 +532,10 @@ async def facet_autocomplete(
 async def list_reference_values(
     facet_name: str,
     include_suggested: bool = False,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """List canonical reference values and their aliases for a facet."""
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         values = await facet_reference_service.list_values(
@@ -550,10 +549,10 @@ async def list_reference_values(
 async def create_reference_value(
     facet_name: str,
     request: FacetReferenceValueCreateRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Create a new canonical reference value for a facet."""
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         try:
@@ -577,10 +576,10 @@ async def update_reference_value(
     facet_name: str,
     value_id: str,
     request: FacetReferenceValueUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Update a canonical reference value."""
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         result = await facet_reference_service.update_canonical(
@@ -603,10 +602,10 @@ async def update_reference_value(
 async def deactivate_reference_value(
     facet_name: str,
     value_id: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Soft-delete (deactivate) a canonical reference value."""
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         result = await facet_reference_service.update_canonical(
@@ -626,7 +625,7 @@ async def add_reference_alias(
     facet_name: str,
     value_id: str,
     request: FacetReferenceAliasCreateRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Add an alias to a canonical reference value."""
     async with database_service.get_session() as session:
@@ -648,10 +647,10 @@ async def remove_reference_alias(
     facet_name: str,
     value_id: str,
     alias_id: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Remove an alias from a canonical reference value."""
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         success = await facet_reference_service.delete_alias(
@@ -666,7 +665,7 @@ async def remove_reference_alias(
 @router.post("/facets/{facet_name}/discover", response_model=FacetDiscoverResponse)
 async def discover_facet_values(
     facet_name: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     AI-powered discovery: scan indexed data for unmapped values and
@@ -674,7 +673,7 @@ async def discover_facet_values(
 
     This endpoint may take 10-30 seconds depending on data volume and LLM latency.
     """
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         unmapped = await facet_reference_service.discover_unmapped(
@@ -703,10 +702,10 @@ async def discover_facet_values(
 async def approve_reference_value(
     facet_name: str,
     value_id: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Approve a suggested canonical value (promotes to active)."""
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         success = await facet_reference_service.approve(
@@ -722,10 +721,10 @@ async def approve_reference_value(
 async def reject_reference_value(
     facet_name: str,
     value_id: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Reject a suggested canonical value (sets to inactive)."""
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         success = await facet_reference_service.reject(
@@ -739,7 +738,7 @@ async def reject_reference_value(
 
 @router.post("/reference-data/export-baseline", response_model=dict)
 async def export_reference_baseline(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     Export current DB reference data (active values + aliases) back to the
@@ -758,10 +757,10 @@ async def export_reference_baseline(
 
 @router.get("/facets/pending-suggestions", response_model=FacetPendingSuggestionsResponse)
 async def get_pending_suggestions(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Get count of pending suggestions across all facets (for admin badge)."""
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         counts = await facet_reference_service.get_pending_suggestion_count(
@@ -777,14 +776,14 @@ async def get_pending_suggestions(
 
 
 @router.get("/data-sources", response_model=List[DataSourceTypeResponse])
-async def list_data_source_types(current_user: User = Depends(get_current_user)):
+async def list_data_source_types(org_id: UUID = Depends(get_current_org_id)):
     """
     List all data source type definitions with org-level overrides applied.
 
     Returns the curated knowledge about each data source type (what it is,
     what it contains, how to search it) merged with any org customizations.
     """
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         catalog = await metadata_registry_service.get_data_source_catalog(session, org_id)
@@ -809,7 +808,7 @@ async def list_data_source_types(current_user: User = Depends(get_current_user))
 async def update_data_source_type(
     source_type: str,
     request: DataSourceTypeUpdateRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     Create or update an org-level data source type override.
@@ -817,7 +816,7 @@ async def update_data_source_type(
     Allows admins to customize how a data source type is described for their
     organization, or hide source types that are not relevant.
     """
-    org_id = current_user.organization_id
+    # org_id from dependency
 
     async with database_service.get_session() as session:
         try:
@@ -838,7 +837,7 @@ async def update_data_source_type(
 
 @router.post("/facets/export-baseline", response_model=dict)
 async def export_facets_baseline(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     Export global facet definitions from DB back to the YAML baseline file
@@ -857,7 +856,7 @@ async def export_facets_baseline(
 
 @router.post("/rebuild-from-yaml", response_model=dict)
 async def rebuild_from_yaml(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """
     Flush and rebuild the entire metadata catalog in the database from YAML
@@ -882,9 +881,9 @@ async def rebuild_from_yaml(
 
 @router.post("/cache/invalidate")
 async def invalidate_cache(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Force cache invalidation for the current organization's metadata registry."""
-    org_id = current_user.organization_id
+    # org_id from dependency
     metadata_registry_service.invalidate_cache(org_id)
     return {"status": "cache_invalidated", "organization_id": str(org_id)}

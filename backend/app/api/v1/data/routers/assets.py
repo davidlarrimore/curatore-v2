@@ -43,7 +43,7 @@ from app.core.shared.database_service import database_service
 from app.core.shared.run_service import run_service
 from app.core.shared.status_mapper import UnifiedStatus, get_unified_status
 from app.core.storage.zip_service import zip_service
-from app.dependencies import get_current_user
+from app.dependencies import get_current_org_id, get_current_user
 
 logger = logging.getLogger("curatore.api.assets")
 
@@ -62,13 +62,13 @@ async def list_assets(
     include_deleted: bool = Query(False, description="Include deleted assets (default: False)"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results to return"),
     offset: int = Query(0, ge=0, description="Number of results to skip"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> AssetsListResponse:
     """List assets for the organization."""
     async with database_service.get_session() as session:
         assets = await asset_service.get_assets_by_organization(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             source_type=source_type,
             status=status,
             include_deleted=include_deleted,
@@ -78,7 +78,7 @@ async def list_assets(
 
         total = await asset_service.count_assets_by_organization(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             source_type=source_type,
             status=status,
             include_deleted=include_deleted,
@@ -119,7 +119,7 @@ async def list_assets(
     description="Get organization-wide collection health metrics (Phase 2).",
 )
 async def get_collection_health(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> Dict[str, Any]:
     """
     Get collection health metrics for the organization.
@@ -133,7 +133,7 @@ async def get_collection_health(
     - Last updated timestamp
 
     Args:
-        current_user: Authenticated user making the request
+        org_id: Organization ID from dependency
 
     Returns:
         Dict with collection health metrics
@@ -159,7 +159,7 @@ async def get_collection_health(
         }
     """
     async with database_service.get_session() as session:
-        organization_id = current_user.organization_id
+        organization_id = org_id
 
         # Total assets
         stmt = select(func.count(Asset.id)).where(
@@ -228,7 +228,7 @@ async def get_collection_health(
 )
 async def get_asset(
     asset_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> AssetResponse:
     """Get asset by ID."""
     async with database_service.get_session() as session:
@@ -238,7 +238,7 @@ async def get_asset(
             raise HTTPException(status_code=404, detail="Asset not found")
 
         # Verify asset belongs to user's organization
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         return AssetResponse(
@@ -270,7 +270,7 @@ async def get_asset(
 )
 async def get_asset_with_extraction(
     asset_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> AssetWithExtractionResponse:
     """Get asset with latest extraction result."""
     async with database_service.get_session() as session:
@@ -285,7 +285,7 @@ async def get_asset_with_extraction(
         asset, extraction = result
 
         # Verify asset belongs to user's organization
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         return AssetWithExtractionResponse(
@@ -331,7 +331,7 @@ async def get_asset_with_extraction(
 )
 async def get_runs_for_asset(
     asset_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> List[RunResponse]:
     """Get runs for an asset."""
     async with database_service.get_session() as session:
@@ -340,7 +340,7 @@ async def get_runs_for_asset(
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Get runs
@@ -388,6 +388,7 @@ async def get_runs_for_asset(
 )
 async def reextract_asset(
     asset_id: UUID,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> RunResponse:
     """
@@ -415,7 +416,7 @@ async def reextract_asset(
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Pre-check: Verify the raw file exists in object storage
@@ -483,7 +484,7 @@ async def reextract_asset(
 )
 async def get_asset_versions(
     asset_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> AssetVersionHistoryResponse:
     """
     Get version history for an asset.
@@ -509,7 +510,7 @@ async def get_asset_versions(
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Get version history
@@ -586,7 +587,7 @@ async def get_asset_versions(
 async def get_asset_version(
     asset_id: UUID,
     version_number: int,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> AssetVersionResponse:
     """
     Get a specific version of an asset.
@@ -612,7 +613,7 @@ async def get_asset_version(
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # Get specific version
@@ -653,7 +654,7 @@ async def get_asset_version(
 async def preview_bulk_upload(
     files: List[UploadFile],
     source_type: str = Query("upload", description="Source type for the upload"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> BulkUploadAnalysisResponse:
     """
     Preview bulk upload changes.
@@ -709,7 +710,7 @@ async def preview_bulk_upload(
     async with database_service.get_session() as session:
         analysis = await bulk_upload_service.analyze_bulk_upload(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             files=file_list,
             source_type=source_type,
         )
@@ -734,6 +735,7 @@ async def apply_bulk_upload(
     files: List[UploadFile],
     source_type: str = Query("upload", description="Source type for the upload"),
     mark_missing_inactive: bool = Query(True, description="Mark missing files as inactive"),
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> BulkUploadApplyResponse:
     """
@@ -790,7 +792,7 @@ async def apply_bulk_upload(
     if not minio:
         raise HTTPException(status_code=503, detail="MinIO service unavailable")
 
-    organization_id = current_user.organization_id
+    organization_id = org_id
 
     # Read file contents
     file_list = []
@@ -982,7 +984,7 @@ async def apply_bulk_upload(
 )
 async def get_asset_metadata(
     asset_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> AssetMetadataListResponse:
     """
     Get all metadata for an asset.
@@ -996,7 +998,7 @@ async def get_asset_metadata(
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         canonical = await asset_metadata_service.get_canonical_metadata(
@@ -1038,7 +1040,7 @@ async def get_asset_metadata(
 async def create_asset_metadata(
     asset_id: UUID,
     request: AssetMetadataCreateRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> AssetMetadataResponse:
     """
     Create or update metadata for an asset.
@@ -1053,7 +1055,7 @@ async def create_asset_metadata(
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         try:
@@ -1100,7 +1102,7 @@ async def create_asset_metadata(
 async def get_specific_metadata(
     asset_id: UUID,
     metadata_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> AssetMetadataResponse:
     """Get a specific metadata record."""
     from app.core.shared.asset_metadata_service import asset_metadata_service
@@ -1110,7 +1112,7 @@ async def get_specific_metadata(
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         metadata = await asset_metadata_service.get_metadata(
@@ -1145,6 +1147,7 @@ async def get_specific_metadata(
 async def delete_metadata(
     asset_id: UUID,
     metadata_id: UUID,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Delete a metadata record."""
@@ -1155,7 +1158,7 @@ async def delete_metadata(
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         metadata = await asset_metadata_service.get_metadata(
@@ -1188,7 +1191,7 @@ async def delete_metadata(
 )
 async def get_asset_queue_info(
     asset_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> AssetQueueInfoResponse:
     """
     Get queue position and extraction service information for an asset.
@@ -1217,7 +1220,7 @@ async def get_asset_queue_info(
         asset = await asset_service.get_asset(session=session, asset_id=asset_id)
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         # If asset is already ready or failed, return simple response
@@ -1344,7 +1347,7 @@ async def _get_processed_artifact(session, asset_id: UUID, organization_id):
 )
 async def get_asset_content(
     asset_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Get processed markdown content for an asset.
 
@@ -1358,7 +1361,7 @@ async def get_asset_content(
 
     async with database_service.get_session() as session:
         asset, extraction = await _get_processed_artifact(
-            session, asset_id, current_user.organization_id
+            session, asset_id, org_id
         )
 
         if not asset:
@@ -1390,7 +1393,7 @@ async def get_asset_content(
 )
 async def download_asset_content(
     asset_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Download processed markdown file for an asset.
 
@@ -1404,7 +1407,7 @@ async def download_asset_content(
 
     async with database_service.get_session() as session:
         asset, extraction = await _get_processed_artifact(
-            session, asset_id, current_user.organization_id
+            session, asset_id, org_id
         )
 
         if not asset:
@@ -1450,7 +1453,7 @@ async def download_asset_content(
 async def download_asset_original(
     asset_id: UUID,
     inline: bool = Query(False, description="If true, set Content-Disposition to inline for preview; otherwise attachment for download"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Download the original uploaded file for an asset.
 
@@ -1468,7 +1471,7 @@ async def download_asset_original(
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=404, detail="Asset not found")
 
         if not asset.raw_bucket or not asset.raw_object_key:
@@ -1560,7 +1563,7 @@ async def download_bulk_assets(
 )
 async def delete_asset(
     asset_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Delete an asset and all associated artifacts from storage."""
     from app.core.storage.minio_service import get_minio_service
@@ -1570,7 +1573,7 @@ async def delete_asset(
         if not asset:
             raise HTTPException(status_code=404, detail="Asset not found")
 
-        if asset.organization_id != current_user.organization_id:
+        if asset.organization_id != org_id:
             raise HTTPException(status_code=403, detail="Access denied")
 
         minio = get_minio_service()

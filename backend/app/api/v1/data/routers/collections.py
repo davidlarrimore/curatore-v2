@@ -45,7 +45,7 @@ from app.api.v1.data.schemas import (
 from app.core.database.models import SearchCollection, User
 from app.core.search.collection_service import collection_service
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_user, require_org_admin
+from app.dependencies import get_current_org_id, get_current_user, require_org_admin
 
 router = APIRouter(prefix="/collections", tags=["Search Collections"])
 
@@ -104,13 +104,13 @@ async def list_collections(
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     limit: int = Query(50, ge=1, le=200),
     offset: int = Query(0, ge=0),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """List search collections for the current organization."""
     async with database_service.get_session() as session:
         collections, total = await collection_service.list_collections(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             collection_type=collection_type,
             is_active=is_active,
             limit=limit,
@@ -127,6 +127,7 @@ async def list_collections(
 @router.post("", response_model=SearchCollectionResponse, status_code=status.HTTP_201_CREATED)
 async def create_collection(
     request: SearchCollectionCreateRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """Create a new search collection."""
@@ -135,7 +136,7 @@ async def create_collection(
 
         collection = await collection_service.create_collection(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             name=request.name,
             description=request.description,
             collection_type=request.collection_type,
@@ -151,14 +152,14 @@ async def create_collection(
 @router.get("/{collection_id}", response_model=SearchCollectionResponse)
 async def get_collection(
     collection_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """Get a search collection by ID."""
     async with database_service.get_session() as session:
         collection = await collection_service.get_collection(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         if not collection:
             raise HTTPException(
@@ -172,6 +173,7 @@ async def get_collection(
 async def update_collection(
     collection_id: UUID,
     request: SearchCollectionUpdateRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """Update a search collection."""
@@ -183,7 +185,7 @@ async def update_collection(
         collection = await collection_service.update_collection(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             **update_data,
         )
         if not collection:
@@ -198,6 +200,7 @@ async def update_collection(
 @router.delete("/{collection_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_collection(
     collection_id: UUID,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """Delete a search collection and its vector sync targets."""
@@ -205,7 +208,7 @@ async def delete_collection(
         deleted = await collection_service.delete_collection(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         if not deleted:
             raise HTTPException(
@@ -227,6 +230,7 @@ async def delete_collection(
 async def populate_collection(
     collection_id: UUID,
     request: CollectionPopulateRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """
@@ -238,7 +242,7 @@ async def populate_collection(
         collection = await collection_service.get_collection(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         if not collection:
             raise HTTPException(
@@ -253,7 +257,7 @@ async def populate_collection(
         result = await collection_population_service.populate_from_index(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             asset_ids=[UUID(a) for a in request.asset_ids],
         )
         await session.commit()
@@ -271,6 +275,7 @@ async def populate_collection(
 async def populate_collection_fresh(
     collection_id: UUID,
     request: CollectionPopulateFreshRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """
@@ -282,7 +287,7 @@ async def populate_collection_fresh(
         collection = await collection_service.get_collection(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         if not collection:
             raise HTTPException(
@@ -297,7 +302,7 @@ async def populate_collection_fresh(
         run_id = await collection_population_service.populate_fresh(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             asset_ids=[UUID(a) for a in request.asset_ids],
             chunk_size=request.chunk_size,
             chunk_overlap=request.chunk_overlap,
@@ -316,6 +321,7 @@ async def populate_collection_fresh(
 async def remove_assets_from_collection(
     collection_id: UUID,
     request: CollectionRemoveAssetsRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """Remove specific assets' chunks from a collection."""
@@ -323,7 +329,7 @@ async def remove_assets_from_collection(
         collection = await collection_service.get_collection(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         if not collection:
             raise HTTPException(
@@ -338,7 +344,7 @@ async def remove_assets_from_collection(
         removed = await collection_population_service.remove_assets(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             asset_ids=[UUID(a) for a in request.asset_ids],
         )
         await session.commit()
@@ -351,6 +357,7 @@ async def remove_assets_from_collection(
 )
 async def clear_collection(
     collection_id: UUID,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """Remove all chunks from a collection."""
@@ -358,7 +365,7 @@ async def clear_collection(
         collection = await collection_service.get_collection(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         if not collection:
             raise HTTPException(
@@ -373,7 +380,7 @@ async def clear_collection(
         removed = await collection_population_service.clear_collection(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         await session.commit()
         return CollectionClearResponse(removed=removed)
@@ -387,7 +394,7 @@ async def clear_collection(
 @router.get("/{collection_id}/syncs", response_model=List[VectorSyncResponse])
 async def list_vector_syncs(
     collection_id: UUID,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ):
     """List external vector store sync targets for a collection."""
     async with database_service.get_session() as session:
@@ -395,7 +402,7 @@ async def list_vector_syncs(
         collection = await collection_service.get_collection(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         if not collection:
             raise HTTPException(
@@ -433,6 +440,7 @@ async def list_vector_syncs(
 async def add_vector_sync(
     collection_id: UUID,
     request: VectorSyncCreateRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """Add an external vector store sync target to a collection."""
@@ -441,7 +449,7 @@ async def add_vector_sync(
         collection = await collection_service.get_collection(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         if not collection:
             raise HTTPException(
@@ -478,6 +486,7 @@ async def add_vector_sync(
 async def remove_vector_sync(
     collection_id: UUID,
     sync_id: UUID,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """Remove an external vector store sync target."""
@@ -486,7 +495,7 @@ async def remove_vector_sync(
         collection = await collection_service.get_collection(
             session=session,
             collection_id=collection_id,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
         )
         if not collection:
             raise HTTPException(

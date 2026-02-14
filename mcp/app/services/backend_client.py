@@ -42,6 +42,7 @@ class BackendClient:
         self,
         api_key: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        org_id: Optional[str] = None,
     ) -> Dict[str, str]:
         """Build request headers."""
         headers = {"Content-Type": "application/json"}
@@ -49,6 +50,8 @@ class BackendClient:
             headers["Authorization"] = f"Bearer {api_key}"
         if correlation_id:
             headers["X-Correlation-ID"] = correlation_id
+        if org_id:
+            headers["X-Organization-Id"] = org_id
         return headers
 
     async def get_contracts(
@@ -56,6 +59,7 @@ class BackendClient:
         side_effects: Optional[bool] = None,
         api_key: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        org_id: Optional[str] = None,
     ) -> List[Dict[str, Any]]:
         """
         Fetch tool contracts from backend.
@@ -64,12 +68,13 @@ class BackendClient:
             side_effects: Filter by side_effects value (None = no filter)
             api_key: API key for authentication
             correlation_id: Request correlation ID
+            org_id: Organization ID for org-scoped requests
 
         Returns:
             List of tool contract dictionaries
         """
         client = await self._get_client()
-        headers = self._build_headers(api_key, correlation_id)
+        headers = self._build_headers(api_key, correlation_id, org_id=org_id)
 
         params = {}
         if side_effects is not None:
@@ -96,6 +101,7 @@ class BackendClient:
         name: str,
         api_key: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        org_id: Optional[str] = None,
     ) -> Optional[Dict[str, Any]]:
         """
         Fetch a specific tool contract.
@@ -104,12 +110,13 @@ class BackendClient:
             name: Function name
             api_key: API key for authentication
             correlation_id: Request correlation ID
+            org_id: Organization ID for org-scoped requests
 
         Returns:
             Tool contract dictionary or None if not found
         """
         client = await self._get_client()
-        headers = self._build_headers(api_key, correlation_id)
+        headers = self._build_headers(api_key, correlation_id, org_id=org_id)
 
         try:
             response = await client.get(
@@ -147,7 +154,7 @@ class BackendClient:
             Metadata catalog dictionary
         """
         client = await self._get_client()
-        headers = self._build_headers(api_key, correlation_id)
+        headers = self._build_headers(api_key, correlation_id, org_id=org_id)
 
         params = {}
         if org_id:
@@ -186,7 +193,7 @@ class BackendClient:
             List of facet definitions
         """
         client = await self._get_client()
-        headers = self._build_headers(api_key, correlation_id)
+        headers = self._build_headers(api_key, correlation_id, org_id=org_id)
 
         params = {}
         if org_id:
@@ -215,6 +222,7 @@ class BackendClient:
         api_key: Optional[str] = None,
         correlation_id: Optional[str] = None,
         dry_run: bool = False,
+        org_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Execute a CWR function.
@@ -225,12 +233,13 @@ class BackendClient:
             api_key: API key for authentication
             correlation_id: Request correlation ID
             dry_run: If true, function will not make changes
+            org_id: Organization ID for org-scoped requests
 
         Returns:
             Function execution result
         """
         client = await self._get_client()
-        headers = self._build_headers(api_key, correlation_id)
+        headers = self._build_headers(api_key, correlation_id, org_id=org_id)
 
         request_body = {
             "params": params,

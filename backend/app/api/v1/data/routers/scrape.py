@@ -63,7 +63,7 @@ from app.core.shared.database_service import database_service
 from app.core.shared.run_service import run_service
 from app.core.storage.minio_service import get_minio_service
 from app.core.tasks import async_delete_scrape_collection_task
-from app.dependencies import get_current_user, require_org_admin
+from app.dependencies import get_current_org_id, get_current_user, require_org_admin
 
 # Initialize router
 router = APIRouter(prefix="/scrape", tags=["Web Scraping"])
@@ -138,6 +138,7 @@ async def list_collections(
     status: Optional[str] = Query(None, description="Filter by status (active, paused, archived)"),
     limit: int = Query(50, ge=1, le=100, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> ScrapeCollectionListResponse:
     """
@@ -157,7 +158,7 @@ async def list_collections(
     async with database_service.get_session() as session:
         collections, total = await scrape_service.list_collections(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             status=status,
             limit=limit,
             offset=offset,
@@ -180,6 +181,7 @@ async def list_collections(
 )
 async def create_collection(
     request: ScrapeCollectionCreateRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ) -> ScrapeCollectionResponse:
     """
@@ -204,7 +206,7 @@ async def create_collection(
     async with database_service.get_session() as session:
         collection = await scrape_service.create_collection(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             name=request.name,
             root_url=request.root_url,
             collection_mode=request.collection_mode,
@@ -227,6 +229,7 @@ async def create_collection(
 )
 async def get_collection(
     collection_id: str,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> ScrapeCollectionResponse:
     """
@@ -251,7 +254,7 @@ async def get_collection(
             )
 
         # Verify organization access
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"
@@ -269,6 +272,7 @@ async def get_collection(
 async def update_collection(
     collection_id: str,
     request: ScrapeCollectionUpdateRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ) -> ScrapeCollectionResponse:
     """
@@ -293,7 +297,7 @@ async def update_collection(
                 detail="Collection not found"
             )
 
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"
@@ -336,6 +340,7 @@ async def update_collection(
 )
 async def delete_collection(
     collection_id: str,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ):
     """
@@ -368,7 +373,7 @@ async def delete_collection(
                 detail="Collection not found"
             )
 
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"
@@ -387,7 +392,7 @@ async def delete_collection(
 
         # Create a run to track the deletion
         run = Run(
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             run_type="scrape_delete",
             origin="user",
             status="pending",
@@ -405,7 +410,7 @@ async def delete_collection(
         # Queue the async deletion task
         async_delete_scrape_collection_task.delay(
             collection_id=str(collection_id),
-            organization_id=str(current_user.organization_id),
+            organization_id=str(org_id),
             run_id=str(run.id),
             collection_name=collection.name,
         )
@@ -436,6 +441,7 @@ async def delete_collection(
 async def start_crawl(
     collection_id: str,
     request: Optional[CrawlCollectionRequest] = None,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> CrawlCollectionResponse:
     """
@@ -460,7 +466,7 @@ async def start_crawl(
                 detail="Collection not found"
             )
 
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"
@@ -486,7 +492,7 @@ async def start_crawl(
 
         scrape_crawl_task.delay(
             collection_id=str(collection_id),
-            organization_id=str(current_user.organization_id),
+            organization_id=str(org_id),
             run_id=str(run.id),
             user_id=str(current_user.id),
             max_pages=max_pages,
@@ -510,7 +516,7 @@ async def start_crawl(
 )
 async def get_crawl_status(
     collection_id: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> CrawlStatusResponse:
     """
     Get status of the most recent crawl.
@@ -531,7 +537,7 @@ async def get_crawl_status(
                 detail="Collection not found"
             )
 
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"
@@ -574,7 +580,7 @@ async def get_crawl_status(
 async def list_sources(
     collection_id: str,
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> ScrapeSourceListResponse:
     """
     List sources for a collection.
@@ -596,7 +602,7 @@ async def list_sources(
                 detail="Collection not found"
             )
 
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"
@@ -639,6 +645,7 @@ async def list_sources(
 async def add_source(
     collection_id: str,
     request: ScrapeSourceCreateRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ) -> ScrapeSourceResponse:
     """
@@ -663,7 +670,7 @@ async def add_source(
                 detail="Collection not found"
             )
 
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"
@@ -671,7 +678,7 @@ async def add_source(
 
         source = await scrape_service.add_source(
             session=session,
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             collection_id=UUID(collection_id),
             url=request.url,
             source_type=request.source_type,
@@ -704,6 +711,7 @@ async def add_source(
 async def delete_source(
     collection_id: str,
     source_id: str,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(require_org_admin),
 ) -> None:
     """
@@ -725,7 +733,7 @@ async def delete_source(
                 detail="Collection not found"
             )
 
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"
@@ -762,7 +770,7 @@ async def list_scraped_assets(
     is_promoted: Optional[bool] = Query(None, description="Filter by promotion status"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum results"),
     offset: int = Query(0, ge=0, description="Offset for pagination"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> ScrapedAssetListResponse:
     """
     List scraped assets in a collection.
@@ -788,7 +796,7 @@ async def list_scraped_assets(
                 detail="Collection not found"
             )
 
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"
@@ -821,7 +829,7 @@ async def list_scraped_assets(
 async def get_scraped_asset(
     collection_id: str,
     scraped_asset_id: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> ScrapedAssetResponse:
     """
     Get scraped asset details.
@@ -843,7 +851,7 @@ async def get_scraped_asset(
                 detail="Collection not found"
             )
 
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"
@@ -869,7 +877,7 @@ async def get_scraped_asset(
 async def get_scraped_asset_content(
     collection_id: str,
     scraped_asset_id: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> PlainTextResponse:
     """
     Get extracted markdown content for a scraped asset.
@@ -891,7 +899,7 @@ async def get_scraped_asset_content(
                 detail="Collection not found"
             )
 
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"
@@ -954,6 +962,7 @@ async def get_scraped_asset_content(
 async def promote_to_record(
     collection_id: str,
     scraped_asset_id: str,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> PromoteToRecordResponse:
     """
@@ -980,7 +989,7 @@ async def promote_to_record(
                 detail="Collection not found"
             )
 
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"
@@ -1028,7 +1037,7 @@ async def promote_to_record(
 async def get_path_tree(
     collection_id: str,
     path_prefix: str = Query("/", description="Parent path to list children from"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> PathTreeResponse:
     """
     Get hierarchical tree structure for browsing.
@@ -1050,7 +1059,7 @@ async def get_path_tree(
                 detail="Collection not found"
             )
 
-        if collection.organization_id != current_user.organization_id:
+        if collection.organization_id != org_id:
             raise HTTPException(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Collection not found"

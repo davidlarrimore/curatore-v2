@@ -106,7 +106,7 @@ async def handle_tools_call(
             progress_service.update(progress_token, progress=10, message="Fetching tool contract...")
 
         # 2. Get contract for schema validation and exposure check
-        contract = await backend_client.get_contract(name, api_key, correlation_id)
+        contract = await backend_client.get_contract(name, api_key, correlation_id, org_id=org_id)
         if not contract:
             if progress_state:
                 progress_service.fail(progress_token, f"Tool '{name}' not found")
@@ -188,6 +188,7 @@ async def handle_tools_call(
             params=clamped_arguments,
             api_key=api_key,
             correlation_id=correlation_id,
+            org_id=org_id,
         )
 
         if progress_state:

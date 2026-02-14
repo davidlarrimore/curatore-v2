@@ -17,9 +17,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import { useAuth } from './auth-context'
-import { organizationsApi, type Organization } from './api'
-
-const ORG_CONTEXT_KEY = 'curatore_org_context'
+import { organizationsApi, setOrgContext, type Organization } from './api'
 
 interface OrgUrlContextType {
   // Current organization from URL
@@ -79,11 +77,8 @@ export function OrgUrlProvider({ children }: { children: React.ReactNode }) {
         const org = await organizationsApi.getOrganizationBySlug(token, orgSlug)
         setOrganization(org)
 
-        // Set localStorage for API client compatibility
-        // This ensures API calls include X-Organization-Id header
-        if (typeof window !== 'undefined') {
-          localStorage.setItem(ORG_CONTEXT_KEY, org.id)
-        }
+        // Set module-level org context for API client
+        setOrgContext(org.id)
       } catch (err: unknown) {
         console.error('Failed to fetch organization:', err)
 

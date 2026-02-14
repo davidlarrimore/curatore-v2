@@ -42,7 +42,7 @@ from app.api.v1.admin.schemas import (
 from app.core.auth.connection_service import connection_service
 from app.core.database.models import Connection, User
 from app.core.shared.database_service import database_service
-from app.dependencies import get_current_user, require_org_admin
+from app.dependencies import get_current_org_id, get_current_user, require_org_admin, require_org_admin_or_above
 
 # Initialize router
 router = APIRouter(prefix="/connections", tags=["Connections"])
@@ -88,6 +88,7 @@ def _redact_secrets(config: dict) -> dict:
     description="List all available connection types with their configuration schemas."
 )
 async def list_connection_types(
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> ConnectionTypesResponse:
     """
@@ -147,6 +148,7 @@ async def list_connections(
     is_default: Optional[bool] = Query(None, description="Filter by default status"),
     skip: int = Query(0, ge=0, description="Number of connections to skip"),
     limit: int = Query(100, ge=1, le=1000, description="Max connections to return"),
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> ConnectionListResponse:
     """
@@ -175,7 +177,7 @@ async def list_connections(
     async with database_service.get_session() as session:
         # Build query
         query = select(Connection).where(
-            Connection.organization_id == current_user.organization_id
+            Connection.organization_id == org_id
         )
 
         # Apply filters
@@ -235,7 +237,8 @@ async def list_connections(
 )
 async def create_connection(
     request: ConnectionCreateRequest,
-    current_user: User = Depends(require_org_admin),
+    org_id: UUID = Depends(get_current_org_id),
+    current_user: User = Depends(require_org_admin_or_above),
 ) -> ConnectionResponse:
     """
     Create new connection.
@@ -298,7 +301,7 @@ async def create_connection(
         if request.is_default:
             await session.execute(
                 update(Connection)
-                .where(Connection.organization_id == current_user.organization_id)
+                .where(Connection.organization_id == org_id)
                 .where(Connection.connection_type == request.connection_type)
                 .values(is_default=False)
             )
@@ -306,7 +309,7 @@ async def create_connection(
         # Create connection
         connection = Connection(
             id=uuid4(),
-            organization_id=current_user.organization_id,
+            organization_id=org_id,
             name=request.name,
             description=request.description,
             connection_type=request.connection_type,
@@ -357,6 +360,7 @@ async def create_connection(
 )
 async def get_connection(
     connection_id: str,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> ConnectionResponse:
     """
@@ -385,7 +389,7 @@ async def get_connection(
         result = await session.execute(
             select(Connection)
             .where(Connection.id == UUID(connection_id))
-            .where(Connection.organization_id == current_user.organization_id)
+            .where(Connection.organization_id == org_id)
         )
         connection = result.scalar_one_or_none()
 
@@ -424,7 +428,8 @@ async def get_connection(
 async def update_connection(
     connection_id: str,
     request: ConnectionUpdateRequest,
-    current_user: User = Depends(require_org_admin),
+    org_id: UUID = Depends(get_current_org_id),
+    current_user: User = Depends(require_org_admin_or_above),
 ) -> ConnectionResponse:
     """
     Update connection details.
@@ -462,7 +467,7 @@ async def update_connection(
         result = await session.execute(
             select(Connection)
             .where(Connection.id == UUID(connection_id))
-            .where(Connection.organization_id == current_user.organization_id)
+            .where(Connection.organization_id == org_id)
         )
         connection = result.scalar_one_or_none()
 
@@ -507,7 +512,7 @@ async def update_connection(
             # Unset other defaults of same type
             await session.execute(
                 update(Connection)
-                .where(Connection.organization_id == current_user.organization_id)
+                .where(Connection.organization_id == org_id)
                 .where(Connection.connection_type == connection.connection_type)
                 .where(Connection.id != connection.id)
                 .values(is_default=False)
@@ -555,7 +560,8 @@ async def update_connection(
 )
 async def delete_connection(
     connection_id: str,
-    current_user: User = Depends(require_org_admin),
+    org_id: UUID = Depends(get_current_org_id),
+    current_user: User = Depends(require_org_admin_or_above),
 ) -> None:
     """
     Delete connection.
@@ -585,7 +591,7 @@ async def delete_connection(
         result = await session.execute(
             select(Connection)
             .where(Connection.id == UUID(connection_id))
-            .where(Connection.organization_id == current_user.organization_id)
+            .where(Connection.organization_id == org_id)
         )
         connection = result.scalar_one_or_none()
 
@@ -622,6 +628,7 @@ async def delete_connection(
 )
 async def test_connection_endpoint(
     connection_id: str,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> ConnectionTestResponse:
     """
@@ -661,7 +668,7 @@ async def test_connection_endpoint(
         result = await session.execute(
             select(Connection)
             .where(Connection.id == UUID(connection_id))
-            .where(Connection.organization_id == current_user.organization_id)
+            .where(Connection.organization_id == org_id)
         )
         connection = result.scalar_one_or_none()
 
@@ -694,7 +701,7 @@ async def test_connection_endpoint(
 )
 async def test_llm_credentials(
     request: dict,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> dict:
     """
     Test LLM credentials and fetch available models.
@@ -805,7 +812,8 @@ async def test_llm_credentials(
 )
 async def set_default_connection(
     connection_id: str,
-    current_user: User = Depends(require_org_admin),
+    org_id: UUID = Depends(get_current_org_id),
+    current_user: User = Depends(require_org_admin_or_above),
 ) -> ConnectionResponse:
     """
     Set connection as default.
@@ -834,7 +842,7 @@ async def set_default_connection(
         result = await session.execute(
             select(Connection)
             .where(Connection.id == UUID(connection_id))
-            .where(Connection.organization_id == current_user.organization_id)
+            .where(Connection.organization_id == org_id)
         )
         connection = result.scalar_one_or_none()
 
@@ -847,7 +855,7 @@ async def set_default_connection(
         # Unset other defaults of same type
         await session.execute(
             update(Connection)
-            .where(Connection.organization_id == current_user.organization_id)
+            .where(Connection.organization_id == org_id)
             .where(Connection.connection_type == connection.connection_type)
             .where(Connection.id != connection.id)
             .values(is_default=False)

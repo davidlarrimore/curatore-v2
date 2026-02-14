@@ -51,7 +51,7 @@ from app.core.ingestion.upload_integration_service import upload_integration_ser
 from app.core.shared.artifact_service import artifact_service
 from app.core.shared.database_service import database_service
 from app.core.storage.minio_service import get_minio_service
-from app.dependencies import get_current_user
+from app.dependencies import get_current_org_id, get_current_user
 
 logger = logging.getLogger("curatore.api.storage")
 
@@ -113,6 +113,7 @@ async def get_storage_health():
 )
 async def proxy_upload(
     file: fastapi.UploadFile,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> ConfirmUploadResponse:
     """Upload file proxied through backend.
@@ -128,11 +129,9 @@ async def proxy_upload(
     if not minio:
         raise HTTPException(status_code=503, detail="MinIO service unavailable")
 
-    organization_id = current_user.organization_id
-
     document_id = str(uuid.uuid4())
     filename = file.filename or "unknown"
-    object_key = f"{organization_id}/uploads/{document_id}-{filename}"
+    object_key = f"{org_id}/uploads/{document_id}-{filename}"
 
     bucket = settings.minio_bucket_uploads
     expires_at = datetime.utcnow() + timedelta(days=settings.file_retention_uploaded_days)
@@ -144,7 +143,7 @@ async def proxy_upload(
 
             artifact = await artifact_service.create_artifact(
                 session=session,
-                organization_id=organization_id,
+                organization_id=org_id,
                 document_id=document_id,
                 artifact_type="uploaded",
                 bucket=bucket,
@@ -226,7 +225,7 @@ async def proxy_upload(
 )
 async def get_artifact(
     artifact_id: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> ArtifactResponse:
     """Get artifact details by ID."""
     _require_storage_enabled()
@@ -242,7 +241,7 @@ async def get_artifact(
             raise HTTPException(status_code=404, detail="Artifact not found")
 
         # Verify organization access
-        if artifact.organization_id != current_user.organization_id:
+        if artifact.organization_id != org_id:
             raise HTTPException(status_code=404, detail="Artifact not found")
 
         return ArtifactResponse(
@@ -274,17 +273,15 @@ async def list_artifacts(
     artifact_type: Optional[str] = Query(None, description="Filter by artifact type (uploaded, processed, temp)"),
     limit: int = Query(100, ge=1, le=1000, description="Maximum number of artifacts to return"),
     offset: int = Query(0, ge=0, description="Number of artifacts to skip"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> list[ArtifactResponse]:
     """List all artifacts for the current organization."""
     _require_storage_enabled()
 
-    organization_id = current_user.organization_id
-
     async with database_service.get_session() as session:
         artifacts = await artifact_service.list_artifacts_by_organization(
             session=session,
-            organization_id=organization_id,
+            organization_id=org_id,
             artifact_type=artifact_type,
             limit=limit,
             offset=offset,
@@ -320,18 +317,16 @@ async def list_artifacts(
 )
 async def list_document_artifacts(
     document_id: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> list[ArtifactResponse]:
     """List all artifacts for a document."""
     _require_storage_enabled()
-
-    organization_id = current_user.organization_id
 
     async with database_service.get_session() as session:
         artifacts = await artifact_service.get_artifacts_by_document(
             session=session,
             document_id=document_id,
-            organization_id=organization_id,
+            organization_id=org_id,
         )
 
         return [
@@ -363,7 +358,7 @@ async def list_document_artifacts(
 )
 async def delete_artifact(
     artifact_id: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> dict:
     """Delete an artifact and its storage object."""
     _require_storage_enabled()
@@ -383,7 +378,7 @@ async def delete_artifact(
             raise HTTPException(status_code=404, detail="Artifact not found")
 
         # Verify organization access
-        if artifact.organization_id != current_user.organization_id:
+        if artifact.organization_id != org_id:
             raise HTTPException(status_code=404, detail="Artifact not found")
 
         try:
@@ -419,7 +414,7 @@ async def delete_artifact(
 )
 async def bulk_delete_artifacts(
     request: BulkDeleteArtifactsRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> BulkDeleteArtifactsResponse:
     """Delete multiple artifacts and their storage objects."""
     _require_storage_enabled()
@@ -461,7 +456,7 @@ async def bulk_delete_artifacts(
                     continue
 
                 # Verify organization access
-                if artifact.organization_id != current_user.organization_id:
+                if artifact.organization_id != org_id:
                     results.append(BulkDeleteResultItem(
                         artifact_id=artifact_id_str,
                         document_id=artifact.document_id,
@@ -527,7 +522,7 @@ async def bulk_delete_artifacts(
     description="List all storage buckets accessible to the user with display names.",
 )
 async def list_buckets(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> BucketsListResponse:
     """List all accessible storage buckets with metadata."""
     _require_storage_enabled()
@@ -568,6 +563,7 @@ async def list_buckets(
 async def browse_bucket(
     bucket: str,
     prefix: str = Query(default="", description="Folder prefix to browse (e.g., 'org_123/workspace/')"),
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> BrowseResponse:
     """Browse bucket contents at a specific path."""
@@ -582,7 +578,7 @@ async def browse_bucket(
         raise HTTPException(status_code=404, detail=f"Bucket not found: {bucket}")
 
     # Validate that non-admin users can only browse within their organization prefix
-    organization_id = str(current_user.organization_id)
+    organization_id = str(org_id)
     if current_user.role != "org_admin" and prefix and not prefix.startswith(f"{organization_id}/"):
         raise HTTPException(
             status_code=403,
@@ -651,7 +647,7 @@ async def browse_bucket(
     description="Get list of bucket names that are protected (read-only).",
 )
 async def get_protected_buckets(
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> ProtectedBucketsResponse:
     """Get list of protected bucket names."""
     _require_storage_enabled()
@@ -675,7 +671,7 @@ async def get_protected_buckets(
 )
 async def create_folder(
     request: CreateFolderRequest,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> CreateFolderResponse:
     """Create a new folder in storage."""
     _require_storage_enabled()
@@ -696,7 +692,7 @@ async def create_folder(
         )
 
     # Validate that path starts with user's organization prefix
-    organization_id = str(current_user.organization_id)
+    organization_id = str(org_id)
     if not request.path.startswith(f"{organization_id}/"):
         raise HTTPException(
             status_code=403,
@@ -735,7 +731,7 @@ async def delete_folder(
     bucket: str,
     path: str,
     recursive: bool = Query(default=False, description="Delete folder contents recursively"),
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> DeleteFolderResponse:
     """Delete a folder from storage."""
     _require_storage_enabled()
@@ -756,7 +752,7 @@ async def delete_folder(
         )
 
     # Validate that path starts with user's organization prefix
-    organization_id = str(current_user.organization_id)
+    organization_id = str(org_id)
     if not path.startswith(f"{organization_id}/"):
         raise HTTPException(
             status_code=403,
@@ -795,7 +791,7 @@ async def delete_folder(
 async def delete_file(
     bucket: str,
     key: str,
-    current_user: User = Depends(get_current_user),
+    org_id: UUID = Depends(get_current_org_id),
 ) -> DeleteFileResponse:
     """Delete a file from storage by bucket and key."""
     _require_storage_enabled()
@@ -816,7 +812,7 @@ async def delete_file(
         )
 
     # Validate that file path starts with user's organization prefix
-    organization_id = str(current_user.organization_id)
+    organization_id = str(org_id)
     if not key.startswith(f"{organization_id}/"):
         raise HTTPException(
             status_code=403,
@@ -830,7 +826,7 @@ async def delete_file(
             # Try to find artifact by object_key
             artifacts = await artifact_service.list_artifacts_by_organization(
                 session=session,
-                organization_id=current_user.organization_id,
+                organization_id=org_id,
                 artifact_type=None,
                 limit=1000,
                 offset=0,
@@ -928,6 +924,7 @@ async def upload_to_folder(
     bucket: str = fastapi.Form(...),
     prefix: str = fastapi.Form(default=""),
     file: fastapi.UploadFile = fastapi.File(...),
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """
@@ -993,7 +990,7 @@ async def upload_to_folder(
                     # (in case someone re-uploads to the same path)
                     artifacts = await artifact_service.list_artifacts_by_organization(
                         session=session,
-                        organization_id=current_user.organization_id,
+                        organization_id=org_id,
                         artifact_type="uploaded",
                         limit=1000,
                         offset=0,
@@ -1023,7 +1020,7 @@ async def upload_to_folder(
                         document_id = str(uuid.uuid4())
                         artifact = await artifact_service.create_artifact(
                             session=session,
-                            organization_id=current_user.organization_id,
+                            organization_id=org_id,
                             document_id=document_id,
                             artifact_type="uploaded",
                             bucket=bucket,
@@ -1040,7 +1037,7 @@ async def upload_to_folder(
 
                 logger.info(
                     f"Registered upload artifact for document={document_id}, "
-                    f"artifact={artifact_id}, org={current_user.organization_id}"
+                    f"artifact={artifact_id}, org={org_id}"
                 )
             except Exception as e:
                 logger.error(f"Failed to register upload artifact for {bucket}/{object_key}: {e}")
@@ -1073,6 +1070,7 @@ async def upload_to_folder(
 )
 async def move_files(
     request: MoveFilesRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> MoveFilesResponse:
     """Move files to a different location."""
@@ -1097,7 +1095,7 @@ async def move_files(
         )
 
     # Validate that destination prefix starts with user's organization prefix
-    organization_id = str(current_user.organization_id)
+    organization_id = str(org_id)
     dest_prefix = request.destination_prefix or ""
     if dest_prefix and not dest_prefix.startswith(f"{organization_id}/"):
         raise HTTPException(
@@ -1119,7 +1117,7 @@ async def move_files(
                     continue
 
                 # Verify organization access
-                if artifact.organization_id != current_user.organization_id:
+                if artifact.organization_id != org_id:
                     failed_artifacts.append(artifact_id)
                     continue
 
@@ -1160,6 +1158,7 @@ async def move_files(
 )
 async def rename_file(
     request: RenameFileRequest,
+    org_id: UUID = Depends(get_current_org_id),
     current_user: User = Depends(get_current_user),
 ) -> RenameFileResponse:
     """Rename a file in storage."""
@@ -1181,7 +1180,7 @@ async def rename_file(
             raise HTTPException(status_code=404, detail="Artifact not found")
 
         # Verify organization access
-        if artifact.organization_id != current_user.organization_id:
+        if artifact.organization_id != org_id:
             raise HTTPException(status_code=404, detail="Artifact not found")
 
         # Check if bucket is protected
