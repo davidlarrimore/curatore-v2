@@ -463,6 +463,151 @@ async def get_current_user(
 
 
 # =========================================================================
+# DELEGATED AUTHENTICATION (SERVICE ACCOUNT + ON-BEHALF-OF)
+# =========================================================================
+
+
+async def get_delegated_user(
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_on_behalf_of: Optional[str] = Header(None, alias="X-On-Behalf-Of"),
+) -> User:
+    """
+    Resolve a user via delegated authentication (ServiceAccount + X-On-Behalf-Of).
+
+    Used by trusted services (e.g., MCP Gateway) that authenticate with a
+    ServiceAccount API key and forward end-user identity via the
+    X-On-Behalf-Of header containing the user's email address.
+
+    Auth chain:
+        Service → Backend:  X-API-Key: <ServiceAccount key>
+                            X-On-Behalf-Of: alice@company.com
+
+    Args:
+        x_api_key: ServiceAccount API key from X-API-Key header
+        x_on_behalf_of: End-user email from X-On-Behalf-Of header
+
+    Returns:
+        User: The resolved end-user (with their org_id, role, etc.)
+
+    Raises:
+        HTTPException: 401 if API key is invalid or not a ServiceAccount key
+        HTTPException: 403 if API key belongs to a regular User (not ServiceAccount)
+        HTTPException: 404 if X-On-Behalf-Of email doesn't match any Curatore user
+    """
+    # Validate the API key — must be a ServiceAccount key
+    principal = await get_current_principal_from_api_key(x_api_key)
+
+    if not isinstance(principal, ServiceAccount):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Delegated auth requires a ServiceAccount API key, not a user key.",
+        )
+
+    if not x_on_behalf_of:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="X-On-Behalf-Of header is required for delegated authentication.",
+        )
+
+    # Resolve the end-user by email
+    async with database_service.get_session() as session:
+        result = await session.execute(
+            select(User).where(User.email == x_on_behalf_of)
+        )
+        user = result.scalar_one_or_none()
+
+        if not user:
+            logger.warning(
+                f"Delegated auth: user not found for email '{x_on_behalf_of}' "
+                f"(service account: {principal.name})"
+            )
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"No Curatore user found with email: {x_on_behalf_of}",
+            )
+
+        if not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Delegated user account is inactive",
+            )
+
+        logger.debug(
+            f"Delegated auth: resolved {x_on_behalf_of} → {user.email} "
+            f"(org: {user.organization_id}, via service account: {principal.name})"
+        )
+        return user
+
+
+async def get_current_user_or_delegated(
+    credentials: Optional[HTTPAuthorizationCredentials] = Depends(bearer_scheme),
+    x_api_key: Optional[str] = Header(None, alias="X-API-Key"),
+    x_on_behalf_of: Optional[str] = Header(None, alias="X-On-Behalf-Of"),
+) -> User:
+    """
+    Flexible auth: JWT, User API key, or delegated (ServiceAccount + X-On-Behalf-Of).
+
+    Tries authentication methods in order:
+    1. Auth disabled (ENABLE_AUTH=false) → return default admin user
+    2. JWT Bearer token → standard user auth
+    3. X-API-Key with X-On-Behalf-Of → delegated auth (ServiceAccount resolves end-user)
+    4. X-API-Key without X-On-Behalf-Of → user API key auth (rejects ServiceAccount keys)
+
+    This dependency is used on CWR endpoints that the MCP Gateway calls,
+    allowing both browser users (JWT) and service-delegated users to access
+    the same endpoints with proper org scoping.
+
+    Args:
+        credentials: HTTP Bearer token from Authorization header (optional)
+        x_api_key: API key from X-API-Key header (optional)
+        x_on_behalf_of: End-user email from X-On-Behalf-Of header (optional)
+
+    Returns:
+        User: Resolved user (always a User, never a ServiceAccount)
+
+    Raises:
+        HTTPException: 401 if no valid authentication provided
+    """
+    # Auth disabled: backward compatibility mode
+    if not settings.enable_auth:
+        async with database_service.get_session() as session:
+            result = await session.execute(
+                select(User).where(User.role == "admin").limit(1)
+            )
+            user = result.scalar_one_or_none()
+
+            if not user:
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="No users found. Please run database seed: python -m app.core.commands.seed --create-admin",
+                )
+            return user
+
+    # Try JWT first
+    if credentials:
+        try:
+            return await get_current_user_from_jwt(credentials)
+        except HTTPException:
+            if not x_api_key:
+                raise
+
+    # Try API key
+    if x_api_key:
+        # If X-On-Behalf-Of is present, use delegated auth
+        if x_on_behalf_of:
+            return await get_delegated_user(x_api_key, x_on_behalf_of)
+
+        # Otherwise, standard user API key auth
+        return await get_current_user_from_api_key(x_api_key)
+
+    raise HTTPException(
+        status_code=status.HTTP_401_UNAUTHORIZED,
+        detail="Authentication required. Provide Bearer token, API key, or delegated auth.",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+
+
+# =========================================================================
 # AUTHORIZATION (ROLE-BASED)
 # =========================================================================
 
@@ -508,6 +653,57 @@ async def require_admin(user: User = Depends(get_current_user)) -> User:
 # =========================================================================
 
 
+async def _resolve_effective_org_id(
+    user: User,
+    x_organization_id: Optional[str] = None,
+) -> Optional[UUID_TYPE]:
+    """
+    Core org resolution logic shared by get_effective_org_id variants.
+
+    For system admins:
+        - If X-Organization-Id header is provided, use that org (after validation)
+        - If no header, return None (system context)
+
+    For non-admin users:
+        - Always use user.organization_id (header is ignored)
+    """
+    if user.role != "admin":
+        return user.organization_id
+
+    if x_organization_id:
+        try:
+            org_id = UUID_TYPE(x_organization_id)
+        except ValueError:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Invalid organization ID format",
+            )
+
+        async with database_service.get_session() as session:
+            result = await session.execute(
+                select(Organization).where(Organization.id == org_id)
+            )
+            org = result.scalar_one_or_none()
+
+            if not org:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="Organization not found",
+                )
+
+            if not org.is_active:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail="Organization is inactive",
+                )
+
+            logger.debug(f"Admin {user.email} using org context: {org.name}")
+            return org_id
+
+    logger.debug(f"Admin {user.email} using system context")
+    return None
+
+
 async def get_effective_org_id(
     user: User = Depends(get_current_user),
     x_organization_id: Optional[str] = Header(None, alias="X-Organization-Id"),
@@ -548,45 +744,20 @@ async def get_effective_org_id(
         System context (None) is only possible for admin users.
         Non-admin users always have an org context.
     """
-    # Non-admin users: always use their organization
-    if user.role != "admin":
-        return user.organization_id
+    return await _resolve_effective_org_id(user, x_organization_id)
 
-    # Admin users: use header if provided, otherwise system context (None)
-    if x_organization_id:
-        try:
-            org_id = UUID_TYPE(x_organization_id)
-        except ValueError:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Invalid organization ID format",
-            )
 
-        # Validate org exists and is active
-        async with database_service.get_session() as session:
-            result = await session.execute(
-                select(Organization).where(Organization.id == org_id)
-            )
-            org = result.scalar_one_or_none()
+async def get_effective_org_id_or_delegated(
+    user: User = Depends(get_current_user_or_delegated),
+    x_organization_id: Optional[str] = Header(None, alias="X-Organization-Id"),
+) -> Optional[UUID_TYPE]:
+    """
+    Get effective organization context, supporting delegated auth.
 
-            if not org:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail="Organization not found",
-                )
-
-            if not org.is_active:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail="Organization is inactive",
-                )
-
-            logger.debug(f"Admin {user.email} using org context: {org.name}")
-            return org_id
-
-    # No header: system context
-    logger.debug(f"Admin {user.email} using system context")
-    return None
+    Same logic as get_effective_org_id but uses get_current_user_or_delegated
+    for authentication, allowing ServiceAccount + X-On-Behalf-Of flows.
+    """
+    return await _resolve_effective_org_id(user, x_organization_id)
 
 
 async def require_org_context(
@@ -779,6 +950,23 @@ async def get_current_org_id(
 
 # Alias for backwards compatibility
 get_optional_current_user = get_current_user_optional
+
+
+async def get_current_org_id_or_delegated(
+    org_id: Optional[UUID_TYPE] = Depends(get_effective_org_id_or_delegated),
+) -> UUID_TYPE:
+    """
+    Get org ID for the current context, supporting delegated auth.
+
+    Same as get_current_org_id but uses get_effective_org_id_or_delegated,
+    allowing ServiceAccount + X-On-Behalf-Of flows.
+    """
+    if org_id is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Organization context required. Provide X-Organization-Id header.",
+        )
+    return org_id
 
 
 # =========================================================================

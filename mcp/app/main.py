@@ -15,7 +15,7 @@ from app.handlers import handle_tools_call, handle_tools_list
 from app.middleware.auth import AuthMiddleware
 from app.middleware.correlation import CorrelationMiddleware
 from app.models.openai import OpenAIToolsResponse
-from app.server import ctx_api_key, ctx_correlation_id, ctx_org_id, session_manager
+from app.server import ctx_api_key, ctx_correlation_id, ctx_user_email, session_manager
 from app.services.backend_client import backend_client
 from app.services.openai_converter import mcp_tools_to_openai
 from app.services.policy_service import policy_service
@@ -91,10 +91,12 @@ class MCPTransport:
     async def __call__(self, scope, receive, send):
         if scope["type"] == "http":
             headers = dict(scope.get("headers", []))
-            auth = headers.get(b"authorization", b"").decode()
-            if auth.lower().startswith("bearer "):
-                ctx_api_key.set(auth[7:])
-            ctx_org_id.set(headers.get(b"x-org-id", b"").decode() or None)
+            # Use the backend API key (ServiceAccount key), not the incoming Bearer token
+            ctx_api_key.set(settings.backend_api_key or None)
+            # Extract user email forwarded by Open WebUI
+            ctx_user_email.set(
+                headers.get(b"x-openwebui-user-email", b"").decode() or None
+            )
             ctx_correlation_id.set(
                 headers.get(b"x-correlation-id", b"").decode() or None
             )
@@ -153,8 +155,9 @@ async def list_tools(request: Request):
     """List available MCP tools (REST endpoint for testing)."""
     api_key = getattr(request.state, "api_key", None)
     correlation_id = getattr(request.state, "correlation_id", None)
+    user_email = getattr(request.state, "user_email", None)
 
-    result = await handle_tools_list(api_key, correlation_id)
+    result = await handle_tools_list(api_key, correlation_id, user_email=user_email)
     return result.model_dump()
 
 
@@ -166,16 +169,16 @@ async def call_tool(name: str, request: Request):
     except json.JSONDecodeError:
         body = {}
 
-    org_id = getattr(request.state, "org_id", None)
     api_key = getattr(request.state, "api_key", None)
     correlation_id = getattr(request.state, "correlation_id", None)
+    user_email = getattr(request.state, "user_email", None)
 
     result = await handle_tools_call(
         name=name,
         arguments=body.get("arguments", {}),
-        org_id=org_id,
         api_key=api_key,
         correlation_id=correlation_id,
+        user_email=user_email,
     )
     return result.model_dump()
 
@@ -321,9 +324,10 @@ async def list_openai_tools(request: Request):
     """
     api_key = getattr(request.state, "api_key", None)
     correlation_id = getattr(request.state, "correlation_id", None)
+    user_email = getattr(request.state, "user_email", None)
 
     # Reuse existing MCP tools list handler
-    mcp_result = await handle_tools_list(api_key, correlation_id)
+    mcp_result = await handle_tools_list(api_key, correlation_id, user_email=user_email)
 
     # Convert to OpenAI format
     openai_tools = mcp_tools_to_openai(mcp_result.tools)
@@ -348,9 +352,9 @@ async def call_openai_tool(name: str, request: Request):
     except json.JSONDecodeError:
         body = {}
 
-    org_id = getattr(request.state, "org_id", None)
     api_key = getattr(request.state, "api_key", None)
     correlation_id = getattr(request.state, "correlation_id", None)
+    user_email = getattr(request.state, "user_email", None)
 
     # OpenAI sends args directly; MCP wraps in "arguments"
     # Support both formats for maximum compatibility
@@ -363,9 +367,9 @@ async def call_openai_tool(name: str, request: Request):
     result = await handle_tools_call(
         name=name,
         arguments=arguments,
-        org_id=org_id,
         api_key=api_key,
         correlation_id=correlation_id,
+        user_email=user_email,
     )
     return result.model_dump()
 
@@ -380,9 +384,10 @@ async def get_openapi_spec(request: Request):
     """
     api_key = getattr(request.state, "api_key", None)
     correlation_id = getattr(request.state, "correlation_id", None)
+    user_email = getattr(request.state, "user_email", None)
 
     # Get available tools
-    mcp_result = await handle_tools_list(api_key, correlation_id)
+    mcp_result = await handle_tools_list(api_key, correlation_id, user_email=user_email)
     openai_tools = mcp_tools_to_openai(mcp_result.tools)
 
     # Build OpenAPI paths from tools - flat paths like Open WebUI expects
@@ -474,9 +479,9 @@ async def call_tool_direct(tool_name: str, request: Request):
     except json.JSONDecodeError:
         body = {}
 
-    org_id = getattr(request.state, "org_id", None)
     api_key = getattr(request.state, "api_key", None)
     correlation_id = getattr(request.state, "correlation_id", None)
+    user_email = getattr(request.state, "user_email", None)
 
     # Support both direct args and wrapped args
     if "arguments" in body and isinstance(body["arguments"], dict):
@@ -487,9 +492,9 @@ async def call_tool_direct(tool_name: str, request: Request):
     result = await handle_tools_call(
         name=tool_name,
         arguments=arguments,
-        org_id=org_id,
         api_key=api_key,
         correlation_id=correlation_id,
+        user_email=user_email,
     )
     return result.model_dump()
 

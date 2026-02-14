@@ -30,7 +30,11 @@ from app.cwr.tools import (
     fn,
     initialize_functions,
 )
-from app.dependencies import get_current_user, get_current_org_id, get_effective_org_id
+from app.dependencies import (
+    get_current_org_id_or_delegated,
+    get_current_user_or_delegated,
+    get_effective_org_id_or_delegated,
+)
 
 logger = logging.getLogger("curatore.api.functions")
 
@@ -46,8 +50,8 @@ router = APIRouter(prefix="/functions", tags=["Functions"])
 async def list_functions(
     category: Optional[str] = Query(None, description="Filter by category"),
     tag: Optional[str] = Query(None, description="Filter by tag"),
-    current_user: User = Depends(get_current_user),
-    org_id: Optional[UUID] = Depends(get_effective_org_id),
+    current_user: User = Depends(get_current_user_or_delegated),
+    org_id: Optional[UUID] = Depends(get_effective_org_id_or_delegated),
 ):
     """
     List all available functions.
@@ -104,8 +108,8 @@ async def list_categories():
 @router.get("/{name}", response_model=FunctionSchema)
 async def get_function(
     name: str,
-    current_user: User = Depends(get_current_user),
-    org_id: Optional[UUID] = Depends(get_effective_org_id),
+    current_user: User = Depends(get_current_user_or_delegated),
+    org_id: Optional[UUID] = Depends(get_effective_org_id_or_delegated),
 ):
     """
     Get documentation for a specific function.
@@ -135,8 +139,8 @@ async def get_function(
 async def execute_function(
     name: str,
     request: ExecuteFunctionRequest,
-    current_user: User = Depends(get_current_user),
-    org_id: UUID = Depends(get_current_org_id),
+    current_user: User = Depends(get_current_user_or_delegated),
+    org_id: UUID = Depends(get_current_org_id_or_delegated),
 ):
     """
     Execute a function directly.

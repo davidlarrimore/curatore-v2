@@ -64,11 +64,11 @@ curl http://localhost:8020/
 
 ```bash
 # REST format (convenience)
-curl -H "Authorization: Bearer mcp_dev_key" \
+curl -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   http://localhost:8020/rest/tools
 
 # OpenAI format
-curl -H "Authorization: Bearer mcp_dev_key" \
+curl -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   http://localhost:8020/openai/tools
 ```
 
@@ -124,19 +124,47 @@ curl -H "Authorization: Bearer mcp_dev_key" \
 
 ## Authentication
 
+The MCP Gateway uses a **two-key authentication model** with per-user identity propagation:
+
+| Key | Direction | Purpose |
+|-----|-----------|---------|
+| `SERVICE_API_KEY` | Client → Gateway | Shared secret for incoming requests (Bearer token) |
+| `BACKEND_API_KEY` | Gateway → Backend | ServiceAccount API key for authenticating to curatore-backend |
+
 All protected endpoints require a Bearer token in the Authorization header:
 
 ```bash
-curl -H "Authorization: Bearer YOUR_API_KEY" \
+curl -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   http://localhost:8020/rest/tools
 ```
+
+### Per-User Identity Propagation
+
+When Open WebUI (or another client) sends the `X-OpenWebUI-User-Email` header, the gateway forwards it to the backend as `X-On-Behalf-Of`. The backend resolves the Curatore user by email and scopes all data to that user's organization.
+
+```
+Client → Gateway:   Authorization: Bearer <SERVICE_API_KEY>
+                    X-OpenWebUI-User-Email: alice@company.com
+
+Gateway → Backend:  X-API-Key: <BACKEND_API_KEY>
+                    X-On-Behalf-Of: alice@company.com
+```
+
+**Requirements:**
+- Open WebUI users must have matching Curatore accounts (same email)
+- Set `ENABLE_FORWARD_USER_INFO_HEADERS=true` in Open WebUI
+- Create a ServiceAccount in Curatore and use its API key as `BACKEND_API_KEY`
+
+### Dev Mode
+
+If `SERVICE_API_KEY` is empty (or not set), the gateway runs in **dev mode** — all requests pass through without authentication. Useful for local development.
 
 ### Environment Variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `MCP_API_KEY` | `mcp_dev_key` | API key for client authentication |
-| `DEFAULT_ORG_ID` | (none) | Default organization ID for requests |
+| `SERVICE_API_KEY` | (empty = dev mode) | Shared secret for incoming client authentication |
+| `BACKEND_API_KEY` | (empty) | ServiceAccount API key for backend authentication |
 
 ---
 
@@ -153,7 +181,7 @@ Claude Desktop connects via MCP Streamable HTTP transport:
       "type": "http",
       "url": "http://localhost:8020/mcp",
       "headers": {
-        "Authorization": "Bearer mcp_dev_key"
+        "Authorization": "Bearer YOUR_SERVICE_API_KEY"
       }
     }
   }
@@ -171,7 +199,7 @@ Configure in your project's `.mcp.json` or global MCP settings:
       "type": "http",
       "url": "http://localhost:8020/mcp",
       "headers": {
-        "Authorization": "Bearer mcp_dev_key"
+        "Authorization": "Bearer YOUR_SERVICE_API_KEY"
       }
     }
   }
@@ -180,17 +208,33 @@ Configure in your project's `.mcp.json` or global MCP settings:
 
 ### Open WebUI
 
-1. Go to **Settings** > **Tools** > **OpenAPI Tools**
-2. Add a new tool server:
-   - **Name**: Curatore
-   - **URL**: `http://localhost:8020`
-   - **OpenAPI Spec**: `openapi.json`
-   - **Authentication**: Bearer Token
-   - **Token**: Your MCP API key
+Open WebUI requires additional configuration for per-user identity propagation.
+
+**1. Set Open WebUI environment variables:**
+
+```bash
+# Forward user identity headers to tool servers
+ENABLE_FORWARD_USER_INFO_HEADERS=true
+```
+
+**2. Add the MCP Gateway as a tool server:**
+
+Go to **Settings** > **Tools** > **OpenAPI Tools** and add:
+- **Name**: Curatore
+- **URL**: `http://localhost:8020` (or `http://mcp:8020` if on the same Docker network)
+- **Authentication**: Bearer Token
+- **Token**: Your `SERVICE_API_KEY` value
 
 Open WebUI will automatically:
 - Fetch tools from `GET /openapi.json`
 - Execute tools via `POST /{tool_name}` (flat paths)
+- Forward `X-OpenWebUI-User-Email` on every request (when `ENABLE_FORWARD_USER_INFO_HEADERS=true`)
+
+**3. Ensure user accounts match:**
+
+Each Open WebUI user must have a corresponding Curatore user account with the **same email address**. The backend resolves the user by email and scopes data to that user's organization.
+
+See [MCP & Open WebUI Guide](../docs/MCP_OPEN_WEBUI.md) for the full setup walkthrough.
 
 ### ChatGPT / OpenAI-Compatible Clients
 
@@ -201,7 +245,7 @@ Tool Server Configuration:
   Base URL: http://localhost:8020/openai
   List Tools: GET /tools
   Call Tool: POST /tools/{function_name}
-  Auth Header: Authorization: Bearer mcp_dev_key
+  Auth Header: Authorization: Bearer YOUR_SERVICE_API_KEY
 ```
 
 ### Custom Integration
@@ -209,7 +253,7 @@ Tool Server Configuration:
 #### List Tools (OpenAI Format)
 
 ```bash
-curl -H "Authorization: Bearer mcp_dev_key" \
+curl -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   http://localhost:8020/openai/tools
 ```
 
@@ -242,7 +286,7 @@ Response:
 
 ```bash
 curl -X POST \
-  -H "Authorization: Bearer mcp_dev_key" \
+  -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   -H "Content-Type: application/json" \
   http://localhost:8020/openai/tools/search_assets \
   -d '{"query": "contract management", "limit": 10}'
@@ -403,7 +447,7 @@ Update the policy without restarting:
 
 ```bash
 # Edit policy.yaml, then reload
-curl -X POST -H "Authorization: Bearer mcp_dev_key" \
+curl -X POST -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   http://localhost:8020/policy/reload
 ```
 
@@ -415,8 +459,8 @@ curl -X POST -H "Authorization: Bearer mcp_dev_key" \
 |----------|---------|-------------|
 | `BACKEND_URL` | `http://backend:8000` | Curatore backend URL |
 | `BACKEND_TIMEOUT` | `30` | Backend request timeout (seconds) |
-| `MCP_API_KEY` | `mcp_dev_key` | API key for authentication |
-| `DEFAULT_ORG_ID` | (none) | Default organization ID |
+| `SERVICE_API_KEY` | (empty = dev mode) | Shared secret for incoming client authentication |
+| `BACKEND_API_KEY` | (empty) | ServiceAccount API key for backend authentication (sent as `X-API-Key`) |
 | `REDIS_URL` | `redis://redis:6379/2` | Redis URL for caching |
 | `LOG_LEVEL` | `INFO` | Logging level |
 | `DEBUG` | `false` | Debug mode |
@@ -504,23 +548,23 @@ docker logs curatore-mcp
 ### 401 Unauthorized
 
 ```bash
-# Verify your API key
-curl -H "Authorization: Bearer YOUR_KEY" \
+# Verify your SERVICE_API_KEY
+curl -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   http://localhost:8020/rest/tools
 
-# Check configured key
-docker exec curatore-mcp env | grep MCP_API_KEY
+# Check configured keys
+docker exec curatore-mcp env | grep -E "SERVICE_API_KEY|BACKEND_API_KEY"
 ```
 
 ### Tool Not Found
 
 ```bash
 # List available tools
-curl -H "Authorization: Bearer mcp_dev_key" \
+curl -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   http://localhost:8020/openai/tools | jq '.tools[].function.name'
 
 # Check policy (v2.0 shows denylist)
-curl -H "Authorization: Bearer mcp_dev_key" \
+curl -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   http://localhost:8020/policy | jq '.'
 ```
 
@@ -539,7 +583,7 @@ docker logs curatore-mcp 2>&1 | grep -i error
 ```bash
 # Edit policy.yaml, then reload
 docker exec curatore-mcp cat /app/policy.yaml  # Verify changes
-curl -X POST -H "Authorization: Bearer mcp_dev_key" \
+curl -X POST -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   http://localhost:8020/policy/reload
 ```
 
@@ -573,11 +617,13 @@ uvicorn app.main:app --reload --port 8020
 
 ## Security Considerations
 
-1. **API Key Protection**: Store `MCP_API_KEY` securely; rotate regularly in production
-2. **Side-Effect Blocking**: Keep `block_side_effects: true` to prevent unintended actions
-3. **Parameter Clamping**: Set appropriate limits to prevent resource exhaustion
-4. **Network Isolation**: In production, restrict access to trusted networks
-5. **Audit Logging**: Monitor logs for unusual activity
+1. **Two-Key Separation**: `SERVICE_API_KEY` (client-facing) and `BACKEND_API_KEY` (backend-facing) serve different purposes — rotate them independently
+2. **ServiceAccount API Key**: The `BACKEND_API_KEY` is a Curatore ServiceAccount key — store securely and restrict ServiceAccount permissions
+3. **User Account Matching**: Ensure Open WebUI users have corresponding Curatore accounts; unmatched emails will receive 404 errors
+4. **Side-Effect Blocking**: Keep `block_side_effects: true` to prevent unintended actions
+5. **Parameter Clamping**: Set appropriate limits to prevent resource exhaustion
+6. **Network Isolation**: In production, restrict access to trusted networks
+7. **Dev Mode Warning**: Empty `SERVICE_API_KEY` disables all auth — never use in production
 
 ---
 

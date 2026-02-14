@@ -23,7 +23,7 @@ from app.core.database.procedures import Pipeline, PipelineItemState, PipelineRu
 from app.core.shared.database_service import database_service
 from app.core.shared.run_service import run_service
 from app.cwr.pipelines import pipeline_executor
-from app.dependencies import get_current_org_id, get_optional_current_user
+from app.dependencies import get_current_org_id, get_current_org_id_or_delegated, get_optional_current_user
 
 logger = logging.getLogger("curatore.api.pipelines")
 
@@ -182,7 +182,7 @@ class UpdatePipelineRequest(BaseModel):
 async def list_pipelines(
     is_active: Optional[bool] = Query(None, description="Filter by active status"),
     tag: Optional[str] = Query(None, description="Filter by tag"),
-    organization_id: UUID = Depends(get_current_org_id),
+    organization_id: UUID = Depends(get_current_org_id_or_delegated),
 ):
     """
     List all pipelines.
@@ -251,7 +251,7 @@ async def list_pipelines(
 @router.get("/{slug}", response_model=PipelineSchema)
 async def get_pipeline(
     slug: str,
-    organization_id: UUID = Depends(get_current_org_id),
+    organization_id: UUID = Depends(get_current_org_id_or_delegated),
 ):
     """
     Get pipeline details by slug.
@@ -324,7 +324,7 @@ async def get_pipeline(
 async def run_pipeline(
     slug: str,
     request: RunPipelineRequest = Body(...),
-    organization_id: UUID = Depends(get_current_org_id),
+    organization_id: UUID = Depends(get_current_org_id_or_delegated),
     user = Depends(get_optional_current_user),
 ):
     """

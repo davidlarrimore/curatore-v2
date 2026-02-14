@@ -14,6 +14,10 @@ _SESSION_DIR = Path(tempfile.mkdtemp(prefix="curatore_pytest_"))
 # Object storage is now required - tests should use MinIO or mock it
 os.environ.setdefault("USE_OBJECT_STORAGE", "true")
 
+# MinIO credentials required by config.yml validation (${MINIO_ACCESS_KEY}, ${MINIO_SECRET_KEY})
+os.environ.setdefault("MINIO_ACCESS_KEY", "test-access-key")
+os.environ.setdefault("MINIO_SECRET_KEY", "test-secret-key")
+
 # Keep external integrations quiet during tests
 os.environ.setdefault("USE_CELERY", "false")
 os.environ.setdefault("DOCUMENT_SERVICE_URL", "")

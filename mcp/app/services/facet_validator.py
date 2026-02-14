@@ -15,37 +15,42 @@ class FacetValidator:
 
     def __init__(self, cache_ttl: int = 600):
         self._cache_ttl = cache_ttl
-        self._facet_cache: Dict[str, Set[str]] = {}  # org_id -> set of valid facet names
+        self._facet_cache: Dict[str, Set[str]] = {}  # cache_key -> set of valid facet names
         self._cache_timestamps: Dict[str, float] = {}
 
-    def _is_cache_valid(self, org_id: str) -> bool:
+    def _cache_key(self, user_email: Optional[str] = None) -> str:
+        """Build cache key from user_email (or '_global' for anonymous)."""
+        return user_email or "_global"
+
+    def _is_cache_valid(self, key: str) -> bool:
         """Check if cache is still valid."""
-        if org_id not in self._cache_timestamps:
+        if key not in self._cache_timestamps:
             return False
-        return time.time() - self._cache_timestamps[org_id] < self._cache_ttl
+        return time.time() - self._cache_timestamps[key] < self._cache_ttl
 
     async def _load_facets(
         self,
-        org_id: str,
         api_key: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        user_email: Optional[str] = None,
     ) -> Set[str]:
         """Load facets from backend and cache them."""
+        key = self._cache_key(user_email)
         try:
             facets = await backend_client.get_facets(
-                org_id=org_id,
                 api_key=api_key,
                 correlation_id=correlation_id,
+                user_email=user_email,
             )
 
             # Extract facet names
             facet_names = {f.get("name") for f in facets if f.get("name")}
 
             # Update cache
-            self._facet_cache[org_id] = facet_names
-            self._cache_timestamps[org_id] = time.time()
+            self._facet_cache[key] = facet_names
+            self._cache_timestamps[key] = time.time()
 
-            logger.debug(f"Loaded {len(facet_names)} facets for org {org_id}")
+            logger.debug(f"Loaded {len(facet_names)} facets for {key}")
             return facet_names
 
         except Exception as e:
@@ -56,33 +61,34 @@ class FacetValidator:
 
     async def get_valid_facets(
         self,
-        org_id: str,
         api_key: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        user_email: Optional[str] = None,
     ) -> Set[str]:
-        """Get set of valid facet names for an organization."""
+        """Get set of valid facet names."""
+        key = self._cache_key(user_email)
         # Check cache first
-        if self._is_cache_valid(org_id):
-            return self._facet_cache.get(org_id, set())
+        if self._is_cache_valid(key):
+            return self._facet_cache.get(key, set())
 
         # Load from backend
-        return await self._load_facets(org_id, api_key, correlation_id)
+        return await self._load_facets(api_key, correlation_id, user_email=user_email)
 
     async def validate_facets(
         self,
         facet_filters: Dict[str, Any],
-        org_id: str,
         api_key: Optional[str] = None,
         correlation_id: Optional[str] = None,
+        user_email: Optional[str] = None,
     ) -> tuple[bool, List[str]]:
         """
         Validate facet_filters against the metadata catalog.
 
         Args:
             facet_filters: Facet filter dictionary
-            org_id: Organization ID
             api_key: API key for backend authentication
             correlation_id: Request correlation ID
+            user_email: End-user email for delegated auth
 
         Returns:
             Tuple of (is_valid, list_of_invalid_facets)
@@ -90,7 +96,7 @@ class FacetValidator:
         if not facet_filters:
             return True, []
 
-        valid_facets = await self.get_valid_facets(org_id, api_key, correlation_id)
+        valid_facets = await self.get_valid_facets(api_key, correlation_id, user_email=user_email)
 
         # If we couldn't load facets, allow all (fail open for availability)
         if not valid_facets:
@@ -108,11 +114,12 @@ class FacetValidator:
 
         return True, []
 
-    def clear_cache(self, org_id: Optional[str] = None):
+    def clear_cache(self, user_email: Optional[str] = None):
         """Clear facet cache."""
-        if org_id:
-            self._facet_cache.pop(org_id, None)
-            self._cache_timestamps.pop(org_id, None)
+        if user_email:
+            key = self._cache_key(user_email)
+            self._facet_cache.pop(key, None)
+            self._cache_timestamps.pop(key, None)
         else:
             self._facet_cache.clear()
             self._cache_timestamps.clear()

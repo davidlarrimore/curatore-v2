@@ -1,5 +1,10 @@
 # Authentication Middleware
-"""API key authentication for MCP Gateway."""
+"""API key authentication for MCP Gateway.
+
+Follows the same SERVICE_API_KEY pattern as document-service and
+playwright-service, plus extracts per-user identity from
+X-OpenWebUI-User-Email for delegation to the backend.
+"""
 
 import logging
 from typing import Optional, Tuple
@@ -21,7 +26,8 @@ def verify_api_key(authorization: Optional[str]) -> Tuple[bool, Optional[str]]:
         authorization: Authorization header value (e.g., "Bearer xxx")
 
     Returns:
-        Tuple of (is_valid, org_id)
+        Tuple of (is_valid, user_email) where user_email is extracted
+        from X-OpenWebUI-User-Email if present (set later in middleware).
     """
     if not authorization:
         return False, None
@@ -33,9 +39,9 @@ def verify_api_key(authorization: Optional[str]) -> Tuple[bool, Optional[str]]:
 
     token = parts[1].strip()
 
-    # Check against configured API key
-    if token == settings.mcp_api_key:
-        return True, settings.default_org_id
+    # Check against configured SERVICE_API_KEY
+    if token == settings.service_api_key:
+        return True, None
 
     return False, None
 
@@ -58,24 +64,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
         if path in self.PUBLIC_PATHS:
             return await call_next(request)
 
+        # Dev mode: if service_api_key is empty, pass all requests through
+        if not settings.service_api_key:
+            logger.debug("Dev mode: SERVICE_API_KEY not set, skipping auth")
+            request.state.api_key = settings.backend_api_key or None
+            request.state.user_email = request.headers.get("X-OpenWebUI-User-Email")
+            return await call_next(request)
+
         # Get authorization header
         authorization = request.headers.get("Authorization")
 
-        # Verify API key
-        is_valid, org_id = verify_api_key(authorization)
+        # Verify SERVICE_API_KEY
+        is_valid, _ = verify_api_key(authorization)
 
         if not is_valid:
             logger.warning(f"Unauthorized request to {path}")
-            # Return JSONResponse directly instead of raising HTTPException
-            # HTTPException doesn't work properly in BaseHTTPMiddleware
             return JSONResponse(
                 status_code=401,
                 content={"detail": "Invalid or missing API key"},
                 headers={"WWW-Authenticate": "Bearer"},
             )
 
-        # Store org_id in request state for handlers
-        request.state.org_id = org_id
-        request.state.api_key = settings.mcp_api_key
+        # Store backend API key for forwarding to backend
+        request.state.api_key = settings.backend_api_key or None
+
+        # Extract user email from Open WebUI forwarded header
+        request.state.user_email = request.headers.get("X-OpenWebUI-User-Email")
 
         return await call_next(request)

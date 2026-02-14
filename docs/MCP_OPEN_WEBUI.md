@@ -30,9 +30,33 @@ Open WebUI supports both connection methods. Choose based on your preference:
 
 ---
 
-## Quick Start
+## Setup
 
-### 1. Start the MCP Gateway
+### Step 1: Create a ServiceAccount in Curatore
+
+The MCP Gateway authenticates to the Curatore backend using a **ServiceAccount API key**. This is required for per-user identity propagation — the gateway forwards Open WebUI user identity so the backend can scope data to the correct organization.
+
+1. Log in to Curatore as an admin
+2. Navigate to **Settings** > **API Keys** > **Service Accounts**
+3. Create a new ServiceAccount (e.g., name: "MCP Gateway")
+4. Copy the generated API key (starts with `cur_`)
+
+### Step 2: Configure Environment Variables
+
+In your `.env` file, set both keys:
+
+```bash
+# Shared secret between Open WebUI and the MCP Gateway
+# Clients (Open WebUI) must send this as: Authorization: Bearer <key>
+# Leave empty for dev mode (all requests pass through without auth)
+MCP_SERVICE_API_KEY=your_secure_shared_secret_here
+
+# ServiceAccount API key for authenticating to the Curatore backend
+# Created in Step 1 — the gateway sends this as X-API-Key to the backend
+MCP_BACKEND_API_KEY=cur_abcdef1234567890
+```
+
+### Step 3: Start the MCP Gateway
 
 ```bash
 docker-compose up -d mcp
@@ -44,13 +68,42 @@ Verify it's running:
 curl http://localhost:8020/health
 ```
 
-### 2. Set Environment Variables
+### Step 4: Configure Open WebUI
 
-In your `.env` file:
+Open WebUI must forward per-user identity headers so the MCP Gateway can propagate user context to the backend.
+
+**Required Open WebUI environment variable:**
 
 ```bash
-MCP_API_KEY=your_secure_api_key_here
+ENABLE_FORWARD_USER_INFO_HEADERS=true
 ```
+
+This tells Open WebUI to send `X-OpenWebUI-User-Email` on every tool call, which the MCP Gateway forwards to the backend as `X-On-Behalf-Of`.
+
+### How Identity Propagation Works
+
+```
+Open WebUI                         MCP Gateway                      Curatore Backend
+    │                                  │                                  │
+    │  Authorization: Bearer <SERVICE_API_KEY>                            │
+    │  X-OpenWebUI-User-Email: alice@company.com                          │
+    │─────────────────────────►│                                          │
+    │                          │  X-API-Key: <BACKEND_API_KEY>            │
+    │                          │  X-On-Behalf-Of: alice@company.com       │
+    │                          │─────────────────────────►│               │
+    │                          │                          │ Resolves user │
+    │                          │                          │ by email,     │
+    │                          │                          │ scopes data   │
+    │                          │                          │ to user's org │
+    │                          │◄─────────────────────────│               │
+    │◄─────────────────────────│                                          │
+```
+
+**Key points:**
+- Each Open WebUI user's email is forwarded to the backend
+- The backend resolves the Curatore user by email and scopes all data to that user's organization
+- Open WebUI users **must have matching Curatore accounts** (same email address)
+- If no matching Curatore user exists, the request returns 404
 
 ---
 
@@ -69,7 +122,7 @@ Use this method if you want to connect via the native MCP protocol.
 | Name | Curatore |
 | Type | HTTP (Streamable) |
 | URL | See table below |
-| Headers | `Authorization: Bearer YOUR_MCP_API_KEY` |
+| Headers | `Authorization: Bearer YOUR_SERVICE_API_KEY` |
 
 **URL by deployment:**
 
@@ -98,11 +151,11 @@ Use this method if you want to connect via the native MCP protocol.
 
 ```bash
 # List tools via REST convenience endpoint
-curl -H "Authorization: Bearer YOUR_MCP_API_KEY" \
+curl -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   http://localhost:8020/rest/tools
 
 # Or use the OpenAI-compatible endpoint
-curl -H "Authorization: Bearer YOUR_MCP_API_KEY" \
+curl -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   http://localhost:8020/openai/tools
 ```
 
@@ -123,7 +176,7 @@ Use this method if you prefer standard REST/OpenAPI integration.
 | Name | Curatore |
 | URL | See table below |
 | Authentication | Bearer Token |
-| Token | Your `MCP_API_KEY` value |
+| Token | Your `MCP_SERVICE_API_KEY` value |
 
 **URL by deployment:**
 
@@ -157,12 +210,12 @@ Use this method if you prefer standard REST/OpenAPI integration.
 curl http://localhost:8020/openapi.json | jq '.paths | keys'
 
 # List tools (OpenAI format)
-curl -H "Authorization: Bearer YOUR_MCP_API_KEY" \
+curl -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   http://localhost:8020/openai/tools | jq '.tools[].function.name'
 
 # Execute a tool
 curl -X POST http://localhost:8020/search_assets \
-  -H "Authorization: Bearer YOUR_MCP_API_KEY" \
+  -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"query": "contract management", "limit": 5}'
 ```
@@ -284,7 +337,7 @@ Limits enforced on parameters:
 ### Tools Not Appearing
 
 1. Check gateway health: `curl http://localhost:8020/health`
-2. Verify API key is correct
+2. Verify SERVICE_API_KEY is correct
 3. Check logs: `docker logs curatore-mcp`
 
 ### "Tool not found" Errors
@@ -293,6 +346,13 @@ Limits enforced on parameters:
 2. Check the function is not in `policy.yaml` denylist
 3. Verify tool doesn't have blocked side effects (or is in `side_effects_allowlist`)
 4. Check backend is running: `curl http://localhost:8000/api/v1/admin/system/health`
+
+### User Not Found (404)
+
+If tool calls return 404 for user not found:
+1. Verify the Open WebUI user has a matching Curatore account with the **same email address**
+2. Ensure `ENABLE_FORWARD_USER_INFO_HEADERS=true` is set in Open WebUI
+3. Check gateway logs for the forwarded email: `docker logs curatore-mcp 2>&1 | grep "On-Behalf-Of"`
 
 ### Connection Refused
 
@@ -311,10 +371,14 @@ docker exec -it open-webui curl http://host.docker.internal:8020/health
 Check the JSON-RPC response for error details:
 ```bash
 curl -X POST http://localhost:8020/mcp \
-  -H "Authorization: Bearer YOUR_KEY" \
+  -H "Authorization: Bearer YOUR_SERVICE_API_KEY" \
   -H "Content-Type: application/json" \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list","params":{}}' | jq
 ```
+
+### Dev Mode
+
+If `MCP_SERVICE_API_KEY` is empty (or not set), the gateway runs in **dev mode** — all requests pass through without authentication. This is useful for local development but should never be used in production.
 
 ---
 
@@ -322,6 +386,9 @@ curl -X POST http://localhost:8020/mcp \
 
 ```
 Open WebUI
+    │
+    │  Authorization: Bearer <SERVICE_API_KEY>
+    │  X-OpenWebUI-User-Email: alice@company.com
     │
     ├─── MCP Protocol ────► POST /mcp (JSON-RPC)
     │                           │
@@ -336,12 +403,18 @@ Open WebUI
                     │  • Policy enforce   │
                     │  • Input validation │
                     │  • Parameter clamps │
+                    │  • Identity forward │
                     └──────────┬──────────┘
-                               │ HTTP
+                               │ X-API-Key: <BACKEND_API_KEY>
+                               │ X-On-Behalf-Of: alice@company.com
                                ▼
                     ┌─────────────────────┐
                     │  Curatore Backend   │
                     │   (port 8000)       │
+                    │                     │
+                    │  Resolves user by   │
+                    │  email, scopes to   │
+                    │  user's org         │
                     └─────────────────────┘
 ```
 
@@ -356,6 +429,7 @@ Claude Desktop connects via **MCP Streamable HTTP transport** (same as Open WebU
 ## Related Documentation
 
 - [MCP Gateway README](../mcp/README.md) - Full gateway documentation
+- [Auth & Access Model](AUTH_ACCESS_MODEL.md) - Roles, org context, delegated auth
 - [CWR Functions & Procedures](FUNCTIONS_PROCEDURES.md) - Function reference
 - [Search & Indexing](SEARCH_INDEXING.md) - Search capabilities
 - [API Documentation](API_DOCUMENTATION.md) - Backend API reference

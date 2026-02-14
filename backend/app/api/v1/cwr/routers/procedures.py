@@ -23,7 +23,13 @@ from app.core.database.procedures import Procedure, ProcedureTrigger, ProcedureV
 from app.core.shared.database_service import database_service
 from app.cwr.procedures import procedure_executor, procedure_loader
 from app.core.database.models import User
-from app.dependencies import get_current_org_id, get_current_user, get_optional_current_user
+from app.dependencies import (
+    get_current_org_id,
+    get_current_org_id_or_delegated,
+    get_current_user,
+    get_current_user_or_delegated,
+    get_optional_current_user,
+)
 
 logger = logging.getLogger("curatore.api.procedures")
 
@@ -323,8 +329,8 @@ async def validate_procedure(
 @router.post("/generate")
 async def generate_procedure(
     request: GenerateProcedureRequest,
-    organization_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(get_current_user),
+    organization_id: UUID = Depends(get_current_org_id_or_delegated),
+    current_user: User = Depends(get_current_user_or_delegated),
 ):
     """
     Generate or refine a procedure using AI with SSE streaming.
@@ -495,8 +501,8 @@ async def validate_draft(
 @router.post("/", response_model=ProcedureSchema, status_code=201)
 async def create_procedure(
     request: CreateProcedureRequest,
-    organization_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(get_current_user),
+    organization_id: UUID = Depends(get_current_org_id_or_delegated),
+    current_user: User = Depends(get_current_user_or_delegated),
 ):
     """
     Create a new user-defined procedure.
@@ -741,8 +747,8 @@ async def get_procedure(
 async def update_procedure(
     slug: str,
     request: UpdateProcedureRequest,
-    organization_id: UUID = Depends(get_current_org_id),
-    current_user: User = Depends(get_current_user),
+    organization_id: UUID = Depends(get_current_org_id_or_delegated),
+    current_user: User = Depends(get_current_user_or_delegated),
 ):
     """
     Update procedure settings or definition.
@@ -939,7 +945,7 @@ async def delete_procedure(
 async def run_procedure(
     slug: str,
     request: RunProcedureRequest,
-    organization_id: UUID = Depends(get_current_org_id),
+    organization_id: UUID = Depends(get_current_org_id_or_delegated),
     user: Optional[Any] = Depends(get_optional_current_user),
 ):
     """

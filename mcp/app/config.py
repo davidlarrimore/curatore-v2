@@ -21,13 +21,13 @@ class Settings(BaseSettings):
     )
 
     # Authentication
-    mcp_api_key: str = Field(
-        default="mcp_dev_key",
-        description="API key for MCP client authentication",
+    service_api_key: str = Field(
+        default="",
+        description="Shared secret for incoming MCP client authentication (empty = dev mode, all requests pass through)",
     )
-    default_org_id: Optional[str] = Field(
-        default=None,
-        description="Default organization ID for authenticated requests",
+    backend_api_key: str = Field(
+        default="",
+        description="ServiceAccount API key for authenticating to curatore-backend (sent as X-API-Key)",
     )
 
     # Redis for caching

@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional, Set, Tuple
 
 from jsonschema import Draft7Validator
 
-from app.config import settings
 from app.models.mcp import (
     MCPErrorCode,
     MCPTextContent,
@@ -48,10 +47,10 @@ def extract_progress_token(arguments: Dict[str, Any]) -> Tuple[Optional[str], Di
 async def handle_tools_call(
     name: str,
     arguments: Dict[str, Any],
-    org_id: Optional[str] = None,
     api_key: Optional[str] = None,
     correlation_id: Optional[str] = None,
     progress_token: Optional[str] = None,
+    user_email: Optional[str] = None,
 ) -> MCPToolsCallResponse:
     """
     Handle MCP tools/call request.
@@ -66,14 +65,13 @@ async def handle_tools_call(
     Args:
         name: Tool name
         arguments: Tool arguments
-        org_id: Organization ID
         api_key: API key for backend authentication
         correlation_id: Request correlation ID
+        user_email: End-user email for delegated auth
 
     Returns:
         MCP tool call response
     """
-    org_id = org_id or settings.default_org_id
 
     # Extract progress token from arguments if not provided directly
     if not progress_token:
@@ -106,7 +104,7 @@ async def handle_tools_call(
             progress_service.update(progress_token, progress=10, message="Fetching tool contract...")
 
         # 2. Get contract for schema validation and exposure check
-        contract = await backend_client.get_contract(name, api_key, correlation_id, org_id=org_id)
+        contract = await backend_client.get_contract(name, api_key, correlation_id, user_email=user_email)
         if not contract:
             if progress_state:
                 progress_service.fail(progress_token, f"Tool '{name}' not found")
@@ -161,14 +159,14 @@ async def handle_tools_call(
             progress_service.update(progress_token, progress=30, message="Validating facets...")
 
         # 5. Validate facets if present and enabled
-        if policy_service.validate_facets and org_id:
+        if policy_service.validate_facets:
             facet_filters = clamped_arguments.get("facet_filters")
             if facet_filters:
                 is_valid, invalid_facets = await facet_validator.validate_facets(
                     facet_filters,
-                    org_id,
-                    api_key,
-                    correlation_id,
+                    api_key=api_key,
+                    correlation_id=correlation_id,
+                    user_email=user_email,
                 )
                 if not is_valid:
                     if progress_state:
@@ -188,7 +186,7 @@ async def handle_tools_call(
             params=clamped_arguments,
             api_key=api_key,
             correlation_id=correlation_id,
-            org_id=org_id,
+            user_email=user_email,
         )
 
         if progress_state:

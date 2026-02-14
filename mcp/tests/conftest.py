@@ -8,6 +8,10 @@ from app.config import settings
 from app.main import app
 from fastapi.testclient import TestClient
 
+# Ensure auth is enforced during tests (non-empty = auth required)
+_TEST_SERVICE_API_KEY = "test-service-key"
+settings.service_api_key = _TEST_SERVICE_API_KEY
+
 
 @pytest.fixture
 def client():
@@ -18,7 +22,7 @@ def client():
 @pytest.fixture
 def auth_headers():
     """Authorization headers for authenticated requests."""
-    return {"Authorization": f"Bearer {settings.mcp_api_key}"}
+    return {"Authorization": f"Bearer {_TEST_SERVICE_API_KEY}"}
 
 
 @pytest.fixture

@@ -268,8 +268,8 @@ services:
       - PYTHONUNBUFFERED=1
       - BACKEND_URL=http://backend:8000
       - REDIS_URL=redis://redis:6379/2
-      - MCP_API_KEY=${MCP_API_KEY:-mcp_dev_key}
-      - DEFAULT_ORG_ID=${DEFAULT_ORG_ID:-}
+      - SERVICE_API_KEY=${MCP_SERVICE_API_KEY:-}
+      - BACKEND_API_KEY=${MCP_BACKEND_API_KEY:-}
       - LOG_LEVEL=${MCP_LOG_LEVEL:-INFO}
       - DEBUG=${DEBUG:-false}
     volumes:

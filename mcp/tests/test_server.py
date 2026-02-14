@@ -4,7 +4,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
-from app.server import ctx_api_key, ctx_correlation_id, ctx_org_id, sdk_call_tool, sdk_list_resources, sdk_list_tools
+from app.server import ctx_api_key, ctx_correlation_id, ctx_user_email, sdk_call_tool, sdk_list_resources, sdk_list_tools
 
 
 class TestSDKListTools:
@@ -20,10 +20,11 @@ class TestSDKListTools:
 
             ctx_api_key.set("test-key")
             ctx_correlation_id.set("test-corr")
+            ctx_user_email.set("alice@company.com")
 
             result = await sdk_list_tools()
 
-            mock_handler.assert_called_once_with("test-key", "test-corr")
+            mock_handler.assert_called_once_with("test-key", "test-corr", user_email="alice@company.com")
             assert isinstance(result, list)
 
     @pytest.mark.asyncio
@@ -66,7 +67,7 @@ class TestSDKCallTool:
                 isError=False,
             )
 
-            ctx_org_id.set("test-org")
+            ctx_user_email.set("alice@company.com")
             ctx_api_key.set("test-key")
             ctx_correlation_id.set("test-corr")
 
@@ -75,9 +76,9 @@ class TestSDKCallTool:
             mock_handler.assert_called_once_with(
                 name="search_assets",
                 arguments={"query": "test"},
-                org_id="test-org",
                 api_key="test-key",
                 correlation_id="test-corr",
+                user_email="alice@company.com",
             )
             assert len(result) == 1
             assert result[0].text == "Search results"

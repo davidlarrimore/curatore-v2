@@ -15,8 +15,8 @@ from app.services.contract_converter import ContractConverter
 logger = logging.getLogger("mcp.server")
 
 # Auth context — set by ASGI middleware before SDK handlers run
-ctx_org_id: ContextVar[Optional[str]] = ContextVar("ctx_org_id", default=None)
 ctx_api_key: ContextVar[Optional[str]] = ContextVar("ctx_api_key", default=None)
+ctx_user_email: ContextVar[Optional[str]] = ContextVar("ctx_user_email", default=None)
 ctx_correlation_id: ContextVar[Optional[str]] = ContextVar("ctx_correlation_id", default=None)
 
 server = Server("curatore-mcp")
@@ -34,7 +34,8 @@ async def sdk_list_tools() -> list[types.Tool]:
     """List available tools via SDK transport."""
     api_key = ctx_api_key.get()
     correlation_id = ctx_correlation_id.get()
-    result = await handle_tools_list(api_key, correlation_id)
+    user_email = ctx_user_email.get()
+    result = await handle_tools_list(api_key, correlation_id, user_email=user_email)
     return ContractConverter.to_sdk_tools(result.tools)
 
 
@@ -44,9 +45,9 @@ async def sdk_call_tool(name: str, arguments: dict) -> list[types.TextContent]:
     result = await handle_tools_call(
         name=name,
         arguments=arguments or {},
-        org_id=ctx_org_id.get(),
         api_key=ctx_api_key.get(),
         correlation_id=ctx_correlation_id.get(),
+        user_email=ctx_user_email.get(),
     )
     return [
         types.TextContent(type="text", text=block.text)

@@ -28,12 +28,15 @@ Comprehensive reference for Curatore v2's authentication, authorization, and mul
 
 | Dependency | Returns | Use Case |
 |-----------|---------|----------|
+| `get_current_user` | `User` | Authenticated user (JWT or user API key). |
 | `get_effective_org_id` | `Optional[UUID]` | Cross-org admin views (ops dashboards). Returns `None` for admin system context, UUID for org-scoped context. |
 | `get_current_org_id` | `UUID` (required) | Org-scoped data operations. Raises 400 if no org context available. |
-| `get_current_user` | `User` | Authenticated user object. |
 | `require_admin` | `User` | System admin only (raises 403 otherwise). |
+| `get_current_user_or_delegated` | `User` | Flexible auth: JWT, user API key, or delegated (ServiceAccount + X-On-Behalf-Of). Used by CWR endpoints. |
+| `get_effective_org_id_or_delegated` | `Optional[UUID]` | Cross-org views with delegated auth support. |
+| `get_current_org_id_or_delegated` | `UUID` (required) | Org-scoped operations with delegated auth support. |
 
-**Implementation rule**: ALWAYS use `get_current_org_id` or `get_effective_org_id` — NEVER `current_user.organization_id` directly.
+**Implementation rule**: ALWAYS use `get_current_org_id` or `get_effective_org_id` (or their `_or_delegated` variants for CWR endpoints) — NEVER `current_user.organization_id` directly.
 
 ---
 
@@ -121,10 +124,43 @@ async def create_api_key(
 
 ## MCP Gateway Access
 
-- **Current**: Shared API key authentication, no per-user identity
-- **Known limitation**: No RBAC in the MCP layer
+The MCP Gateway uses **delegated authentication** to propagate per-user identity from Open WebUI (or other clients) to the backend.
+
+### Auth Chain
+
+```
+Client → MCP Gateway:   Authorization: Bearer <SERVICE_API_KEY>
+                         X-OpenWebUI-User-Email: alice@company.com
+
+MCP Gateway → Backend:   X-API-Key: <BACKEND_API_KEY>      (ServiceAccount key)
+                         X-On-Behalf-Of: alice@company.com  (user identity)
+```
+
+### How It Works
+
+1. The MCP Gateway authenticates incoming requests using `SERVICE_API_KEY` (shared secret with Open WebUI)
+2. It extracts the user's email from the `X-OpenWebUI-User-Email` header
+3. It forwards the request to the backend with the `BACKEND_API_KEY` (a ServiceAccount API key) and `X-On-Behalf-Of` header
+4. The backend's `get_delegated_user` dependency validates the ServiceAccount key and resolves the Curatore user by email
+5. All data is scoped to the resolved user's organization
+
+### Dependencies
+
+| Dependency | Returns | Use Case |
+|-----------|---------|----------|
+| `get_delegated_user` | `User` | ServiceAccount key + X-On-Behalf-Of email → resolved user |
+| `get_current_user_or_delegated` | `User` | Flexible auth: JWT, user API key, or delegated (used by CWR endpoints) |
+| `get_effective_org_id_or_delegated` | `Optional[UUID]` | Org resolution with delegated auth support |
+| `get_current_org_id_or_delegated` | `UUID` | Org-scoped operations with delegated auth support |
+
+### Requirements
+
+- Open WebUI must set `ENABLE_FORWARD_USER_INFO_HEADERS=true`
+- Each Open WebUI user must have a matching Curatore user account (same email)
+- A ServiceAccount must be created in Curatore; its API key is used as `BACKEND_API_KEY`
 - Side-effect gating is handled at the MCP policy level (`policy.yaml` allowlist)
-- Future work: Per-user MCP authentication with role propagation
+
+See [MCP & Open WebUI Guide](MCP_OPEN_WEBUI.md) for the full setup walkthrough.
 
 ---
 

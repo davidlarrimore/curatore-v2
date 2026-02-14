@@ -203,7 +203,7 @@ class TestToolsCall:
                     result = await handle_tools_call(
                         "search_assets",
                         {"query": "test", "facet_filters": {"invalid_facet": "value"}},
-                        org_id="test-org",
+                        user_email="test@example.com",
                     )
 
                     assert result.isError is True

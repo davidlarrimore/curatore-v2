@@ -20,6 +20,7 @@ _cache_timestamp: float = 0
 async def _get_contracts(
     api_key: Optional[str] = None,
     correlation_id: Optional[str] = None,
+    user_email: Optional[str] = None,
 ) -> List[Dict[str, Any]]:
     """Get contracts from cache or backend."""
     global _contract_cache, _cache_timestamp
@@ -33,6 +34,7 @@ async def _get_contracts(
         side_effects=None,  # Don't filter at source - let policy handle it
         api_key=api_key,
         correlation_id=correlation_id,
+        user_email=user_email,
     )
 
     _contract_cache = contracts
@@ -45,6 +47,7 @@ async def _get_contracts(
 async def handle_tools_list(
     api_key: Optional[str] = None,
     correlation_id: Optional[str] = None,
+    user_email: Optional[str] = None,
 ) -> MCPToolsListResponse:
     """
     Handle MCP tools/list request.
@@ -55,12 +58,13 @@ async def handle_tools_list(
     Args:
         api_key: API key for backend authentication
         correlation_id: Request correlation ID
+        user_email: End-user email for delegated auth
 
     Returns:
         List of MCP tools
     """
     # Get all contracts (cached)
-    contracts = await _get_contracts(api_key, correlation_id)
+    contracts = await _get_contracts(api_key, correlation_id, user_email=user_email)
 
     # Filter by policy (v2.0: exposure_profile + denylist, v1.0: allowlist)
     allowed_contracts = policy_service.filter_allowed(contracts)
